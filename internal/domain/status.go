@@ -1,5 +1,7 @@
 // Package domain holds BatonDeck's pure rules: the status state machine, the move decision, the
-// error model, order keys and dependency cycles. Nothing here touches a store or the clock.
+// error model, order keys, dependency cycles, claimability, retry and poison, the auto-unblock guard,
+// roles and capability grants, audit descriptors, the event vocabulary and the system labels.
+// Nothing here touches a store or reads the clock: the time is an argument.
 package domain
 
 import "fmt"

@@ -8,6 +8,17 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `internal/domain`, the rest of the pure rules: one claimability predicate (READY, unblocked, not
+  poisoned, not racing, no live lease with expiry lazy on read, past the retry backoff) and the
+  open-frontier variant; the retry policy (`poisonAfterAttempts`, default 30 s doubling to 1 h, ±20 %
+  jitter, poison after 5) and `ApplyFailure`, which returns READY with a backoff or BLOCKED with
+  `blockedReason: "poison"` and the system label `poisoned` (on `retryable:false` at once), and
+  un-poison, which resets `claimAttempts` and removes the label; the auto-unblock guard, which never
+  readies a poisoned task; the five roles and the tier ladder; the posture of the 93 target tools
+  with the capability grant check (anything not exempt is governed) and the least-privilege worker
+  grant; the audit descriptors of the 14 sensitive tools; the 59 event types, `task.poisoned` in
+  place of `task.dead_lettered`; and the reserved labels `cancelled` and `poisoned`, which a caller
+  cannot add or remove (ADR-0001). Pure functions, not yet called by any tool.
 - `internal/domain`: the six ticket statuses and the fixed transition table (same-status moves
   legal; `CANCELLED` and `DEAD_LETTER` refused as `VALIDATION`), with allowed-next and shortest-path
   guidance on `INVALID_TRANSITION`; the error model (13 codes, `STALE`, `RATE_LIMITED` and `INTERNAL`
