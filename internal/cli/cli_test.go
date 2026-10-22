@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/migrations"
 )
 
@@ -224,6 +225,120 @@ func TestServeMigratesBeforeListening(t *testing.T) {
 	case code := <-done:
 		if code != 0 {
 			t.Fatalf("serve exited %d: %s", code, errb.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not stop on SIGINT")
+	}
+}
+
+// Two `migrate` runs on one fresh SQLite file at once both succeed, and the schema ends at the
+// binary's version: the data-dir lock lets one migrate while the other waits, then finds no change.
+// Without it they race in goose's Up ("table … already exists", SQLITE_BUSY). flock locks belong
+// to the open file, so two runs in one process contend as two processes do.
+func TestFirstMigrationsOnOneFileBothSucceed(t *testing.T) {
+	n := sqliteMigrations(t)
+	const rounds = 30
+	failed := 0
+	var first string
+	for r := 0; r < rounds; r++ {
+		path := filepath.Join(t.TempDir(), "race.db")
+		t.Setenv("BATONDECK_DATABASE_URL", path)
+		type result struct {
+			code      int
+			out, errs string
+		}
+		results := make(chan result, 2)
+		start := make(chan struct{})
+		for i := 0; i < 2; i++ {
+			go func() {
+				<-start
+				code, out, errs := run("migrate")
+				results <- result{code, out, errs}
+			}()
+		}
+		close(start)
+		for i := 0; i < 2; i++ {
+			if res := <-results; res.code != 0 {
+				failed++
+				if first == "" {
+					first = res.errs
+				}
+			}
+		}
+		if rows := gooseRows(t, path); rows != 1+n {
+			t.Fatalf("round %d: goose_db_version holds %d rows, want %d", r, rows, 1+n)
+		}
+	}
+	if failed > 0 {
+		t.Fatalf("%d of %d concurrent first migrations failed, the first with: %s", failed, 2*rounds, first)
+	}
+}
+
+// A serve that starts beside another running serve (the data-dir lock already shared) does not
+// migrate: on an unmigrated file it refuses, naming the schema as not migrated; on a migrated one it
+// joins and answers /healthz.
+func TestAServeBesideAnotherDoesNotMigrate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "beside.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	running, err := core.AcquireServeLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Share(); err != nil {
+		t.Fatal(err)
+	}
+	var errb bytes.Buffer
+	if code := Run([]string{"serve"}, "x", io.Discard, &errb); code != 1 || !strings.Contains(errb.String(), "it has not been migrated") {
+		t.Fatalf("serve beside a running serve, on an unmigrated file: %d %q", code, errb.String())
+	}
+	if err := running.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	if running, err = core.AcquireServeLock(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer running.Release()
+	if err := running.Share(); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	t.Setenv("BATONDECK_LISTEN", addr)
+	errb.Reset()
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		select {
+		case code := <-done:
+			t.Fatalf("serve beside a running serve exited %d before listening: %s", code, errb.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("serve beside a running serve did not answer /healthz: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 || !strings.Contains(errb.String(), "migrated by the serve already holding the data dir") {
+			t.Fatalf("serve beside a running serve: exit %d, log %q", code, errb.String())
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("serve did not stop on SIGINT")
