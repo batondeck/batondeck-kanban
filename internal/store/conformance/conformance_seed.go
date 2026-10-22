@@ -12,8 +12,9 @@ import (
 // subtasks,audit,toolcalls,agentsessions,wakesessions,attachments,blobs,search}.go) share. Each runs
 // as one subtest named for its area, which SKIPS, naming the task that builds the area, while the
 // engine's methods are unbuilt (store.UnbuiltTask), so an engine is never failed for a lane not
-// merged yet. A battery whose rows hang off a task stands on a seeder; no engine offers one until
-// store.Tasks exists (R0.18), and until then such a battery skips saying so.
+// merged yet. A battery whose rows hang off a task stands on a seeder; an engine gets one through
+// the adapter R0.10 writes here over store.Projects, Boards and Tasks, and a built area on a store
+// without one FAILS.
 
 // seedTaskInput is a task to put in place. Status "" is READY.
 type seedTaskInput struct {
@@ -84,14 +85,15 @@ func wantErr(t *testing.T, err error, code domain.Code, entity string) *domain.B
 	return e
 }
 
-// seeded is a migrated store and its seeder, with one project and board in place; it skips when
-// the store cannot seed.
+// seeded is a migrated store and its seeder, with one project and board in place. It fails when
+// the store cannot seed: area() has already found the area built, so a missing seeder would
+// otherwise pass the battery as a skip.
 func seeded(t *testing.T, newStore Factory) (store.Store, seeder, string, string) {
 	t.Helper()
 	s := migrated(t, newStore)
 	sd, ok := s.(seeder)
 	if !ok {
-		t.Skip("this battery stands on projects, boards and tasks, which this store cannot seed until store.Tasks exists (R0.18)")
+		t.Fatalf("the area is built, but this store has no seeder for the projects, boards and tasks the battery stands on: the engine seeder adapter (conformance_seed.go, over store.Projects, Boards and Tasks) is R0.10's")
 	}
 	p, b, err := sd.seedProject(context.Background())
 	if err != nil {

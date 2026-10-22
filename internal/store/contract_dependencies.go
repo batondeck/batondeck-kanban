@@ -40,6 +40,8 @@ type AddEdgeInput struct {
 // to); an unknown type or an empty creator is domain.Validation. A refused call writes nothing: no
 // edge and no cache entry. Status is never changed here: the auto-unblock decision
 // (domain.DecideUnblock, domain.AutoReady) is the service's, over SetCaches and Tasks.SetStatus.
+// No call here changes a task's version, caches included: the bump is the caller's, once per
+// mutation (service.mutate, ADR-0003), so an add_dependency moves each task's version at most once.
 // Lists are in (ts, id) order and not paginated.
 type Dependencies interface {
 	// AddEdge adds the edge. For blocks it runs domain.CheckCycle over the project's blocks edges
@@ -57,8 +59,8 @@ type Dependencies interface {
 	// ListDependents is the edges whose FromTaskID is the task: what waits on it.
 	ListDependents(ctx context.Context, projectID, taskID string) ([]DependencyEdge, error)
 	// SetCaches replaces the task's blockedBy and blocks with the lists given, in their order (nil
-	// is empty). It is the write of an unblock decision: a blocker reaching DONE leaves its edge in
-	// place and leaves the dependent's blockedBy.
+	// is empty). It writes an unblock decision: when a blocker reaches DONE its edge stays, and its
+	// id is removed from the dependent's blockedBy.
 	SetCaches(ctx context.Context, projectID, taskID string, blockedBy, blocks []string) error
 }
 

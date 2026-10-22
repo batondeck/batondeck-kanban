@@ -314,16 +314,22 @@ func (r *reference) ReadMemory(_ context.Context, projectID, taskID string, q st
 		return nil, invalid("ReadMemory reads the task scopes")
 	}
 	at := now()
-	var out []store.MemoryEntry
+	var window []store.MemoryEntry
 	for _, e := range r.st.memory {
-		if e.ProjectID == projectID && e.TaskID == taskID && taskScope(e.Scope) && live(e, at) &&
-			(q.Scope == "" || e.Scope == q.Scope) && (q.Key == "" || e.Key == q.Key) &&
+		if e.ProjectID == projectID && e.TaskID == taskID && taskScope(e.Scope) {
+			window = append(window, e)
+		}
+	}
+	newestFirst(window)
+	window = window[:min(len(window), clamp(q.Limit, 200, 200))]
+	out := []store.MemoryEntry{}
+	for _, e := range window {
+		if live(e, at) && (q.Scope == "" || e.Scope == q.Scope) && (q.Key == "" || e.Key == q.Key) &&
 			(e.Scope != store.MemoryAgent || e.Author == q.Identity) {
 			out = append(out, e)
 		}
 	}
-	newestFirst(out)
-	return out[:min(len(out), clamp(q.Limit, 200, 200))], nil
+	return out, nil
 }
 
 func (r *reference) RecallMemory(_ context.Context, q store.RecallMemoryQuery) ([]store.MemoryEntry, error) {
@@ -331,16 +337,17 @@ func (r *reference) RecallMemory(_ context.Context, q store.RecallMemoryQuery) (
 		return nil, invalid("bad recall")
 	}
 	at := now()
-	var out []store.MemoryEntry
+	var rows []store.MemoryEntry
 	for _, e := range r.st.memory {
 		mine := (q.Scope == store.MemoryProject && e.Scope == store.MemoryProject && e.ProjectID == q.ProjectID) ||
 			(q.Scope == store.MemoryAgentGlobal && e.Scope == store.MemoryAgentGlobal && e.Author == q.Identity)
-		if mine && live(e, at) && (q.Key == "" || e.Key == q.Key) {
-			out = append(out, e)
+		if mine && (q.Key == "" || e.Key == q.Key) && (q.Key == "" || live(e, at)) {
+			rows = append(rows, e)
 		}
 	}
-	newestFirst(out)
-	return out[:min(len(out), q.Limit)], nil
+	newestFirst(rows)
+	rows = rows[:min(len(rows), q.Limit)]
+	return slices.DeleteFunc(rows, func(e store.MemoryEntry) bool { return !live(e, at) }), nil
 }
 
 func (r *reference) DeleteExpiredMemory(_ context.Context, at int64, limit int) (int64, error) {
@@ -844,7 +851,7 @@ func (r *reference) hits(projectID, query string, f store.SearchFilter) ([]store
 	}
 	var out []store.SearchHit
 	for _, tk := range r.st.tasks {
-		if tk.projectID != projectID || (f.BoardID != "" && tk.boardID != f.BoardID) || (f.Statuses != nil && !slices.Contains(f.Statuses, tk.status)) {
+		if tk.projectID != projectID || (f.BoardID != "" && tk.boardID != f.BoardID) || (len(f.Statuses) > 0 && !slices.Contains(f.Statuses, tk.status)) {
 			continue
 		}
 		var tokens []string

@@ -134,6 +134,17 @@ func search(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("AnEmptyStatusListIsNoFilter", func(t *testing.T) {
+			s, p, _ := corpus(t)
+			page, err := s.SearchTasks(ctx, p, "login", store.SearchFilter{Statuses: []domain.Status{}}, "", 0)
+			noErr(t, err)
+			n, err := s.CountSearch(ctx, p, "login", store.SearchFilter{Statuses: []domain.Status{}})
+			noErr(t, err)
+			if got := ids(page.Hits); !slices.Equal(got, []string{"T-2", "T-3", "T-6"}) || n != 3 {
+				t.Fatalf("an empty status list matched %v (count %d), want every status: [T-2 T-3 T-6]", got, n)
+			}
+		})
+
 		t.Run("NoHitIsAnEmptyPage", func(t *testing.T) {
 			s, p, _ := corpus(t)
 			page, err := s.SearchTasks(ctx, p, "zeta", store.SearchFilter{}, "", 0)

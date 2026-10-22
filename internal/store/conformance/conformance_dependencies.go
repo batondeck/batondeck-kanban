@@ -32,6 +32,22 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 			return out
 		}
+		// versions is each task's version: no Dependencies call moves it, the caller bumps once per
+		// mutation (service.mutate), so a battery compares the versions before and after its calls.
+		versions := func(t *testing.T, sd seeder, p string, tasks ...string) []int64 {
+			t.Helper()
+			out := make([]int64, len(tasks))
+			for i, task := range tasks {
+				out[i] = stateOf(t, sd, p, task).Version
+			}
+			return out
+		}
+		unbumped := func(t *testing.T, sd seeder, p string, before []int64, tasks ...string) {
+			t.Helper()
+			if after := versions(t, sd, p, tasks...); !slices.Equal(after, before) {
+				t.Fatalf("versions of %v moved %v -> %v across Dependencies calls: the bump is the caller's", tasks, before, after)
+			}
+		}
 		wantCaches := func(t *testing.T, sd seeder, p, task string, blockedBy, blocksList []string) {
 			t.Helper()
 			st := stateOf(t, sd, p, task)
@@ -43,6 +59,7 @@ func dependencies(t *testing.T, newStore Factory) {
 		t.Run("AddEdgeWritesTheEdgeAndBothCaches", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b")
+			before := versions(t, sd, p, ts...)
 			e, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
 			noErr(t, err)
 			if e.ID == "" || e.TS == 0 || e.ProjectID != p || e.FromTaskID != ts[0] || e.ToTaskID != ts[1] || e.Type != store.DependencyBlocks || e.CreatedBy != "alice" {
@@ -50,6 +67,7 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 			wantCaches(t, sd, p, ts[0], []string{}, []string{ts[1]})
 			wantCaches(t, sd, p, ts[1], []string{ts[0]}, []string{})
+			unbumped(t, sd, p, before, ts...)
 			blockers, err := s.ListBlockers(ctx, p, ts[1])
 			noErr(t, err)
 			dependents, err := s.ListDependents(ctx, p, ts[0])
@@ -67,6 +85,7 @@ func dependencies(t *testing.T, newStore Factory) {
 		t.Run("ARefusedCycleLeavesNoPartialEdgeOrCacheEntry", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")
+			before := versions(t, sd, p, ts...)
 			a, bb, c := ts[0], ts[1], ts[2]
 			_, err := s.AddEdge(ctx, blocks(p, a, bb))
 			noErr(t, err)
@@ -87,6 +106,7 @@ func dependencies(t *testing.T, newStore Factory) {
 			wantCaches(t, sd, p, a, []string{}, []string{bb})
 			wantCaches(t, sd, p, bb, []string{a}, []string{c})
 			wantCaches(t, sd, p, c, []string{bb}, []string{})
+			unbumped(t, sd, p, before, ts...)
 		})
 
 		t.Run("ARefusalInsideAtomicallyRollsBackTheEdgesBeforeIt", func(t *testing.T) {
@@ -137,6 +157,7 @@ func dependencies(t *testing.T, newStore Factory) {
 		t.Run("RemoveEdgeRemovesTheEdgeAndItsCacheEntries", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")
+			before := versions(t, sd, p, ts...)
 			ab, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
 			noErr(t, err)
 			_, err = s.AddEdge(ctx, blocks(p, ts[2], ts[1]))
@@ -151,6 +172,7 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 			wantCaches(t, sd, p, ts[0], []string{}, []string{})
 			wantCaches(t, sd, p, ts[1], []string{ts[2]}, []string{})
+			unbumped(t, sd, p, before, ts...)
 			_, err = s.RemoveEdge(ctx, p, ab.ID)
 			wantErr(t, err, domain.CodeNotFound, "DependencyEdge")
 		})
@@ -158,10 +180,12 @@ func dependencies(t *testing.T, newStore Factory) {
 		t.Run("SetCachesReplacesBothInOrder", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			task := seedTasks(t, sd, p, b, "a")[0]
+			before := versions(t, sd, p, task)
 			noErr(t, s.SetCaches(ctx, p, task, []string{"T-9", "T-7"}, []string{"T-8"}))
 			wantCaches(t, sd, p, task, []string{"T-9", "T-7"}, []string{"T-8"})
 			noErr(t, s.SetCaches(ctx, p, task, nil, nil))
 			wantCaches(t, sd, p, task, []string{}, []string{})
+			unbumped(t, sd, p, before, task)
 			wantErr(t, s.SetCaches(ctx, p, "T-404", nil, nil), domain.CodeNotFound, "Task")
 		})
 

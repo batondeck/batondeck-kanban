@@ -54,7 +54,7 @@ type WriteMemoryInput struct {
 
 // ReadMemoryQuery filters a task's entries. Scope "" is all three task scopes; Key "" is every key.
 // Identity is the reader: agent entries of other authors are not returned. Limit <= 0 is 200 and a
-// limit above 200 is 200.
+// limit above 200 is 200; it cuts the window the filters apply to (Memory.ReadMemory).
 type ReadMemoryQuery struct {
 	Scope    MemoryScope
 	Key      string
@@ -63,7 +63,8 @@ type ReadMemoryQuery struct {
 }
 
 // RecallMemoryQuery reads durable memory: Scope project reads ProjectID's entries, Scope
-// agent_global reads Identity's. Key "" is every key, else that key exactly. Limit is 1 to 1000.
+// agent_global reads Identity's. Key "" is every key, else that key exactly. Limit (conductor's k)
+// is 1 to 1000.
 type RecallMemoryQuery struct {
 	Scope     MemoryScope
 	ProjectID string
@@ -76,7 +77,8 @@ type RecallMemoryQuery struct {
 // task_id), a project entry under project_id, an agent_global entry under its author; an entry's id
 // is unique on its own. Every read leaves out an entry whose ExpiresAt has passed, judged at the
 // read, before any sweep has run (DeleteExpiredMemory is the sweep, run by retention). Errors: a
-// missing task is domain.NotFound("Task", id), a missing project domain.NotFound("Project", id); an
+// missing task is domain.NotFound("Task", id), a missing project domain.NotFound("Project", id), a
+// BlobSHA256 naming no blob domain.NotFound("Blob", sha256); an
 // unknown scope, a task scope without a TaskID, a project scope without a ProjectID, an empty key or
 // author, a read of a durable scope through ReadMemory and a recall limit outside 1..1000 are
 // domain.Validation. Writes mint a new entry every call: there is no upsert on key. The area is
@@ -84,11 +86,17 @@ type RecallMemoryQuery struct {
 type Memory interface {
 	// WriteMemory stores a new entry, stamped with a new id and the current time.
 	WriteMemory(ctx context.Context, in WriteMemoryInput) (MemoryEntry, error)
-	// ReadMemory is the task's live entries matching q.
+	// ReadMemory is window first, then filter, conductor's order (store.ts readMemory): it takes the
+	// task's newest q.Limit task, agent and shared entries, of every author, live or expired, and
+	// only then applies q.Scope, q.Key, the agent privacy and the TTL to that window. A read can
+	// therefore return fewer than q.Limit entries while older matches exist.
 	ReadMemory(ctx context.Context, projectID, taskID string, q ReadMemoryQuery) ([]MemoryEntry, error)
-	// RecallMemory is the live durable entries of one project or one identity matching q. A missing
-	// project or an identity with nothing recalls an empty list: recall reads one scope key and
-	// checks nothing else (the caller has authorised the project).
+	// RecallMemory is the durable entries of one project or one identity, newest first, at most
+	// q.Limit, as conductor's recallFrom reads them. With no Key it takes the newest q.Limit entries
+	// first and then leaves out the expired ones, so it can return fewer than q.Limit. With a Key it
+	// is the live entries of that key, at most q.Limit. A missing project or an identity with nothing
+	// recalls an empty list: recall reads one scope key and checks nothing else (the caller has
+	// authorised the project).
 	RecallMemory(ctx context.Context, q RecallMemoryQuery) ([]MemoryEntry, error)
 	// DeleteExpiredMemory deletes at most limit entries whose ExpiresAt is at or before now and
 	// returns how many it deleted. limit <= 0 is domain.Validation.

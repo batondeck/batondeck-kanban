@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,53 @@ func memory(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			if !slices.Equal(keys(limited), []string{"k-agent"}) {
 				t.Fatalf("limit 1 reads %v, want the newest", keys(limited))
+			}
+		})
+
+		t.Run("ReadTakesTheNewestWindowFirstThenFilters", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "old"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryShared, Key: "n1"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryAgent, Key: "bobs", Author: "bob"})
+			read := func(q store.ReadMemoryQuery) []string {
+				t.Helper()
+				q.Identity = "alice"
+				es, err := s.ReadMemory(ctx, p, task, q)
+				noErr(t, err)
+				return keys(es)
+			}
+			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 2}); len(got) != 0 {
+				t.Fatalf("key old in a window of 2 reads %v, want none: the window [bobs n1] is cut before the key filter", got)
+			}
+			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 3}); !slices.Equal(got, []string{"old"}) {
+				t.Fatalf("key old in a window of 3 reads %v, want [old]", got)
+			}
+			if got := read(store.ReadMemoryQuery{Limit: 1}); len(got) != 0 {
+				t.Fatalf("alice with a window of 1 reads %v, want none: bob's private entry holds the slot", got)
+			}
+		})
+
+		t.Run("RecallWithNoKeyIsTheNewestKThenLiveAndWithAKeyLiveThenK", func(t *testing.T) {
+			s, _, p, _ := seeded(t, newStore)
+			past := time.Now().Add(-time.Second).UnixMilli()
+			write(t, s, store.WriteMemoryInput{ProjectID: p, Scope: store.MemoryProject, Key: "k"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, Scope: store.MemoryProject, Key: "p2"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, Scope: store.MemoryProject, Key: "k", ExpiresAt: past})
+			recall := func(key string, limit int) []string {
+				t.Helper()
+				es, err := s.RecallMemory(ctx, store.RecallMemoryQuery{Scope: store.MemoryProject, ProjectID: p, Key: key, Limit: limit})
+				noErr(t, err)
+				return keys(es)
+			}
+			if got := recall("", 2); !slices.Equal(got, []string{"p2"}) {
+				t.Fatalf("no key, k 2 recalls %v, want [p2]: the newest two, then the expired one left out", got)
+			}
+			if got := recall("", 3); !slices.Equal(got, []string{"p2", "k"}) {
+				t.Fatalf("no key, k 3 recalls %v, want [p2 k] newest first", got)
+			}
+			if got := recall("k", 1); !slices.Equal(got, []string{"k"}) {
+				t.Fatalf("key k, k 1 recalls %v, want the live k: a keyed recall drops the expired before k", got)
 			}
 		})
 
@@ -207,6 +255,8 @@ func memory(t *testing.T, newStore Factory) {
 			wantErr(t, err, domain.CodeNotFound, "Task")
 			_, err = s.WriteMemory(ctx, store.WriteMemoryInput{ProjectID: "P-missing", Scope: store.MemoryProject, Key: "k", Author: "alice"})
 			wantErr(t, err, domain.CodeNotFound, "Project")
+			_, err = s.WriteMemory(ctx, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "k", Author: "alice", BlobSHA256: strings.Repeat("f", 64)})
+			wantErr(t, err, domain.CodeNotFound, "Blob")
 			left, err := s.ReadMemory(ctx, p, task, store.ReadMemoryQuery{Identity: "alice"})
 			noErr(t, err)
 			if len(left) != 0 {

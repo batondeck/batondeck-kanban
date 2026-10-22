@@ -6,7 +6,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
-// SearchFilter narrows a search: BoardID "" is every board, Statuses nil is every status.
+// SearchFilter narrows a search: BoardID "" is every board; Statuses nil or empty is every status
+// (an empty list is no filter, never "match nothing"; conductor has no status filter to follow).
 type SearchFilter struct {
 	BoardID  string
 	Statuses []domain.Status
