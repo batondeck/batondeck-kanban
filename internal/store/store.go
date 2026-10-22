@@ -162,9 +162,11 @@ func tableExists(ctx context.Context, st database.Store, conn database.DBTxConn)
 	return err == nil || errors.Is(err, database.ErrVersionNotFound), nil
 }
 
-// ensureVersionTable is what goose's Up does before its first migration (provider_run.go,
-// tryEnsureVersionTable): create the version table and its version-0 row in one transaction,
-// unless it is there. On Postgres it holds the migration's session lock while it does.
+// ensureVersionTable creates goose's version table and its version-0 row, unless it is there, with
+// the check and the creation in ONE transaction. goose's own tryEnsureVersionTable checks outside
+// its transaction and retries the race that opens; here there is no race to retry: on SQLite the
+// transaction begins IMMEDIATE, so the check is made under the write lock, and on Postgres the
+// migration's session lock is held around the whole of it.
 func (m migrator) ensureVersionTable(ctx context.Context) (err error) {
 	st, err := m.versionTable()
 	if err != nil {
@@ -185,16 +187,19 @@ func (m migrator) ensureVersionTable(ctx context.Context) (err error) {
 			}
 		}()
 	}
-	exists, err := tableExists(ctx, st, conn)
-	if err != nil {
-		return fmt.Errorf("store: version table: %w", err)
-	}
-	if exists {
-		return nil
-	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
+	}
+	// Inside the transaction: Postgres answers from the catalog, and SQLite's fallback read of a
+	// missing table fails one statement without ending the transaction.
+	exists, err := tableExists(ctx, st, tx)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: version table: %w", err)
+	}
+	if exists {
+		return tx.Rollback()
 	}
 	if err := st.CreateVersionTable(ctx, tx); err != nil {
 		_ = tx.Rollback()
