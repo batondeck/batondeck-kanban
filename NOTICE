@@ -9,3 +9,13 @@ was copied from hdtp-gateway (https://github.com/humandelegatedtrustprotocol/hdt
 commit 3324f09), Apache-2.0, and modified. Its NOTICE reads, in the part that covers what was
 copied: "hdtp-gateway — the HDTP node / Copyright 2026 Sumit Agrawal". The copy of frp that
 hdtp-gateway carries was not copied.
+
+The web UI under web/ (its sources, tests, package.json and lockfile, index.html) was copied from
+the web app of the hosted BatonDeck (the private repository tech-sumit/batondeck, known internally
+as conductor, at commit 5e2baafa) and trimmed to this product's scope.
+That app is proprietary; its owner, Sumit Agrawal, relicenses the copied files under the Apache
+License, Version 2.0, as part of this repository. Its investor deck and its design bundle were not
+copied. The brand files under web/public/brand/ are hdtp-web-kit release 0.2.0, as vendored in
+hdtp-gateway at commit 3324f09, pinned by web/kit/kit.lock; the BatonDeck and HDTP marks they carry
+are the owner's, and the licence grants no right to use them (Apache-2.0, section 6). web/tools/kit.mjs
+was copied from hdtp-gateway at the same commit and cut to the lock check.
