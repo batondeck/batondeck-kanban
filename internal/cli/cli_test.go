@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/batondeck/batondeck-kanban/migrations"
 )
 
 func run(args ...string) (int, string, string) {
@@ -115,18 +119,32 @@ func gooseRows(t *testing.T, path string) int {
 	return n
 }
 
-func TestMigrateWithNoMigrationsMakesTheVersionTable(t *testing.T) {
+// sqliteMigrations is the number of SQLite migrations the binary embeds.
+func sqliteMigrations(t *testing.T) int {
+	t.Helper()
+	migs, err := fs.Glob(migrations.SQLite, "sqlite/*.sql")
+	if err != nil || len(migs) == 0 {
+		t.Fatalf("the embedded SQLite migrations: %v, %d files", err, len(migs))
+	}
+	return len(migs)
+}
+
+// migrate applies the embedded migrations to a fresh file, and a second run applies nothing and
+// says so.
+func TestMigrateAppliesTheSchemaThenNoChange(t *testing.T) {
+	n := sqliteMigrations(t)
 	path := filepath.Join(t.TempDir(), "sub", "bk.db")
 	t.Setenv("BATONDECK_DATABASE_URL", path)
 	code, out, errs := run("migrate")
-	if code != 0 || out != "migrate: sqlite: no migrations in this binary; goose's version table is in place\n" {
-		t.Fatalf("migrate: %d %q %q", code, out, errs)
+	if want := fmt.Sprintf("migrate: sqlite: %d applied, schema at version %d\n", n, n); code != 0 || out != want {
+		t.Fatalf("migrate: %d %q %q, want %q", code, out, errs, want)
 	}
-	if n := gooseRows(t, path); n != 1 {
-		t.Fatalf("goose_db_version holds %d rows, want its version-0 row", n)
+	if rows := gooseRows(t, path); rows != 1+n {
+		t.Fatalf("goose_db_version holds %d rows, want %d: version 0 and one per migration", rows, 1+n)
 	}
-	if code, out, errs := run("migrate"); code != 0 || gooseRows(t, path) != 1 {
-		t.Fatalf("a second migrate: %d %q %q, %d rows", code, out, errs, gooseRows(t, path))
+	code, out, errs = run("migrate")
+	if want := fmt.Sprintf("migrate: sqlite: no change, schema at version %d\n", n); code != 0 || out != want || gooseRows(t, path) != 1+n {
+		t.Fatalf("a second migrate: %d %q %q, %d rows; want %q", code, out, errs, gooseRows(t, path), want)
 	}
 }
 
@@ -164,7 +182,7 @@ func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 }
 
 // serve migrates before it listens: by the time /healthz answers, a fresh SQLite file holds
-// goose's version table.
+// every embedded migration.
 func TestServeMigratesBeforeListening(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -195,8 +213,8 @@ func TestServeMigratesBeforeListening(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if n := gooseRows(t, path); n != 1 {
-		t.Fatalf("goose_db_version holds %d rows once serve listens, want 1", n)
+	if n, want := gooseRows(t, path), 1+sqliteMigrations(t); n != want {
+		t.Fatalf("goose_db_version holds %d rows once serve listens, want %d", n, want)
 	}
 	// serve answers SIGINT, which its signal.NotifyContext holds by the time it listens.
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
