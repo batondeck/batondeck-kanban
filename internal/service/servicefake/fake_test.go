@@ -208,14 +208,15 @@ func TestTriggerWinsOverAConfiguredResult(t *testing.T) {
 	wantCode(t, "Tasks.Create", "a customFields key", err, domain.CodeValidation)
 }
 
-// TestSetRefusesANilRequiredSlice: a configured response whose required slice is nil (null on
-// the wire, which output validation refuses) panics, at any depth; an unconfigured method's zero
-// response carries [] for every required slice.
+// TestSetRefusesANilRequiredSlice: a configured response whose required slice or map is nil (null
+// on the wire, which output validation refuses) panics, at any depth; a zero optional field is off
+// the wire and not inspected; an unconfigured method's zero response carries [] and {}.
 func TestSetRefusesANilRequiredSlice(t *testing.T) {
 	for name, resp := range map[string]any{
 		"top level":  service.ListTasksResp{},
 		"nested":     service.GetTaskResp{Task: service.Task{ID: "T-1"}},
 		"in an item": service.ListTasksResp{Tasks: []service.Task{{ID: "T-1"}}},
+		"a map":      service.ListTasksResp{Tasks: []service.Task{noFields}},
 	} {
 		func() {
 			defer func() {
@@ -231,13 +232,23 @@ func TestSetRefusesANilRequiredSlice(t *testing.T) {
 		}()
 	}
 	New().Set("Tasks.Get", service.GetTaskResp{Task: task("T-1")}, nil) // filled: accepted
+	next := task("T-1")
+	New().Set("Lifecycle.Next", service.NextTaskResp{Task: &next}, nil) // inbox omitted: accepted
 	resp, err := New().Services().Tasks.List(context.Background(), domain.Caller{}, service.ListTasksReq{ProjectID: "P-1"})
 	if err != nil || resp.Tasks == nil {
 		t.Errorf("an unconfigured Tasks.List = %+v, %v; want tasks [] and nil", resp, err)
 	}
+	board, err := New().Services().Boards.Get(context.Background(), domain.Caller{}, service.GetBoardReq{ProjectID: "P-1", BoardID: "B-1"})
+	if err != nil || board.TaskCounts == nil {
+		t.Errorf("an unconfigured Boards.Get = %+v, %v; want taskCounts {} and nil", board, err)
+	}
 }
 
-// task is a Task with every required slice filled.
+// noFields is a filled Task but for its nil customFields.
+var noFields = func() service.Task { t := task("T-1"); t.CustomFields = nil; return t }()
+
+// task is a Task with every required slice and map filled.
 func task(id string) service.Task {
-	return service.Task{ID: id, BlockedBy: []string{}, Blocks: []string{}, Labels: []string{}, RequiredCapabilities: []string{}}
+	return service.Task{ID: id, BlockedBy: []string{}, Blocks: []string{}, Labels: []string{}, RequiredCapabilities: []string{},
+		CustomFields: map[string]service.FieldValue{}}
 }

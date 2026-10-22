@@ -44,7 +44,7 @@ type Fake struct {
 }
 
 // New returns a Fake with no results configured: a method then returns its zero response, with []
-// for every required slice, and nil.
+// or {} for every required slice or map, and nil.
 func New() *Fake { return &Fake{results: map[string]result{}} }
 
 // Services returns the fake as the bundle a transport is built from.
@@ -64,7 +64,7 @@ func (f *Fake) Services() service.Services {
 
 // Set configures what method ("Tasks.Get") returns when no trigger fires: resp, which must be the
 // method's response type, and err. It panics on an unknown method, a response of the wrong type, or,
-// when err is nil, a response with a nil required slice (null on the wire, which go-sdk's output
+// when err is nil, a response with a nil required slice or map (null on the wire, which go-sdk's output
 // validation refuses): each is a bug in the test that calls it.
 func (f *Fake) Set(method string, resp any, err error) {
 	want, ok := methods()[method]
@@ -74,8 +74,8 @@ func (f *Fake) Set(method string, resp any, err error) {
 	if reflect.TypeOf(resp) != want {
 		panic(fmt.Sprintf("servicefake: %s returns %s, not %T", method, want, resp))
 	}
-	if path, ok := nilRequiredSlice(reflect.ValueOf(resp), want.Name()); ok && err == nil {
-		panic(fmt.Sprintf("servicefake: %s response has a nil required slice at %s (null on the wire)", method, path))
+	if path, ok := nilRequired(reflect.ValueOf(resp), want.Name()); ok && err == nil {
+		panic(fmt.Sprintf("servicefake: %s response has a nil required slice or map at %s (null on the wire)", method, path))
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -189,12 +189,13 @@ func required(f reflect.StructField) bool {
 	return f.IsExported() && tag != "-" && !strings.Contains(tag, ",omitzero") && !strings.Contains(tag, ",omitempty")
 }
 
-// nilRequiredSlice finds a required slice that is nil, at any depth of v, and names its path.
-func nilRequiredSlice(v reflect.Value, path string) (string, bool) {
+// nilRequired finds a required slice or map that is nil (null on the wire), at any depth of v that
+// is on the wire (a zero optional field is omitted, so it is skipped), and names its path.
+func nilRequired(v reflect.Value, path string) (string, bool) {
 	switch v.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if !v.IsNil() {
-			return nilRequiredSlice(v.Elem(), path)
+			return nilRequired(v.Elem(), path)
 		}
 	case reflect.Struct:
 		for i := range v.NumField() {
@@ -202,24 +203,27 @@ func nilRequiredSlice(v reflect.Value, path string) (string, bool) {
 			if !f.IsExported() {
 				continue
 			}
+			if !required(f) && v.Field(i).IsZero() {
+				continue // omitted on the wire
+			}
 			p := path + "." + f.Name
-			if f.Type.Kind() == reflect.Slice && v.Field(i).IsNil() && required(f) {
+			if k := f.Type.Kind(); (k == reflect.Slice || k == reflect.Map) && v.Field(i).IsNil() && required(f) {
 				return p, true
 			}
-			if q, ok := nilRequiredSlice(v.Field(i), p); ok {
+			if q, ok := nilRequired(v.Field(i), p); ok {
 				return q, true
 			}
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
-			if q, ok := nilRequiredSlice(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); ok {
+			if q, ok := nilRequired(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); ok {
 				return q, true
 			}
 		}
 	case reflect.Map:
 		iter := v.MapRange()
 		for iter.Next() {
-			if q, ok := nilRequiredSlice(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Key())); ok {
+			if q, ok := nilRequired(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Key())); ok {
 				return q, true
 			}
 		}
@@ -227,7 +231,7 @@ func nilRequiredSlice(v reflect.Value, path string) (string, bool) {
 	return "", false
 }
 
-// fillRequiredSlices sets every nil required slice of the addressable struct v, and of its
+// fillRequiredSlices sets every nil required slice or map of the addressable struct v, and of its
 // required struct fields, to an empty one.
 func fillRequiredSlices(v reflect.Value) {
 	if v.Kind() != reflect.Struct {
@@ -242,6 +246,10 @@ func fillRequiredSlices(v reflect.Value) {
 		case reflect.Slice:
 			if fv.IsNil() {
 				fv.Set(reflect.MakeSlice(f.Type, 0, 0))
+			}
+		case reflect.Map:
+			if fv.IsNil() {
+				fv.Set(reflect.MakeMap(f.Type))
 			}
 		case reflect.Struct:
 			fillRequiredSlices(fv)
