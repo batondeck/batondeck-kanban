@@ -65,7 +65,7 @@ Notable changes to batondeck-kanban. The format follows
   (`domain.NotFound`, `domain.Stale(expected, actual)`, `domain.CycleDetected`, `domain.Validation`),
   limits and base64url `{order, id}` cursors. Both engines implement them as stubs returning INTERNAL
   that name the task building each area (R0.10, R0.11, R1.8, R1.9; `store.UnbuiltTask`). The
-  conformance suite gains one battery per area (`conformance_<area>.go`, 57 subtests), which skips an
+  conformance suite gains one battery per area (`conformance_<area>.go`, 60 subtests), which skips an
   area on an engine while it is unbuilt, and `TestContractIIBatteriesOnAReference` runs all of them
   against a map-backed reference: the memory TTL absent on read after expiry before any sweep, a
   refused dependency cycle leaving no partial edge or cache entry, and ten search queries with their
