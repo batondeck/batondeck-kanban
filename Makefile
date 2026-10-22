@@ -105,8 +105,9 @@ sqlc-check:
 		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
 	fi; \
 	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
-		cp -R internal/store/sqlitedb internal/store/pgdb "$$tmp/"; \
-		$(SQLC) generate; \
+		cp -R internal/store/sqlitedb internal/store/pgdb "$$tmp/" \
+			|| { echo "sqlc-check: the generated code is missing - run $(SQLC) generate and commit the result" >&2; exit 1; }; \
+		$(SQLC) generate || { echo "sqlc-check: sqlc generate FAILED" >&2; exit 1; }; \
 		if diff -r "$$tmp/sqlitedb" internal/store/sqlitedb >/dev/null \
 		&& diff -r "$$tmp/pgdb" internal/store/pgdb >/dev/null; then \
 			echo "sqlc-check: generated code matches its sources"; \
@@ -118,12 +119,13 @@ sqlc-check:
 		fi
 
 # web-dist-check builds web/ afresh and fails when the build differs from the committed web/dist
-# by a byte: a changed or deleted file (against HEAD) or a file the commit does not hold. The build
-# writes web/dist in place, so a failure leaves the fresh build there to commit.
+# by a byte: a changed or deleted file (against HEAD) or a file the commit does not hold (git's
+# ignore rules apply, so a .DS_Store is not drift). The build writes web/dist in place, so a
+# failure leaves the fresh build there to commit.
 web-dist-check:
 	@if [ ! -f web/package.json ]; then echo "web-dist-check: no web/package.json yet"; exit 0; fi; \
 	cd web && npm ci && npm run build && cd .. && \
-	if git diff --quiet HEAD -- web/dist && [ -z "$$(git ls-files --others -- web/dist)" ]; then \
+	if git diff --quiet HEAD -- web/dist && [ -z "$$(git ls-files --others --exclude-standard -- web/dist)" ]; then \
 		echo "web-dist-check: web/dist matches a fresh build"; \
 	else \
 		echo "web-dist-check: web/dist is STALE - a fresh build changed it; commit what it wrote:"; \
