@@ -531,12 +531,13 @@ type ToolCall struct {
 }
 
 type User struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	PasswordHash string
-	CreatedAt    int64
-	DisabledAt   sql.NullInt64
+	ID             string
+	Email          string
+	DisplayName    string
+	PasswordHash   string
+	CreatedAt      int64
+	DisabledAt     sql.NullInt64
+	WorkspaceAdmin bool
 }
 
 type WakeSession struct {
