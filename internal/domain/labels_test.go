@@ -18,6 +18,8 @@ func TestCheckCallerLabelsRefuses(t *testing.T) {
 		{"a case and space variant", nil, []string{" Poisoned "}},
 		{"poisoned removed by an update", []string{"ingest", "poisoned"}, []string{"ingest"}},
 		{"cancelled removed by an update", []string{"cancelled"}, nil},
+		{"poisoned kept but respelled", []string{"ingest", "poisoned"}, []string{"ingest", "POISONED"}},
+		{"cancelled kept but padded", []string{"cancelled"}, []string{" cancelled"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := CheckCallerLabels(c.current, c.requested)
@@ -61,4 +63,38 @@ func TestLabelHelpers(t *testing.T) {
 	if !IsSystemLabel("CANCELLED") || IsSystemLabel("ingest") {
 		t.Fatal("IsSystemLabel")
 	}
+}
+
+// Regression (review round 1, B1): a caller's update to a poisoned task's labels, then un-poison, must
+// leave no system label behind under any spelling the check lets through.
+func TestUnpoisonRoundTripAfterCallerUpdate(t *testing.T) {
+	current := []string{"ingest", LabelPoisoned}
+	for _, requested := range [][]string{
+		{"ingest", "POISONED"},
+		{"ingest", " poisoned "},
+		{"ingest", LabelPoisoned, "deploy"},
+	} {
+		if CheckCallerLabels(current, requested) != nil {
+			continue
+		}
+		stored := Unpoison(requested).Labels
+		for _, l := range stored {
+			if IsSystemLabel(l) {
+				t.Errorf("update %q accepted, then Unpoison left %q: the label outlives the reason", requested, stored)
+			}
+		}
+		if again := ApplyFailure(Failure{Labels: requested, Retryable: false}, noJitter, claimNow, 0.5).Labels; countSystem(again) != 1 {
+			t.Errorf("update %q accepted, then ApplyFailure stored %q: two spellings of poisoned", requested, again)
+		}
+	}
+}
+
+func countSystem(labels []string) int {
+	n := 0
+	for _, l := range labels {
+		if IsSystemLabel(l) {
+			n++
+		}
+	}
+	return n
 }

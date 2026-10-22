@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -31,7 +32,8 @@ func IsSystemLabel(l string) bool {
 
 // CheckCallerLabels refuses a caller's label write that adds or removes a system label: current is
 // the task's labels (nil on create), requested the labels the caller asks for. Keeping a system label
-// the task already carries is allowed, so a full-list update that leaves it in place passes.
+// the task already carries is allowed, so a full-list update that leaves it in place passes, provided
+// it is spelled exactly as the constant: the server's WithLabel and WithoutLabel match exactly.
 func CheckCallerLabels(current, requested []string) error {
 	for _, s := range SystemLabels() {
 		had, wants := hasSystemLabel(current, s), hasSystemLabel(requested, s)
@@ -41,6 +43,10 @@ func CheckCallerLabels(current, requested []string) error {
 				map[string]any{"label": s, "systemLabels": SystemLabels()})
 		case had && !wants:
 			return Validation(fmt.Sprintf("label %q is a system label and cannot be removed by hand", s),
+				map[string]any{"label": s, "systemLabels": SystemLabels()})
+		case wants && !slices.Contains(requested, s):
+			// Kept, but respelled: stored as given, it would escape WithoutLabel's exact match.
+			return Validation(fmt.Sprintf("label %q is a system label and must be kept as %q", s, s),
 				map[string]any{"label": s, "systemLabels": SystemLabels()})
 		}
 	}
