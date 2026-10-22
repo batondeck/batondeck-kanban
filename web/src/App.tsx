@@ -214,11 +214,9 @@ function Shell() {
  * A ROUTE THE CALLER MAY NOT HAVE — rendered as an explicit refusal, never as a bounce (T-378).
  *
  * *** WHY NOT `<Navigate to="/projects">`, WHICH IS WHAT THIS REPLACED. *** A silent redirect is
- * indistinguishable from a broken link, a stale bookmark, and a bug. A caller who types `/admin` and
+ * indistinguishable from a broken link, a stale bookmark, and a bug. A caller who types `/oncall` and
  * lands on `/projects` cannot tell whether they lack the permission, the page moved, or the app
- * failed — and neither can whoever they report it to. That is the same argument
- * `docs/runbooks/workos-admin-verification.md` makes about reading a response BODY rather than a
- * status code: the distinguishable answer is the useful one.
+ * failed — and neither can whoever they report it to. The distinguishable answer is the useful one.
  *
  * *** THIS HIDES, IT DOES NOT ENFORCE. *** The BFF gates these routes and the core gates the tools
  * behind them. See the header of `permissions.ts` — never remove a server check because this exists.
