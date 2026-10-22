@@ -20,6 +20,7 @@ func TestCheckCallerLabelsRefuses(t *testing.T) {
 		{"cancelled removed by an update", []string{"cancelled"}, nil},
 		{"poisoned kept but respelled", []string{"ingest", "poisoned"}, []string{"ingest", "POISONED"}},
 		{"cancelled kept but padded", []string{"cancelled"}, []string{" cancelled"}},
+		{"poisoned kept with a respelling beside it", []string{"poisoned"}, []string{"poisoned", "POISONED"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := CheckCallerLabels(c.current, c.requested)
@@ -69,14 +70,17 @@ func TestLabelHelpers(t *testing.T) {
 // leave no system label behind under any spelling the check lets through.
 func TestUnpoisonRoundTripAfterCallerUpdate(t *testing.T) {
 	current := []string{"ingest", LabelPoisoned}
+	accepted := 0
 	for _, requested := range [][]string{
 		{"ingest", "POISONED"},
 		{"ingest", " poisoned "},
+		{"ingest", LabelPoisoned, "POISONED"},
 		{"ingest", LabelPoisoned, "deploy"},
 	} {
 		if CheckCallerLabels(current, requested) != nil {
 			continue
 		}
+		accepted++
 		stored := Unpoison(requested).Labels
 		for _, l := range stored {
 			if IsSystemLabel(l) {
@@ -86,6 +90,10 @@ func TestUnpoisonRoundTripAfterCallerUpdate(t *testing.T) {
 		if again := ApplyFailure(Failure{Labels: requested, Retryable: false}, noJitter, claimNow, 0.5).Labels; countSystem(again) != 1 {
 			t.Errorf("update %q accepted, then ApplyFailure stored %q: two spellings of poisoned", requested, again)
 		}
+	}
+	// Not vacuous: a check refusing every update would skip every assertion above.
+	if accepted == 0 {
+		t.Fatal("no update was accepted: the canonical keep must pass")
 	}
 }
 
