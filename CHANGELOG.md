@@ -18,3 +18,9 @@ Notable changes to batondeck-kanban. The format follows
   area; the Makefile gate
   (`make check`: fmt vet staticcheck notices-check release-check test), the githooks, the
   distroless Dockerfile, THIRD_PARTY_NOTICES and RELEASING.md.
+- The gate: `pre-commit` scans the INDEX for credentials (`scripts/check-secrets.py`; a documented
+  fake carries `secret-scan-ok: <reason>`, and a marker with no reason fails); `pre-push` starts
+  `postgres:16-alpine` in Docker, exports `BATONDECK_TEST_POSTGRES_DSN` and runs `make check`,
+  refusing the push when Docker is absent; `make check` gains `sqlc-check` and `web-dist-check`
+  (each prints a skip line until `queries/*.sql` and `web/package.json` exist); a GitHub Actions
+  `check` workflow runs `make check` on pull requests against a `postgres:16` service.

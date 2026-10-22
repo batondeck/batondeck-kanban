@@ -1,0 +1,41 @@
+# The gate for a contributor who has not run `make hooks`: the same `make check` githooks/pre-push
+# runs, on both engines, against a Postgres service container. The job name `check` is the status
+# context branch protection on main requires. It needs no secret: the DSN is the service's own.
+name: check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: batondeck
+          POSTGRES_PASSWORD: batondeck
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U batondeck"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      GOWORK: "off"
+      BATONDECK_TEST_POSTGRES_DSN: postgres://batondeck:batondeck@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # scripts/notices.mjs (notices-check) and the web build (web-dist-check) run on Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # check includes web-dist-check: the web build, byte-compared against the committed web/dist.
+      - run: make check

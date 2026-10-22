@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck dist sbom build check fmt vet test clean
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check dist sbom build check fmt vet test clean
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -63,7 +63,7 @@ release-check:
 hooks:
 	git config core.hooksPath githooks
 	@echo "hooks installed: $$(git config core.hooksPath)"
-	@echo "pre-commit styles staged Go and refuses files over 5 MiB; commit-msg refuses a local path in the message; pre-push runs make check."
+	@echo "pre-commit scans the index for credentials, styles staged Go and refuses files over 5 MiB; commit-msg refuses a local path in the message; pre-push runs make check on both engines."
 
 # sbom emits CycloneDX for the shipped binary's dependency graph. Pinned, not
 # @latest: a supply-chain document produced by an unpinned tool is worth less.
@@ -90,8 +90,46 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
-# THIRD_PARTY_NOTICES against go.sum, the release fixtures, and the tests under the race detector.
-check: fmt vet staticcheck notices-check release-check test
+# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
+# sources, web/dist against a fresh web build, and the tests under the race detector.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check test
+
+# SQLC pins the generator, built from source at this version (minutes on a cold module cache).
+SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+
+# sqlc-check fails when the committed generated code (internal/store/{sqlitedb,pgdb}, sqlc.yaml's
+# outputs) does not match what the current queries and migrations produce. Until queries/ holds a
+# .sql file there is nothing to generate, and it says so.
+sqlc-check:
+	@if ! find queries -name '*.sql' 2>/dev/null | grep -q .; then \
+		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
+	fi; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		cp -R internal/store/sqlitedb internal/store/pgdb "$$tmp/"; \
+		$(SQLC) generate; \
+		if diff -r "$$tmp/sqlitedb" internal/store/sqlitedb >/dev/null \
+		&& diff -r "$$tmp/pgdb" internal/store/pgdb >/dev/null; then \
+			echo "sqlc-check: generated code matches its sources"; \
+		else \
+			echo "sqlc-check: generated code is STALE - run $(SQLC) generate and commit the result"; \
+			diff -r "$$tmp/sqlitedb" internal/store/sqlitedb | head -20; \
+			diff -r "$$tmp/pgdb" internal/store/pgdb | head -20; \
+			exit 1; \
+		fi
+
+# web-dist-check builds web/ afresh and fails when the build differs from the committed web/dist
+# by a byte: a changed or deleted file (against HEAD) or a file the commit does not hold. The build
+# writes web/dist in place, so a failure leaves the fresh build there to commit.
+web-dist-check:
+	@if [ ! -f web/package.json ]; then echo "web-dist-check: no web/package.json yet"; exit 0; fi; \
+	cd web && npm ci && npm run build && cd .. && \
+	if git diff --quiet HEAD -- web/dist && [ -z "$$(git ls-files --others -- web/dist)" ]; then \
+		echo "web-dist-check: web/dist matches a fresh build"; \
+	else \
+		echo "web-dist-check: web/dist is STALE - a fresh build changed it; commit what it wrote:"; \
+		git status --short --untracked-files=all -- web/dist; \
+		exit 1; \
+	fi
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed

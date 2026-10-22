@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-push: the gate, run here before anything leaves this machine: `make check` (fmt vet
-# staticcheck notices-check release-check test). It starts no Postgres: no Postgres test exists
-# yet, so a DSN would change nothing.
+# staticcheck notices-check release-check sqlc-check web-dist-check test) on both engines, with
+# BATONDECK_TEST_POSTGRES_DSN pointing at a Postgres this hook starts, so every test that needs
+# Postgres runs rather than skips. Without Docker the push is refused.
 #
 # This project does not bypass its hooks: a gate that is wrong is fixed, not skipped.
 set -euo pipefail
@@ -44,5 +45,31 @@ step() {
     exit 1
   fi
 }
+
+# The Postgres engine's tests skip without BATONDECK_TEST_POSTGRES_DSN, so the hook provides one: a
+# NAMED container (the image the engine's tests are written against), removed by name on every
+# way out of this script. The name carries this hook's PID, so two pushes running at once (two
+# worktrees, two builders) never remove each other's database. Without Docker the push is
+# refused — a skipped engine is not a pass.
+pg="batondeck-kanban-prepush-pg-$$"
+if ! docker info >/dev/null 2>&1; then
+  echo "pre-push: Docker is not running, and make check needs it for the Postgres engine's tests." >&2
+  echo "          Start Docker and push again." >&2
+  exit 1
+fi
+trap 'docker rm -f "$pg" >/dev/null 2>&1 || true' EXIT
+docker run -d --name "$pg" -e POSTGRES_USER=batondeck -e POSTGRES_PASSWORD=batondeck \
+  -p 127.0.0.1::5432 postgres:16-alpine >/dev/null
+for _ in $(seq 1 60); do
+  docker exec "$pg" pg_isready -U batondeck -h 127.0.0.1 >/dev/null 2>&1 && break
+  sleep 1
+done
+if ! docker exec "$pg" pg_isready -U batondeck -h 127.0.0.1 >/dev/null 2>&1; then
+  echo "pre-push: the Postgres container $pg did not become ready in 60 s" >&2
+  exit 1
+fi
+port="$(docker port "$pg" 5432/tcp | head -1 | sed 's/.*://')"
+export BATONDECK_TEST_POSTGRES_DSN="postgres://batondeck:batondeck@127.0.0.1:${port}/postgres?sslmode=disable"
+echo "pre-push: Postgres engine on 127.0.0.1:${port} (container $pg), BATONDECK_TEST_POSTGRES_DSN set"
 
 step check
