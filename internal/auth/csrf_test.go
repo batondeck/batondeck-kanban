@@ -19,7 +19,7 @@ func (f *fixture) wantRefusalAudited(t *testing.T, before int, reason string) {
 }
 
 // AC2: a session passes with Sec-Fetch-Site same-origin and is refused, audited, cross-site.
-func TestCSRFSessionSameOriginPassesCrossSiteRefused(t *testing.T) {
+func TestRefusalCSRFCrossSite(t *testing.T) {
 	f := newFixture(t)
 	u := f.addUser(t, "alice", "pw")
 	sess, csrf := f.session(t, "alice")
