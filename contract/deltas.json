@@ -1,0 +1,1386 @@
+{
+  "removedTools": [
+    "add_git_destination",
+    "add_mcp_connection",
+    "add_plugin_file",
+    "approve_version",
+    "call_mounted_tool",
+    "check_access",
+    "create_audience",
+    "create_plugin",
+    "create_registry_asset",
+    "delete_plugin",
+    "discard_version",
+    "finalize_version",
+    "get_feature_flags",
+    "get_marketplace_key",
+    "get_plugin_file",
+    "get_plugin_version",
+    "get_registry_asset",
+    "get_surface_profile",
+    "get_transitions",
+    "list_audiences",
+    "list_git_destinations",
+    "list_mcp_connections",
+    "list_plugin_versions",
+    "list_plugins",
+    "list_registry_assets",
+    "my_plugins",
+    "publish_asset_version",
+    "publish_version",
+    "read_org_knowledge",
+    "remove_plugin_file",
+    "request_access",
+    "requeue_task",
+    "rotate_mcp_connection_secret",
+    "select_asset",
+    "set_knowledge_source",
+    "set_plugin_mcp",
+    "set_surface_profile",
+    "set_transitions",
+    "update_audience_membership",
+    "yank_version"
+  ],
+  "removedProps": [
+    "/tools/get_project/output/properties/project/properties/settings/properties/transitionTable",
+    "/tools/get_sprint/output/properties/attention/items/properties/why",
+    "/tools/get_sprint/output/properties/counts/properties/deadLetter",
+    "/tools/next_task/output/properties/inbox/properties/deadLetter",
+    "/tools/update_settings/input/properties/transitionTable",
+    "/tools/update_settings/output/properties/settings/properties/transitionTable"
+  ],
+  "removedEnumValues": [
+    "/tools/add_artifact/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/add_artifact/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/add_column/input/properties/status/enum/CANCELLED",
+    "/tools/add_column/input/properties/status/enum/DEAD_LETTER",
+    "/tools/add_column/output/properties/column/properties/status/enum/CANCELLED",
+    "/tools/add_column/output/properties/column/properties/status/enum/DEAD_LETTER",
+    "/tools/add_follow_up/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/add_follow_up/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/add_subtask/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/add_subtask/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/block_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/block_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/cancel_runs/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/cancel_runs/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/claim_next/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/claim_next/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/claim_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/claim_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/complete_task/output/properties/handover/properties/status/enum/CANCELLED",
+    "/tools/complete_task/output/properties/handover/properties/status/enum/DEAD_LETTER",
+    "/tools/complete_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/complete_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/input/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/create_board/input/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/create_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/create_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/fail_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/fail_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/CANCELLED",
+    "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/CANCELLED",
+    "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/CANCELLED",
+    "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/get_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/get_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/CANCELLED",
+    "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/CANCELLED",
+    "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/status/enum/CANCELLED",
+    "/tools/get_task_context/output/properties/workflow/properties/status/enum/DEAD_LETTER",
+    "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/CANCELLED",
+    "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/CANCELLED",
+    "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/handoff_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/handoff_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/list_runs/output/properties/runs/items/properties/status/enum/CANCELLED",
+    "/tools/list_runs/output/properties/runs/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/CANCELLED",
+    "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_tasks/input/properties/status/enum/CANCELLED",
+    "/tools/list_tasks/input/properties/status/enum/DEAD_LETTER",
+    "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/CANCELLED",
+    "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/move_task/input/properties/toStatus/enum/CANCELLED",
+    "/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER",
+    "/tools/move_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/move_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/CANCELLED",
+    "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/CANCELLED",
+    "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/next_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/open_run/output/properties/run/properties/status/enum/CANCELLED",
+    "/tools/open_run/output/properties/run/properties/status/enum/DEAD_LETTER",
+    "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/CANCELLED",
+    "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/DEAD_LETTER",
+    "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/CANCELLED",
+    "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/DEAD_LETTER",
+    "/tools/pick_run/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/pick_run/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/CANCELLED",
+    "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/release_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/release_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/retract_artifact/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/retract_artifact/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/CANCELLED",
+    "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/set_sprint/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/set_sprint/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/set_summary/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/set_summary/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/start_runs/output/properties/runs/items/properties/status/enum/CANCELLED",
+    "/tools/start_runs/output/properties/runs/items/properties/status/enum/DEAD_LETTER",
+    "/tools/start_runs/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/start_runs/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/input/properties/status/enum/CANCELLED",
+    "/tools/update_column/input/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
+    "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
+    "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/update_task/output/properties/task/properties/status/enum/CANCELLED",
+    "/tools/update_task/output/properties/task/properties/status/enum/DEAD_LETTER"
+  ],
+  "addedTools": [
+    {
+      "name": "cancel_task",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "version",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "boardId": {
+                "type": "string"
+              },
+              "columnId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "BACKLOG",
+                  "READY",
+                  "IN_PROGRESS",
+                  "BLOCKED",
+                  "REVIEW",
+                  "DONE"
+                ]
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "urgent"
+                ]
+              },
+              "assignee": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredCapabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "estimate": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dueAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parentTaskId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "order": {
+                "type": "string"
+              },
+              "customFields": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "blockedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contextSummary": {
+                "type": "string"
+              },
+              "deliverable": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "pr",
+                        "branch",
+                        "commit",
+                        "file",
+                        "doc",
+                        "attachment"
+                      ]
+                    },
+                    "url": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ref": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "repo": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "addedBy": {
+                      "type": "string"
+                    },
+                    "addedByAgent": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ts": {
+                      "type": "string"
+                    },
+                    "retracted": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "by": {
+                              "type": "string"
+                            },
+                            "byAgent": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "by",
+                            "byAgent",
+                            "at",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "url",
+                    "ref",
+                    "repo",
+                    "title",
+                    "addedBy",
+                    "addedByAgent",
+                    "ts"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "chars": {
+                "type": "object",
+                "properties": {
+                  "doc": {
+                    "type": "number"
+                  },
+                  "items": {
+                    "type": "number"
+                  },
+                  "comments": {
+                    "type": "number"
+                  },
+                  "followups": {
+                    "type": "number"
+                  },
+                  "memory": {
+                    "type": "number"
+                  },
+                  "attachments": {
+                    "type": "number"
+                  },
+                  "total": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "doc",
+                  "items",
+                  "comments",
+                  "followups",
+                  "memory",
+                  "attachments",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "reviewer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "review": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "reviewer": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "completedBy": {
+                        "type": "string"
+                      },
+                      "completedByAgent": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "requestedBy": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reviewer",
+                      "completedBy",
+                      "completedByAgent",
+                      "requestedBy",
+                      "requestedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modelHint": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "effort": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh"
+                        ]
+                      },
+                      "rationale": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runOf": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sprintIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "racing": {
+                "type": "boolean"
+              },
+              "raceOpenedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "claimAttempts": {
+                "type": "number"
+              },
+              "nextEligibleAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "version": {
+                "type": "number"
+              },
+              "claim": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "owner": {
+                        "type": "string"
+                      },
+                      "agent": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "agentId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "owner",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "createdByAgent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedBy": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "boardId",
+              "columnId",
+              "title",
+              "description",
+              "status",
+              "priority",
+              "assignee",
+              "labels",
+              "requiredCapabilities",
+              "estimate",
+              "dueAt",
+              "parentTaskId",
+              "order",
+              "customFields",
+              "blockedBy",
+              "blocks",
+              "contextSummary",
+              "version",
+              "claim",
+              "createdBy",
+              "createdAt",
+              "updatedBy",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "handover": {
+            "type": "object",
+            "properties": {
+              "reviewer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "BACKLOG",
+                  "READY",
+                  "IN_PROGRESS",
+                  "BLOCKED",
+                  "REVIEW",
+                  "DONE"
+                ]
+              }
+            },
+            "required": [
+              "reviewer",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_task",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "addedProps": [
+    {
+      "pointer": "/tools/get_sprint/output/properties/attention/items/properties/why",
+      "required": true,
+      "schema": {
+        "type": "string",
+        "enum": [
+          "review",
+          "blocked",
+          "poisoned",
+          "stale_lease"
+        ]
+      }
+    },
+    {
+      "pointer": "/tools/get_sprint/output/properties/counts/properties/poisoned",
+      "required": true,
+      "schema": {
+        "type": "number"
+      }
+    },
+    {
+      "pointer": "/tools/next_task/output/properties/inbox/properties/poisoned",
+      "required": true,
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "projectId": {
+              "type": "string"
+            },
+            "boardId": {
+              "type": "string"
+            },
+            "columnId": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "BACKLOG",
+                "READY",
+                "IN_PROGRESS",
+                "BLOCKED",
+                "REVIEW",
+                "DONE"
+              ]
+            },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high",
+                "urgent"
+              ]
+            },
+            "assignee": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "requiredCapabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "estimate": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "dueAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parentTaskId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "order": {
+              "type": "string"
+            },
+            "customFields": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            },
+            "blockedBy": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "contextSummary": {
+              "type": "string"
+            },
+            "deliverable": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "pr",
+                      "branch",
+                      "commit",
+                      "file",
+                      "doc",
+                      "attachment"
+                    ]
+                  },
+                  "url": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ref": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "repo": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "addedBy": {
+                    "type": "string"
+                  },
+                  "addedByAgent": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ts": {
+                    "type": "string"
+                  },
+                  "retracted": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "by": {
+                            "type": "string"
+                          },
+                          "byAgent": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "by",
+                          "byAgent",
+                          "at",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url",
+                  "ref",
+                  "repo",
+                  "title",
+                  "addedBy",
+                  "addedByAgent",
+                  "ts"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "chars": {
+              "type": "object",
+              "properties": {
+                "doc": {
+                  "type": "number"
+                },
+                "items": {
+                  "type": "number"
+                },
+                "comments": {
+                  "type": "number"
+                },
+                "followups": {
+                  "type": "number"
+                },
+                "memory": {
+                  "type": "number"
+                },
+                "attachments": {
+                  "type": "number"
+                },
+                "total": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "doc",
+                "items",
+                "comments",
+                "followups",
+                "memory",
+                "attachments",
+                "total"
+              ],
+              "additionalProperties": false
+            },
+            "reviewer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "review": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "reviewer": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "completedBy": {
+                      "type": "string"
+                    },
+                    "completedByAgent": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "requestedBy": {
+                      "type": "string"
+                    },
+                    "requestedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reviewer",
+                    "completedBy",
+                    "completedByAgent",
+                    "requestedBy",
+                    "requestedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "modelHint": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100
+                    },
+                    "effort": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh"
+                      ]
+                    },
+                    "rationale": {
+                      "type": "string",
+                      "maxLength": 500
+                    }
+                  },
+                  "required": [
+                    "model"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "runOf": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sprintIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "racing": {
+              "type": "boolean"
+            },
+            "raceOpenedAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "claimAttempts": {
+              "type": "number"
+            },
+            "nextEligibleAt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version": {
+              "type": "number"
+            },
+            "claim": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "owner": {
+                      "type": "string"
+                    },
+                    "agent": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "agentId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "owner",
+                    "expiresAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdBy": {
+              "type": "string"
+            },
+            "createdByAgent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "createdAt": {
+              "type": "string"
+            },
+            "updatedBy": {
+              "type": "string"
+            },
+            "updatedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "projectId",
+            "boardId",
+            "columnId",
+            "title",
+            "description",
+            "status",
+            "priority",
+            "assignee",
+            "labels",
+            "requiredCapabilities",
+            "estimate",
+            "dueAt",
+            "parentTaskId",
+            "order",
+            "customFields",
+            "blockedBy",
+            "blocks",
+            "contextSummary",
+            "version",
+            "claim",
+            "createdBy",
+            "createdAt",
+            "updatedBy",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}
