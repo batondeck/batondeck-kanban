@@ -18,11 +18,14 @@ every HDTP area removed.
 | Area (file) | Subtests |
 |---|---|
 | lifecycle (`conformance.go`) | `MigrateUpDownUp`; `ASecondMigrateAppliesNothing`; `TheSchemaIsCurrentOnceMigrated`; `ServerVersionIsReadFromTheConnection`; `AtomicallyReturnsItsCallbacksErrorAndNests` |
+| projects and members (`conformance_projects.go`) | create, read, list, settings (transitionTable refused), recursive delete; add (an upsert), list, look up and remove members; each with its NOT_FOUND and VALIDATION cases |
+| boards and columns (`conformance_boards.go`) | default and given columns, idempotent create, reads keyed by project, list, column add, update and remove, each with its refusals |
+| counters (`conformance_counters.go`) | `T-n` per project, 100 concurrent calls handed T-1..T-100 once, rolled back with its transaction, NOT_FOUND |
+| idempotency (`conformance_idempotency.go`) | replay inside the window, a second after it, scoped by identity, nothing kept on failure, one run under concurrency |
 
-The `Store` holds no area yet and no migration exists, so the lifecycle is all it judges: a green run
-proves the engines open, migrate (goose's version table alone, since goose v3.28.0's `NewProvider`
-refuses an empty directory with `ErrNoMigrations`), report their version from the connection and
-transact, and nothing about any area.
+Task counts over real tasks, the two-statement pin on `GetBoard` and the refusal to remove a column
+holding a task are `internal/store/boards_test.go`, on both engines, until the tasks area can create a
+task through the Store.
 
 ## Its callers
 

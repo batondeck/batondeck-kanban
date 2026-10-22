@@ -7,7 +7,91 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const countColumnTasks = `-- name: CountColumnTasks :one
+SELECT COUNT(*) FROM tasks WHERE project_id = ? AND board_id = ? AND column_id = ?
+`
+
+type CountColumnTasksParams struct {
+	ProjectID string
+	BoardID   string
+	ColumnID  string
+}
+
+func (q *Queries) CountColumnTasks(ctx context.Context, arg CountColumnTasksParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countColumnTasks, arg.ProjectID, arg.BoardID, arg.ColumnID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createBoard = `-- name: CreateBoard :exec
+INSERT INTO boards (project_id, id, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)
+`
+
+type CreateBoardParams struct {
+	ProjectID string
+	ID        string
+	Name      string
+	CreatedBy string
+	CreatedAt int64
+}
+
+func (q *Queries) CreateBoard(ctx context.Context, arg CreateBoardParams) error {
+	_, err := q.db.ExecContext(ctx, createBoard,
+		arg.ProjectID,
+		arg.ID,
+		arg.Name,
+		arg.CreatedBy,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const createColumn = `-- name: CreateColumn :exec
+INSERT INTO columns (project_id, board_id, id, name, position, status, wip_limit)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateColumnParams struct {
+	ProjectID string
+	BoardID   string
+	ID        string
+	Name      string
+	Position  int64
+	Status    string
+	WipLimit  sql.NullInt64
+}
+
+func (q *Queries) CreateColumn(ctx context.Context, arg CreateColumnParams) error {
+	_, err := q.db.ExecContext(ctx, createColumn,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.ID,
+		arg.Name,
+		arg.Position,
+		arg.Status,
+		arg.WipLimit,
+	)
+	return err
+}
+
+const deleteColumn = `-- name: DeleteColumn :exec
+DELETE FROM columns WHERE project_id = ? AND board_id = ? AND id = ?
+`
+
+type DeleteColumnParams struct {
+	ProjectID string
+	BoardID   string
+	ID        string
+}
+
+func (q *Queries) DeleteColumn(ctx context.Context, arg DeleteColumnParams) error {
+	_, err := q.db.ExecContext(ctx, deleteColumn, arg.ProjectID, arg.BoardID, arg.ID)
+	return err
+}
 
 const getBoard = `-- name: GetBoard :one
 SELECT project_id, id, name, created_by, created_at FROM boards WHERE project_id = ? AND id = ?
@@ -54,4 +138,233 @@ func (q *Queries) GetColumn(ctx context.Context, arg GetColumnParams) (Column, e
 		&i.WipLimit,
 	)
 	return i, err
+}
+
+const listBoards = `-- name: ListBoards :many
+SELECT project_id, id, name, created_by, created_at FROM boards WHERE project_id = ?
+ORDER BY created_at, id
+`
+
+func (q *Queries) ListBoards(ctx context.Context, projectID string) ([]Board, error) {
+	rows, err := q.db.QueryContext(ctx, listBoards, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Board
+	for rows.Next() {
+		var i Board
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.Name,
+			&i.CreatedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listColumns = `-- name: ListColumns :many
+SELECT project_id, board_id, id, name, position, status, wip_limit
+FROM columns WHERE project_id = ? AND board_id = ?
+ORDER BY position, id
+`
+
+type ListColumnsParams struct {
+	ProjectID string
+	BoardID   string
+}
+
+func (q *Queries) ListColumns(ctx context.Context, arg ListColumnsParams) ([]Column, error) {
+	rows, err := q.db.QueryContext(ctx, listColumns, arg.ProjectID, arg.BoardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Column
+	for rows.Next() {
+		var i Column
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.BoardID,
+			&i.ID,
+			&i.Name,
+			&i.Position,
+			&i.Status,
+			&i.WipLimit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listColumnsWithTaskCounts = `-- name: ListColumnsWithTaskCounts :many
+SELECT c.project_id, c.board_id, c.id, c.name, c.position, c.status, c.wip_limit,
+       CAST(COALESCE(n.task_count, 0) AS INTEGER) AS task_count
+FROM columns c
+LEFT JOIN (
+    SELECT t.column_id, COUNT(*) AS task_count
+    FROM tasks t
+    WHERE t.project_id = ?1 AND t.board_id = ?2
+    GROUP BY t.column_id
+) n ON n.column_id = c.id
+WHERE c.project_id = ?1 AND c.board_id = ?2
+ORDER BY c.position, c.id
+`
+
+type ListColumnsWithTaskCountsParams struct {
+	ProjectID string
+	BoardID   string
+}
+
+type ListColumnsWithTaskCountsRow struct {
+	ProjectID string
+	BoardID   string
+	ID        string
+	Name      string
+	Position  int64
+	Status    string
+	WipLimit  sql.NullInt64
+	TaskCount int64
+}
+
+// A board's columns with the number of tasks in each, from ONE grouped count over the board's
+// tasks: a column holding none is a 0, never absent.
+func (q *Queries) ListColumnsWithTaskCounts(ctx context.Context, arg ListColumnsWithTaskCountsParams) ([]ListColumnsWithTaskCountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listColumnsWithTaskCounts, arg.ProjectID, arg.BoardID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListColumnsWithTaskCountsRow
+	for rows.Next() {
+		var i ListColumnsWithTaskCountsRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.BoardID,
+			&i.ID,
+			&i.Name,
+			&i.Position,
+			&i.Status,
+			&i.WipLimit,
+			&i.TaskCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectColumns = `-- name: ListProjectColumns :many
+SELECT project_id, board_id, id, name, position, status, wip_limit
+FROM columns WHERE project_id = ?
+ORDER BY board_id, position, id
+`
+
+func (q *Queries) ListProjectColumns(ctx context.Context, projectID string) ([]Column, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectColumns, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Column
+	for rows.Next() {
+		var i Column
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.BoardID,
+			&i.ID,
+			&i.Name,
+			&i.Position,
+			&i.Status,
+			&i.WipLimit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockBoard = `-- name: LockBoard :one
+SELECT project_id, id, name, created_by, created_at FROM boards WHERE project_id = ? AND id = ?
+`
+
+type LockBoardParams struct {
+	ProjectID string
+	ID        string
+}
+
+// The row a column change reads first: on Postgres it is locked to the transaction, so two column
+// changes on one board take turns.
+func (q *Queries) LockBoard(ctx context.Context, arg LockBoardParams) (Board, error) {
+	row := q.db.QueryRowContext(ctx, lockBoard, arg.ProjectID, arg.ID)
+	var i Board
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.Name,
+		&i.CreatedBy,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateColumn = `-- name: UpdateColumn :exec
+UPDATE columns SET name = ?, position = ?, status = ?, wip_limit = ?
+WHERE project_id = ? AND board_id = ? AND id = ?
+`
+
+type UpdateColumnParams struct {
+	Name      string
+	Position  int64
+	Status    string
+	WipLimit  sql.NullInt64
+	ProjectID string
+	BoardID   string
+	ID        string
+}
+
+func (q *Queries) UpdateColumn(ctx context.Context, arg UpdateColumnParams) error {
+	_, err := q.db.ExecContext(ctx, updateColumn,
+		arg.Name,
+		arg.Position,
+		arg.Status,
+		arg.WipLimit,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.ID,
+	)
+	return err
 }

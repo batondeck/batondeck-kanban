@@ -28,6 +28,10 @@ type Factory func(t *testing.T) Migratable
 // here.
 func Run(t *testing.T, newStore Factory) {
 	lifecycle(t, newStore)
+	projects(t, newStore)
+	boards(t, newStore)
+	counters(t, newStore)
+	idempotency(t, newStore)
 }
 
 func migrated(t *testing.T, newStore Factory) Migratable {

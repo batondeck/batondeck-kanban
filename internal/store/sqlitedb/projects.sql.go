@@ -7,7 +7,50 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const createProject = `-- name: CreateProject :exec
+INSERT INTO projects (id, name, settings, review_enabled, retry_policy, created_by, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateProjectParams struct {
+	ID            string
+	Name          string
+	Settings      string
+	ReviewEnabled int64
+	RetryPolicy   sql.NullString
+	CreatedBy     string
+	CreatedAt     int64
+}
+
+func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) error {
+	_, err := q.db.ExecContext(ctx, createProject,
+		arg.ID,
+		arg.Name,
+		arg.Settings,
+		arg.ReviewEnabled,
+		arg.RetryPolicy,
+		arg.CreatedBy,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const deleteProject = `-- name: DeleteProject :execrows
+DELETE FROM projects WHERE id = ?
+`
+
+// Everything the project owns goes with it by ON DELETE CASCADE, except the rows the caller deletes
+// itself (idempotency keys) and those kept as the trace (audit_log, tool_calls, change_log).
+func (q *Queries) DeleteProject(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const getCapabilityGrant = `-- name: GetCapabilityGrant :one
 SELECT project_id, identity_id, grant_json, updated_by, updated_at FROM capability_grants WHERE project_id = ? AND identity_id = ?
@@ -32,7 +75,8 @@ func (q *Queries) GetCapabilityGrant(ctx context.Context, arg GetCapabilityGrant
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, settings, review_enabled, retry_policy, created_by, created_at FROM projects WHERE id = ?
+SELECT id, name, settings, review_enabled, retry_policy, created_by, created_at
+FROM projects WHERE id = ?
 `
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
@@ -50,37 +94,94 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 	return i, err
 }
 
-const getProjectMember = `-- name: GetProjectMember :one
-SELECT project_id, identity_id, role, added_by, added_at FROM project_members WHERE project_id = ? AND identity_id = ?
+const listProjectsForIdentity = `-- name: ListProjectsForIdentity :many
+SELECT p.id, p.name, p.settings, p.review_enabled, p.retry_policy, p.created_by, p.created_at, m.role
+FROM projects p JOIN project_members m ON m.project_id = p.id
+WHERE m.identity_id = ?
+ORDER BY p.created_at, p.id
 `
 
-type GetProjectMemberParams struct {
-	ProjectID  string
-	IdentityID string
+type ListProjectsForIdentityRow struct {
+	ID            string
+	Name          string
+	Settings      string
+	ReviewEnabled int64
+	RetryPolicy   sql.NullString
+	CreatedBy     string
+	CreatedAt     int64
+	Role          string
 }
 
-func (q *Queries) GetProjectMember(ctx context.Context, arg GetProjectMemberParams) (ProjectMember, error) {
-	row := q.db.QueryRowContext(ctx, getProjectMember, arg.ProjectID, arg.IdentityID)
-	var i ProjectMember
+func (q *Queries) ListProjectsForIdentity(ctx context.Context, identityID string) ([]ListProjectsForIdentityRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsForIdentity, identityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectsForIdentityRow
+	for rows.Next() {
+		var i ListProjectsForIdentityRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Settings,
+			&i.ReviewEnabled,
+			&i.RetryPolicy,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.Role,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockProject = `-- name: LockProject :one
+SELECT id, name, settings, review_enabled, retry_policy, created_by, created_at
+FROM projects WHERE id = ?
+`
+
+// The row a settings change reads and then writes: on Postgres it is locked to the transaction.
+func (q *Queries) LockProject(ctx context.Context, id string) (Project, error) {
+	row := q.db.QueryRowContext(ctx, lockProject, id)
+	var i Project
 	err := row.Scan(
-		&i.ProjectID,
-		&i.IdentityID,
-		&i.Role,
-		&i.AddedBy,
-		&i.AddedAt,
+		&i.ID,
+		&i.Name,
+		&i.Settings,
+		&i.ReviewEnabled,
+		&i.RetryPolicy,
+		&i.CreatedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const nextTaskNumber = `-- name: NextTaskNumber :one
-INSERT INTO project_counters (project_id, last_task) VALUES (?, 1)
-ON CONFLICT (project_id) DO UPDATE SET last_task = project_counters.last_task + 1
-RETURNING last_task
+const updateProjectSettings = `-- name: UpdateProjectSettings :exec
+UPDATE projects SET settings = ?, review_enabled = ?, retry_policy = ? WHERE id = ?
 `
 
-func (q *Queries) NextTaskNumber(ctx context.Context, projectID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, nextTaskNumber, projectID)
-	var last_task int64
-	err := row.Scan(&last_task)
-	return last_task, err
+type UpdateProjectSettingsParams struct {
+	Settings      string
+	ReviewEnabled int64
+	RetryPolicy   sql.NullString
+	ID            string
+}
+
+func (q *Queries) UpdateProjectSettings(ctx context.Context, arg UpdateProjectSettingsParams) error {
+	_, err := q.db.ExecContext(ctx, updateProjectSettings,
+		arg.Settings,
+		arg.ReviewEnabled,
+		arg.RetryPolicy,
+		arg.ID,
+	)
+	return err
 }
