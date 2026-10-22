@@ -15,22 +15,31 @@ every HDTP area removed.
 - `Run(t, newStore)`: judges one engine by every area, in a fixed order, each area a set of subtests that
   start from a fresh store.
 
-## What it does not do yet
+| Area (file) | Subtests |
+|---|---|
+| lifecycle (`conformance.go`) | `MigrateUpDownUp`; `ASecondMigrateAppliesNothing`; `TheSchemaIsCurrentOnceMigrated`; `ServerVersionIsReadFromTheConnection`; `AtomicallyReturnsItsCallbacksErrorAndNests` |
 
-It holds no area and has no caller: the `Store` interface holds only its lifecycle, no migration exists,
-and no test calls `Run`. A green run of this package proves nothing about either engine.
+The `Store` holds no area yet and no migration exists, so the lifecycle is all it judges: a green run
+proves the engines open, migrate (goose's version table alone, since goose v3.28.0's `NewProvider`
+refuses an empty directory with `ErrNoMigrations`), report their version from the connection and
+transact, and nothing about any area.
 
-### How an engine plugs in
+## Its callers
 
-Write a `Factory` that opens the engine on an empty database (a fresh file, or a fresh database on a
-shared server) and close it in `t.Cleanup`; return it from a test that calls `conformance.Run`:
+`TestSQLiteConformance` (`sqlite_test.go`) opens a file under `t.TempDir()`. `TestPostgresConformance`
+(`postgres_test.go`) creates a database `bk_conf_<n>` on the server `BATONDECK_TEST_POSTGRES_DSN` names
+for each store the suite asks for, after `DROP DATABASE IF EXISTS` on that name; it skips, printing why,
+when the variable is unset, and fails when it is set and the server does not answer. `make conformance`
+(a step of `make check`) runs each by name.
 
-```go
-func TestMyEngineConformance(t *testing.T) {
-	conformance.Run(t, func(t *testing.T) conformance.Migratable {
-		s := openMyEngine(t) // empty and unmigrated
-		t.Cleanup(func() { s.Close() })
-		return s
-	})
-}
-```
+## How an area plugs in
+
+An area is `func <area>(t *testing.T, newStore Factory)` in its own file of this package
+(`conformance_<area>.go`), and one line in `Run`. Each subtest asks `newStore` for its own store (or
+`migrated(t, newStore)` for a migrated one) and calls it only through `store.Store`: no engine branch,
+so a statement that differs between SQLite and Postgres fails in one of the two callers.
+
+## What it does not do
+
+It does not prove behaviour between processes: `TestWriteTransactionsOnOneFileSerialiseAtBegin`
+(`internal/store/sqlite_test.go`) holds SQLite's `BEGIN IMMEDIATE` across stores on one file.
