@@ -24,6 +24,18 @@ Notable changes to batondeck-kanban. The format follows
   60 s account cache. The users, sessions and tokens store areas on both engines, with their
   conformance batteries; they replace the scaffold `queries/*/auth.sql`. The login and middleware
   handlers are not yet mounted by `serve`.
+- The first Store areas, on both engines, each an exported role (`store.Projects`, `Members`,
+  `Boards`, `Counters`, `Idempotency`, in `internal/store/contract_*.go`) embedded in `Store`:
+  projects (create with the creator as admin, get, list by identity with its role, settings without
+  `transitionTable`, recursive delete keeping the audit log, tool calls and change log), members (add
+  or update, remove, list, look up), boards and columns (create with the default columns Backlog,
+  Ready, In progress, Blocked, Review, Done, Review left out when `reviewEnabled` is off; get with
+  per-column task counts in two statements; list; add, update and remove a column, refusing one that
+  holds a task or is the last), the per-project `T-n` counter (`NextTaskID`) and idempotency keys
+  (`WithIdempotency`, replay within the caller's window per project, identity and key, one run under
+  concurrency). Every lookup is keyed by project. These areas are versionless, as conductor's are;
+  they write no event or audit row, which the service layer composes. The conformance suite judges
+  all five on SQLite and Postgres.
 - The base schema, `migrations/{sqlite,postgres}/0001_base.sql`: 43 tables on both engines for
   every in-scope area (projects, members, grants and the per-project `T-n` counter; boards and
   columns; tasks with the six statuses, `blocked_reason`, `claim_attempts`, `next_eligible_at`,
