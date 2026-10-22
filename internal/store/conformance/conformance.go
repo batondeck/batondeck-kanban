@@ -28,6 +28,9 @@ type Factory func(t *testing.T) Migratable
 // here.
 func Run(t *testing.T, newStore Factory) {
 	lifecycle(t, newStore)
+	users(t, newStore)
+	sessions(t, newStore)
+	tokens(t, newStore)
 }
 
 func migrated(t *testing.T, newStore Factory) Migratable {
