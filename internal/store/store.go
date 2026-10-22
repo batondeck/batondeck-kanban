@@ -26,6 +26,9 @@ type Store interface {
 	Boards
 	Counters
 	Idempotency
+	Users
+	Sessions
+	Tokens
 }
 
 // Lifecycle opens, migrates, transacts and closes: what every engine does before it holds anything.

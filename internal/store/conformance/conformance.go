@@ -32,6 +32,9 @@ func Run(t *testing.T, newStore Factory) {
 	boards(t, newStore)
 	counters(t, newStore)
 	idempotency(t, newStore)
+	users(t, newStore)
+	sessions(t, newStore)
+	tokens(t, newStore)
 }
 
 func migrated(t *testing.T, newStore Factory) Migratable {
