@@ -288,9 +288,27 @@ func TestAServeBesideAnotherDoesNotMigrate(t *testing.T) {
 	if err := running.Share(); err != nil {
 		t.Fatal(err)
 	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	t.Setenv("BATONDECK_LISTEN", addr)
 	var errb bytes.Buffer
-	if code := Run([]string{"serve"}, "x", io.Discard, &errb); code != 1 || !strings.Contains(errb.String(), "it has not been migrated") {
-		t.Fatalf("serve beside a running serve, on an unmigrated file: %d %q", code, errb.String())
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()
+	select {
+	case code := <-done:
+		if code != 1 || !strings.Contains(errb.String(), "it has not been migrated") {
+			t.Fatalf("serve beside a running serve, on an unmigrated file: %d %q", code, errb.String())
+		}
+	case <-time.After(10 * time.Second):
+		if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+			t.Fatal(err)
+		}
+		<-done
+		t.Fatalf("serve beside a running serve migrated an unmigrated file and served it: %q", errb.String())
 	}
 	if err := running.Release(); err != nil {
 		t.Fatal(err)
@@ -305,15 +323,7 @@ func TestAServeBesideAnotherDoesNotMigrate(t *testing.T) {
 	if err := running.Share(); err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	ln.Close()
-	t.Setenv("BATONDECK_LISTEN", addr)
 	errb.Reset()
-	done := make(chan int, 1)
 	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
