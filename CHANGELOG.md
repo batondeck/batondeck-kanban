@@ -8,6 +8,12 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `internal/domain`: the six ticket statuses and the fixed transition table (same-status moves
+  legal; `CANCELLED` and `DEAD_LETTER` refused as `VALIDATION`), with allowed-next and shortest-path
+  guidance on `INVALID_TRANSITION`; the error model (13 codes, `STALE`, `RATE_LIMITED` and `INTERNAL`
+  retryable); the move decision (WIP limit on entering IN_PROGRESS, a promotion with open blockers
+  landing on BLOCKED, reorder within a column); order keys ported from fractional-indexing 4.0.0;
+  dependency cycle detection (`CYCLE_DETECTED`). Pure functions, not yet called by any tool.
 - The skeleton, copied from hdtp-gateway and stripped of HDTP: the Go module
   `github.com/batondeck/batondeck-kanban`; the `batondeck-kanban` binary with `serve`, `healthcheck`
   and `version` (`migrate`, `token`, `user` and `doctor` exit 2, not implemented in this release);
