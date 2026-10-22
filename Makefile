@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check dist sbom build check fmt vet test conformance clean
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check dist sbom build check fmt vet test conformance contract clean
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -91,9 +91,9 @@ image:
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
 # THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
-# sources, web/dist against a fresh web build, the tests under the race detector, and the store
-# conformance suite once per engine.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check test conformance
+# sources, web/dist against a fresh web build, the tests under the race detector, the store
+# conformance suite once per engine, and the MCP contract.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check test conformance contract
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -162,6 +162,14 @@ test:
 conformance:
 	go test -race -count=1 -v -run '^TestSQLiteConformance$$' ./internal/store/conformance/
 	go test -race -count=1 -v -run '^TestPostgresConformance$$' ./internal/store/conformance/
+
+# contract holds contract/expected.json to canonical(tools.json + admin-tools.json) ⊖ deltas.json and
+# runs the comparator's refusal controls (contract/contract_test.go). After a deliberate change to
+# deltas.json: `go test ./contract/ -run TestExpectedIsTheExactDerivation -update`. tools.json and
+# admin-tools.json come from conductor by `node scripts/contract-import.mjs <mcp.json> [--admin <dump>]`,
+# which the gate cannot run: conductor is a private sibling.
+contract:
+	go test -race ./contract/
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:
