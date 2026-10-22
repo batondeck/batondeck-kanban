@@ -14,6 +14,7 @@ Notable changes to batondeck-kanban. The format follows
   `serve` answers `GET /healthz` with the binary and its version and serves the embedded web UI
   placeholder; config from `BATONDECK_*` > a JSON file > defaults, holding `database.url`,
   `database.synchronous`, `listen` and `public_url`; the data-dir lock, admin socket and keyring;
-  the SQLite and Postgres engines with migrations and no area; the Makefile gate
+  the SQLite and Postgres engines with goose's migration machinery, no migration yet and no
+  area; the Makefile gate
   (`make check`: fmt vet staticcheck notices-check release-check test), the githooks, the
   distroless Dockerfile, THIRD_PARTY_NOTICES and RELEASING.md.

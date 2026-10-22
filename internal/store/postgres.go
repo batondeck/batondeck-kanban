@@ -14,8 +14,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/migrations"
 )
 
-// Postgres is the engine selected by a postgres:// database.url: same Store contract,
-// same conformance suite, pgx underneath. Migrations run through goose over a
+// Postgres is the engine selected by a postgres:// database.url: same Store contract, the
+// same conformance suite (which has no area yet), pgx underneath. Migrations run through goose over a
 // database/sql handle derived from the pool; the queries the areas add run on the pool directly.
 type Postgres struct {
 	pool *pgxpool.Pool
