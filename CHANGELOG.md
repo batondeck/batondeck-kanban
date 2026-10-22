@@ -85,3 +85,12 @@ Notable changes to batondeck-kanban. The format follows
   (ADR-0002): the local hooks are the gate. `pre-commit` runs gofmt, the 5 MiB cap and the INDEX
   secret scan; `pre-push` runs `make check` on both engines and refuses the push without Docker. A
   pull request now reports no status check; the reviewer re-runs `make check` on its head.
+
+### Fixed
+
+- Two processes migrating one SQLite file at once no longer race in goose's Up (`SQLITE_BUSY`,
+  `table projects already exists`): `migrate` holds the data-dir lock alone, waiting up to a
+  minute for another holder, and `serve` takes it through `core.AcquireServeLock`, migrates only
+  when alone, then shares it for its lifetime, so a serve beside another does not migrate.
+  Postgres keeps goose's session lock. `TestFirstMigrationsOnOneFileBothSucceed` moved to
+  `internal/cli` and runs the real migrations through `migrate`, 30 rounds.

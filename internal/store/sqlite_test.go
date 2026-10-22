@@ -5,10 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"testing/fstest"
 	"time"
-
-	"github.com/pressly/goose/v3"
 )
 
 // Transactions that read and then write, from several goroutines at once, each on its own store
@@ -92,65 +89,5 @@ func TestTheReadPoolRefusesWrites(t *testing.T) {
 	}
 	if _, err := s.w.Exec("CREATE TABLE x (n INTEGER)"); err != nil {
 		t.Fatalf("the write connection: %v", err)
-	}
-}
-
-// Two processes making goose's version table on one SQLite file for the first time must both
-// succeed: the check for the table and its creation are one lock holder, so the second finds the
-// table the first made instead of creating it again. That is the empty-migrations path
-// (ensureVersionTable), so each store migrates an EMPTY directory here: with the binary's own
-// migrations, two concurrent first migrations race in goose's Up instead, which this does not
-// claim to hold. The file is put in WAL mode first, as any earlier open leaves it, so the two meet
-// at BEGIN rather than at the journal-mode switch.
-func TestFirstMigrationsOnOneFileBothSucceed(t *testing.T) {
-	ctx := context.Background()
-	const rounds = 30
-	failed := 0
-	var first error
-	for r := 0; r < rounds; r++ {
-		path := filepath.Join(t.TempDir(), "race.db")
-		pre, err := OpenSQLite(path, "FULL")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := pre.w.PingContext(ctx); err != nil {
-			t.Fatal(err)
-		}
-		pre.Close()
-		a, err := OpenSQLite(path, "FULL")
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := OpenSQLite(path, "FULL")
-		if err != nil {
-			t.Fatal(err)
-		}
-		errs := make(chan error, 2)
-		start := make(chan struct{})
-		for _, s := range []*SQLite{a, b} {
-			go func(s *SQLite) {
-				<-start
-				_, err := migrator{db: s.w, dialect: goose.DialectSQLite3, fsys: fstest.MapFS{}}.up(ctx)
-				errs <- err
-			}(s)
-		}
-		close(start)
-		for i := 0; i < 2; i++ {
-			if err := <-errs; err != nil {
-				failed++
-				if first == nil {
-					first = err
-				}
-			}
-		}
-		var rows int
-		if err := a.r.QueryRowContext(ctx, "SELECT count(*) FROM goose_db_version").Scan(&rows); err != nil || rows != 1 {
-			t.Fatalf("round %d: goose_db_version holds %d rows (%v), want its one version-0 row", r, rows, err)
-		}
-		a.Close()
-		b.Close()
-	}
-	if failed > 0 {
-		t.Fatalf("%d of %d concurrent first migrations failed, the first with: %v", failed, 2*rounds, first)
 	}
 }
