@@ -1,0 +1,21 @@
+Third-party notices for batondeck-kanban
+================================================================================
+
+What the binary built from this repository redistributes, under the licences below: the Go
+modules it links. Each entry carries the licence files as the dependency's own source holds
+them; this file classifies nothing.
+
+Written by `make notices` (scripts/notices.mjs) for these platforms from these inputs, which `make notices-check`
+(part of `make check`) holds it to:
+
+  platforms                   linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+  go.sum                      sha256 1bd2b42cca43b155ed4b6e56fb359fd9fe15b4844df6041a0ffbfda7771e6c6d
+
+Contents
+  1. Go modules the shipped binary links: 0
+
+
+================================================================================
+1. Go modules the shipped binary links
+   go list -deps ./cmd/batondeck-kanban for each of linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 (CGO_ENABLED=0, GOWORK=off), the union; the licence files of each module directory
+================================================================================
