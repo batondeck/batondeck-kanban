@@ -55,3 +55,10 @@ Notable changes to batondeck-kanban. The format follows
   refusing the push when Docker is absent; `make check` gains `sqlc-check` and `web-dist-check`
   (each prints a skip line until `queries/*.sql` and `web/package.json` exist); a GitHub Actions
   `check` workflow runs `make check` on pull requests against a `postgres:16` service.
+
+### Removed
+
+- The GitHub Actions `check` workflow (`.github/workflows/check.yml`), by the owner's ruling
+  (ADR-0002): the local hooks are the gate. `pre-commit` runs gofmt, the 5 MiB cap and the INDEX
+  secret scan; `pre-push` runs `make check` on both engines and refuses the push without Docker. A
+  pull request now reports no status check; the reviewer re-runs `make check` on its head.
