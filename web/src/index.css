@@ -1,0 +1,1329 @@
+/* BatonDeck design system — "Deck", ember cut.
+   ================================================================================================
+   *** EVERY COLOUR VALUE IN THE THREE PALETTE BLOCKS BELOW IS OWNED BY design/brand.json. ***
+   `scripts/check-brand.py` (a pre-push step) fails if one of them disagrees, and it checks the same
+   values against the marketing site, the legal template and the docs site — because those are three
+   more independent palettes with no bundler between them, and three of the four used to declare
+   --ready/--progress/--blocked/--done with DIFFERENT hexes. Change a colour THERE and re-run the
+   check to see what moves; changing it here first just makes the guard shout.
+
+   THE ACCENT IS EMBER #E8613C — the orange from the logo, and the one colour that does not change
+   between themes ("ember is constant; ink becomes paper"). It replaced an indigo that had no
+   relationship to the mark at all. Three consequences worth knowing before editing:
+
+     - `--ink-fg` is NEAR-BLACK, not white. White on ember measures 3.38:1 and fails WCAG 1.4.3;
+       the brand ink measures 5.17:1, in BOTH themes, because both halves are constants.
+     - `--ink-hover` exists because ONE token can no longer serve both jobs. Under indigo,
+       `--accent-tint` was both the link colour and the button hover fill. Ember has no overlap: a
+       link needs to be dark enough to read on paper, a fill needs to be light enough to carry an
+       ink label. So hover LIGHTENS, and `--accent-tint` is link text only.
+     - The neutral ramp turned WARM. Every surface keeps the OKLCH lightness it had under indigo and
+       moves only in hue (to the brand's paper, 82°) and chroma, so density, hierarchy and every
+       contrast margin carry over unchanged — the diff is a change of temperature. Dark inverts it:
+       the surfaces are the brand ink (257°) and the text is paper.
+
+   THE THESIS: **a product surface, not a printed record.** Depth and colour carry hierarchy;
+   borders recede to hairlines and do structural work only.
+
+   This REPLACES "Intent" (warm paper, Newsreader serif titles, 0px radii, 1.5px near-black rules),
+   which was a deliberate and well-built editorial system — and the wrong class of object. BatonDeck
+   is a dashboard people live in for hours, so it borrows from the surfaces that do that well
+   (Linear, Vercel, Stripe): a cool neutral canvas, white cards lifted by a 1px hairline and a soft
+   shadow, one saturated accent, and generous-but-dense type.
+
+     `--border` 1px hairline. Every edge in the product: a card, a column, a row divider, an input.
+     `--rule`   1px, one step darker. The edge of something you can act on — a dialog, a popover,
+                a menu — where the extra step is what separates it from the page behind it.
+     `--ink`    the accent as a FILL. Primary buttons, the selected nav row, an active chip.
+                In "Intent" this was near-black; emphasis now comes from hue, not from value.
+
+   Everything else follows from that:
+     - **Rounded.** `--r-1/2/3` are 4/6/10px. A product surface is soft; a ledger is not.
+     - **Sans for everything, mono for facts.** Inter carries the UI including titles; every id,
+       time, count, hash and status label stays JetBrains Mono, so you can still tell what kind of
+       thing a string is from its typeface. `--serif` survives for Chronicle prose ONLY.
+     - **Elevation is a token** (`--shadow-1/2/3`), not a per-component invention.
+     - **`--band`** is the header fill of a panel — where its mono, letter-spaced caps label sits.
+     - Status keeps its seven semantic tokens, restated for a warm ground; only `--blocked` moved
+       hue, to get clear of the ember accent.
+
+   THERE ARE TWO THEMES AND BOTH ARE REAL (T-519). `:root` is light. Dark arrives two ways and the
+   order matters: `@media (prefers-color-scheme: dark)` is scoped `:root:not([data-theme="light"])`
+   so a viewer who has explicitly chosen light is not overridden by their OS, and
+   `[data-theme="dark"]` comes last so an explicit dark choice wins everywhere. `theme.ts` owns the
+   attribute; nothing else may write it.
+
+   T-398 removed the previous theme machinery on 2026-08-10 because only ONE palette shipped and the
+   switcher offered three that did not — the mechanism read as live and could not act. That reasoning
+   is satisfied here rather than ignored: both palettes are complete (`tokens.test.ts` fails a theme
+   that moves `--bg` without moving all 13 surface tokens) and both are contrast-measured
+   (`contrast.test.ts` now reads the dark block too, not just `:root`).
+   ================================================================================================ */
+:root {
+  /* ---- Canvas ---------------------------------------------------------------------------------
+     WARM neutral now — the brand's paper, not a cool grey. `--bg` is a hair off white so a `--panel`
+     card reads as lifted off it rather than continuous with it; that single step is what makes a
+     card look like a card without a heavy border, and it survives the temperature change because
+     every value below kept its old lightness and moved only in hue. */
+  --bg: #FCFBFA;                 /* app canvas */
+  --surface-lowest: #F3F2EF;     /* recessed wells — code blocks, dropzones */
+  --surface-low: #F8F7F5;        /* skeleton base, hovered rows */
+  --panel: #FFFFFF;              /* the face of a card */
+  --panel-2: #F6F5F3;            /* inputs, hover, chips */
+  --surface-highest: #EEECE8;    /* kbd chips, mono badges */
+
+  /* ---- The two weights ------------------------------------------------------------------------
+     Both 1px now. In "Intent" the outer edge was 1.5px near-black and did the work a shadow does
+     here; keeping that weight against a hairline palette just looks like a rendering fault. */
+  --rule: #DDDAD3;               /* edge of a dialog, popover, menu — one step up from --border */
+  --border: #EBE9E4;             /* every other edge */
+  --outline-variant: #D6D1C9;    /* hover / active hairline */
+  --band: #F8F7F5;               /* panel header fill */
+
+  /* Cool ink on warm paper — the brand's own pairing, and `--text` IS the brand ink. At these
+     chromas (0.008–0.023) the temperature split reads as depth, not as a colour cast. */
+  --text: #131A24;
+  --text-2: #4C5461;
+  /* WCAG 2.2 §1.4.3 (AA, normal text) needs 4.5:1, and `--band` is the darkest surface muted text
+     sits on, so it is the binding constraint. Measured on the ember palette: 5.38:1 on --panel ·
+     5.20:1 on --bg · 5.02:1 on --band. The predecessor token shipped at 3.03:1 across 19 text nodes
+     on the board alone, which is why this floor is a test (`contrast.test.ts`) and not a judgement
+     call. */
+  --text-muted: #636B78;
+
+  /* ---- Ink — primary action. The accent AS A FILL, and it is the brand's ember exactly. ---------
+     `--ink-fg` on `--ink` measures 5.17:1 — the SAME number in both themes, because ember and the
+     brand ink are both constants. It is near-black rather than white on purpose: white on ember is
+     3.38:1 and fails. `--ink-hover` LIGHTENS (6.10:1) — darkening would push the label under the
+     floor, since ember is already near the top of the range that can carry dark text. */
+  --ink: #ED6B3A;
+  --ink-fg: #FFFFFF;
+  --ink-hover: #DE5D2C;
+
+  /* ---- Accent — focus, links, selection, active state. -----------------------------------------
+     TWO TOKENS, TWO FLOORS, AND THEY ARE NOT INTERCHANGEABLE. `--accent` is NON-TEXT: focus rings,
+     the selected-card border, the active tab underline, and the base of every `color-mix()` wash —
+     WCAG 1.4.11, 3:1, measured 3.16:1 on `--band`, the darkest surface it borders. `--accent-tint`
+     carries actual TEXT (`.md a`, `.role-badge.admin`) and clears 4.5:1 on all three surfaces.
+     Do not use `--accent` as a text colour; `check-brand.py` measures both, which
+     `contrast.test.ts` did not until this rebrand. */
+  --accent: #E46738;
+  --accent-tint: #E05A2B;
+
+  /* ---- Marker — matched search text only. ------------------------------------------------------ */
+  --marker: #FDE68A;
+  --marker-fg: #131A24;
+
+  /* ---- Logo knockout — the colour BEHIND the mark. ---------------------------------------------
+     The mark's side nodes are filled with the background so the edge running vertex-to-vertex
+     through them is knocked out rather than drawn over. That colour is not inheritable, so the SVG
+     takes it as a variable and each surface overrides it (see `.nav` below). Get it wrong and the
+     mark grows two visible discs. */
+  --bd-knockout: var(--panel);
+
+  /* ---- Status — SEVEN tokens, restated for a warm ground. All ≥4.5:1 as badge TEXT on both `--bg`
+     and `--band`; the guard checks every one.
+     `--blocked` ROTATED, and that is the only status change. Ember sits at OKLCH hue 36; the old
+     error red sat at 29 — seven degrees away, close enough that a BLOCKED badge and an ember accent
+     read as the same family. It is now at 22, which doubles the separation to 14 while staying a
+     red rather than a crimson, and costs nothing (5.47:1 vs 5.46:1 on --band). `--progress` was
+     left alone: amber at hue 73 was already 36 clear.
+     `--done` and `--live` deliberately hold ONE value under two names — "accepted" and "verifying"
+     mean the same thing to the eye. Re-space one and you must re-space both. */
+  --backlog: #5F6673;
+  --ready: #2159C9;
+  --progress: #8A5A06;
+  --blocked: #C02736;
+  --review: #7132CF;
+  --done: #1A7040;
+  --live: #1A7040;
+
+  /* ---- Radius — soft. -------------------------------------------------------------------------- */
+  --r-1: 4px;                    /* chips, tags, small badges */
+  --r-2: 6px;                    /* buttons, inputs, cards, nav rows */
+  --r-3: 10px;                   /* panels, dialogs, popovers */
+  --r-full: 999px;               /* dots and presence pills only, where round IS the meaning */
+
+  /* ---- Elevation — a token, never a per-component invention. -----------------------------------
+     Three steps only: a resting card, a thing that floats over the page, a thing that owns it.
+     Redefined per theme — a light-theme shadow is a soft grey wash, a dark-theme one has to be
+     near-black and deeper or it does not read at all. */
+  /* The light-theme shadow moved with the canvas. It was rgba(16, 24, 40) — a navy tint chosen to
+     sit under cool grey surfaces; on warm paper the same value reads as a blue-grey smudge rather
+     than as depth. Re-derived at the SAME OKLCH lightness on the paper hue, at a third of the
+     chroma, because a shadow that is visibly coloured stops looking like shade. */
+  --shadow-1: 0 1px 2px rgba(27, 24, 19, 0.06), 0 1px 3px rgba(27, 24, 19, 0.08);
+  --shadow-2: 0 4px 8px -2px rgba(27, 24, 19, 0.10), 0 2px 4px -2px rgba(27, 24, 19, 0.06);
+  --shadow-3: 0 20px 24px -4px rgba(27, 24, 19, 0.12), 0 8px 8px -4px rgba(27, 24, 19, 0.04);
+
+  /* ---- Type scale — 7 steps ---------------------------------------------------------------
+     Steps below the just-noticeable difference read as inconsistency, not hierarchy (Bringhurst,
+     *The Elements of Typographic Style* §3; Refactoring UI, "define a limited type scale"), so
+     every step here is ≥1px and the small end is ≥1 full point apart.
+
+     Body moves 13.5px → 14px. "Intent" was tuned for editorial density; 14px is the dashboard
+     convention and the single biggest reason the old surface read as cramped rather than dense.
+     `scale.test.ts` holds this set closed — adding a size means changing the scale on purpose. */
+  --fs-micro: 10px;     /* mono caps labels, tags */
+  --fs-small: 11px;     /* mono meta, counts, timestamps */
+  --fs-body-s: 12px;    /* secondary body, table cells, chips */
+  --fs-body: 14px;      /* body */
+  --fs-lead: 16px;      /* lead-in prose, brand */
+  --fs-sub: 20px;       /* section titles */
+  --fs-title: 28px;     /* page titles */
+
+  /* ---- Spacing scale — a 4-based grid, plus 2px for hairline insets ------------------------
+     Unchanged from "Intent": one base unit is the whole point of a grid (Material 3,
+     "Understanding layout → spacing"; the 4/8pt convention), and off-grid values are why two
+     panels that should align never quite do. */
+  --sp-1: 2px;  --sp-2: 4px;  --sp-3: 8px;  --sp-4: 12px;
+  --sp-5: 16px; --sp-6: 24px; --sp-7: 32px;
+
+  --caps-track: 0.15em;          /* mono caps labels — the panel-header voice */
+  --scrim: rgba(21, 18, 13, 0.45);   /* warm, to match the canvas — see --shadow-* above */
+
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: Newsreader, Georgia, serif;   /* Chronicle prose ONLY — not UI titles */
+  color-scheme: light;
+
+  /* ---- Motion vocabulary (T-51) -----------------------------------------------------------------
+     ONE easing curve family and ONE duration scale for the whole app. EXTEND BY REUSING THESE
+     TOKENS — do not invent a per-component curve or a bespoke millisecond value; that is how a UI
+     ends up feeling like five different products.
+
+       --ease         everything that enters, settles, or travels one way (decelerating)
+       --ease-inout   anything that returns to where it started (the chip marquee: out and back)
+
+       --t-1  120ms   state echo — hover, border, opacity, a chip fading out of the way
+       --t-2  200ms   an element enters or leaves — a card appearing, the "changed" ring
+       --t-3  320ms   travel — a card crossing columns, a panel sliding in
+
+     Rules: animate transform/opacity only (compositor-cheap); nothing loops unless the pointer or
+     keyboard focus is on it; every animation here is disabled under `prefers-reduced-motion`
+     (bottom of this file), which must remain true of anything added later.
+
+     These live on `:root`, NOT in a theme block. Duration and easing are theme-INDEPENDENT: a
+     palette changes what the UI looks like, never how long it takes. They sat inside
+     `[data-theme="neopop"]` once, which left every `transition`/`animation` in the app referencing
+     an undefined token on the default theme — an invalid declaration the browser drops in silence,
+     so all motion was dead with nothing on screen looking broken. Keep them here.
+  ------------------------------------------------------------------------------------------------ */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-1: 120ms;
+  --t-2: 200ms;
+  --t-3: 320ms;
+}
+
+/* ================================================================================================
+   DARK.
+
+   ONE list of declarations, applied through two selectors, because the alternative is two copies
+   that drift. `--dark-palette` is not a mechanism CSS has, so the block below is duplicated
+   verbatim by intent — and `contrast.test.ts` reads the `[data-theme="dark"]` copy, while
+   `tokens.test.ts` checks BOTH for surface-set completeness, so a half-edit fails rather than
+   shipping a theme where only one of the two entry points is correct.
+
+   Ordering: the media query is scoped `:root:not([data-theme="light"])` so an explicit light
+   choice survives a dark OS; `[data-theme="dark"]` comes AFTER it so an explicit dark choice wins
+   on a light OS. Both are needed — dropping either leaves one of the three states (light / dark /
+   system) unreachable.
+   ================================================================================================ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A0E15;
+    --surface-lowest: #06090E;
+    --surface-low: #11161E;
+    --panel: #131A24;
+    --panel-2: #19212C;
+    --surface-highest: #222B37;
+    --rule: #303A47;
+    --border: #1F2834;
+    --outline-variant: #3B4452;
+    --band: #171D27;
+    --text: #F7F6F4;
+    --text-2: #B4B0AA;
+    --text-muted: #9A968F;
+    --ink: #ED6B3A;
+    --ink-fg: #FFFFFF;
+    --ink-hover: #DE5D2C;
+    --accent: #FF7A3D;
+    --accent-tint: #FF8A55;
+    --marker: #7A6410;
+    --marker-fg: #F5F0DC;
+    --backlog: #9AA2B1;
+    --ready: #7AA7F5;
+    --progress: #DDA13A;
+    --blocked: #F28A88;
+    --review: #C1A0F5;
+    --done: #5FCF8E;
+    --live: #5FCF8E;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40), 0 1px 3px rgba(0, 0, 0, 0.32);
+    --shadow-2: 0 4px 8px -2px rgba(0, 0, 0, 0.48), 0 2px 4px -2px rgba(0, 0, 0, 0.36);
+    --shadow-3: 0 20px 24px -4px rgba(0, 0, 0, 0.56), 0 8px 8px -4px rgba(0, 0, 0, 0.36);
+    --scrim: rgba(0, 0, 0, 0.62);
+    color-scheme: dark;
+  }
+}
+[data-theme="dark"] {
+  --bg: #0A0E15;
+  --surface-lowest: #06090E;
+  --surface-low: #11161E;
+  --panel: #131A24;
+  --panel-2: #19212C;
+  --surface-highest: #222B37;
+  --rule: #303A47;
+  --border: #1F2834;
+  --outline-variant: #3B4452;
+  --band: #171D27;
+  --text: #F7F6F4;
+  --text-2: #B4B0AA;
+  --text-muted: #9A968F;
+  --ink: #ED6B3A;
+  --ink-fg: #FFFFFF;
+  --ink-hover: #DE5D2C;
+  --accent: #FF7A3D;
+  --accent-tint: #FF8A55;
+  --marker: #7A6410;
+  --marker-fg: #F5F0DC;
+  --backlog: #9AA2B1;
+  --ready: #7AA7F5;
+  --progress: #DDA13A;
+  --blocked: #F28A88;
+  --review: #C1A0F5;
+  --done: #5FCF8E;
+  --live: #5FCF8E;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.40), 0 1px 3px rgba(0, 0, 0, 0.32);
+  --shadow-2: 0 4px 8px -2px rgba(0, 0, 0, 0.48), 0 2px 4px -2px rgba(0, 0, 0, 0.36);
+  --shadow-3: 0 20px 24px -4px rgba(0, 0, 0, 0.56), 0 8px 8px -4px rgba(0, 0, 0, 0.36);
+  --scrim: rgba(0, 0, 0, 0.62);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; }
+.mono { font-family: var(--mono); }
+
+/* Matched search text. The one loud color in the product — see `--marker`. `mark` is the native
+   element for "this is the bit you searched for", so it gets the styling directly and any
+   highlighter code can emit plain <mark> with no class.
+   ponytail: styled but NOT yet emitted anywhere — nothing in the app wraps matches today. It plugs
+   into the board//-search result rows (`ticketSearch.ts` already computes the matched ranges);
+   wrap those ranges in <mark> and this lights up with no further CSS. */
+mark, .mark {
+  background: var(--marker); color: var(--marker-fg);
+  border-radius: var(--r-1); padding: 0 2px; box-decoration-break: clone;
+}
+
+/* Primary action: solid ink, square, no extrusion. In this system emphasis comes from
+   VALUE (near-black on paper), not from depth. */
+/*
+ * A BUTTON IS A FLEX ROW, and this is the rule that makes an icon sit BESIDE its label.
+ *
+ * `.btn` carried no `display`, so it was `inline-block` — and an `<svg>` rendered `display: block`
+ * (which is how `icons.tsx` draws them, so the glyph aligns rather than riding the text baseline)
+ * takes its own line inside one. Reported from staging: the On-call "Setup" button stacked its icon
+ * ABOVE the word. Every icon+label button in the app had the same latent bug; only that one had an
+ * icon added recently enough to be seen.
+ *
+ * `gap` replaces the `{' '}` spacers those call sites would otherwise need, and `justify-content`
+ * centres the pair rather than leaving it left-aligned in a stretched button.
+ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--ink); color: var(--ink-fg); border: 1px solid var(--ink);
+  border-radius: var(--r-2); padding: 8px 16px; font-weight: 600; font-size: 12px;
+  box-shadow: var(--shadow-1);
+  transition: background var(--t-1) var(--ease), border-color var(--t-1) var(--ease);
+}
+
+/*
+ * AN ICON-ONLY BUTTON IS A SQUARE, not a pill that happens to hold a glyph.
+ *
+ * Without this the close control inherits `padding: 8px 16px` — horizontal padding sized for a WORD
+ * — so a 12px × wide rounded rectangle sits next to a title. Reported from staging: "this close icon
+ * button should be on right side with proper square shape".
+ *
+ * Fixed `width`/`height` rather than symmetric padding: the glyph sizes vary (10–14px) and padding
+ * alone would make each icon button a different size.
+ */
+.btn.icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex: 0 0 28px;
+}
+.btn:hover { background: var(--ink-hover); border-color: var(--ink-hover); }
+.btn.secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow-1); }
+.btn.secondary:hover { background: var(--panel-2); border-color: var(--outline-variant); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+/*
+ * CHIPS ARE FLEX ROWS, for the same reason `.btn` is.
+ *
+ * `.badge` / `.label` / `.pill` / `.chip` / `.role-badge` declared no `display`, so they were inline
+ * — and `icons.tsx` draws its glyphs `display: block` (so they align to the box rather than riding
+ * the text baseline). An icon inside any of them therefore took its own line and the chip grew to
+ * two rows. The On-call "Setup" button is the one that got REPORTED; the sprint flag, the lease
+ * padlock, the racing flag, the model-hint and custom-field chips and the break-glass badge all had
+ * it latent, and would have surfaced one screenshot at a time.
+ *
+ * `align-items: center` is what actually centres the glyph against the text; `gap` replaces the
+ * literal spaces those call sites relied on.
+ */
+.badge, .label, .pill, .chip, .role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /*
+   * THE THREE LINES BELOW EXIST BECAUSE `inline-flex` CHANGES WRAPPING, and that is the cost of the
+   * line above rather than an unrelated tidy.
+   *
+   * As `display: inline` these chips wrapped at the container edge like any other text. A flex
+   * container's anonymous text item instead sizes to `max-content`, so a chip holding a long value
+   * grows on ONE line and pushes its row wide. `.label` carries user-supplied task labels and
+   * required capabilities — arbitrary strings we do not control — so this is reachable content, not
+   * a hypothetical.
+   *
+   * `max-width` stops a chip widening its container, `flex-wrap` lets a multi-part chip break, and
+   * `overflow-wrap` breaks a single long unbroken token rather than letting it spill.
+   *
+   * NOT VERIFIED VISUALLY: jsdom computes no layout, so nothing in the suite can see this. It is
+   * reasoning about the box model plus a defensive default, and it wants a look on staging.
+   */
+  max-width: 100%;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A QUIET CONTROL — borderless until you reach for it.
+ *
+ * For secondary disclosures ("Show deleted") that must be reachable but must not compete with the
+ * panel's real content. A full `.btn secondary` gave one the same visual weight as "Create", pinned
+ * in a panel corner. Hover and focus bring the surface back, so it is never a control you cannot
+ * find — and `:focus-visible` carries the same ring every other control uses, because a borderless
+ * button that also loses its focus ring is unusable by keyboard.
+ */
+.btn-quiet {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: none; border: 1px solid transparent; color: var(--text-muted);
+  border-radius: var(--r-2); padding: 4px 12px; font-size: 11px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  transition: background var(--t-1) var(--ease), color var(--t-1) var(--ease), border-color var(--t-1) var(--ease);
+}
+.btn-quiet:hover { background: var(--panel-2); color: var(--text); border-color: var(--border); }
+.btn-quiet:focus-visible {
+  outline: none; color: var(--text); border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.input, select, textarea {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-2); padding: 8px 8px; font-size: 12px; font-family: inherit;
+  transition: border-color var(--t-1) var(--ease), box-shadow var(--t-1) var(--ease);
+}
+/*
+ * THE CLOSED SELECT WEARS OUR CARET, NOT THE PLATFORM'S.
+ *
+ * Reported from staging: "dropdown style is generic across site". A bare `<select>` keeps the OS
+ * control — a different arrow, a different metric box and a different focus ring on every platform,
+ * sitting next to `.input`s that all match. `appearance: none` plus an inline SVG chevron makes the
+ * RESTING state ours; `currentColor` keeps it correct in both themes and while disabled.
+ *
+ * WHAT THIS CANNOT REACH, so nobody re-files it: the OPEN option list. `<option>` popups are drawn
+ * by the operating system, not the page — no CSS selector styles them, which is why the open menu
+ * still shows a native blue highlight. Changing that means replacing `<select>` with a custom
+ * listbox (button + `role="listbox"` + roving focus + type-ahead + portal), which is a component,
+ * not a rule. Not attempted here.
+ */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%236b7280' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+  cursor: pointer;
+}
+select:disabled { cursor: default; opacity: 0.6; }
+/* The ring is `box-shadow`, not `outline`: it has to follow `border-radius`, and it must not
+   shift layout the way a widening border would. `:focus-visible` so a click into a field does
+   not light up the way keyboard arrival does. */
+.input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+/* A monospace field. TWO classes deliberately: `.mono` alone is defined ABOVE `.input`, and both are
+   single-class selectors, so `.input`'s `font-family: inherit` would win on source order and silently
+   render a token in the body face. `.input.mono` outranks both regardless of order. */
+.input.mono { font-family: var(--mono); }
+
+.shell { display: grid; grid-template-columns: 220px 1fr; height: 100%; }
+.nav { background: var(--surface-low); border-right: 1px solid var(--border); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; --bd-knockout: var(--surface-low); }
+/* The brand is the LOCKUP now, not a text run, so it aligns on centres rather than on a baseline
+   an SVG does not have. The font declarations went with the text they used to set. */
+.nav .brand { padding: 4px 8px 12px; display: flex; align-items: center; gap: 4px; color: var(--text); }
+.nav a { padding: 8px 8px; border-radius: var(--r-2); color: var(--text-2); font-size: 12px; font-weight: 500; }
+.nav a { transition: background var(--t-1) var(--ease), color var(--t-1) var(--ease); }
+.nav a:hover { background: var(--panel-2); color: var(--text); }
+.nav .foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; padding-top: 8px; border-top: 1px solid var(--border); }
+.nav .foot a { color: var(--text-muted); }
+.main { overflow: auto; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); z-index: 5; }
+.page { padding: 16px; }
+.page h1 { font-family: var(--display); font-weight: 600; letter-spacing: -0.02em; font-size: 28px; margin: 0 0 4px; }
+.muted { color: var(--text-2); }
+
+/* board */
+/* `height`, not just `flex: 1` — `.main` is `display: block`, so a flex grow factor on this element
+   does nothing vertically and the container collapses to its tallest column. That put the horizontal
+   scroll track at the bottom of the CONTENT (~47px of dead space beneath it) instead of at the bottom
+   of the page, so reaching it meant aiming at a bar floating mid-screen. Same `calc(100vh - 140px)`
+   the columns themselves use, so the track lands on the viewport floor.
+   `align-items: flex-start` is what stops the columns stretching to fill this new height. */
+.columns {
+  display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding: 4px;
+  height: calc(100vh - 140px);
+}
+.column { background: var(--surface-low); border: 1px solid var(--border); border-radius: var(--r-3); width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
+.column > header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--band); border-radius: var(--r-3) var(--r-3) 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; font-weight: 600; }
+.wip { font-family: var(--mono); font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: var(--r-1); padding: 2px 8px; }
+.wip.over { color: var(--blocked); border-color: var(--blocked); }
+.column .cards { padding: 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+.card { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-2); padding: 12px; box-shadow: var(--shadow-1); transition: border-color var(--t-1) var(--ease), opacity var(--t-1) var(--ease); animation: card-in var(--t-2) var(--ease) both; }
+.card:hover { border-color: var(--outline-variant); }
+/* Card enter. This is also the column-transition: a task that changes status unmounts from one
+   column and mounts in another, so it plays exactly where it lands. */
+@keyframes card-in { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: none; } }
+.card .id { font-family: var(--mono); font-size: 11px; color: var(--text-2); }
+.card .title { font-size: 14px; font-weight: 600; margin: 4px 0 8px; line-height: 1.35; }
+.card .row { display: flex; align-items: center; gap: 4px; }
+/* ---- card meta: two zones, always the same shape ---------------------------------------------
+   This was ONE flex row of independently-conditional children plus a `flex:1` spacer, so a card's
+   silhouette changed with its data AND with the pointer: a plain ticket drew an empty ~24px row, and
+   the assign chip was `visibility: hidden` until hover, which reserved its width and blanked it. Two
+   identical tickets therefore looked like different components.
+   Now: badges left, the WHO control right, both zones always present. `min-height` is what keeps a
+   badge-less card the same height as its neighbours instead of collapsing — the row is a consistent
+   baseline, not a variable-height gap. */
+.card-meta { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+/* Wraps rather than clipping: a ticket carrying blocked + sprint + effort + lease is legitimately
+   wide, and a second line is honest where a mid-badge cut is not. */
+.card-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+/* `margin-left: auto` replaces the old `<span style={{flex:1}}/>` spacer — same right alignment, one
+   fewer DOM node, and it holds when the badge zone is empty. `flex: 0 0 auto` stops the control being
+   squeezed by a long sprint name. */
+.card-who { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; }
+/* The "created by" avatar is a weaker signal than an assignee — it says who FILED the ticket, not who
+   owns it — so it is dimmed rather than given equal weight. */
+.card-author { display: inline-flex; opacity: 0.55; }
+/* 2px lease progress bar pinned to the card bottom (amber, fades as the lease runs out) */
+.lease-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--progress); border-bottom-left-radius: var(--r-2); border-bottom-right-radius: var(--r-2); }
+.spacer { flex: 1; }
+
+.pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--r-1); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.chip { font-size: 11px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-2); padding: 2px 8px; color: var(--text-2); }
+/* mono label chip (task labels) — JetBrains Mono on surface-container-high */
+.label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em; background: var(--panel-2); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--r-1); padding: 2px 4px; }
+/* ---- badge: ONE family, and every variant is a tint of it ------------------------------------
+   The base used to carry no border and no colour, while `.blocked` and `.lease` added both and the
+   effort / racing / sprint badges set theirs through INLINE styles in Board.tsx. On a card holding
+   several, `Blocked` rendered as a red outlined pill next to `high` as bare grey text — they read as
+   unrelated widgets rather than one row of metadata. Now the base owns the shape (border, padding,
+   radius, icon gap) and a variant changes only the HUE, so the row stays visually level however many
+   badges a ticket happens to have. Adding a badge is a class, never an inline style. */
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-family: var(--mono); line-height: 1.6;
+  padding: 2px 4px; border-radius: var(--r-1);
+  border: 1px solid var(--border); color: var(--text-2);
+}
+.badge.blocked { color: var(--blocked); border-color: var(--blocked); }
+.badge.lease { color: var(--progress); border-color: var(--progress); }
+.badge.racing { color: var(--progress); border-color: var(--progress); }
+.badge.sprint { color: var(--review); border-color: var(--review); }
+/* Effort is the quietest of the family — advisory metadata, not a state — so it keeps the neutral
+   rule colour rather than claiming a semantic hue it does not have. */
+.badge.effort { color: var(--text-muted); }
+
+/* ---- Marquee: the one truncating surface (T-51, components.tsx `Marquee`) ----------------------
+   Labels are how a human scans a board, so `contex…` `cross-ta…` `+1` is worse than useless: it
+   costs the width AND says nothing. At rest the row is clipped with a right-edge fade and a measured
+   `+N`; on hover / keyboard focus / `.card.selected` / hover-or-focus of an enclosing button, a CSS
+   keyframe walks the track to its end, HOLDS it there long enough to read, and returns.
+
+   Distance (`--marquee-shift`) and duration (`--marquee-ms`) are measured once in JS; the motion
+   itself is this keyframe on `transform`, so it stays on the compositor and a React re-render can't
+   restart it. Nothing animates unless it is hovered or focused — so a board of 200 cards runs at
+   most ONE marquee, and an off-screen card runs none.
+   `--marquee-bg` must match the surface behind the row, or the fade shows a seam.
+------------------------------------------------------------------------------------------------ */
+.marquee { position: relative; display: flex; align-items: center; min-width: 0; max-width: 100%; overflow: hidden; }
+.marquee-track { position: relative; display: inline-flex; align-items: center; gap: 4px; width: max-content; white-space: nowrap; }
+/* The honest overflow cue: the fade is always painted, but it only *shows* where content reaches the
+   right edge — a row that fits has nothing under it to fade. No measurement needed. */
+.marquee::after {
+  content: ""; position: absolute; inset: 0 0 0 auto; width: 26px; pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--marquee-bg, var(--panel)));
+  transition: opacity var(--t-1) var(--ease);
+}
+/* THE CLIP HAS TO LOOK DELIBERATE. On the board card the fade is wider than the generic 26px,
+   because a label chip is a bordered box: cut at an arbitrary pixel it reads as a broken word
+   ("explaina", "concurrenc") rather than as "there is more here". A fade deep enough to swallow the
+   remnant, plus the measured `+N`, is the difference between an overflow cue and a rendering bug.
+   Nothing is hidden by it — the marquee still walks the full row on hover/focus (T-51). */
+.card-labels::after { width: 52px; }
+.card-labels .marquee-more {
+  box-shadow: -10px 0 0 10px var(--marquee-bg, var(--panel)), -26px 0 16px 0 var(--marquee-bg, var(--panel));
+}
+/* A chip never breaks internally — it is one token, so it is shown whole or faded, never hyphenated. */
+.label { white-space: nowrap; }
+.marquee-more {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  font-family: var(--mono); font-size: 10px; line-height: 1.5; padding: 0 4px; border-radius: var(--r-1);
+  color: var(--text-muted); background: var(--marquee-bg, var(--panel));
+  /* wide, solid-ish spread so a half-clipped chip doesn't peek out to the left of the badge */
+  box-shadow: -6px 0 0 6px var(--marquee-bg, var(--panel)), -18px 0 12px 0 var(--marquee-bg, var(--panel));
+  transition: opacity var(--t-1) var(--ease);
+}
+/* The reveal triggers. `.card.selected` is deliberate: the board's keyboard model is j/k selection,
+   so the reveal is keyboard-reachable through the affordance that already exists instead of adding
+   one tab stop per card. The `:where(a, button)` arm covers marquees nested inside a control. */
+:is(.marquee:hover, .marquee:focus-within, .card.selected .marquee, :where(a, button):is(:hover, :focus-visible) .marquee) .marquee-track {
+  animation: marquee-reveal var(--marquee-ms, 4000ms) var(--ease-inout) infinite;
+}
+:is(.marquee:hover, .marquee:focus-within, .card.selected .marquee, :where(a, button):is(:hover, :focus-visible) .marquee) .marquee-more,
+:is(.marquee:hover, .marquee:focus-within, .card.selected .marquee, :where(a, button):is(:hover, :focus-visible) .marquee)::after {
+  opacity: 0;
+}
+/* Pause at the start, travel, HOLD at the end (this is the part that makes it readable), travel back. */
+@keyframes marquee-reveal {
+  0%, 12% { transform: translateX(0); }
+  46%, 66% { transform: translateX(var(--marquee-shift, 0px)); }
+  96%, 100% { transform: translateX(0); }
+}
+/* chips sitting on surface-container-high need the fade to match, or it seams */
+.assign-chip .marquee, .presence-chip .marquee { --marquee-bg: var(--panel-2); }
+/* board card: labels get their own full-width line — they are the scan target, not a leftover */
+.card-labels { margin: 0 0 8px; height: 17px; }
+
+.avatar { position: relative; width: 22px; height: 22px; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel); border: 1px solid var(--border); color: var(--text-2); flex: 0 0 auto; }
+.avatar.human { border-radius: 50%; }
+.avatar.agent { border-radius: var(--r-2); font-size: 12px; }
+.avatar-dot { position: absolute; right: -2px; bottom: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); border: 1px solid var(--panel); }
+.avatar-dot.active { background: var(--live); }
+
+/* live agent presence — status dot (green available · yellow busy · red offline · blue connecting) */
+.status-dot { display: inline-block; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 0 2px color-mix(in srgb, var(--panel) 70%, transparent); }
+.status-dot[data-state="available"] { box-shadow: 0 0 0 2px color-mix(in srgb, var(--done) 22%, transparent); }
+.status-dot[data-state="connecting"] { animation: dot-pulse 1.1s ease-in-out infinite; }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* presence cluster in the board header */
+.presence { display: flex; align-items: center; gap: 8px; }
+.presence-chips { display: flex; align-items: center; gap: 4px; }
+.presence-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 2px 8px 2px 8px; font-size: 11px; color: var(--text-2); max-width: 130px; }
+.presence-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* board card → assign-to-agent control + its fixed (clip-proof) dropdown */
+.assign-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 128px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 2px 8px 2px 2px; font-size: 11px; color: var(--text-2); cursor: pointer; }
+.assign-chip.ghost { padding: 2px 8px; gap: 4px; color: var(--text-muted); border-style: dashed; }
+.assign-chip:hover { border-color: var(--outline-variant); color: var(--text); }
+.assign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign-menu { position: fixed; z-index: 50; width: 230px; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r-3); box-shadow: var(--shadow-3); padding: 4px; }
+.assign-head { font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--text-muted); padding: 4px 8px 4px; }
+.assign-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.assign-empty { font-size: 12px; color: var(--text-muted); padding: 4px 8px; }
+.assign-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: var(--r-2); padding: 4px 8px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.assign-item:hover { background: var(--panel-2); color: var(--text); }
+.assign-item .assign-check { margin-left: auto; color: var(--accent); }
+.assign-item.unassign { color: var(--blocked); margin-top: 4px; border-top: 1px solid var(--border); }
+.assign-item.unassign:hover { background: color-mix(in srgb, var(--blocked) 8%, transparent); }
+.assign-type { display: flex; gap: 4px; padding: 4px; }
+.assign-type .input { flex: 1; min-width: 0; }
+.assign-type .btn { padding: 4px 8px; }
+
+.drawer-overlay { position: fixed; inset: 0; background: var(--scrim); display: flex; justify-content: flex-end; z-index: 20; }
+.drawer { width: 520px; max-width: 92vw; height: 100%; background: var(--panel); border-left: 1px solid var(--rule); overflow-y: auto; padding: 16px; }
+.drawer h2 { font-family: var(--display); font-weight: 600; letter-spacing: -0.02em; font-size: 20px; line-height: 1.2; }
+.section { margin-top: 16px; }
+.section > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: var(--caps-track); color: var(--text-muted); margin: 0 0 8px; }
+.callout { background: color-mix(in srgb, var(--accent) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r-2); padding: 8px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+/* project card — colored left accent bar + role badge (Projects overview) */
+.proj-card { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-3); box-shadow: var(--shadow-1); padding: 12px 12px 12px 16px; overflow: hidden; transition: border-color 0.12s; cursor: pointer; }
+.proj-card:hover { border-color: var(--outline-variant); }
+.proj-card .accent { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.proj-card .head { display: flex; align-items: center; gap: 8px; }
+.role-badge { font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; padding: 2px 4px; border-radius: var(--r-1); background: var(--panel-2); color: var(--text-2); border: 1px solid var(--border); }
+.role-badge.admin { color: var(--accent-tint); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: var(--caps-track); }
+
+/*
+ * A TABLE'S OUTER EDGE LINES UP WITH ITS PANEL'S HEADER.
+ *
+ * `.record-head` insets 12px; `th`/`td` inset 8px. In an UNPADDED panel — which is what a table gets,
+ * because `Panel`'s `pad` is for content that is not self-padding — the columns therefore started 4px
+ * left of the panel's own title, and every row read as shifted out of the table. Reported from
+ * staging against the CLI-tokens and MCP-sessions tables.
+ *
+ * Only the FIRST and LAST cells are widened: matching all of them to 12px would push the inter-column
+ * gap out with no reason. Descendant selector, not a child one, because several tables here sit
+ * inside an `overflow-x` wrapper so the table is a grandchild.
+ */
+.record table th:first-child, .record table td:first-child { padding-left: 12px; }
+.record table th:last-child, .record table td:last-child { padding-right: 12px; }
+
+.center { display: grid; place-items: center; height: 100%; }
+.signin-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-3); box-shadow: var(--shadow-3); padding: 24px; width: 340px; text-align: center; }
+.error { color: var(--blocked); }
+
+/* toasts (global error/info surface) */
+.toast-host { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; }
+.toast { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--text-muted); border-radius: var(--r-2); padding: 8px 12px; font-size: 12px; max-width: 360px; cursor: pointer; box-shadow: var(--shadow-2); }
+.toast.error { border-left-color: var(--blocked); }
+.toast.info { border-left-color: var(--accent); }
+
+/* a11y: visible keyboard focus everywhere; the dialog container itself doesn't need a ring */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.drawer:focus { outline: none; }
+
+/* responsive: collapse the side nav, full-width drawer, single-column board with horizontal scroll */
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .nav { flex-direction: row; flex-wrap: wrap; align-items: center; border-right: none; border-bottom: 1px solid var(--border); padding: 8px 8px; gap: 4px; }
+  .nav .brand { padding: 4px 4px; }
+  .nav .spacer { flex: 1; }
+  .topbar { flex-wrap: wrap; padding: 8px 12px; }
+  .page { padding: 12px; flex-direction: column; }
+  .column { width: 86vw; flex-basis: 86vw; max-height: none; }
+  .drawer { width: 100vw; max-width: 100vw; }
+}
+
+/* ---- Phase 1-3: Linear-grade interaction layer ---- */
+
+/* skeleton shimmer (replaces "Loading…" text) */
+.skeleton { position: relative; overflow: hidden; background: var(--surface-low); border-radius: var(--r-2); min-height: 12px; }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--text-2) 7%, transparent), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* keyboard selection (the focused card the shortcuts act on) */
+.card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* Acknowledge a card that changed under you (an agent moved/edited it while you were looking at it).
+   A ring blooms and fades; before T-51 the card silently swapped its contents. Suppressed for your
+   OWN edits — see markLocalEdit() in mutations.ts. */
+.card-changed::after {
+  /* z-index 3 keeps the "changed under you" ring ABOVE `.card-saving` (z-index 2). The two states
+     co-occur — a move that races another agent's edit — and the ring is information, so it must not be
+     blurred and washed by the veil. */
+  content: ""; position: absolute; inset: -1px; border-radius: var(--r-2); pointer-events: none; z-index: 3;
+  border: 1px solid var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: ring-fade 1.4s var(--ease) forwards;
+}
+@keyframes ring-fade { 0% { opacity: 0; } 10% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ---- optimistic move: the card is already in its destination lane, the server has not agreed yet ----
+   On failure the mutation's snapshot restore puts it back; the veil's only job is to stop the UI
+   claiming success in the meantime. */
+/* The card is ALREADY in its destination lane — the optimistic patch put it there on drop. What is
+   unconfirmed is whether the server agrees, so the card is veiled: its content stays in place and
+   readable in outline, with the uncertainty made obvious.
+
+   `backdrop-filter` blurs what is BEHIND this overlay (the card's own content) while the spinner, being
+   a CHILD of the overlay, stays sharp. Blurring `.card` directly would blur the spinner with it, and
+   splitting the card into an inner wrapper just to blur it would restructure every card for one state. */
+.card-saving {
+  position: absolute; inset: 0; z-index: 2; border-radius: var(--r-2);
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+  color: var(--accent);
+  -webkit-backdrop-filter: blur(2.5px);
+  backdrop-filter: blur(2.5px);
+  /* A translucent wash ON TOP OF the blur — not a fallback, and an earlier comment claiming so was
+     wrong twice over: it is unconditional (no @supports gate, so supporting browsers get both), and
+     color-mix's support baseline is close enough to backdrop-filter's that it would rarely render
+     alone anyway. It is here because blur alone does not read as "busy" at this card size.
+     Mixed against `--panel` (the card's own background) rather than `--bg`: review found the wash
+     near-invisible because a card sits ON `--panel`, so a `--bg` mix at 30% was washing a surface it
+     already matched. 55% against the panel colour is what actually reads as veiled. */
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  animation: card-veil var(--t-1) var(--ease);
+}
+@keyframes card-veil { from { opacity: 0; } to { opacity: 1; } }
+.card-saving-spin { animation: card-spin 720ms linear infinite; }
+@keyframes card-spin { to { transform: rotate(360deg); } }
+
+/* ---- drop ripple ----
+   Decorative only: aria-hidden in the markup, pointer-events:none here, and one-shot (the board clears
+   the flag on a timer). Uses --t-3, the "travel" duration, because a drop IS travel completing. */
+.card-ripple {
+  position: absolute; inset: 0; border-radius: var(--r-2); pointer-events: none;
+  background: radial-gradient(circle at center, color-mix(in srgb, var(--accent) 26%, transparent) 0%, transparent 62%);
+  animation: card-ripple var(--t-3) var(--ease) forwards;
+}
+@keyframes card-ripple {
+  0%   { opacity: 0.9; transform: scale(0.86); }
+  100% { opacity: 0;   transform: scale(1.04); }
+}
+
+/* dnd-kit: drop indicator + drag overlay lift */
+.column { transition: background var(--t-1) var(--ease); }
+/* The drop target's wash mixes against `--surface-low`, THE COLUMN'S OWN GROUND, not `--panel`.
+   That mix was written when a column WAS `--panel`; now that the column is the grey ground and the
+   card is the white object on it, a `--panel`-based mix paints the column LIGHTER rather than
+   tinted — so the drop target read as "this column went pale", with the dashed accent outline
+   arguing against its own background. Rendered, not reasoned: harness `states-light.png`. */
+.col-drop { outline: 2px dashed color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: -4px; border-radius: var(--r-3); background: color-mix(in srgb, var(--accent) 10%, var(--surface-low)); }
+.drag-overlay .card { box-shadow: var(--shadow-3); transform: rotate(2deg) scale(1.02); cursor: grabbing; border-color: var(--accent); animation: none; }
+
+/* command palette (cmdk) */
+.palette-overlay { position: fixed; inset: 0; background: var(--scrim); z-index: 60; display: grid; place-items: start center; padding-top: 14vh; }
+.palette { width: 560px; max-width: 92vw; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r-3); overflow: hidden; box-shadow: var(--shadow-3); }
+.palette [cmdk-input] { width: 100%; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 16px; padding: 16px 16px; border-bottom: 1px solid var(--border); }
+.palette [cmdk-list] { max-height: 330px; overflow-y: auto; padding: 4px; }
+.palette [cmdk-item] { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--r-2); font-size: 14px; color: var(--text-2); cursor: pointer; }
+.palette [cmdk-item][data-selected="true"] { background: var(--panel-2); color: var(--text); }
+.palette [cmdk-item] .kbd { margin-left: auto; }
+.palette [cmdk-group-heading] { font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--text-muted); padding: 8px 12px 4px; }
+.palette [cmdk-empty] { padding: 16px; font-size: 12px; color: var(--text-muted); text-align: center; }
+
+/* kbd chips (palette hints + the ? overlay) */
+.kbd { font-family: var(--mono); font-size: 11px; color: var(--text-2); background: var(--surface-highest); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: var(--r-1); padding: 2px 4px; }
+
+/* shortcut help overlay (?) */
+.help-overlay { position: fixed; inset: 0; background: var(--scrim); z-index: 70; display: grid; place-items: center; }
+.help-card { width: 520px; max-width: 92vw; max-height: 76vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r-3); padding: 16px 24px; box-shadow: var(--shadow-3); }
+.help-card h2 { font-family: var(--display); font-weight: 600; letter-spacing: -0.02em; font-size: 20px; margin: 0 0 12px; }
+.help-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; font-size: 12px; color: var(--text-2); border-bottom: 1px solid var(--border); }
+.help-row:last-child { border-bottom: 0; }
+
+/* rendered markdown (task descriptions + comments) — compact rhythm tuned for the drawer */
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 14px; font-weight: 600; color: var(--text); margin: 12px 0 4px; }
+.md h1 { font-size: 16px; }
+.md ul, .md ol { margin: 4px 0 8px; padding-left: 16px; }
+.md li { margin: 2px 0; }
+.md li > p { margin: 0; }
+.md code { font-family: var(--mono); font-size: 12px; background: var(--surface-highest); border-radius: var(--r-1); padding: 2px 4px; }
+.md pre { background: var(--surface-lowest); border: 1px solid var(--border); border-radius: var(--r-2); padding: 8px 12px; overflow-x: auto; margin: 8px 0; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { margin: 8px 0; padding: 2px 0 2px 8px; border-left: 2px solid var(--outline-variant); color: var(--text-2); }
+.md a { color: var(--accent-tint); text-decoration: underline; }
+.md img { max-width: 100%; border-radius: var(--r-2); }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+/* block+overflow keeps a wide table scrolling inside itself instead of the whole drawer body */
+.md table { display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; }
+/* undo the global data-table th treatment (uppercase 11px muted) inside prose tables */
+.md th { color: var(--text); font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: normal; }
+
+/* ---- Shell revamp: dark theme, grouped nav, project switcher, avatar menu, shared blocks ---- */
+
+/* ================= THEMES: THERE ARE NONE =============================================
+   This section held NeoPOP, NeoPOP-light and Bone — revamp explorations kept switchable rather than
+   deleted. The owner retired them on 2026-08-10 and their token blocks are gone, along with the
+   `applyTheme`/`THEMES` machinery in App.tsx that could reach them.
+
+   Three stale comments survived that deletion and were removed on review: an orphaned "Light variant"
+   note describing a rule that no longer exists, and a "BACKUP THEMES" banner still asserting the
+   themes were "kept switchable" — directly above the note saying they had been deleted. Someone
+   grepping BACKUP THEMES would have concluded the mechanism was live and written
+   `[data-theme="bone"]`-scoped CSS that can never match.
+
+   `:root` is the whole palette now. Nothing sets `data-theme`. Recover the blocks from git history
+   if a second theme is ever wanted, and reintroduce the machinery deliberately.
+   ==================================================================================== */
+
+/* grouped sidebar nav */
+.nav a { display: flex; align-items: center; gap: 8px; }
+.nav a svg { flex: 0 0 auto; opacity: 0.85; }
+.nav-group { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+.nav-group-label { font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--text-muted); padding: 0 8px 2px; }
+
+/* The unread count on a nav row. `--ink`/`--ink-fg` because that pair is contrast-proven in both
+   themes; INVERTED on `.active`, whose background is `--ink` itself — the badge would otherwise be
+   ink-on-ink and vanish exactly when you are looking at it. */
+.nav-badge {
+  font-family: var(--mono); font-size: 10px; font-weight: 600; line-height: 1.6;
+  background: var(--ink); color: var(--ink-fg);
+  border-radius: var(--r-full); min-width: 18px; padding: 0 4px; text-align: center;
+}
+.nav a.active .nav-badge { background: var(--ink-fg); color: var(--ink); }
+
+/* THE PROJECT SWITCHER — the sidebar's most-used control, and it was a bare `<select>`.
+   It stays a native select: it is the accessible, keyboard-correct, mobile-correct control, and a
+   custom listbox would be a lot of machinery to arrive back where we started. What it needed was
+   the chrome — `appearance: none` plus an inline-SVG chevron, so it reads as a switcher rather than
+   as an unstyled form field sitting above the navigation.
+
+   THE CHEVRON COLOUR IS A LITERAL AND HAS TO BE. A `data:` URI is an opaque string to the cascade,
+   so `var(--text-muted)` inside one does not resolve — it just fails to parse and the arrow
+   disappears. One value therefore has to serve both palettes, and it is measured rather than picked:
+   `#7a828e` is 3.88:1 on the light panel and 4.51:1 on the dark one, both clear of WCAG 2.2 §1.4.11's
+   3:1 for non-text. Do NOT "fix" this to `--text-muted`'s light value — that measures barely over
+   3:1 on the dark panel, a margin thin enough to lose to the next palette tweak.
+   `contrast.test.ts` pins it. */
+.proj-switch {
+  width: 100%; font-size: 12px; font-weight: 600; margin-bottom: 8px;
+  appearance: none; -webkit-appearance: none;
+  background-color: var(--panel);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237a828e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+  padding-right: 24px; cursor: pointer;
+}
+.proj-switch:hover { border-color: var(--outline-variant); }
+
+/* Title + task count stack, so a long board name gets the whole cell instead of sharing it with
+   "5 tasks". `min-width: 0` lets the cell shrink so the actions never get pushed off the row. */
+.topbar-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.topbar-heading h1 { overflow-wrap: anywhere; }
+
+/* *** THE BOARD SELECTOR IS FIXED-WIDTH IN THE TOPBAR. ***
+   `.proj-switch` is `width: 100%` for the sidebar, where it should fill. In the topbar that made it
+   claim every spare pixel, so the board name, presence chip and buttons were all squeezed by a control
+   whose own content did not need the room. A fixed basis plus ellipsis keeps the row stable no matter
+   how long the board names are. */
+.topbar .proj-switch { width: 240px; flex: 0 0 240px; margin-bottom: 0; text-overflow: ellipsis; }
+
+/* footer identity row + avatar-menu popover */
+.nav .foot { position: relative; }
+.identity-row { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; border-radius: var(--r-2); padding: 8px; text-align: left; cursor: pointer; }
+.identity-row:hover { background: var(--panel); }
+.identity-email { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-menu { position: absolute; bottom: calc(100% - 6px); left: 6px; right: 6px; min-width: 160px; z-index: 30; background: var(--panel); border: 1px solid var(--rule); border-radius: var(--r-3); box-shadow: var(--shadow-3); padding: 4px; display: flex; flex-direction: column; gap: 2px; }
+.avatar-menu a, .avatar-menu button { display: flex; align-items: center; gap: 8px; background: none; border: 0; border-radius: var(--r-2); padding: 8px 8px; font-size: 12px; color: var(--text-2); text-align: left; cursor: pointer; }
+.nav .avatar-menu a { color: var(--text-2); }
+.avatar-menu a:hover, .avatar-menu button:hover { background: var(--panel-2); color: var(--text); }
+
+/* Appearance segmented control (T-519). Three states, so a segmented control rather than a switch —
+   a two-position toggle cannot express "follow the OS". Higher specificity than `.avatar-menu button`
+   on purpose: that rule makes every button in the popover a full-width menu row, which is exactly
+   wrong for three segments sharing one track. */
+.theme-switch { display: flex; gap: 2px; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-2); padding: 2px; margin: 0 8px 4px; }
+.avatar-menu .theme-switch button {
+  flex: 1; justify-content: center; padding: 4px 8px; border-radius: var(--r-1);
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); background: none; transition: background var(--t-1) var(--ease), color var(--t-1) var(--ease);
+}
+.avatar-menu .theme-switch button:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-2); }
+.avatar-menu .theme-switch button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
+
+/* EmptyState */
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 32px 16px; text-align: center; }
+.empty-state .empty-icon { font-size: 28px; color: var(--text-muted); opacity: 0.8; }
+.empty-state .empty-title { font-size: 14px; font-weight: 600; }
+.empty-state .empty-hint { font-size: 12px; color: var(--text-muted); }
+
+/* ErrorBoundary fallback (errors.tsx). Deliberately built from the same tokens as .empty-state — a
+   crash should look like a state of the app, not like the browser's own error page. */
+.crash { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px 16px; text-align: center; }
+.crash-full { min-height: 100vh; }
+.crash-title { font-size: 16px; font-weight: 600; }
+.crash-hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+.crash-detail { font-size: 12px; color: var(--blocked); font-family: ui-monospace, monospace; max-width: 60ch; overflow-wrap: anywhere; margin: 0; }
+.crash-actions { display: flex; gap: 8px; margin-top: 8px; }
+.crash-actions .btn { text-decoration: none; }
+
+/* ConfirmButton armed state (double selector so it also outguns .btn.secondary) */
+.confirm-armed, .btn.confirm-armed { background: color-mix(in srgb, var(--blocked) 12%, transparent); color: var(--blocked); border: 1px solid var(--blocked); }
+
+/* single-line feed row for compact lists */
+.row-compact { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
+
+@media (max-width: 760px) {
+  .nav-group { flex-direction: row; align-items: center; margin-top: 0; }
+  .nav-group-label { display: none; }
+  /* ...EXCEPT inside the avatar menu (review finding 13). The rule above exists because the sidebar
+     collapses to a horizontal strip below 760px, where "Work"/"Observe"/"Configure" headings have
+     nowhere to sit. The avatar menu is a popover — it keeps its own vertical layout at every width,
+     so hiding its "Organization" heading left a bare grey string between Help and Sign out with
+     nothing saying what it was. The menu lives inside `.nav .foot`, so it is caught by the bare
+     selector and has to opt back in. */
+  .avatar-menu .nav-group-label { display: block; }
+  .proj-switch { width: auto; margin-bottom: 0; }
+  .nav .foot { margin-top: 0; margin-left: auto; border-top: 0; padding-top: 0; }
+}
+
+/* respect reduced motion: kill shimmer + transitions */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after { animation: none; }
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  /* `animation-duration: 0.01ms` alone would leave the marquee flickering at its end state, so kill
+     it outright. The labels still have to be READABLE, so hover/focus WRAPS the row to full height
+     instead: no motion, full text, and the card grows taller rather than wider — column width is
+     untouched and every other column stays aligned.
+     In flow on purpose, NOT an absolutely-positioned popover: `.column .cards` is an overflow scroll
+     container (same trap the AssigneePicker comment names), so a popover on the last card of a
+     scrolled column would be clipped exactly where it is needed. Wrapping in flow cannot be clipped. */
+  :is(.marquee:hover, .marquee:focus-within, .card.selected .marquee, :where(a, button):is(:hover, :focus-visible) .marquee) {
+    overflow: visible; height: auto; min-height: 0;
+  }
+  :is(.marquee:hover, .marquee:focus-within, .card.selected .marquee, :where(a, button):is(:hover, :focus-visible) .marquee) .marquee-track {
+    animation: none !important; transform: none !important;
+    flex-wrap: wrap; width: auto; white-space: normal; overflow-wrap: anywhere; row-gap: 4px;
+  }
+  /* The change acknowledgement must survive too — it just holds still for as long as React keeps the
+     class instead of blooming. An ack you can't see is not an ack. */
+  .card-changed::after { animation: none !important; opacity: 1; }
+  /* The veil and spinner still SHOW — they carry meaning (a write is in flight) and hiding them would
+     drop information. Only the rotation and the fade-in stop. The ripple is decorative, so it goes. */
+  .card-saving { animation: none !important; }
+  .card-saving-spin { animation: none !important; }
+  .card-ripple { display: none !important; }
+}
+
+/* ================================================================================================
+   COMPONENT LAYER — the styles behind ui.tsx.
+
+   Every rule here is reachable only through a component, which is the point: a screen cannot
+   quietly invent its own panel or its own radius. If you need a variant, add a prop and a class
+   here — do not reach for inline `style`.
+   ================================================================================================ */
+
+/* ---- the record: hairline edge, banded head, resting elevation ---- */
+.record { border: 1px solid var(--border); background: var(--panel); border-radius: var(--r-3); box-shadow: var(--shadow-1); margin-bottom: 16px; overflow: hidden; }
+.record.danger { border-color: var(--blocked); }
+.record-head {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--band); border-bottom: 1px solid var(--border); padding: 8px 12px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track);
+  text-transform: uppercase; font-weight: 600;
+}
+.record.danger .record-head { background: var(--blocked); color: var(--panel); border-bottom-color: var(--blocked); }
+.record-head-right { margin-left: auto; font-weight: 400; color: var(--text-muted); letter-spacing: 0.06em; }
+
+/* A collapsible panel is a native <details>; its summary keeps the .record-head chrome exactly, so a
+   folded panel and an open one are the same box. The marker is drawn here because the UA triangle
+   sits outside the padded header and cannot be positioned. */
+.record > summary.record-head { cursor: pointer; list-style: none; }
+.record > summary.record-head::-webkit-details-marker { display: none; }
+.record > summary.record-head::before { content: '\25b8'; display: inline-block; margin-right: 8px; color: var(--text-muted); transition: transform 120ms ease; }
+details.record[open] > summary.record-head::before { transform: rotate(90deg); }
+.record.danger .record-head-right { color: color-mix(in srgb, var(--panel) 85%, transparent); }
+.record-body { padding: 16px 16px; }
+.record-note {
+  font-size: 12px; color: var(--text-2); line-height: 1.55; padding: 12px 12px;
+  background: var(--surface-low); border-top: 1px dashed var(--border);
+}
+.record-note b { color: var(--text); }
+.record-section {
+  font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track);
+  text-transform: uppercase; color: var(--text-muted); font-weight: 600;
+  border-bottom: 1px solid var(--border); padding-bottom: 8px; margin: 24px 0 12px;
+}
+
+/* ---- rows ---- */
+.kv {
+  display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline;
+}
+.kv:last-child { border-bottom: 0; }
+.kv-k { font-family: var(--mono); font-size: 10px; color: var(--text-muted); letter-spacing: 0.05em; }
+.line-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.line-row:last-child { border-bottom: 0; }
+.line-row[role="button"] { cursor: pointer; }
+.line-row[role="button"]:hover { background: var(--surface-low); }
+.line-row-v { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* ---- fact / opinion: P-1 requires these to never look alike ---- */
+.tag {
+  display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em;
+  text-transform: uppercase; padding: 2px 4px; margin-right: 4px; vertical-align: 1px;
+  border: 1px solid transparent; border-radius: var(--r-1);
+}
+.tag-fact { background: color-mix(in srgb, var(--done) 12%, var(--panel)); color: var(--done);
+  border-color: color-mix(in srgb, var(--done) 30%, transparent); }
+.tag-opinion { background: color-mix(in srgb, var(--progress) 14%, var(--panel)); color: var(--progress);
+  border-color: color-mix(in srgb, var(--progress) 32%, transparent); }
+.tag-shadow { background: color-mix(in srgb, var(--progress) 14%, var(--panel)); color: var(--progress); }
+.tag-guard { background: color-mix(in srgb, var(--blocked) 10%, var(--panel)); color: var(--blocked);
+  border-color: color-mix(in srgb, var(--blocked) 28%, transparent); }
+.tag-plain { background: var(--panel-2); color: var(--text-2); border-color: var(--border); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10px;
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--r-1); color: var(--text-2);
+}
+.pill-ok { color: var(--done); border-color: color-mix(in srgb, var(--done) 34%, transparent);
+  background: color-mix(in srgb, var(--done) 9%, var(--panel)); }
+.pill-no { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 34%, transparent);
+  background: color-mix(in srgb, var(--blocked) 9%, var(--panel)); }
+.pill-warn { color: var(--progress); border-color: color-mix(in srgb, var(--progress) 36%, transparent);
+  background: color-mix(in srgb, var(--progress) 10%, var(--panel)); }
+
+/* ---- role vocabulary (P-3): the analytical contract, not the column name ---- */
+.role {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+  padding: 2px 8px; border: 1px solid currentColor; border-radius: var(--r-1); white-space: nowrap;
+}
+.role-intake { color: var(--backlog); }   .role-ready { color: var(--ready); }
+.role-doing { color: var(--progress); }   .role-handover { color: var(--review); }
+.role-parked { color: var(--backlog); }   .role-verifying { color: var(--live); }
+.role-accepted { color: var(--done); }    .role-rejected { color: var(--blocked); }
+
+/* ---- figures ---- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border: 1px solid var(--border); border-radius: var(--r-3); box-shadow: var(--shadow-1);
+  background: var(--panel); margin-bottom: 16px; overflow: hidden; }
+.tile { padding: 16px 16px; border-right: 1px solid var(--border); }
+.tile:last-child { border-right: 0; }
+.tile-k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--text-muted); }
+.tile-v { font-family: var(--display); font-size: 28px; font-weight: 600; letter-spacing: -0.025em;
+  line-height: 1.05; margin-top: 4px; }
+.tile-d { font-family: var(--mono); font-size: 10px; margin-top: 2px; }
+.tile-d.up { color: var(--done); } .tile-d.down { color: var(--blocked); }
+.tile-note { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+
+/* ---- button variants owned by <Button> ---- */
+.btn.sm { padding: 4px 12px; font-size: 11px; }
+.btn.danger { background: var(--panel); color: var(--blocked); border-color: var(--blocked); }
+.btn.danger:hover { background: color-mix(in srgb, var(--blocked) 8%, var(--panel)); }
+
+/* Role selector on the plugin builder — a chip that carries a secondary count. */
+.chip-role {
+  font-family: inherit; font-size: 12px; font-weight: 600; padding: 8px 12px;
+  border: 1px solid var(--rule); background: var(--panel); color: var(--text);
+  cursor: pointer; transition: background var(--t-1) var(--ease);
+}
+.chip-role { border-radius: var(--r-2); }
+.chip-role:hover { background: var(--band); }
+.chip-role.on { background: var(--ink); color: var(--ink-fg); border-color: var(--ink); }
+.chip-role.on .muted { color: var(--ink-fg); }
+
+/* ================================================================================================
+   THE BOARD, per the "Intent" direction.
+   Solid-ink nav selection with counts, role-marked column headers, the card lift, and the tab/chip
+   controls above the board.
+   ============================================================================================= */
+
+/* ---- classes the TSX referenced but nothing defined ------------------------------------------
+   Found by diffing every className literal against the stylesheet. An undefined class is the same
+   silent failure as an undefined token: the element renders, unstyled, and nothing looks broken.
+   `.kv-v` is the value half of <KV>; `td.m`/`td.n`/`.r` are the Plugins table's mono, numeric and
+   right-aligned cells. Scoped to `td`/`th` so the one-letter names cannot collide with the nav
+   count (`.nav .n`) or a future utility. */
+.kv-v { color: var(--text); }
+td.m { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+td.n { font-family: var(--mono); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+th.r, td.r { text-align: right; }
+
+/* ---- nav: the selected item is a solid ink block, not a tint (mock `.nav a.item.on`) --------- */
+.nav a.active, .nav a.active:hover { background: var(--ink); color: var(--ink-fg); font-weight: 600; }
+.nav .n { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--text-muted); }
+.nav a.active .n { color: var(--ink-fg); }
+.nav .n.alert { color: var(--blocked); font-weight: 600; }
+/* No red is legible on the ember fill (the old salmon lift measures 1.4:1 on it), so on the ACTIVE
+   row the alert is carried by WEIGHT against a full-strength ink label — 5.17:1 — rather than by
+   hue. Every other `.nav .n.alert` keeps --blocked. */
+.nav a.active .n.alert { color: var(--ink-fg); font-weight: 700; }
+
+/* ---- column head: the lifecycle role stated on the column itself (PRD P-3) ------------------- */
+.dot { width: 8px; height: 8px; display: inline-block; flex: 0 0 auto; }
+.dot.intake, .dot.parked { background: var(--backlog); }
+.dot.ready { background: var(--ready); }
+.dot.doing { background: var(--progress); }
+.dot.handover { background: var(--review); }
+.dot.verifying { background: var(--live); }
+.dot.accepted { background: var(--done); }
+.dot.rejected { background: var(--blocked); }
+.column > header { gap: 8px; justify-content: flex-start; text-transform: none; }
+.column > header .col-name { text-transform: uppercase; }
+.column > header .wip { margin-left: auto; }
+
+/* ---- card: the mock's lift. Transform/opacity only, so it stays compositor-cheap.
+       Wrapped in `no-preference` rather than relying on the reduce block above — that block is at
+       line ~571 and later rules would silently out-order it. */
+@media (prefers-reduced-motion: no-preference) {
+  .card { transition: border-color var(--t-1) var(--ease), transform var(--t-2) var(--ease), box-shadow var(--t-2) var(--ease); }
+  .card:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
+}
+.card .foot {
+  border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 2px;
+  font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+}
+
+/* ---- tabs + filter chips above the board (mock `.tabs` / `.chips`) --------------------------- */
+.tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tabs a, .tabs button {
+  padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--text-muted);
+  border: 0; background: none; border-bottom: 2px solid transparent; margin-bottom: -2px;
+  cursor: pointer; font-family: inherit;
+}
+.tabs a:hover, .tabs button:hover { color: var(--text-2); }
+.tabs a.on, .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.chip {
+  font-family: var(--mono); font-size: 11px; border: 1px solid var(--outline-variant);
+  border-radius: var(--r-1); background: var(--panel); padding: 4px 12px; cursor: pointer; color: var(--text-2);
+}
+.chip:hover { background: var(--band); }
+.chip.on { background: var(--ink); color: var(--ink-fg); border-color: var(--ink); }
+
+/* ---- library primitives added for the board grid + ticket detail page ------------------------
+   Owned by ui.tsx components. Screens consume the components, never these class names. */
+
+/* Detail layout — main + reference rail (mock `.side-wide`). The rail carries Properties, Gates,
+   Outcome, Cost: reference, not chrome, so it goes BELOW the main column on a narrow viewport
+   rather than squeezing the ticket itself. */
+.side-wide { display: grid; grid-template-columns: 1fr 420px; gap: 16px; align-items: start; }
+.side-main, .side-rail { min-width: 0; }
+@media (max-width: 1100px) { .side-wide { grid-template-columns: 1fr; } }
+
+/* Equal-column grid. `grid-template-columns` is set inline by <Cols> because the count is data. */
+.cols { display: grid; }
+
+.empty { padding: 32px; text-align: center; color: var(--text-muted); font-size: 12px; }
+
+/* Proportion bar. Tone carries the meaning, so each tone owns both track and fill. */
+.bar-h { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.bar-h .bar { flex: 1; height: 4px; background: var(--band); }
+.bar-h .bar i { display: block; height: 100%; background: var(--text-2); }
+.bar-h-label { white-space: nowrap; }
+.bar-h.tone-doing { color: var(--progress); }
+.bar-h.tone-doing .bar { background: color-mix(in srgb, var(--progress) 18%, transparent); }
+.bar-h.tone-doing .bar i { background: var(--progress); }
+.bar-h.tone-crit { color: var(--blocked); }
+.bar-h.tone-crit .bar { background: color-mix(in srgb, var(--blocked) 18%, transparent); }
+.bar-h.tone-crit .bar i { background: var(--blocked); }
+.bar-h.tone-verifying { color: var(--live); }
+.bar-h.tone-verifying .bar { background: color-mix(in srgb, var(--live) 18%, transparent); }
+.bar-h.tone-verifying .bar i { background: var(--live); }
+.bar-h.tone-accepted { color: var(--done); }
+.bar-h.tone-accepted .bar i { background: var(--done); }
+
+/* Provenance — a fact about where the ticket came from. Deliberately quiet: it must not read
+   like a judgement tag (PRD P-1 keeps the two classes visually apart). */
+.prov {
+  display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10px;
+  border: 1px solid var(--outline-variant); padding: 2px 8px; color: var(--text-2);
+}
+
+/* A capped, scrolling panel body (<Panel scroll>). The header and the `.record-note` footnote sit
+   OUTSIDE this box on purpose — the note says what the list means, so it must not scroll away.
+   `overscroll-behavior: contain` stops a flick inside a finished-tickets list from scrolling the
+   whole board once it bottoms out. */
+.record-scroll { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---- WCAG 2.2 §2.5.8 Target Size (Minimum): 24×24 CSS px ------------------------------------
+   A native checkbox renders 13×13. The visual box stays small (the design wants a hairline square,
+   not a chunky control) — the HIT AREA is grown to 24×24 with a transparent outline-box, which is
+   what the success criterion measures. Fitts's law: acquisition time falls as target size grows,
+   and this control sits in a filter bar people hit repeatedly. */
+input[type="checkbox"], input[type="radio"] {
+  width: 16px; height: 16px; margin: 4px;   /* 16 + 2×4 = 24 */
+  accent-color: var(--rule);
+}
+
+/* Panel titles are heading ELEMENTS (a11y) but must keep the banded mono-caps voice — reset the
+   browser's h2/h3/h4 margins and size so semantics carry no visual cost. */
+.record-title { margin: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; }
+/* ------------------------------------------------------------------------------------------------
+   Chronicle (CHS-4)
+
+   Almost nothing left here on purpose. The provenance tags, panels, buttons, rows and empty states
+   all come from ui.tsx now — `derived` is Tag kind="fact", `authored` is "opinion", and
+   `derived-then-edited` is "guard", so the warning inherits --blocked from the token layer instead
+   of a private colour that a palette change could silently orphan. What remains is the geometry the
+   system genuinely does not own: a two-column diff and the rule down an edited block.
+------------------------------------------------------------------------------------------------ */
+/* T-491: a derived block's provenance IS its citation — quiet, grey, small. */
+.chr-cites { font-size: 11px; opacity: 0.55; }
+.chr-cites a { color: inherit; }
+.chr-table-wrap { overflow-x: auto; }
+.chr-table-wrap table { border-collapse: collapse; font-size: 12px; }
+.chr-table-wrap th, .chr-table-wrap td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.chr-evidence > summary { cursor: pointer; font-size: 12px; opacity: 0.75; padding: 4px 0; }
+.chr-evidence[open] > summary { margin-bottom: 8px; }
+.chr-mermaid svg { max-width: 100%; height: auto; }
+.chr-mermaid-src { overflow-x: auto; }
+
+/* T-513 — HTML fence: the frame is height-CAPPED and scrolls its own document. `overflow` on an
+   <iframe> does nothing, and the frame cannot be measured to fit (no allow-same-origin, by design). */
+.chr-html { width: 100%; height: 360px; max-height: 60vh; border: 1px solid var(--border, #d0d4da); border-radius: 6px; background: var(--panel); display: block; }
+.chr-html-src { overflow-x: auto; }
+/* Fenced code carrying a language, made distinguishable. */
+.chr-code { position: relative; }
+.chr-code::before { content: attr(data-lang); position: absolute; top: 4px; right: 8px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.45; pointer-events: none; }
+.chr-code pre { overflow-x: auto; }
+/* The lines a reader must not skim past. `warn` borrows --blocked, the system's warning token. */
+.chr-callout { border-left: 3px solid; padding: 4px 8px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+.chr-callout > :first-child { margin-top: 0; }
+.chr-callout > :last-child { margin-bottom: 0; }
+.chr-callout.is-warn { border-color: var(--blocked); background: color-mix(in srgb, var(--blocked) 8%, transparent); }
+.chr-callout.is-ok { border-color: var(--done); background: color-mix(in srgb, var(--done) 8%, transparent); }
+/* Anchored headings — the glyph appears on hover/focus, so it does not clutter a scan. */
+.chr-h { position: relative; }
+.chr-anchor { margin-left: 4px; opacity: 0; text-decoration: none; color: var(--text-muted); font-weight: 400; }
+.chr-h:hover .chr-anchor, .chr-anchor:focus { opacity: 0.7; }
+.chr-record-link { text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* The one place a block needs more than its tag: a rule down the whole paragraph, so a drifted
+   sentence is findable while SCROLLING, not only once you have stopped to read the tag. */
+.chr-block.is-drifted {
+  border-left: 3px solid var(--blocked);
+  padding-left: 12px;
+  background: color-mix(in srgb, var(--blocked) 4%, transparent);
+}
+.chr-block p { margin: 4px 0; }
+
+.chr-edit {
+  width: 100%; min-height: 5rem; font: inherit; padding: 8px;
+  border: 1px solid var(--outline-variant); background: var(--panel);
+}
+
+/* Genuinely one-off geometry: two panes side by side, each scrolling its own overflow. */
+.chr-diff-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.chr-diff-row pre {
+  background: var(--surface-lowest); padding: 8px; white-space: pre-wrap; margin: 0;
+  font-size: 12px; overflow-x: auto;
+}
+.chr-diff-row.is-changed pre { background: color-mix(in srgb, var(--progress) 10%, transparent); }
+
+/*
+ * STATUS DOTS — a shape, not a character.
+ *
+ * These replaced `●` and `⬤`, which are pictographic characters: the platform font decides their
+ * size and vertical alignment, they ignore `currentColor`, and the two differ so little at 11px that
+ * "resolved" and "firing" were told apart only by the word beside them. A styled span is the same
+ * pixel in every font, and takes its meaning from a token that both themes define.
+ */
+.dot-online, .dot-resolved, .dot-firing {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  vertical-align: baseline;
+}
+.dot-online { background: var(--ok, var(--accent)); }
+.dot-resolved { background: var(--text-muted); }
+.dot-firing { background: var(--blocked); }

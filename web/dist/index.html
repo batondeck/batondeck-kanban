@@ -1,11 +1,43 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>batondeck-kanban</title>
-</head>
-<body>
-<p>batondeck-kanban: the web UI is not built into this release yet.</p>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BatonDeck</title>
+    <!-- The kit's brand set (web/kit, served at /brand/). -->
+    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <!-- Paints the stored theme BEFORE the bundle loads. Without it a dark-mode user gets a
+         white flash for the length of the JS download, which no in-app fix can reach. -->
+    <script>try{var t=localStorage.getItem("bd.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script type="module" crossorigin src="/assets/index-C3i6nCeF.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-B0Z9INg1.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-2DBM4-uG.css">
+  </head>
+  <body>
+    <!-- The preloader is a CHILD of the React root on purpose: `createRoot().render()` clears
+         the container, so it removes itself with no script — which matters, because the app's
+         CSP is `script-src 'self'` and would refuse one. -->
+    <div id="root">
+      <style>
+        #bd-boot {
+          position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: #F7F6F4;
+        }
+        #bd-boot img { width: 56px; height: 56px; animation: bd-boot-pulse 1.6s ease-in-out infinite; }
+        @keyframes bd-boot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        @media (prefers-reduced-motion: reduce) { #bd-boot img { animation: none; } }
+        @media (prefers-color-scheme: dark) {
+          :root:not([data-theme="light"]) #bd-boot { background: #131A24; }
+        }
+        [data-theme="dark"] #bd-boot { background: #131A24; }
+      </style>
+      <div id="bd-boot" role="status" aria-label="Loading BatonDeck">
+        <img src="/brand/mark.svg" alt="" />
+      </div>
+    </div>
+  </body>
 </html>
