@@ -56,16 +56,16 @@ var layeringRules = []rule{
 	{row: 5, kind: direct, subjects: []string{"internal/service"}, forbidden: []string{"internal/mcp", "internal/api", "internal/auth", "internal/wake", "internal/cli"}},
 	// §C row 6: a transport imports no store package, no root and no other transport.
 	{row: 6, kind: direct, subjects: []string{"internal/mcp", "internal/api", "internal/wake"}, forbidden: []string{"internal/store", "internal/cli"}, peers: true},
-	// §C row 7: only internal/mcp and the composition root import the MCP SDK.
+	// §C row 7: only internal/mcp and internal/cli import the MCP SDK (cmd/ is judged).
 	{row: 7, kind: direct, subjects: []string{"*"}, except: []string{"internal/mcp", "internal/cli"}, forbidden: []string{"github.com/modelcontextprotocol/go-sdk"}},
 	// §C row 8: contract/ non-test code reaches no internal package.
 	{row: 8, kind: transitive, subjects: []string{"contract"}, forbidden: []string{"internal"}},
 }
 
-// testRules is the looser table §C applies to TestImports and XTestImports: rows 1 and 3 to 7,
-// direct, with the fakes allowed. Rows 2 and 8 do not bind tests (row 8 says non-test; a test at
-// the join opens both engines).
-var testRules = []rule{layeringRules[0], layeringRules[2], layeringRules[3], layeringRules[4], layeringRules[5], layeringRules[6]}
+// testRules is the looser table §C applies to TestImports and XTestImports: rows 1 to 7, direct,
+// with the fakes allowed. Row 8 is non-test only; a test reaching an engine does so through
+// internal/store/..., which row 2 allows.
+var testRules = []rule{layeringRules[0], layeringRules[1], layeringRules[2], layeringRules[3], layeringRules[4], layeringRules[5], layeringRules[6]}
 
 // testFakes are the packages any test may import whatever its layer (ADR-0003 B2, B3, B4).
 var testFakes = []string{"internal/store/memstore", "internal/service/servicefake", "internal/auth/authfake"}
@@ -213,6 +213,9 @@ func loadPackages(t *testing.T) []pkg {
 		var p pkg
 		if err := dec.Decode(&p); err != nil {
 			t.Fatalf("decoding go list output: %v", err)
+		}
+		if p.Error != nil && strings.Contains(p.Error.Err, "build constraints exclude all Go files") {
+			continue // e.g. a lone //go:build ignore generator: no package, as in go list ./...
 		}
 		if p.Error != nil {
 			t.Errorf("go list could not load %s, so its edges are unjudged: %s", short(p.ImportPath), p.Error.Err)
