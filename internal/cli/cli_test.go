@@ -33,11 +33,10 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestUnbackedCommandsExitTwo(t *testing.T) {
-	for _, cmd := range []string{"token", "user"} {
-		code, _, errs := run(cmd)
-		if code != 2 || errs != cmd+": not implemented in this release\n" {
-			t.Fatalf("%s: %d %q", cmd, code, errs)
+func TestUsageErrorsExitTwo(t *testing.T) {
+	for _, args := range [][]string{{"token"}, {"user"}, {"token", "nope"}, {"user", "nope"}, {"token", "create"}, {"user", "add"}, {"token", "revoke"}} {
+		if code, _, errs := run(args...); code != 2 || !strings.Contains(errs, "usage: batondeck-kanban "+args[0]) {
+			t.Fatalf("%v: %d %q", args, code, errs)
 		}
 	}
 	if code, _, _ := run("nope"); code != 2 {

@@ -26,7 +26,7 @@ import (
 // The first argument names the command: serve, migrate, token, user, doctor, healthcheck or
 // version. No arguments, or a command it does not know, prints the usage to stderr and returns 2.
 // Across the commands 0 is success, 1 is a failure of the work, and 2 is a usage error (a flag
-// that does not parse, an unknown command) or a command not implemented in this release.
+// that does not parse, an unknown command or subcommand, a missing argument).
 func Run(args []string, version string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		usage(stderr)
@@ -45,9 +45,10 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 		return migrate(rest, stdout, stderr)
 	case "doctor":
 		return doctor(rest, stdout, stderr)
-	case "token", "user":
-		fmt.Fprintf(stderr, "%s: not implemented in this release\n", cmd)
-		return 2
+	case "user":
+		return user(rest, stdout, stderr)
+	case "token":
+		return token(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "batondeck-kanban: unknown command %q\n", cmd)
 		usage(stderr)
@@ -61,8 +62,8 @@ func usage(w io.Writer) {
 commands:
   serve        migrate the store, then run the server: GET /healthz and the embedded web UI
   migrate      run the store's migrations on the engine database.url selects
-  token        manage API tokens (not implemented in this release)
-  user         manage users (not implemented in this release)
+  token        create, list and revoke API tokens (a token is printed once, at create)
+  user         add, disable, list users and set their passwords (no sign-up page: users are made here)
   doctor       check the config and report the store engine the connection answers as
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
   version      print the version
