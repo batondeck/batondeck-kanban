@@ -95,8 +95,9 @@ check: fmt vet staticcheck notices-check release-check test
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
-# PLATFORMS, the one list). notices-check holds the file to PLATFORMS and to go.sum by hash: it
-# reads two files and nothing else, so it is part of `check`. A dependency change, or a change to
+# PLATFORMS, the one list). notices-check holds the file to PLATFORMS, to go.sum by hash and to the
+# set of modules the binary links (`go list -deps` per platform, by count and hash): it is part of
+# `check`. A dependency change, an import that links a module go.sum already held, or a change to
 # PLATFORMS, that forgets `make notices` fails there.
 notices:
 	NOTICES_PLATFORMS="$(PLATFORMS)" node scripts/notices.mjs

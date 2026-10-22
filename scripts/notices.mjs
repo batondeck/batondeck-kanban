@@ -7,8 +7,9 @@
 // each with GOOS and GOARCH set and CGO_ENABLED=0 as `make dist` builds, under GOWORK=off; the
 // union, each module with the LICENSE, COPYING, UNLICENSE and NOTICE files its directory holds.
 //
-// The header records the platforms and the sha256 of go.sum, what changes when the set does.
-// `--check` recomputes those and compares, which needs no tool but node, so it runs on every
+// The header records the platforms, the sha256 of go.sum and the linked set (its count and the
+// sha256 of its sorted module ids). `--check` recomputes those and compares: it reads go.sum and
+// runs `go list -deps` once per platform, reading no licence text, so it runs on every
 // `make check`. When the web UI's packages land, their set (web/package-lock.json) joins INPUTS.
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -25,7 +26,16 @@ const fail = (msg) => { console.error(`notices: ${msg}`); process.exit(1) }
 const PLATFORMS = (process.env.NOTICES_PLATFORMS || '').trim().split(/\s+/).filter(Boolean)
 if (!PLATFORMS.length) fail('NOTICES_PLATFORMS is not set: run it as make notices or make notices-check, which pass the Makefile\'s PLATFORMS')
 const sha256 = (p) => createHash('sha256').update(readFileSync(join(root, p))).digest('hex')
-const inputLines = () => [`  ${'platforms'.padEnd(28)}${PLATFORMS.join(' ')}`, ...INPUTS.map((p) => `  ${p.padEnd(28)}sha256 ${sha256(p)}`)]
+// The header's input lines: the platforms, the sha256 of each of INPUTS, and the set of modules the
+// binary links (their count and the sha256 of their sorted ids). go.sum alone does not say what is
+// linked: it holds every module the module graph needs, so a package that starts importing one
+// already in it changes the linked set and leaves go.sum as it was.
+const linkedLine = () => {
+  const ids = goModules().map((m) => m.id)
+  const hash = createHash('sha256').update(ids.join('\n')).digest('hex')
+  return `  ${'linked Go modules'.padEnd(28)}${ids.length}, sha256 ${hash}`
+}
+const inputLines = () => [`  ${'platforms'.padEnd(28)}${PLATFORMS.join(' ')}`, ...INPUTS.map((p) => `  ${p.padEnd(28)}sha256 ${sha256(p)}`), linkedLine()]
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 const run = (cmd, args, cwd, env = {}) =>
   execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, GOWORK: 'off', ...env } })
@@ -38,7 +48,7 @@ function check() {
     fail(`${OUT} was not made from the dependency set on disk; its header does not carry:\n` +
       `${stale.map((l) => l.trim()).join('\n')}\nrun make notices and commit the result`)
   }
-  console.log(`notices-check: ${OUT} matches ${PLATFORMS.join(' ')} and ${INPUTS.join(', ')}`)
+  console.log(`notices-check: ${OUT} matches ${PLATFORMS.join(' ')}, ${INPUTS.join(', ')} and the ${goModules().length} Go modules the binary links`)
 }
 
 // Every licence-like file in dir, sorted by name; none when the directory has none or is not there.
@@ -63,7 +73,9 @@ function splitJSON(text) {
   return objs
 }
 
+let goModulesMemo
 function goModules() {
+  if (goModulesMemo) return goModulesMemo
   const mods = new Map()
   const linked = PLATFORMS.flatMap((plat) => {
     const [goos, goarch] = plat.split('/')
@@ -78,10 +90,11 @@ function goModules() {
     mods.set(id, {
       id,
       note: m.Replace ? `replaced by ${m.Replace.Path} (go.mod)` : '',
-      files: licenceFiles(m.Replace ? m.Replace.Dir : m.Dir),
+      dir: m.Replace ? m.Replace.Dir : m.Dir,
     })
   }
-  return [...mods.values()].sort(byId)
+  goModulesMemo = [...mods.values()].sort(byId)
+  return goModulesMemo
 }
 
 function render(sections) {
@@ -109,7 +122,7 @@ if (process.argv.includes('--check')) {
   check()
 } else {
   const sections = [
-    { title: 'Go modules the shipped binary links', how: `go list -deps ./cmd/batondeck-kanban for each of ${PLATFORMS.join(', ')} (CGO_ENABLED=0, GOWORK=off), the union; the licence files of each module directory`, entries: goModules() },
+    { title: 'Go modules the shipped binary links', how: `go list -deps ./cmd/batondeck-kanban for each of ${PLATFORMS.join(', ')} (CGO_ENABLED=0, GOWORK=off), the union; the licence files of each module directory`, entries: goModules().map((m) => ({ ...m, files: licenceFiles(m.dir) })) },
   ]
   const missing = sections.flatMap((s) => s.entries.filter((e) => e.files.length === 0).map((e) => `${s.title}: ${e.id}`))
   if (missing.length) fail(`no licence file found for:\n  ${missing.join('\n  ')}`)

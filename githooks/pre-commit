@@ -28,7 +28,7 @@ fi
 
 staged=()
 while IFS= read -r -d '' f; do
-  case "$f" in *.go|*.rs) staged+=("$f") ;; esac
+  case "$f" in *.go) staged+=("$f") ;; esac
 done < <(git diff --cached --name-only -z --diff-filter=ACMR)
 [ "${#staged[@]}" -gt 0 ] || exit 0
 

@@ -10,6 +10,7 @@ Written by `make notices` (scripts/notices.mjs) for these platforms from these i
 
   platforms                   linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
   go.sum                      sha256 1bd2b42cca43b155ed4b6e56fb359fd9fe15b4844df6041a0ffbfda7771e6c6d
+  linked Go modules           0, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
 Contents
   1. Go modules the shipped binary links: 0
