@@ -1,0 +1,103 @@
+{
+  "source": {
+    "repo": "conductor",
+    "commit": "5e2baafa731718f68bc9f95ecc173067296360f8",
+    "method": "admin tools/list of the build whose 130 public tools equal docs-site/mcp.json byte for byte",
+    "sha256": "d9e44227d2abf8b5cf7f5cb5c5d1a3e8fd621c43bf126757dd336b9f47d0b3b8"
+  },
+  "tools": [
+    {
+      "name": "list_audit_log",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "days": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 365
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ts": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "actor": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "result": {
+                  "type": "string"
+                },
+                "errorCode": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ts",
+                "action",
+                "actor",
+                "agent",
+                "subject",
+                "projectId",
+                "result",
+                "errorCode",
+                "data"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "days": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "entries",
+          "days"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
