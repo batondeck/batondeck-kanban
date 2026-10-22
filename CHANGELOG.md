@@ -41,8 +41,11 @@ Notable changes to batondeck-kanban. The format follows
   of the same build), both written by `scripts/contract-import.mjs`; `contract/canonical.go`, which
   reduces a JSON Schema to its typeSet, enum, items, properties, required and
   additionalProperties; `contract/deltas.json`, every departure from conductor (40 removed tools,
-  3 removed properties, 120 removed `CANCELLED`/`DEAD_LETTER` enum values, `delete_task` added,
-  `deadLetter` renamed `poisoned` twice); `contract/expected.json`, the derived 92-tool surface;
-  `contract/errors.json`, conductor's 13 error codes and the error payload. `make check` runs the
-  new `contract` step, which refuses an `expected.json` that is not the exact derivation, a surface
-  carrying `get_transitions`, `set_transitions` or `requeue_task`, and one without `delete_task`.
+  6 removed properties, 116 removed `CANCELLED`/`DEAD_LETTER` enum values, `delete_task` and
+  `cancel_task` added, `deadLetter` renamed `poisoned` twice, `settings.transitionTable` dropped
+  from the `get_project` and `update_settings` outputs, `get_sprint`'s `attention.why` value
+  `dead_letter` renamed `poisoned`: ADR-0001); `contract/expected.json`, the derived 93-tool
+  surface; `contract/errors.json`, conductor's 13 error codes and the error payload. `make check`
+  runs the new `contract` step, which refuses an `expected.json` that is not the exact derivation,
+  a surface carrying `get_transitions`, `set_transitions` or `requeue_task`, and one without
+  `delete_task` or `cancel_task`.

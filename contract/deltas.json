@@ -42,9 +42,12 @@
     "yank_version"
   ],
   "removedProps": [
+    "/tools/get_project/output/properties/project/properties/settings/properties/transitionTable",
+    "/tools/get_sprint/output/properties/attention/items/properties/why",
     "/tools/get_sprint/output/properties/counts/properties/deadLetter",
     "/tools/next_task/output/properties/inbox/properties/deadLetter",
-    "/tools/update_settings/input/properties/transitionTable"
+    "/tools/update_settings/input/properties/transitionTable",
+    "/tools/update_settings/output/properties/settings/properties/transitionTable"
   ],
   "removedEnumValues": [
     "/tools/add_artifact/output/properties/task/properties/status/enum/CANCELLED",
@@ -85,8 +88,6 @@
     "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
     "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/CANCELLED",
     "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/DEAD_LETTER",
-    "/tools/get_project/output/properties/project/properties/settings/properties/transitionTable/additionalProperties/items/enum/CANCELLED",
-    "/tools/get_project/output/properties/project/properties/settings/properties/transitionTable/additionalProperties/items/enum/DEAD_LETTER",
     "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/CANCELLED",
     "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
     "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/CANCELLED",
@@ -163,12 +164,622 @@
     "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
     "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
-    "/tools/update_settings/output/properties/settings/properties/transitionTable/additionalProperties/items/enum/CANCELLED",
-    "/tools/update_settings/output/properties/settings/properties/transitionTable/additionalProperties/items/enum/DEAD_LETTER",
     "/tools/update_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/update_task/output/properties/task/properties/status/enum/DEAD_LETTER"
   ],
   "addedTools": [
+    {
+      "name": "cancel_task",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000
+          }
+        },
+        "required": [
+          "projectId",
+          "taskId",
+          "version",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "boardId": {
+                "type": "string"
+              },
+              "columnId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "BACKLOG",
+                  "READY",
+                  "IN_PROGRESS",
+                  "BLOCKED",
+                  "REVIEW",
+                  "DONE"
+                ]
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "urgent"
+                ]
+              },
+              "assignee": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requiredCapabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "estimate": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "dueAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parentTaskId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "order": {
+                "type": "string"
+              },
+              "customFields": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "blockedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contextSummary": {
+                "type": "string"
+              },
+              "deliverable": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "pr",
+                        "branch",
+                        "commit",
+                        "file",
+                        "doc",
+                        "attachment"
+                      ]
+                    },
+                    "url": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ref": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "repo": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "addedBy": {
+                      "type": "string"
+                    },
+                    "addedByAgent": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ts": {
+                      "type": "string"
+                    },
+                    "retracted": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "by": {
+                              "type": "string"
+                            },
+                            "byAgent": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "at": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "by",
+                            "byAgent",
+                            "at",
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "url",
+                    "ref",
+                    "repo",
+                    "title",
+                    "addedBy",
+                    "addedByAgent",
+                    "ts"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "chars": {
+                "type": "object",
+                "properties": {
+                  "doc": {
+                    "type": "number"
+                  },
+                  "items": {
+                    "type": "number"
+                  },
+                  "comments": {
+                    "type": "number"
+                  },
+                  "followups": {
+                    "type": "number"
+                  },
+                  "memory": {
+                    "type": "number"
+                  },
+                  "attachments": {
+                    "type": "number"
+                  },
+                  "total": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "doc",
+                  "items",
+                  "comments",
+                  "followups",
+                  "memory",
+                  "attachments",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "reviewer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "review": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "reviewer": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "completedBy": {
+                        "type": "string"
+                      },
+                      "completedByAgent": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "requestedBy": {
+                        "type": "string"
+                      },
+                      "requestedAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "reviewer",
+                      "completedBy",
+                      "completedByAgent",
+                      "requestedBy",
+                      "requestedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modelHint": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100
+                      },
+                      "effort": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          "xhigh"
+                        ]
+                      },
+                      "rationale": {
+                        "type": "string",
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "runOf": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sprintIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "racing": {
+                "type": "boolean"
+              },
+              "raceOpenedAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "claimAttempts": {
+                "type": "number"
+              },
+              "nextEligibleAt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "version": {
+                "type": "number"
+              },
+              "claim": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "owner": {
+                        "type": "string"
+                      },
+                      "agent": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "agentId": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "owner",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdBy": {
+                "type": "string"
+              },
+              "createdByAgent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedBy": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "projectId",
+              "boardId",
+              "columnId",
+              "title",
+              "description",
+              "status",
+              "priority",
+              "assignee",
+              "labels",
+              "requiredCapabilities",
+              "estimate",
+              "dueAt",
+              "parentTaskId",
+              "order",
+              "customFields",
+              "blockedBy",
+              "blocks",
+              "contextSummary",
+              "version",
+              "claim",
+              "createdBy",
+              "createdAt",
+              "updatedBy",
+              "updatedAt"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "handover": {
+            "type": "object",
+            "properties": {
+              "reviewer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "BACKLOG",
+                  "READY",
+                  "IN_PROGRESS",
+                  "BLOCKED",
+                  "REVIEW",
+                  "DONE"
+                ]
+              }
+            },
+            "required": [
+              "reviewer",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
     {
       "name": "delete_task",
       "inputSchema": {
@@ -211,6 +822,19 @@
     }
   ],
   "addedProps": [
+    {
+      "pointer": "/tools/get_sprint/output/properties/attention/items/properties/why",
+      "required": true,
+      "schema": {
+        "type": "string",
+        "enum": [
+          "review",
+          "blocked",
+          "poisoned",
+          "stale_lease"
+        ]
+      }
+    },
     {
       "pointer": "/tools/get_sprint/output/properties/counts/properties/poisoned",
       "required": true,

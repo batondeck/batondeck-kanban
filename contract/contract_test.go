@@ -68,32 +68,43 @@ func joinLines(s []string) string {
 }
 
 // TestSurfaceRefusesRemovedTools: the committed surface passes CheckSurface, and CheckSurface
-// refuses each forbidden tool and a surface without delete_task.
+// refuses each forbidden tool and a surface without either added tool.
 func TestSurfaceRefusesRemovedTools(t *testing.T) {
 	s := committed(t)
 	if err := CheckSurface(s); err != nil {
 		t.Fatalf("expected.json: %v", err)
 	}
+	good := func() Surface { return Surface{Tools: map[string]*Tool{"cancel_task": {}, "delete_task": {}}} }
+	if err := CheckSurface(good()); err != nil {
+		t.Fatalf("CheckSurface refused a surface with both added tools: %v", err)
+	}
 	for _, name := range Forbidden {
-		bad := Surface{Tools: map[string]*Tool{name: {}, "delete_task": {}}}
+		bad := good()
+		bad.Tools[name] = &Tool{}
 		if err := CheckSurface(bad); err == nil {
 			t.Errorf("CheckSurface accepted a surface carrying %s", name)
 		}
 	}
-	if err := CheckSurface(Surface{Tools: map[string]*Tool{"move_task": {}}}); err == nil {
-		t.Error("CheckSurface accepted a surface without delete_task")
+	for _, name := range Added {
+		bad := good()
+		delete(bad.Tools, name)
+		if err := CheckSurface(bad); err == nil {
+			t.Errorf("CheckSurface accepted a surface without %s", name)
+		}
 	}
 }
 
-// TestDeleteTaskIsAnAddedTool: delete_task enters the surface through deltas.json's addedTools,
-// the one place a tool conductor lacks may come from.
-func TestDeleteTaskIsAnAddedTool(t *testing.T) {
+// TestAddedToolsAreDeltas: delete_task and cancel_task enter the surface through deltas.json's
+// addedTools, the one place a tool conductor lacks may come from.
+func TestAddedToolsAreDeltas(t *testing.T) {
 	var d Deltas
 	if err := ReadJSON("deltas.json", &d); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(d.AddedTools, func(r RawTool) bool { return r.Name == "delete_task" }) {
-		t.Fatal("deltas.json addedTools lacks delete_task")
+	for _, name := range Added {
+		if !slices.ContainsFunc(d.AddedTools, func(r RawTool) bool { return r.Name == name }) {
+			t.Errorf("deltas.json addedTools lacks %s", name)
+		}
 	}
 	for _, name := range Forbidden {
 		if !slices.Contains(d.RemovedTools, name) {
@@ -132,8 +143,8 @@ func TestNoRemovedStatusRemains(t *testing.T) {
 	}
 }
 
-// TestCounts pins the scope the plan states (92 tools: 91 in-scope names plus delete_task; 40
-// published tools removed) and prints every count.
+// TestCounts pins the scope the plan states (93 tools: 91 in-scope names plus delete_task and
+// cancel_task, ADR-0001; 40 published tools removed) and prints every count.
 func TestCounts(t *testing.T) {
 	var src, admin SourceFile
 	var d Deltas
@@ -156,7 +167,7 @@ func TestCounts(t *testing.T) {
 	for _, k := range []string{"tools.json tools", "admin-tools.json tools", "deltas removedTools", "deltas removedProps", "deltas removedEnumValues", "deltas addedTools", "deltas addedProps", "expected.json tools", "expected.json tools (derived)"} {
 		t.Logf("%-30s %d", k, got[k])
 	}
-	for k, want := range map[string]int{"tools.json tools": 130, "admin-tools.json tools": 1, "deltas removedTools": 40, "expected.json tools": 92} {
+	for k, want := range map[string]int{"tools.json tools": 130, "admin-tools.json tools": 1, "deltas removedTools": 40, "expected.json tools": 93} {
 		if got[k] != want {
 			t.Errorf("%s = %d, the plan's scope is %d", k, got[k], want)
 		}

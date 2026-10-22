@@ -661,15 +661,21 @@ func Diff(want, got Surface) []string {
 // are removed by ruling, not merely not yet ported.
 var Forbidden = []string{"get_transitions", "set_transitions", "requeue_task"}
 
-// CheckSurface refuses a surface that carries a forbidden tool or lacks delete_task.
+// Added are the tools conductor lacks that every surface of this server must carry: delete_task
+// (plan §Fold 2) and cancel_task (ADR-0001).
+var Added = []string{"cancel_task", "delete_task"}
+
+// CheckSurface refuses a surface that carries a forbidden tool or lacks an added one.
 func CheckSurface(s Surface) error {
 	for _, name := range Forbidden {
 		if _, ok := s.Tools[name]; ok {
 			return fmt.Errorf("surface carries %s, which is removed", name)
 		}
 	}
-	if _, ok := s.Tools["delete_task"]; !ok {
-		return fmt.Errorf("surface lacks delete_task")
+	for _, name := range Added {
+		if _, ok := s.Tools[name]; !ok {
+			return fmt.Errorf("surface lacks %s", name)
+		}
 	}
 	return nil
 }

@@ -3778,6 +3778,625 @@
         "additionalProperties": false
       }
     },
+    "cancel_task": {
+      "input": {
+        "typeSet": [
+          "object"
+        ],
+        "properties": {
+          "projectId": {
+            "typeSet": [
+              "string"
+            ]
+          },
+          "reason": {
+            "typeSet": [
+              "string"
+            ]
+          },
+          "taskId": {
+            "typeSet": [
+              "string"
+            ]
+          },
+          "version": {
+            "typeSet": [
+              "integer"
+            ]
+          }
+        },
+        "required": [
+          "projectId",
+          "reason",
+          "taskId",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "typeSet": [
+          "object"
+        ],
+        "properties": {
+          "handover": {
+            "typeSet": [
+              "object"
+            ],
+            "properties": {
+              "reviewer": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "status": {
+                "typeSet": [
+                  "string"
+                ],
+                "enum": [
+                  "BACKLOG",
+                  "BLOCKED",
+                  "DONE",
+                  "IN_PROGRESS",
+                  "READY",
+                  "REVIEW"
+                ]
+              }
+            },
+            "required": [
+              "reviewer",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "task": {
+            "typeSet": [
+              "object"
+            ],
+            "properties": {
+              "artifacts": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "object"
+                  ],
+                  "properties": {
+                    "addedBy": {
+                      "typeSet": [
+                        "string"
+                      ]
+                    },
+                    "addedByAgent": {
+                      "typeSet": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "kind": {
+                      "typeSet": [
+                        "string"
+                      ],
+                      "enum": [
+                        "attachment",
+                        "branch",
+                        "commit",
+                        "doc",
+                        "file",
+                        "pr"
+                      ]
+                    },
+                    "ref": {
+                      "typeSet": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "repo": {
+                      "typeSet": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "retracted": {
+                      "typeSet": [
+                        "null",
+                        "object"
+                      ],
+                      "properties": {
+                        "at": {
+                          "typeSet": [
+                            "string"
+                          ]
+                        },
+                        "by": {
+                          "typeSet": [
+                            "string"
+                          ]
+                        },
+                        "byAgent": {
+                          "typeSet": [
+                            "null",
+                            "string"
+                          ]
+                        },
+                        "reason": {
+                          "typeSet": [
+                            "string"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "at",
+                        "by",
+                        "byAgent",
+                        "reason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "title": {
+                      "typeSet": [
+                        "null",
+                        "string"
+                      ]
+                    },
+                    "ts": {
+                      "typeSet": [
+                        "string"
+                      ]
+                    },
+                    "url": {
+                      "typeSet": [
+                        "null",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "addedBy",
+                    "addedByAgent",
+                    "kind",
+                    "ref",
+                    "repo",
+                    "title",
+                    "ts",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "assignee": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "blockedBy": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "string"
+                  ]
+                }
+              },
+              "blocks": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "string"
+                  ]
+                }
+              },
+              "boardId": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "chars": {
+                "typeSet": [
+                  "object"
+                ],
+                "properties": {
+                  "attachments": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "comments": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "doc": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "followups": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "items": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "memory": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  },
+                  "total": {
+                    "typeSet": [
+                      "number"
+                    ]
+                  }
+                },
+                "required": [
+                  "attachments",
+                  "comments",
+                  "doc",
+                  "followups",
+                  "items",
+                  "memory",
+                  "total"
+                ],
+                "additionalProperties": false
+              },
+              "claim": {
+                "typeSet": [
+                  "null",
+                  "object"
+                ],
+                "properties": {
+                  "agent": {
+                    "typeSet": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "agentId": {
+                    "typeSet": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "expiresAt": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "owner": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "expiresAt",
+                  "owner"
+                ],
+                "additionalProperties": false
+              },
+              "claimAttempts": {
+                "typeSet": [
+                  "number"
+                ]
+              },
+              "columnId": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "contextSummary": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "createdAt": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "createdBy": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "createdByAgent": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "customFields": {
+                "typeSet": [
+                  "object"
+                ],
+                "additionalProperties": {
+                  "typeSet": [
+                    "boolean",
+                    "number",
+                    "string"
+                  ]
+                }
+              },
+              "deliverable": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "description": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "dueAt": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "estimate": {
+                "typeSet": [
+                  "null",
+                  "number"
+                ]
+              },
+              "id": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "labels": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "string"
+                  ]
+                }
+              },
+              "modelHint": {
+                "typeSet": [
+                  "null",
+                  "object"
+                ],
+                "properties": {
+                  "effort": {
+                    "typeSet": [
+                      "string"
+                    ],
+                    "enum": [
+                      "high",
+                      "low",
+                      "medium",
+                      "xhigh"
+                    ]
+                  },
+                  "model": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "rationale": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "model"
+                ],
+                "additionalProperties": false
+              },
+              "nextEligibleAt": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "order": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "parentTaskId": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "priority": {
+                "typeSet": [
+                  "string"
+                ],
+                "enum": [
+                  "high",
+                  "low",
+                  "normal",
+                  "urgent"
+                ]
+              },
+              "projectId": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "raceOpenedAt": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "racing": {
+                "typeSet": [
+                  "boolean"
+                ]
+              },
+              "requiredCapabilities": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "string"
+                  ]
+                }
+              },
+              "review": {
+                "typeSet": [
+                  "null",
+                  "object"
+                ],
+                "properties": {
+                  "completedBy": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "completedByAgent": {
+                    "typeSet": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "requestedAt": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "requestedBy": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "reviewer": {
+                    "typeSet": [
+                      "null",
+                      "string"
+                    ]
+                  }
+                },
+                "required": [
+                  "completedBy",
+                  "completedByAgent",
+                  "requestedAt",
+                  "requestedBy",
+                  "reviewer"
+                ],
+                "additionalProperties": false
+              },
+              "reviewer": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "runOf": {
+                "typeSet": [
+                  "null",
+                  "string"
+                ]
+              },
+              "sprintIds": {
+                "typeSet": [
+                  "array"
+                ],
+                "items": {
+                  "typeSet": [
+                    "string"
+                  ]
+                }
+              },
+              "status": {
+                "typeSet": [
+                  "string"
+                ],
+                "enum": [
+                  "BACKLOG",
+                  "BLOCKED",
+                  "DONE",
+                  "IN_PROGRESS",
+                  "READY",
+                  "REVIEW"
+                ]
+              },
+              "title": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "updatedAt": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "updatedBy": {
+                "typeSet": [
+                  "string"
+                ]
+              },
+              "version": {
+                "typeSet": [
+                  "number"
+                ]
+              }
+            },
+            "required": [
+              "assignee",
+              "blockedBy",
+              "blocks",
+              "boardId",
+              "claim",
+              "columnId",
+              "contextSummary",
+              "createdAt",
+              "createdBy",
+              "customFields",
+              "description",
+              "dueAt",
+              "estimate",
+              "id",
+              "labels",
+              "order",
+              "parentTaskId",
+              "priority",
+              "projectId",
+              "requiredCapabilities",
+              "status",
+              "title",
+              "updatedAt",
+              "updatedBy",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "warnings": {
+            "typeSet": [
+              "array"
+            ],
+            "items": {
+              "typeSet": [
+                "string"
+              ]
+            }
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
+      }
+    },
     "claim_next": {
       "input": {
         "typeSet": [
@@ -9916,29 +10535,6 @@
                       "warn"
                     ]
                   },
-                  "transitionTable": {
-                    "typeSet": [
-                      "object"
-                    ],
-                    "additionalProperties": {
-                      "typeSet": [
-                        "array"
-                      ],
-                      "items": {
-                        "typeSet": [
-                          "string"
-                        ],
-                        "enum": [
-                          "BACKLOG",
-                          "BLOCKED",
-                          "DONE",
-                          "IN_PROGRESS",
-                          "READY",
-                          "REVIEW"
-                        ]
-                      }
-                    }
-                  },
                   "txnCap": {
                     "typeSet": [
                       "null",
@@ -10257,7 +10853,7 @@
                   ],
                   "enum": [
                     "blocked",
-                    "dead_letter",
+                    "poisoned",
                     "review",
                     "stale_lease"
                   ]
@@ -29865,29 +30461,6 @@
                   "off",
                   "warn"
                 ]
-              },
-              "transitionTable": {
-                "typeSet": [
-                  "object"
-                ],
-                "additionalProperties": {
-                  "typeSet": [
-                    "array"
-                  ],
-                  "items": {
-                    "typeSet": [
-                      "string"
-                    ],
-                    "enum": [
-                      "BACKLOG",
-                      "BLOCKED",
-                      "DONE",
-                      "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
-                    ]
-                  }
-                }
               },
               "txnCap": {
                 "typeSet": [
