@@ -1,0 +1,78 @@
+/* The brand layer: the lockup and the loader.
+   ================================================================================================
+   THE LOCKUP is the kit's two cuts (brand.tsx): ink-on-light and cream-on-dark. Exactly one shows,
+   chosen the way the theme is: the OS preference unless the page picked light, and an explicit dark
+   choice wins everywhere (the same order as index.css).
+
+   THE LOADER's colour is class-driven. `.bd-i` / `.bd-if` paint the ink half `currentColor`, so it
+   follows the surface it sits on; `.bd-k` is the KNOCKOUT, filled with the background to cut the
+   track out behind a node, and since background is not inheritable it arrives as `--bd-knockout`,
+   which each surface sets (see `.nav` in index.css).
+   ================================================================================================ */
+.bd-i { stroke: currentColor; }
+.bd-if { fill: currentColor; }
+.bd-k { fill: var(--bd-knockout); }
+
+.bd-logo { display: block; flex: 0 0 auto; }
+.bd-lockup { display: inline-flex; align-items: center; color: var(--text); }
+.bd-logo-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bd-logo-light { display: none; }
+  :root:not([data-theme="light"]) .bd-logo-dark { display: block; }
+}
+[data-theme="dark"] .bd-logo-light { display: none; }
+[data-theme="dark"] .bd-logo-dark { display: block; }
+
+/* ---- The loader ------------------------------------------------------------------------------
+   ONE component, two modes, because the product genuinely has two situations and forcing them into
+   one gives you a fake progress bar:
+
+     DETERMINATE   a real 0-100 is available. Both branches are driven from it, the ink branch
+                   leading — the fork/join is the picture of what a board DOES, and a race with a
+                   winner is the honest shape of it. The label shows the value, not the mean of the
+                   two branches, so the number never disagrees with the caller.
+
+     INDETERMINATE no percentage exists. Almost every load site in this SPA is a react-query
+                   `isPending`, which is a boolean. The branches cycle on CSS keyframes with the same
+                   asymmetry, so a load that starts unknown and becomes known does not change
+                   character halfway through. No JS, no rAF loop, no timer per mounted loader.
+
+   REDUCED MOTION IS HANDLED EXPLICITLY AND MUST STAY THAT WAY. index.css's blanket
+   `* { animation-duration: 0.01ms !important }` only kills DURATION, and an infinite dash animation
+   frozen at an arbitrary frame is frequently the EMPTY one — a loader that says nothing. So the
+   animation is cancelled outright and the branches are pinned part-drawn: still visibly a loader,
+   just not a moving one.
+---------------------------------------------------------------------------------------------- */
+.bd-loader { display: block; }
+.bd-loader-track { stroke: currentColor; opacity: 0.14; }
+.bd-loader-node { fill: var(--bd-knockout); stroke: currentColor; stroke-opacity: 0.14; }
+.bd-loader-pct { fill: currentColor; font-family: var(--mono); }
+
+.bd-run-e { animation: bd-branch 2.4s var(--ease-inout) infinite; }
+.bd-run-i { animation: bd-branch 2.4s var(--ease-inout) infinite; animation-delay: -0.35s; }
+@keyframes bd-branch {
+  0% { stroke-dasharray: 0 100; stroke-dashoffset: 0; }
+  55% { stroke-dasharray: 100 100; stroke-dashoffset: 0; }
+  100% { stroke-dasharray: 100 100; stroke-dashoffset: -100; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bd-run-e, .bd-run-i { animation: none !important; stroke-dasharray: 42 100; stroke-dashoffset: 0; }
+}
+
+/* ---- Preloader shells -------------------------------------------------------------------------
+   `.bd-boot` is the whole-window one the app shows before it has anything to render; `.bd-wait` is
+   the in-page one that replaces a "Loading…" line inside a screen that already has its chrome. Both
+   are centred stacks with the caption in the muted voice, so a wait reads the same wherever it
+   happens.
+---------------------------------------------------------------------------------------------- */
+.bd-boot, .bd-wait {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; color: var(--text-muted);
+}
+.bd-boot { min-height: 100%; height: 100%; }
+.bd-wait { padding: 32px 16px; }
+.bd-caption { font-size: var(--fs-body-s); color: var(--text-muted); }
+
+/* The inline one: a card mid-write, a button mid-submit. No caption, no layout of its own — it sits
+   in a text run, so it takes the line's colour and the line's size. */
+.bd-spin { display: inline-block; vertical-align: -2px; color: inherit; }

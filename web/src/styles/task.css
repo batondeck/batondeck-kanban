@@ -1,0 +1,167 @@
+/* Full ticket page.
+   Only the bits the shared panels and ui.tsx primitives don't already cover: the record's identity
+   block above the tabs. Everything below it is `.record` / `.side-wide` from index.css. */
+
+.task-head { margin-bottom: 12px; }
+
+.task-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-err { margin: 0 0 12px; font-size: 12px; }
+
+/*
+ * THE SECTION TABS STICK BENEATH THE TOPBAR.
+ *
+ * `top: 0` WAS THE BUG, not the fix. `PageHeader` renders `.topbar`, which is ALSO `position: sticky;
+ * top: 0` in this same scroll container, at `z-index: 5`. Two elements pinned to the same offset means
+ * the lower one parks UNDERNEATH the higher one: the tabs were sticking correctly and being covered,
+ * which on staging read as a half-clipped row of labels bleeding through the header.
+ *
+ * `--topbar-h` is measured at runtime by `useTopbarOffset` (TaskPage) with a ResizeObserver, because
+ * the topbar's height is content-dependent — an id + a wrapping title + a row of buttons is not a
+ * constant, and a hardcoded px here is wrong the first time a title wraps. The fallback keeps the
+ * tabs usable if the observer never runs (jsdom, or a browser without ResizeObserver).
+ *
+ * The `-1px` closes the seam: without it a hairline of scrolled content shows between the topbar's
+ * bottom border and the tabs' background.
+ */
+.task-tabs {
+  position: sticky;
+  top: calc(var(--topbar-h, 56px) - 1px);
+  z-index: 4;
+  background: var(--bg);
+  margin-bottom: 16px;
+  /* The gutter is on `.page`, so without this the sticky row leaves a transparent margin either
+     side and scrolled content shows through it. */
+  padding: 0 16px;
+  margin-left: -16px;
+  margin-right: -16px;
+}
+.task-tabs .tabs { margin-bottom: 0; }
+
+/* ── the header's eyebrow: board / ticket-id, with copy on hover ──────────────────────────────────
+   The copy control is revealed on hover rather than always shown, because it is a convenience beside
+   an identifier, not a primary action — always-on it competes with the Edit/Back buttons opposite.
+   It stays reachable without a pointer: `:focus-within` shows it for keyboard tabbing, and it keeps
+   its box in the layout at all times (opacity, not display) so revealing it never shifts the id. */
+.ticket-ref { display: inline-flex; align-items: center; gap: 4px; }
+.ticket-ref a { color: inherit; text-decoration: none; }
+.ticket-ref a:hover { text-decoration: underline; }
+.ticket-ref-copy {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--r-sm, 4px);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ticket-ref:hover .ticket-ref-copy,
+.ticket-ref:focus-within .ticket-ref-copy { opacity: 1; }
+.ticket-ref-copy:hover { color: var(--text); background: var(--panel-2); }
+/* Never hide a focused control: without this, tabbing to it moves focus somewhere invisible. */
+.ticket-ref-copy:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── a captioned picker ───────────────────────────────────────────────────────────────────────────
+   Two dropdowns that select DIFFERENT things (project in the sidebar, board in Settings) looked like
+   one control shown twice, because neither carried a visible label and a project can be named after
+   a board. The caption is the whole fix. */
+.picker-labelled { display: inline-flex; align-items: center; gap: 8px; }
+.picker-caption {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── the on-call integration list ─────────────────────────────────────────────────────────────────
+   One grid for the whole list, so name / source / status align DOWN the column instead of each row
+   wrapping wherever its own name happens to end. `1fr` on the name is what does the work: it absorbs
+   the slack, so the two right-hand columns sit on a shared edge no matter how long a name is. */
+.int-list { display: flex; flex-direction: column; gap: 2px; }
+.int-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--r-sm, 6px);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.int-row:hover { background: var(--panel-2); }
+/* Selection is a TINT AND A RULE, not a filled primary button. Every row here is equally clickable,
+   so painting one as the page's main action mis-ranks it against the real actions below. */
+.int-row.is-selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-left-color: var(--accent);
+}
+.int-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The name is the row's subject: it truncates rather than wrapping, so a long one cannot push the
+   status chip onto a second line and break the column. */
+.int-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.int-source { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.int-state { display: inline-flex; align-items: center; gap: 4px; }
+/* Narrow: drop the source column rather than let it wrap — the status chip is the one that must
+   stay on the row, and the source is already shown in the detail panel below. */
+@media (max-width: 560px) { .int-source { display: none; } }
+
+/* The deleted-integrations toggle is a boundary between the live list and the tombstones, so it needs
+   space on BOTH sides — flush, it read as the last row of one region and the first of the next. */
+.deleted-toggle { margin: 12px 0; }
+
+/* ── the refused-payload viewer ───────────────────────────────────────────────────────────────────
+   Shown instead of a download, because the download could not work for 23 of the 30 days it was
+   offered (the log entry outlives the body it refused) and a navigation cannot explain that. */
+.raw-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+.raw-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(720px, 100%);
+  max-height: 80vh;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 12px);
+  background: var(--panel);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.28));
+}
+/* The payload is hostile bytes rendered as TEXT. It scrolls in its own box and wraps, so a single
+   enormous line cannot push the dialog wider than the viewport. */
+.raw-dialog-body {
+  overflow: auto;
+  max-height: 60vh;
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--r-sm, 6px);
+  background: var(--panel-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

@@ -8,6 +8,17 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
+  and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
+  history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
+  their routes, nav entries and tests: the plugin studio (7 routes), billing, admin, onboarding, the
+  organization (tenant) switcher, and the transition-graph editor with `getTransitions` /
+  `setTransitions`. `api.ts` is kept whole. The brand is hdtp-web-kit 0.2.0's brand set, vendored by
+  `web/tools/kit.mjs` and pinned in `web/kit/kit.lock`, in place of the generated logo artwork. The
+  build is committed in `web/dist`, embedded in the binary and served at `/`. `make check` gains
+  `web-public-check` (refuses `web/public/pitch/` and `web/ds-bundle/` anywhere under `web/`, and
+  holds `web/public/` to `scripts/web-public-allowlist.txt`) and `kit-check` (every kit file
+  against its sha256 in the lock).
 - The layering guard, `internal/arch/layering_test.go`, run by `make arch` before `test` in
   `make check`. One `go list -e -deps -json` over every Go directory of the module (the walk skips
   `node_modules`, `testdata`, dot and underscore directories and nested modules) judges the eight

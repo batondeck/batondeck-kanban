@@ -1,0 +1,14 @@
+# Every file web/public/ may hold, one repository-relative path per line (make web-public-check).
+# web/public/pitch/ and web/ds-bundle/ are refused whatever this list says.
+# The brand set, vendored from the kit by web/tools/kit.mjs and pinned in web/kit/kit.lock.
+web/public/brand/apple-touch-icon.png
+web/public/brand/batondeck-inline-dark.svg
+web/public/brand/batondeck-inline.svg
+web/public/brand/favicon.svg
+web/public/brand/hdtp-gateway-inline-dark.svg
+web/public/brand/hdtp-gateway-inline.svg
+web/public/brand/hdtp-identity-inline-dark.svg
+web/public/brand/hdtp-identity-inline.svg
+web/public/brand/hdtp-inline-dark.svg
+web/public/brand/hdtp-inline.svg
+web/public/brand/mark.svg
