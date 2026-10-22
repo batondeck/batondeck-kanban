@@ -8,6 +8,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The base schema, `migrations/{sqlite,postgres}/0001_base.sql`: 43 tables on both engines for
+  every in-scope area (projects, members, grants and the per-project `T-n` counter; boards and
+  columns; tasks with the six statuses, `blocked_reason`, `claim_attempts`, `next_eligible_at`,
+  `score`, runs and summaries; artifacts, events and the change log; dependencies, context items,
+  memory, comments, follow-ups, notifications, sprints, attachments and blobs; identities, agent
+  sessions, profiles and skill stats, wake sessions; users, sessions, tokens and the OAuth tables;
+  audit log, tool calls and idempotency keys; chronicle; on-call integrations, alert states and deliveries), the
+  claim-frontier, feed, change-log and dependency indexes, an FTS5 index over one generated
+  `search_body` column (title, description, search tokens) on SQLite and a generated `tsvector` with a GIN index on Postgres. One scaffold query per table under
+  `queries/{sqlite,postgres}/`, the sqlc output in `internal/store/{sqlitedb,pgdb}`, and
+  `make sqlc-check` (sqlc v1.30.0) in `make check`. `batondeck-kanban migrate` applies it and a
+  second run prints "no change".
 - `internal/domain`, the rest of the pure rules: one claimability predicate (READY, unblocked, not
   poisoned, not racing, no live lease with expiry lazy on read, past the retry backoff) and the
   open-frontier variant; the retry policy (`poisonAfterAttempts`, default 30 s doubling to 1 h, ±20 %
@@ -31,8 +43,8 @@ Notable changes to batondeck-kanban. The format follows
   `serve` answers `GET /healthz` with the binary and its version and serves the embedded web UI
   placeholder; config from `BATONDECK_*` > a JSON file > defaults, holding `database.url`,
   `database.synchronous`, `listen` and `public_url`; the data-dir lock, admin socket and keyring;
-  the SQLite and Postgres engines with goose's migration machinery, no migration yet and no
-  area; the Makefile gate
+  the SQLite and Postgres engines with goose's migration machinery and no
+  area (the base schema is the entry above); the Makefile gate
   (`make check`: fmt vet staticcheck notices-check release-check test), the githooks, the
   distroless Dockerfile, THIRD_PARTY_NOTICES and RELEASING.md.
 - The store engine pair, wired: `database.url` (`BATONDECK_DATABASE_URL`) unset or a file path opens
