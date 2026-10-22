@@ -8,6 +8,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The base schema, `migrations/{sqlite,postgres}/0001_base.sql`: 42 tables on both engines for
+  every in-scope area (projects, members, grants and the per-project `T-n` counter; boards and
+  columns; tasks with the six statuses, `blocked_reason`, `claim_attempts`, `next_eligible_at`,
+  `score`, runs and summaries; artifacts, events and the change log; dependencies, context items,
+  memory, comments, follow-ups, notifications, sprints, attachments and blobs; identities, agent
+  sessions, profiles and skill stats, wake sessions; users, sessions, tokens and the OAuth tables;
+  audit log, tool calls and idempotency keys; chronicle; on-call integrations and deliveries), the
+  claim-frontier, feed, change-log and dependency indexes, an FTS5 index over tasks on SQLite and
+  a generated `tsvector` with a GIN index on Postgres. One scaffold query per table under
+  `queries/{sqlite,postgres}/`, the sqlc output in `internal/store/{sqlitedb,pgdb}`, and
+  `make sqlc-check` (sqlc v1.30.0) in `make check`. `batondeck-kanban migrate` applies it and a
+  second run prints "no change".
 - `internal/domain`: the six ticket statuses and the fixed transition table (same-status moves
   legal; `CANCELLED` and `DEAD_LETTER` refused as `VALIDATION`), with allowed-next and shortest-path
   guidance on `INVALID_TRANSITION`; the error model (13 codes, `STALE`, `RATE_LIMITED` and `INTERNAL`

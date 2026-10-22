@@ -108,6 +108,9 @@ func migratedLine(m store.Migrated) string {
 	if m.None {
 		return "no migrations in this binary; goose's version table is in place"
 	}
+	if m.Applied == 0 {
+		return fmt.Sprintf("no change, schema at version %d", m.Version)
+	}
 	return fmt.Sprintf("%d applied, schema at version %d", m.Applied, m.Version)
 }
 

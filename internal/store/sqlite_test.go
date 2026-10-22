@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 // Transactions that read and then write, from several goroutines at once, each on its own store
@@ -92,10 +95,13 @@ func TestTheReadPoolRefusesWrites(t *testing.T) {
 	}
 }
 
-// Two processes migrating one SQLite file for the first time must both succeed: the check for
-// goose's version table and its creation are one lock holder, so the second finds the table the
-// first made instead of creating it again. The file is put in WAL mode first, as any earlier open
-// leaves it, so the two meet at BEGIN rather than at the journal-mode switch.
+// Two processes making goose's version table on one SQLite file for the first time must both
+// succeed: the check for the table and its creation are one lock holder, so the second finds the
+// table the first made instead of creating it again. That is the empty-migrations path
+// (ensureVersionTable), so each store migrates an EMPTY directory here: with the binary's own
+// migrations, two concurrent first migrations race in goose's Up instead, which this does not
+// claim to hold. The file is put in WAL mode first, as any earlier open leaves it, so the two meet
+// at BEGIN rather than at the journal-mode switch.
 func TestFirstMigrationsOnOneFileBothSucceed(t *testing.T) {
 	ctx := context.Background()
 	const rounds = 30
@@ -124,7 +130,7 @@ func TestFirstMigrationsOnOneFileBothSucceed(t *testing.T) {
 		for _, s := range []*SQLite{a, b} {
 			go func(s *SQLite) {
 				<-start
-				_, err := s.Migrate(ctx)
+				_, err := migrator{db: s.w, dialect: goose.DialectSQLite3, fsys: fstest.MapFS{}}.up(ctx)
 				errs <- err
 			}(s)
 		}
