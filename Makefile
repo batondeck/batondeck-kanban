@@ -91,9 +91,9 @@ image:
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
 # THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
-# sources, web/dist against a fresh web build, the tests under the race detector, the store
-# conformance suite once per engine, and the MCP contract.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check test conformance contract
+# sources, web/dist against a fresh web build, the layering guard, the tests under the race
+# detector, the store conformance suite once per engine, and the MCP contract.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -150,6 +150,13 @@ fmt:
 
 vet:
 	go vet ./...
+
+# arch is the layering guard of ADR-0003 §C (internal/arch/layering_test.go). -count=1 so the gate's
+# verdict always comes from a fresh `go list`: the test cache does notice edits to the tree, but it
+# records only what the test process itself opens, so the gate does not rely on it.
+.PHONY: arch
+arch:
+	go test -count=1 ./internal/arch/
 
 # Naming the module's real trees keeps the run to this repository's code: ./... would reach into
 # web/node_modules once the UI's packages are installed.
