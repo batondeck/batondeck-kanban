@@ -18,7 +18,7 @@ Notable changes to batondeck-kanban. The format follows
   with the capability grant check (anything not exempt is governed) and the least-privilege worker
   grant; the audit descriptors of the 14 sensitive tools; the 59 event types, `task.poisoned` in
   place of `task.dead_lettered`; and the reserved labels `cancelled` and `poisoned`, which a caller
-  cannot add or remove (ADR-0001). Pure functions, not yet called by any tool.
+  cannot add, remove or respell (ADR-0001). Pure functions, not yet called by any tool.
 - `internal/domain`: the six ticket statuses and the fixed transition table (same-status moves
   legal; `CANCELLED` and `DEAD_LETTER` refused as `VALIDATION`), with allowed-next and shortest-path
   guidance on `INVALID_TRANSITION`; the error model (13 codes, `STALE`, `RATE_LIMITED` and `INTERNAL`
