@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck dist sbom build check fmt vet test clean
+.PHONY: release-check notices notices-check image hooks staticcheck dist sbom build check fmt vet test conformance clean
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -90,8 +90,9 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
-# THIRD_PARTY_NOTICES against go.sum, the release fixtures, and the tests under the race detector.
-check: fmt vet staticcheck notices-check release-check test
+# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the tests under the race detector, and
+# the store conformance suite once per engine.
+check: fmt vet staticcheck notices-check release-check test conformance
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
@@ -114,6 +115,13 @@ vet:
 # web/node_modules once the UI's packages are installed.
 test:
 	go test -race ./cmd/... ./internal/...
+
+# conformance judges each store engine by internal/store/conformance, one run per engine, by name.
+# The Postgres run needs BATONDECK_TEST_POSTGRES_DSN: unset, it skips and prints why; set and
+# unreachable, it fails.
+conformance:
+	go test -race -count=1 -v -run '^TestSQLiteConformance$$' ./internal/store/conformance/
+	go test -race -count=1 -v -run '^TestPostgresConformance$$' ./internal/store/conformance/
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:
