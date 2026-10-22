@@ -35,6 +35,18 @@ func Run(t *testing.T, newStore Factory) {
 	users(t, newStore)
 	sessions(t, newStore)
 	tokens(t, newStore)
+	contextItems(t, newStore)
+	memory(t, newStore)
+	summaries(t, newStore)
+	dependencies(t, newStore)
+	subtasks(t, newStore)
+	auditLog(t, newStore)
+	toolCalls(t, newStore)
+	agentSessions(t, newStore)
+	wakeSessions(t, newStore)
+	attachments(t, newStore)
+	blobs(t, newStore)
+	search(t, newStore)
 }
 
 func migrated(t *testing.T, newStore Factory) Migratable {
