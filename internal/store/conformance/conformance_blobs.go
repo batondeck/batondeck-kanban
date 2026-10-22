@@ -12,6 +12,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("blobs", blobs) }
+
 // blobs is the blob table: put once, get, delete, the refusal to delete a referenced blob, the GC
 // list by age and reference, and the refusals.
 func blobs(t *testing.T, newStore Factory) {

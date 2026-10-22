@@ -36,8 +36,8 @@ func newProject(t *testing.T, s store.Store, creator string) store.Project {
 	return p
 }
 
-// projects is the project and membership areas: create, read, list, settings, recursive delete,
-// and members added, updated, listed and removed, each with its refusals.
+// projects is the project area: create, read, list, settings and recursive delete, each with its
+// refusals.
 func projects(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 
@@ -217,6 +217,13 @@ func projects(t *testing.T, newStore Factory) {
 		s := migrated(t, newStore)
 		wantCode(t, s.DeleteProjectRecursive(ctx, "P-missing"), domain.CodeNotFound, "Project")
 	})
+
+}
+
+// members is the membership area: members added (an upsert), listed, looked up and removed, each
+// with its refusals.
+func members(t *testing.T, newStore Factory) {
+	ctx := context.Background()
 
 	t.Run("AddMemberAddsAndThenUpdatesTheRole", func(t *testing.T) {
 		s := migrated(t, newStore)

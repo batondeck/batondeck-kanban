@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -25,11 +24,11 @@ import (
 // It goes when memstore carries these areas and an engine passes them (R0.18, R0.10).
 func TestContractIIBatteriesOnAReference(t *testing.T) {
 	newRef := func(*testing.T) Migratable { return &reference{st: newRefState()} }
-	for _, battery := range []func(*testing.T, Factory){
-		contextItems, memory, summaries, dependencies, subtasks, auditLog, toolCalls,
-		agentSessions, wakeSessions, attachments, blobs, search,
+	for _, name := range []string{
+		"context", "memory", "summaries", "dependencies", "subtasks", "audit", "toolcalls",
+		"agentsessions", "wakesessions", "attachments", "blobs", "search",
 	} {
-		battery(t, newRef)
+		t.Run(name, func(t *testing.T) { batteries[name](t, newRef) })
 	}
 }
 
@@ -115,24 +114,12 @@ func (r *reference) task(projectID, taskID string) (refTask, error) {
 
 func invalid(msg string) error { return domain.Validation(msg, nil) }
 
-// cursor is base64url JSON {order, id}.
-type refCursor struct {
-	Order string `json:"order"`
-	ID    string `json:"id"`
-}
-
-func encodeCursor(order, id string) string {
-	b, _ := json.Marshal(refCursor{order, id})
-	return base64.RawURLEncoding.EncodeToString(b)
-}
+// refCursor is a cursor read back through store.DecodeCursor, the one encoding every store mints.
+type refCursor struct{ Order, ID string }
 
 func decodeCursor(s string) (refCursor, error) {
-	var c refCursor
-	b, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil || json.Unmarshal(b, &c) != nil || c.ID == "" {
-		return c, invalid("malformed cursor")
-	}
-	return c, nil
+	order, id, err := store.DecodeCursor(s)
+	return refCursor{order, id}, err
 }
 
 func clamp(limit, def, max int) int {
@@ -243,7 +230,7 @@ func (r *reference) ListContextItems(_ context.Context, projectID, taskID string
 	if len(items) > limit {
 		page.Items = items[:limit]
 		last := page.Items[limit-1]
-		page.NextCursor = encodeCursor(strconv.FormatInt(last.TS, 10), last.ID)
+		page.NextCursor = store.EncodeCursor(strconv.FormatInt(last.TS, 10), last.ID)
 	}
 	return page, nil
 }
@@ -563,7 +550,7 @@ func (r *reference) ListAuditLog(_ context.Context, f store.AuditFilter, cursor 
 	if len(rows) > limit {
 		page.Rows = rows[:limit]
 		last := page.Rows[limit-1]
-		page.NextCursor = encodeCursor(strconv.FormatInt(last.TS, 10), strconv.FormatInt(last.ID, 10))
+		page.NextCursor = store.EncodeCursor(strconv.FormatInt(last.TS, 10), strconv.FormatInt(last.ID, 10))
 	}
 	return page, nil
 }
@@ -905,7 +892,7 @@ func (r *reference) SearchTasks(_ context.Context, projectID, query string, f st
 	if len(hits) > limit {
 		page.Hits = hits[:limit]
 		last := page.Hits[limit-1]
-		page.NextCursor = encodeCursor(strconv.FormatFloat(last.Rank, 'g', -1, 64), last.TaskID)
+		page.NextCursor = store.EncodeCursor(strconv.FormatFloat(last.Rank, 'g', -1, 64), last.TaskID)
 	}
 	return page, nil
 }

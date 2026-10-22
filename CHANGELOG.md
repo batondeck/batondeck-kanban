@@ -8,6 +8,33 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Store contract I (ADR-0003 B2): the `store.Tasks`, `Claims`, `Events` and `ChangeLog` roles in
+  `internal/store/contract_{tasks,claims,events,changelog}.go`, embedded in `Store`, with doc
+  comments pinning keys `(project_id, task_id)`, `domain.Stale(expected, actual)` on a versioned
+  write, the NOT_FOUND, CONFLICT_LOCKED and LEASE_EXPIRED shapes (`store.LeaseExpired`), and the
+  base64url `{"order","id"}` page cursor (`store.EncodeCursor`/`DecodeCursor`). Their batteries,
+  `conformance_{tasks,claims,events,changelog}.go`, cover every method's happy path and declared
+  error, 50 concurrent `ClaimNext` callers winning 50 distinct tasks and one winner of two
+  `ClaimTask` callers. `conformance.Run` now lists all 24 areas, each a named subtest; an area file
+  registers its battery from `init`, and an area with no file yet, or whose engine methods are still
+  unbuilt (`store.UnbuiltTask`), skips naming the task that builds it. On SQLite and Postgres the
+  four areas are stubs answering INTERNAL until R0.9 writes their statements. `internal/store/memstore`,
+  a test-only in-memory `Store` (maps under one mutex, `Atomically` as snapshot and rollback), passes
+  the suite for these four areas and for projects, members, boards, counters, idempotency, users,
+  sessions and tokens (`TestMemstoreConformance`), and refuses a call through a transaction's Store
+  after its `Atomically` has returned, as the engines do. Order keys and ids compare as bytes. The members battery is split out of the projects
+  battery unchanged. `queries/{sqlite,postgres}/` gains `artifacts.sql`, `runs.sql`, `search.sql`,
+  `summaries.sql` and `wake_sessions.sql`, moved byte for byte out of `tasks.sql` and `agents.sql`;
+  the generated declarations are identical.
+- The service contract (`internal/service`, ADR-0003 B3): the nine interfaces the transports call
+  (Projects, Boards, Tasks, Lifecycle with cancel, Context, Media, Feed, Sessions, ToolCalls; 50
+  methods, each `(ctx, domain.Caller, Req) (Resp, error)`), their request and response DTOs, and
+  the `service.Services` bundle; each method's comment names its tier, event, audit descriptor and
+  doorbell kind. `domain.Caller`. `internal/service/servicefake`: per-method results, call
+  recording, and `servicefake.Trigger(code)` returning each of the 13 codes from any method.
+  `contract/dto_test.go` (`TestDTOCanonical`) infers each tool's DTO pair with jsonschema-go v0.4.3
+  (a test-only dependency) and holds it to `contract/expected.json` exactly, for 44 tools: the 42
+  CORE tools, `cancel_task` and `list_agent_sessions`. No implementation yet.
 - The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
   and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
   history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
@@ -64,9 +91,10 @@ Notable changes to batondeck-kanban. The format follows
   embedded in `store.Store`, with doc comments pinning keys `(project_id, task_id)`, error shapes
   (`domain.NotFound`, `domain.Stale(expected, actual)`, `domain.CycleDetected`, `domain.Validation`),
   limits and base64url `{order, id}` cursors. Both engines implement them as stubs returning INTERNAL
-  that name the task building each area (R0.10, R0.11, R1.8, R1.9; `store.UnbuiltTask`). The
-  conformance suite gains one battery per area (`conformance_<area>.go`, 60 subtests), which skips an
-  area on an engine while it is unbuilt, and `TestContractIIBatteriesOnAReference` runs all of them
+  that name the task building each area (R0.10, R0.11, R1.8, R1.9; `store.UnbuiltTask`), and the
+  memstore does too (R0.10, R0.21, P-67; `store.Unbuilt`). The conformance suite gains one battery per
+  area (`conformance_<area>.go`, 60 subtests, registered with `Run`), which skips an area on a store
+  while it is unbuilt, and `TestContractIIBatteriesOnAReference` runs all of them
   against a map-backed reference: the memory TTL absent on read after expiry before any sweep, a
   refused dependency cycle leaving no partial edge or cache entry, and ten search queries with their
   ordered ids.

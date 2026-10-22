@@ -9,10 +9,10 @@ import (
 )
 
 // What the batteries of store contract II (conformance_{context,memory,summaries,dependencies,
-// subtasks,audit,toolcalls,agentsessions,wakesessions,attachments,blobs,search}.go) share. Each runs
-// as one subtest named for its area, which SKIPS, naming the task that builds the area, while the
-// engine's methods are unbuilt (store.UnbuiltTask), so an engine is never failed for a lane not
-// merged yet. A battery whose rows hang off a task stands on a seeder; an engine gets one through
+// subtasks,audit,toolcalls,agentsessions,wakesessions,attachments,blobs,search}.go) share. Each
+// registers with Run, which gives it the subtest named for its area; that subtest SKIPS, naming the
+// task that builds the area, while the store's methods are unbuilt (store.UnbuiltTask), so a store
+// is never failed for a lane not merged yet. A battery whose rows hang off a task stands on a seeder; an engine gets one through
 // the adapter R0.10 writes here over store.Projects, Boards and Tasks, and a built area on a store
 // without one FAILS.
 
@@ -43,15 +43,13 @@ type seeder interface {
 	taskState(ctx context.Context, projectID, taskID string) (seededTask, error)
 }
 
-// area runs battery as the subtest name, or skips it when probe's call, on a migrated store of its
-// own, is unbuilt on the engine.
+// area runs battery inside the subtest Run gave the area, or skips that subtest when probe's call, on
+// a migrated store of its own, is unbuilt on the store.
 func area(t *testing.T, name string, newStore Factory, probe func(store.Store) error, battery func(t *testing.T)) {
-	t.Run(name, func(t *testing.T) {
-		if task, unbuilt := store.UnbuiltTask(probe(migrated(t, newStore))); unbuilt {
-			t.Skipf("%s is not built on this engine yet: %s builds it", name, task)
-		}
-		battery(t)
-	})
+	if task, unbuilt := store.UnbuiltTask(probe(migrated(t, newStore))); unbuilt {
+		t.Skipf("%s is not built on this store yet: %s builds it", name, task)
+	}
+	battery(t)
 }
 
 // noErr fails on err, or skips when the method is unbuilt on the engine.

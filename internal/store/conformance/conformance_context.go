@@ -9,6 +9,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("context", contextItems) }
+
 // contextItems is the context-item area: append, page newest or oldest first, the per-task delete,
 // project isolation, and the refusals.
 func contextItems(t *testing.T, newStore Factory) {

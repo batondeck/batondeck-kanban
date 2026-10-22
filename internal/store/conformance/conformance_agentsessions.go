@@ -9,6 +9,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("agentsessions", agentSessions) }
+
 // agentSessions is the agent-session area: the connection upsert, the activity touch, the listing,
 // the idle delete, the delete and the refusals.
 func agentSessions(t *testing.T, newStore Factory) {

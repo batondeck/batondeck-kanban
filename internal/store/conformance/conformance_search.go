@@ -50,6 +50,8 @@ var searchQueries = []struct {
 	{"AnotherProjectsTasksAreNotSearched", "deploy", nil, []string{"T-1"}},
 }
 
+func init() { register("search", search) }
+
 // search is lexical task search: the ten pinned queries, the count, paging, no hit, and the
 // refusals.
 func search(t *testing.T, newStore Factory) {

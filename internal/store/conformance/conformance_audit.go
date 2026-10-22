@@ -10,6 +10,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("audit", auditLog) }
+
 // auditLog is the audit area: append and read back every field, newest first, the filters, paging
 // by cursor, and the refusals.
 func auditLog(t *testing.T, newStore Factory) {

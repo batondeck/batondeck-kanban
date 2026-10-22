@@ -1,36 +1,13 @@
 package store
 
-import (
-	"context"
-
-	"github.com/batondeck/batondeck-kanban/internal/domain"
-)
+import "context"
 
 // The engines' methods for the twelve areas of store contract II (contract_{context,memory,
 // summaries,dependencies,subtasks,audit,toolcalls,agentsessions,wakesessions,attachments,blobs,
-// search}.go), unbuilt: each returns domain INTERNAL naming the task that builds it — R0.10 context,
-// memory, summaries, dependencies, subtasks, agent and wake sessions; R0.11 audit and tool calls;
-// R1.8 attachments and blobs; R1.9 search. A lane deletes its methods from this file as it writes
-// them, and the file with its last method.
-
-// unbuiltDetail is the detail an unbuilt method's error names its task under.
-const unbuiltDetail = "unbuilt"
-
-func unbuilt(method, task string) error {
-	return domain.NewError(domain.CodeInternal, "store: "+method+" is not built on this engine yet ("+task+")",
-		map[string]any{unbuiltDetail: task})
-}
-
-// UnbuiltTask reports whether err is an unbuilt method's, and the task that builds it: the
-// conformance batteries skip an area on it rather than fail.
-func UnbuiltTask(err error) (string, bool) {
-	e, ok := domain.AsBatonDeckError(err)
-	if !ok || e.Code != domain.CodeInternal {
-		return "", false
-	}
-	task, ok := e.Details[unbuiltDetail].(string)
-	return task, ok
-}
+// search}.go), unbuilt: each returns unbuilt's INTERNAL (unbuilt.go) naming the task that builds
+// it — R0.10 context, memory, summaries, dependencies, subtasks, agent and wake sessions; R0.11
+// audit and tool calls; R1.8 attachments and blobs; R1.9 search. A lane deletes its methods from
+// this file as it writes them, and the file with its last method.
 
 func (s *SQLite) AddContextItem(context.Context, AddContextItemInput) (ContextItem, error) {
 	return ContextItem{}, unbuilt("AddContextItem", "R0.10")

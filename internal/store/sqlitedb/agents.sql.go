@@ -117,24 +117,3 @@ func (q *Queries) GetSkillStat(ctx context.Context, arg GetSkillStatParams) (Ski
 	)
 	return i, err
 }
-
-const getWakeSession = `-- name: GetWakeSession :one
-SELECT id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at FROM wake_sessions WHERE id = ?
-`
-
-func (q *Queries) GetWakeSession(ctx context.Context, id string) (WakeSession, error) {
-	row := q.db.QueryRowContext(ctx, getWakeSession, id)
-	var i WakeSession
-	err := row.Scan(
-		&i.ID,
-		&i.IdentityID,
-		&i.AgentID,
-		&i.SocketPath,
-		&i.SocketTokenSealed,
-		&i.LastCursor,
-		&i.CreatedAt,
-		&i.LastSeenAt,
-		&i.ExpiresAt,
-	)
-	return i, err
-}

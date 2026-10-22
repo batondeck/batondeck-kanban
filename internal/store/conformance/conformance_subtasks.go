@@ -10,6 +10,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("subtasks", subtasks) }
+
 // subtasks is the parent/child read: children in task-number order, none, project isolation and a
 // missing parent.
 func subtasks(t *testing.T, newStore Factory) {

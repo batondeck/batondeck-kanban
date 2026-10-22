@@ -9,6 +9,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("wakesessions", wakeSessions) }
+
 // wakeSessions is the wake-session area: put, get and delete, a replace keeping its creation time,
 // expiry judged at the read, and the refusals.
 func wakeSessions(t *testing.T, newStore Factory) {

@@ -8,6 +8,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("summaries", summaries) }
+
 // summaries is the summary area: empty until set, set and replace under the task's version, STALE
 // with expected and actual and nothing written, the version left for the caller to bump, and a
 // missing task.

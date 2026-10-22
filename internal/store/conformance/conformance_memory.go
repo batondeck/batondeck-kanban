@@ -12,6 +12,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("memory", memory) }
+
 // memory is the memory area: routing by scope, the agent scope's privacy, durable recall by project
 // and by identity, the TTL judged at the read before any sweep, the bounded sweep, the per-task
 // delete, and the refusals.

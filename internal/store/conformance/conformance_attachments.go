@@ -10,6 +10,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("attachments", attachments) }
+
 // attachments is the attachment area: created pending, made ready on an existing blob, listed oldest
 // first, deleted per task, isolated by project, and the refusals.
 func attachments(t *testing.T, newStore Factory) {

@@ -8,6 +8,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("toolcalls", toolCalls) }
+
 // toolCalls is the tool-call area: a batch lands whole, a bad row refuses the whole batch, and the
 // retention delete is by age and bounded. The contract has no reader, so the delete's count is what
 // proves the rows landed.

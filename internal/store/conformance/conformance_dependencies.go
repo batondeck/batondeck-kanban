@@ -9,6 +9,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
+func init() { register("dependencies", dependencies) }
+
 // dependencies is the dependency area: an edge and its two caches written together, a refused
 // cycle leaving no partial edge or cache entry (alone and inside Atomically), relates edges, the
 // repeated edge, removal, the lists, SetCaches, project isolation and the refusals.
