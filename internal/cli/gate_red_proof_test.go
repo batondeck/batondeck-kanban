@@ -2,4 +2,4 @@ package cli
 
 import "testing"
 
-func TestGateRedProof(t *testing.T) { t.Fatal("throwaway: check must go red") }
+func TestGateRedProof(t *testing.T) { t.Log("throwaway: fixed") }
