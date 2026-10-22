@@ -8,6 +8,29 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
+  and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
+  history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
+  their routes, nav entries and tests: the plugin studio (7 routes), billing, admin, onboarding, the
+  organization (tenant) switcher, and the transition-graph editor with `getTransitions` /
+  `setTransitions`. `api.ts` is kept whole. The brand is hdtp-web-kit 0.2.0's brand set, vendored by
+  `web/tools/kit.mjs` and pinned in `web/kit/kit.lock`, in place of the generated logo artwork. The
+  build is committed in `web/dist`, embedded in the binary and served at `/`. `make check` gains
+  `web-public-check` (refuses `web/public/pitch/` and `web/ds-bundle/` anywhere under `web/`, and
+  holds `web/public/` to `scripts/web-public-allowlist.txt`) and `kit-check` (every kit file
+  against its sha256 in the lock).
+- The layering guard, `internal/arch/layering_test.go`, run by `make arch` before `test` in
+  `make check`. One `go list -e -deps -json` over every Go directory of the module (the walk skips
+  `node_modules`, `testdata`, dot and underscore directories and nested modules) judges the eight
+  rules of ADR-0003 §C, held as the `layeringRules` table: domain and core reach no internal package;
+  outside the store, migrations and the composition root no import chain reaches `database/sql`,
+  SQLite, pgx or goose except one through `internal/store/...` or `migrations` (rule 2, amended by
+  the orchestrator: through-store reach allowed); the store, bus/retention/auth/blob, service and
+  transport rows forbid importing a layer above; transports import no store package and not each
+  other; only `internal/mcp` and `internal/cli` import the MCP SDK; `contract/` non-test code reaches
+  no internal package. Test imports are judged directly under the looser `testRules` table, which
+  allows `memstore`, `servicefake` and `authfake`. Subjects match by path prefix, so a package such
+  as `internal/service` is judged as soon as it exists.
 - Local accounts and credentials (`internal/auth`): users with argon2id password hashes (t=3,
   64 MiB, p=4) made on the host with `batondeck-kanban user add [--admin] [--name N] LOGIN` (the
   password is read from piped stdin; there is no sign-up page), and `user disable|passwd|list`;
