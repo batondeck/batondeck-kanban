@@ -4,13 +4,12 @@ package migrations
 
 import "embed"
 
-// SQLite holds migrations/sqlite. `all:` because the directory holds no migration yet, only its
-// .gitkeep, and a bare pattern refuses a directory with no embeddable file.
+// SQLite holds migrations/sqlite.
 //
-//go:embed all:sqlite
+//go:embed sqlite/*.sql
 var SQLite embed.FS
 
-// Postgres holds migrations/postgres, the same way.
+// Postgres holds migrations/postgres.
 //
-//go:embed all:postgres
+//go:embed postgres/*.sql
 var Postgres embed.FS

@@ -7,6 +7,9 @@ sql:
       go:
         package: "sqlitedb"
         out: "internal/store/sqlitedb"
+        # `tasks_fts` singularises to `TasksFt`.
+        rename:
+          tasks_ft: "TasksFTS"
   - engine: "postgresql"
     schema: "migrations/postgres"
     queries: "queries/postgres"
@@ -28,3 +31,6 @@ sql:
             go_type: "database/sql.NullString"
           - db_type: "pg_catalog.int4"
             go_type: "int64"
+          - db_type: "pg_catalog.float8"
+            nullable: true
+            go_type: "database/sql.NullFloat64"

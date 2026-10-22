@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck dist sbom build check fmt vet test conformance clean
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check dist sbom build check fmt vet test conformance clean
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -90,9 +90,33 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
-# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the tests under the race detector, and
-# the store conformance suite once per engine.
-check: fmt vet staticcheck notices-check release-check test conformance
+# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
+# sources, the tests under the race detector, and the store conformance suite once per engine.
+check: fmt vet staticcheck notices-check release-check sqlc-check test conformance
+
+# SQLC pins the generator, built from source at this version (minutes on a cold module cache).
+SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+
+# sqlc-check fails when the committed generated code (internal/store/{sqlitedb,pgdb}, sqlc.yaml's
+# outputs) does not match what the current queries and migrations produce. Until queries/ holds a
+# .sql file there is nothing to generate, and it says so.
+sqlc-check:
+	@if ! find queries -name '*.sql' 2>/dev/null | grep -q .; then \
+		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
+	fi; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		cp -R internal/store/sqlitedb internal/store/pgdb "$$tmp/" \
+			|| { echo "sqlc-check: the generated code is missing - run $(SQLC) generate and commit the result" >&2; exit 1; }; \
+		$(SQLC) generate || { echo "sqlc-check: sqlc generate FAILED" >&2; exit 1; }; \
+		if diff -r "$$tmp/sqlitedb" internal/store/sqlitedb >/dev/null \
+		&& diff -r "$$tmp/pgdb" internal/store/pgdb >/dev/null; then \
+			echo "sqlc-check: generated code matches its sources"; \
+		else \
+			echo "sqlc-check: generated code is STALE - run $(SQLC) generate and commit the result"; \
+			diff -r "$$tmp/sqlitedb" internal/store/sqlitedb | head -20; \
+			diff -r "$$tmp/pgdb" internal/store/pgdb | head -20; \
+			exit 1; \
+		fi
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
