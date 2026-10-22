@@ -9,7 +9,7 @@ Written by `make notices` (scripts/notices.mjs) for these platforms from these i
 (part of `make check`) holds it to:
 
   platforms                   linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
-  go.sum                      sha256 3bde1534873f48ff4405c6c57984fdb68650667de036a5485d243f7e0cefc7d5
+  go.sum                      sha256 1db7af507c71910104cdffb00491282ae44b5fef7562a8ef950f698f14f5b183
   linked Go modules           21, sha256 ac65d52c76c437134ec5398c3afdf03f4399065aab2ff8b0a6cb779f81dd2600
 
 Contents
