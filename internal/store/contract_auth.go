@@ -13,14 +13,16 @@ import (
 var ErrEmailTaken = errors.New("store: a user with that email exists")
 
 // User is a local account. Email is the sign-in name, unique, stored as given (the auth service
-// lowercases it). PasswordHash is argon2id in its encoded form.
+// lowercases it). PasswordHash is argon2id in its encoded form. WorkspaceAdmin is the account's
+// workspace-admin flag, set at creation (migrations/*/0002_users_workspace_admin.sql).
 type User struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	PasswordHash string
-	CreatedAt    int64
-	DisabledAt   int64
+	ID             string
+	Email          string
+	DisplayName    string
+	PasswordHash   string
+	CreatedAt      int64
+	DisabledAt     int64
+	WorkspaceAdmin bool
 }
 
 // Session is a browser session. IDHash is the SHA-256 (hex) of the cookie's secret, never the

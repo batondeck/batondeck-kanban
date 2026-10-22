@@ -71,3 +71,28 @@ func TestTokenCreateListRevoke(t *testing.T) {
 		t.Fatalf("create for a disabled user: %d %q", code, errs)
 	}
 }
+
+// AC3: `user add --admin` sets the workspace-admin flag, `user add` without it does not; both are
+// read back by user list and by ResolveCaller.
+func TestUserAddAdminFlag(t *testing.T) {
+	path := migratedDB(t)
+	withStdin(t, "pw\n")
+	if code, out, errs := run("user", "add", "--admin", "root"); code != 0 || !strings.HasSuffix(out, " root (workspace admin)\n") {
+		t.Fatalf("add --admin: %d %q %q", code, out, errs)
+	}
+	withStdin(t, "pw\n")
+	if code, out, errs := run("user", "add", "alice"); code != 0 || strings.Contains(out, "admin") {
+		t.Fatalf("add: %d %q %q", code, out, errs)
+	}
+	_, out, _ := run("user", "list")
+	if !regexp.MustCompile(`(?m)^U-\S+\s+root\s+root\s+true\s`).MatchString(out) || !regexp.MustCompile(`(?m)^U-\S+\s+alice\s+alice\s+false\s`).MatchString(out) {
+		t.Fatalf("list: %q", out)
+	}
+	for login, want := range map[string]bool{"root": true, "alice": false} {
+		_, tok, errs := run("token", "create", "--user", login)
+		c, err := resolve(t, path, strings.TrimSpace(tok))
+		if err != nil || c.WorkspaceAdmin != want {
+			t.Fatalf("%s: %+v %v %q, want admin %v", login, c, err, errs, want)
+		}
+	}
+}

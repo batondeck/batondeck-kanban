@@ -37,6 +37,23 @@ func users(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("UsersWorkspaceAdminRoundTrips", func(t *testing.T) {
+		s := migrated(t, newStore)
+		admin := testUser("U-1", "root@x.test", 1)
+		admin.WorkspaceAdmin = true
+		for _, u := range []store.User{admin, testUser("U-2", "alice@x.test", 2)} {
+			if err := s.CreateUser(ctx, u); err != nil {
+				t.Fatal(err)
+			}
+		}
+		a, _ := s.GetUser(ctx, "U-1")
+		b, _ := s.GetUserByEmail(ctx, "alice@x.test")
+		all, _ := s.ListUsers(ctx)
+		if !a.WorkspaceAdmin || b.WorkspaceAdmin || len(all) != 2 || !all[0].WorkspaceAdmin || all[1].WorkspaceAdmin {
+			t.Fatalf("admin flags: %v %v %+v", a.WorkspaceAdmin, b.WorkspaceAdmin, all)
+		}
+	})
+
 	t.Run("UsersDuplicateEmailIsErrEmailTaken", func(t *testing.T) {
 		s := migrated(t, newStore)
 		if err := s.CreateUser(ctx, testUser("U-1", "alice@example.test", 1)); err != nil {

@@ -67,7 +67,7 @@ func (f *fixture) audited() []AuditEvent {
 
 func (f *fixture) addUser(t *testing.T, login, password string) store.User {
 	t.Helper()
-	u, err := f.svc.Accounts.Add(context.Background(), login, "", password)
+	u, err := f.svc.Accounts.Add(context.Background(), login, "", password, false)
 	if err != nil {
 		t.Fatal(err)
 	}

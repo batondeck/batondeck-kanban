@@ -39,7 +39,7 @@ func TestPasswordHashIsArgon2idAndVerifies(t *testing.T) {
 func TestAddNormalizesAndRefusesADuplicateLogin(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	u, err := f.svc.Accounts.Add(ctx, "  Alice@Example.Test ", "", "pw")
+	u, err := f.svc.Accounts.Add(ctx, "  Alice@Example.Test ", "", "pw", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +49,13 @@ func TestAddNormalizesAndRefusesADuplicateLogin(t *testing.T) {
 	if strings.Contains(u.PasswordHash, "pw") || !VerifyPassword("pw", u.PasswordHash) {
 		t.Fatal("the stored hash is not the password's argon2id")
 	}
-	_, err = f.svc.Accounts.Add(ctx, "ALICE@example.test", "", "pw2")
+	_, err = f.svc.Accounts.Add(ctx, "ALICE@example.test", "", "pw2", false)
 	wantCode(t, err, domain.CodeValidation)
 	for _, bad := range []string{"", "a b", strings.Repeat("a", 255)} {
-		_, err := f.svc.Accounts.Add(ctx, bad, "", "pw")
+		_, err := f.svc.Accounts.Add(ctx, bad, "", "pw", false)
 		wantCode(t, err, domain.CodeValidation)
 	}
-	_, err = f.svc.Accounts.Add(ctx, "bob", "", "")
+	_, err = f.svc.Accounts.Add(ctx, "bob", "", "", false)
 	wantCode(t, err, domain.CodeValidation)
 }
 

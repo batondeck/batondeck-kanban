@@ -79,7 +79,7 @@ func (s *Service) account(ctx context.Context, userID string) (accountEntry, err
 	case err != nil:
 		return accountEntry{}, err
 	default:
-		e = accountEntry{usable: u.DisabledAt == 0, at: now}
+		e = accountEntry{usable: u.DisabledAt == 0, admin: u.WorkspaceAdmin, at: now}
 	}
 	s.mu.Lock()
 	if s.cache == nil {

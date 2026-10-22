@@ -69,10 +69,12 @@ func user(args []string, stdout, stderr io.Writer) int {
 	}
 	sub, rest := args[0], args[1:]
 	var cfgPath, name string
+	var admin bool
 	fs := commonFlags("user "+sub, &cfgPath, stderr)
 	switch sub {
 	case "add":
 		fs.StringVar(&name, "name", "", "display name (default: the login before any @)")
+		fs.BoolVar(&admin, "admin", false, "make the user a workspace admin")
 	case "disable", "passwd", "list":
 	default:
 		fmt.Fprintf(stderr, "user: unknown subcommand %q\n", sub)
@@ -108,11 +110,15 @@ func user(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(err)
 		}
-		u, err := acc.Add(ctx, fs.Arg(0), name, pw)
+		u, err := acc.Add(ctx, fs.Arg(0), name, pw, admin)
 		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "user add: %s %s\n", u.ID, u.Email)
+		role := ""
+		if u.WorkspaceAdmin {
+			role = " (workspace admin)"
+		}
+		fmt.Fprintf(stdout, "user add: %s %s%s\n", u.ID, u.Email, role)
 	case "disable":
 		u, err := acc.Disable(ctx, fs.Arg(0))
 		if err != nil {
@@ -134,13 +140,13 @@ func user(args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "ID\tLOGIN\tNAME\tCREATED\tDISABLED")
+		fmt.Fprintln(tw, "ID\tLOGIN\tNAME\tADMIN\tCREATED\tDISABLED")
 		for _, u := range us {
 			disabled := "-"
 			if u.DisabledAt != 0 {
 				disabled = time.UnixMilli(u.DisabledAt).UTC().Format(time.RFC3339)
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", u.ID, u.Email, u.DisplayName, time.UnixMilli(u.CreatedAt).UTC().Format(time.RFC3339), disabled)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\n", u.ID, u.Email, u.DisplayName, u.WorkspaceAdmin, time.UnixMilli(u.CreatedAt).UTC().Format(time.RFC3339), disabled)
 		}
 		tw.Flush()
 	}

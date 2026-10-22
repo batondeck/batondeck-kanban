@@ -81,8 +81,9 @@ func checkPassword(pw string) error {
 	return nil
 }
 
-// Add creates an enabled user. displayName "" means the login's part before any "@".
-func (a *Accounts) Add(ctx context.Context, login, displayName, password string) (store.User, error) {
+// Add creates an enabled user, a workspace admin when admin is set. displayName "" means the
+// login's part before any "@".
+func (a *Accounts) Add(ctx context.Context, login, displayName, password string, admin bool) (store.User, error) {
 	l, err := NormalizeLogin(login)
 	if err != nil {
 		return store.User{}, err
@@ -101,7 +102,7 @@ func (a *Accounts) Add(ctx context.Context, login, displayName, password string)
 	if err != nil {
 		return store.User{}, err
 	}
-	u := store.User{ID: id, Email: l, DisplayName: displayName, PasswordHash: hash, CreatedAt: a.now().UnixMilli()}
+	u := store.User{ID: id, Email: l, DisplayName: displayName, PasswordHash: hash, CreatedAt: a.now().UnixMilli(), WorkspaceAdmin: admin}
 	if err := a.Store.CreateUser(ctx, u); err != nil {
 		if errors.Is(err, store.ErrEmailTaken) {
 			return store.User{}, domain.Validation("a user with that login exists", map[string]any{"field": "login", "login": l})

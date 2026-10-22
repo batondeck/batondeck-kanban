@@ -28,7 +28,7 @@ func (q *Queries) DisableUser(ctx context.Context, arg DisableUserParams) (int64
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, email, display_name, password_hash, created_at, disabled_at
+SELECT id, email, display_name, password_hash, created_at, disabled_at, workspace_admin
 FROM users WHERE id = ?
 `
 
@@ -42,12 +42,13 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.DisabledAt,
+		&i.WorkspaceAdmin,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, display_name, password_hash, created_at, disabled_at
+SELECT id, email, display_name, password_hash, created_at, disabled_at, workspace_admin
 FROM users WHERE email = ?
 `
 
@@ -61,23 +62,25 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.DisabledAt,
+		&i.WorkspaceAdmin,
 	)
 	return i, err
 }
 
 const insertUser = `-- name: InsertUser :execrows
 
-INSERT INTO users (id, email, display_name, password_hash, created_at)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO users (id, email, display_name, password_hash, created_at, workspace_admin)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT (email) DO NOTHING
 `
 
 type InsertUserParams struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	PasswordHash string
-	CreatedAt    int64
+	ID             string
+	Email          string
+	DisplayName    string
+	PasswordHash   string
+	CreatedAt      int64
+	WorkspaceAdmin int64
 }
 
 // Local accounts. email holds the sign-in name; its UNIQUE constraint decides a duplicate.
@@ -88,6 +91,7 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (int64, 
 		arg.DisplayName,
 		arg.PasswordHash,
 		arg.CreatedAt,
+		arg.WorkspaceAdmin,
 	)
 	if err != nil {
 		return 0, err
@@ -96,7 +100,7 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (int64, 
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, display_name, password_hash, created_at, disabled_at
+SELECT id, email, display_name, password_hash, created_at, disabled_at, workspace_admin
 FROM users ORDER BY created_at, id
 `
 
@@ -116,6 +120,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.PasswordHash,
 			&i.CreatedAt,
 			&i.DisabledAt,
+			&i.WorkspaceAdmin,
 		); err != nil {
 			return nil, err
 		}

@@ -51,9 +51,16 @@ func nullMs(n sql.NullInt64) int64 {
 	return 0
 }
 
+// The workspace-admin flag is an INTEGER 0/1 on SQLite and a boolean on Postgres, so a users row
+// is mapped once per engine.
 func userFromRow(r sqlitedb.User) User {
 	return User{ID: r.ID, Email: r.Email, DisplayName: r.DisplayName, PasswordHash: r.PasswordHash,
-		CreatedAt: r.CreatedAt, DisabledAt: nullMs(r.DisabledAt)}
+		CreatedAt: r.CreatedAt, DisabledAt: nullMs(r.DisabledAt), WorkspaceAdmin: r.WorkspaceAdmin == 1}
+}
+
+func userFromPGRow(r pgdb.User) User {
+	return User{ID: r.ID, Email: r.Email, DisplayName: r.DisplayName, PasswordHash: r.PasswordHash,
+		CreatedAt: r.CreatedAt, DisabledAt: nullMs(r.DisabledAt), WorkspaceAdmin: r.WorkspaceAdmin}
 }
 
 func usersFromRows(rows []sqlitedb.User) []User {
@@ -65,8 +72,17 @@ func usersFromRows(rows []sqlitedb.User) []User {
 }
 
 func insertUserParams(u User) sqlitedb.InsertUserParams {
+	admin := int64(0)
+	if u.WorkspaceAdmin {
+		admin = 1
+	}
 	return sqlitedb.InsertUserParams{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName,
-		PasswordHash: u.PasswordHash, CreatedAt: u.CreatedAt}
+		PasswordHash: u.PasswordHash, CreatedAt: u.CreatedAt, WorkspaceAdmin: admin}
+}
+
+func insertUserPGParams(u User) pgdb.InsertUserParams {
+	return pgdb.InsertUserParams{ID: u.ID, Email: u.Email, DisplayName: u.DisplayName,
+		PasswordHash: u.PasswordHash, CreatedAt: u.CreatedAt, WorkspaceAdmin: u.WorkspaceAdmin}
 }
 
 func disableParams(id string, at int64) sqlitedb.DisableUserParams {
@@ -137,7 +153,7 @@ func (s *SQLite) SetUserPassword(ctx context.Context, id, passwordHash string) e
 // --- Postgres ---
 
 func (s *Postgres) CreateUser(ctx context.Context, u User) error {
-	n, err := s.authQ().InsertUser(ctx, pgdb.InsertUserParams(insertUserParams(u)))
+	n, err := s.authQ().InsertUser(ctx, insertUserPGParams(u))
 	if err != nil {
 		return authErr("create user", err)
 	}
@@ -152,7 +168,7 @@ func (s *Postgres) GetUser(ctx context.Context, id string) (User, error) {
 	if err != nil {
 		return User{}, authErr("get user", err)
 	}
-	return userFromRow(sqlitedb.User(r)), nil
+	return userFromPGRow(r), nil
 }
 
 func (s *Postgres) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -160,7 +176,7 @@ func (s *Postgres) GetUserByEmail(ctx context.Context, email string) (User, erro
 	if err != nil {
 		return User{}, authErr("get user", err)
 	}
-	return userFromRow(sqlitedb.User(r)), nil
+	return userFromPGRow(r), nil
 }
 
 func (s *Postgres) ListUsers(ctx context.Context) ([]User, error) {
@@ -170,7 +186,7 @@ func (s *Postgres) ListUsers(ctx context.Context) ([]User, error) {
 	}
 	out := make([]User, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, userFromRow(sqlitedb.User(r)))
+		out = append(out, userFromPGRow(r))
 	}
 	return out, nil
 }

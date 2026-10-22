@@ -46,3 +46,34 @@ func TestATokenOfAnUnknownIdentityIsUnauthenticated(t *testing.T) {
 	_, err := f.svc.ResolveCaller(ctx, plain)
 	wantCode(t, err, domain.CodeUnauthenticated)
 }
+
+// AC3: the workspace-admin flag set at `user add --admin` reaches the Caller, by token and by
+// session; a user added without it is not an admin.
+func TestWorkspaceAdminFlagReachesTheCaller(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	admin, err := f.svc.Accounts.Add(ctx, "root", "", "pw", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := f.addUser(t, "alice", "pw")
+	for _, c := range []struct {
+		id    string
+		login string
+		want  bool
+	}{{admin.ID, "root", true}, {plain.ID, "alice", false}} {
+		tok, _, _ := f.svc.Tokens.Create(ctx, c.id, c.login, "t", 0)
+		got, err := f.svc.ResolveCaller(ctx, tok)
+		if err != nil || got.WorkspaceAdmin != c.want || got.Identity != c.id {
+			t.Fatalf("%s by token: %+v %v, want admin %v", c.login, got, err, c.want)
+		}
+		secret, _, err := f.svc.Login(ctx, c.login, "pw")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _, err = f.svc.ResolveSession(ctx, secret)
+		if err != nil || got.WorkspaceAdmin != c.want {
+			t.Fatalf("%s by session: %+v %v, want admin %v", c.login, got, err, c.want)
+		}
+	}
+}
