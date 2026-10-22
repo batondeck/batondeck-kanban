@@ -33,7 +33,7 @@ Notable changes to batondeck-kanban. The format follows
   placeholder; config from `BATONDECK_*` > a JSON file > defaults, holding `database.url`,
   `database.synchronous`, `listen` and `public_url`; the data-dir lock, admin socket and keyring;
   the SQLite and Postgres engines with goose's migration machinery and no
-  area (the base migration is below); the Makefile gate
+  area (the base schema is the entry above); the Makefile gate
   (`make check`: fmt vet staticcheck notices-check release-check test), the githooks, the
   distroless Dockerfile, THIRD_PARTY_NOTICES and RELEASING.md.
 - The store engine pair, wired: `database.url` (`BATONDECK_DATABASE_URL`) unset or a file path opens
