@@ -142,6 +142,16 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	log := core.NewLogger(stderr)
+	// On SQLite the data-dir lock is held for serve's lifetime: alone while this serve migrates,
+	// then shared, so a serve that starts beside another finds it migrated and does not migrate.
+	var lock *core.Lock
+	if cfg.Engine() == core.EngineSQLite {
+		if lock, err = lockSQLiteDir(cfg, core.AcquireServeLock); err != nil {
+			fmt.Fprintln(stderr, "serve:", err)
+			return 1
+		}
+		defer lock.Release()
+	}
 	// The store is migrated before anything listens, so a fresh SQLite file has its schema by the
 	// time /healthz answers (hdtp-gateway's serve does the same).
 	st, err := openStore(context.Background(), cfg, true)
@@ -150,15 +160,24 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	m, err := st.Migrate(context.Background())
+	line := "migrated by the serve already holding the data dir"
+	if lock == nil || lock.Exclusive() {
+		var m store.Migrated
+		if m, err = st.Migrate(context.Background()); err == nil {
+			line = migratedLine(m)
+		}
+	}
 	if err == nil {
 		err = st.SchemaCurrent(context.Background())
+	}
+	if err == nil && lock != nil {
+		err = lock.Share()
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "serve: %s: %v\n", cfg.Engine(), err)
 		return 1
 	}
-	log.Printf("serve: store %s: %s", cfg.Engine(), migratedLine(m))
+	log.Printf("serve: store %s: %s", cfg.Engine(), line)
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)

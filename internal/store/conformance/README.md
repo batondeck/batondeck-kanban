@@ -41,6 +41,7 @@ so a statement that differs between SQLite and Postgres fails in one of the two 
 
 ## What it does not do
 
-It does not prove behaviour between processes: `TestWriteTransactionsOnOneFileSerialiseAtBegin` and
-`TestFirstMigrationsOnOneFileBothSucceed` (`internal/store/sqlite_test.go`) hold SQLite's `BEGIN
-IMMEDIATE` across stores on one file, for writes and for the first migration.
+It does not prove behaviour between processes: `TestWriteTransactionsOnOneFileSerialiseAtBegin`
+(`internal/store/sqlite_test.go`) holds SQLite's `BEGIN IMMEDIATE` across stores on one file for
+writes, and `TestFirstMigrationsOnOneFileBothSucceed` (`internal/cli/cli_test.go`) holds the
+data-dir lock around two concurrent first migrations.
