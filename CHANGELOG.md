@@ -26,6 +26,15 @@ Notable changes to batondeck-kanban. The format follows
   battery unchanged. `queries/{sqlite,postgres}/` gains `artifacts.sql`, `runs.sql`, `search.sql`,
   `summaries.sql` and `wake_sessions.sql`, moved byte for byte out of `tasks.sql` and `agents.sql`;
   the generated declarations are identical.
+- The service contract (`internal/service`, ADR-0003 B3): the nine interfaces the transports call
+  (Projects, Boards, Tasks, Lifecycle with cancel, Context, Media, Feed, Sessions, ToolCalls; 50
+  methods, each `(ctx, domain.Caller, Req) (Resp, error)`), their request and response DTOs, and
+  the `service.Services` bundle; each method's comment names its tier, event, audit descriptor and
+  doorbell kind. `domain.Caller`. `internal/service/servicefake`: per-method results, call
+  recording, and `servicefake.Trigger(code)` returning each of the 13 codes from any method.
+  `contract/dto_test.go` (`TestDTOCanonical`) infers each tool's DTO pair with jsonschema-go v0.4.3
+  (a test-only dependency) and holds it to `contract/expected.json` exactly, for 44 tools: the 42
+  CORE tools, `cancel_task` and `list_agent_sessions`. No implementation yet.
 - The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
   and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
   history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
