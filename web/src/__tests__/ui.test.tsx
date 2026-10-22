@@ -149,15 +149,16 @@ describe('SignIn screen', () => {
   });
 
   /**
-   * POSITIVE CONTROL for the branch above (rule 5): with no `?error=`, the screen still auto-redirects.
-   * Without this, deleting the `!error` condition from `autoRedirect` — i.e. never redirecting anyone —
-   * would leave the refusal test just as green.
+   * A clean sign-in does NOT redirect. This binary has no `/auth/workos`, so it answers that path
+   * with the SPA itself; a redirect there renders this screen again and reloads the page forever.
+   * The manual button is the way on.
    */
-  it('POSITIVE CONTROL: a clean /login still redirects straight to WorkOS', () => {
+  it('REFUSAL: a clean sign-in renders the card and does not redirect', () => {
     const replace = vi.fn();
     vi.stubGlobal('location', { search: '', replace, href: '' });
     render(<SignIn />);
-    expect(replace).toHaveBeenCalledWith('/auth/workos');
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 });
 

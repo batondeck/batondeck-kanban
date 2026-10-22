@@ -20,26 +20,9 @@ export function SignIn() {
       })
       .catch(() => {});
   }, []);
-  // THERE IS NO PROVIDER CHOOSER (owner, 2026-07-29). WorkOS brokers Google, Apple, email+password,
-  // email OTP and passkey, so a local chooser was a second, weaker copy of a menu AuthKit already
-  // renders — and it asked users to choose between two words ("Google" / "WorkOS") that mean the same
-  // thing to them. `/login` now goes straight to WorkOS, which is also why the landing page needed no
-  // edits: all seven of its CTAs point at `/login`.
-  //
-  // THREE CONDITIONS STOP THE REDIRECT, and each one exists to prevent a specific dead end:
-  //  1. `error` — a failed sign-in MUST stay readable. Redirecting here sends the user back to the
-  //     IdP that just refused them: an infinite loop, with no message explaining why.
-  //  2. `access` — same, for pending/denied workspace access. The whole point of that message is
-  //     that signing in again will not help.
-  //  3. `demoLogin` — `/auth/demo` is only reachable from this page. Auto-redirecting past it makes
-  //     the demo unreachable wherever it is switched on.
-  // In all three cases the page renders with a manual button instead.
-  //
-  // `replace`, not `href`: Back must not land on a page that immediately bounces forward again.
-  const autoRedirect = !error && !access && !demoLogin;
-  useEffect(() => {
-    if (autoRedirect) window.location.replace('/auth/workos');
-  }, [autoRedirect]);
+  // NO AUTO-REDIRECT. The hosted app sent a clean sign-in straight on to its identity provider at
+  // `/auth/workos`; this binary has no such route, so it answers with this same page, which would
+  // redirect again, forever. The card renders with its manual button until local sign-in lands.
   const accessMsg =
     access === 'requested'
       ? { error: false, text: 'Access requested — an admin will review it. Sign in again once approved.' }
@@ -141,8 +124,6 @@ export function SignIn() {
           </p>
         )}
 
-        {/* No auto-redirect (error, access message, or demo enabled) -> one manual button.
-            There is deliberately no provider choice here either: WorkOS is the only front door. */}
         <button
           className="btn"
           style={{ width: '100%', padding: '12px 16px', fontSize: 14 }}
