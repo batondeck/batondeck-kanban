@@ -19,7 +19,7 @@ import (
 const triggerPrefix = "servicefake:"
 
 // Trigger is the input value that makes any fake method fail with code: put it in any string field
-// of the request (projectId by convention; nested fields count), or, for a request without one
+// of the request (projectId by convention; nested fields and map keys count), or, for a request without one
 // (list_projects, list_agent_sessions), in the caller's Identity. The error is
 // domain.NewError(code, …), so the transport sees the shape the real service returns.
 func Trigger(code domain.Code) string { return triggerPrefix + string(code) }
@@ -43,7 +43,8 @@ type Fake struct {
 	calls   []Call
 }
 
-// New returns a Fake with no results configured: a method then returns its zero response and nil.
+// New returns a Fake with no results configured: a method then returns its zero response, with []
+// for every required slice, and nil.
 func New() *Fake { return &Fake{results: map[string]result{}} }
 
 // Services returns the fake as the bundle a transport is built from.
@@ -62,8 +63,9 @@ func (f *Fake) Services() service.Services {
 }
 
 // Set configures what method ("Tasks.Get") returns when no trigger fires: resp, which must be the
-// method's response type, and err. It panics on an unknown method or a response of the wrong type,
-// since either is a bug in the test that calls it.
+// method's response type, and err. It panics on an unknown method, a response of the wrong type, or,
+// when err is nil, a response with a nil required slice (null on the wire, which go-sdk's output
+// validation refuses): each is a bug in the test that calls it.
 func (f *Fake) Set(method string, resp any, err error) {
 	want, ok := methods()[method]
 	if !ok {
@@ -71,6 +73,9 @@ func (f *Fake) Set(method string, resp any, err error) {
 	}
 	if reflect.TypeOf(resp) != want {
 		panic(fmt.Sprintf("servicefake: %s returns %s, not %T", method, want, resp))
+	}
+	if path, ok := nilRequiredSlice(reflect.ValueOf(resp), want.Name()); ok && err == nil {
+		panic(fmt.Sprintf("servicefake: %s response has a nil required slice at %s (null on the wire)", method, path))
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -102,6 +107,7 @@ func call[Resp any](f *Fake, method string, caller domain.Caller, req any) (Resp
 		return zero, domain.NewError(code, "servicefake: "+method+" triggered "+string(code), nil)
 	}
 	if !ok {
+		fillRequiredSlices(reflect.ValueOf(&zero).Elem())
 		return zero, nil
 	}
 	resp, _ := r.resp.(Resp)
@@ -152,6 +158,9 @@ func scan(v reflect.Value) (domain.Code, bool) {
 	case reflect.Map:
 		iter := v.MapRange()
 		for iter.Next() {
+			if code, ok := scan(iter.Key()); ok {
+				return code, true
+			}
 			if code, ok := scan(iter.Value()); ok {
 				return code, true
 			}
@@ -172,4 +181,70 @@ func methods() map[string]reflect.Type {
 		}
 	}
 	return out
+}
+
+// required reports a struct field the JSON form always carries (no omitzero or omitempty).
+func required(f reflect.StructField) bool {
+	tag := f.Tag.Get("json")
+	return f.IsExported() && tag != "-" && !strings.Contains(tag, ",omitzero") && !strings.Contains(tag, ",omitempty")
+}
+
+// nilRequiredSlice finds a required slice that is nil, at any depth of v, and names its path.
+func nilRequiredSlice(v reflect.Value, path string) (string, bool) {
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			return nilRequiredSlice(v.Elem(), path)
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			f := v.Type().Field(i)
+			if !f.IsExported() {
+				continue
+			}
+			p := path + "." + f.Name
+			if f.Type.Kind() == reflect.Slice && v.Field(i).IsNil() && required(f) {
+				return p, true
+			}
+			if q, ok := nilRequiredSlice(v.Field(i), p); ok {
+				return q, true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			if q, ok := nilRequiredSlice(v.Index(i), fmt.Sprintf("%s[%d]", path, i)); ok {
+				return q, true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if q, ok := nilRequiredSlice(iter.Value(), fmt.Sprintf("%s[%v]", path, iter.Key())); ok {
+				return q, true
+			}
+		}
+	}
+	return "", false
+}
+
+// fillRequiredSlices sets every nil required slice of the addressable struct v, and of its
+// required struct fields, to an empty one.
+func fillRequiredSlices(v reflect.Value) {
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	for i := range v.NumField() {
+		f := v.Type().Field(i)
+		if !required(f) {
+			continue
+		}
+		switch fv := v.Field(i); f.Type.Kind() {
+		case reflect.Slice:
+			if fv.IsNil() {
+				fv.Set(reflect.MakeSlice(f.Type, 0, 0))
+			}
+		case reflect.Struct:
+			fillRequiredSlices(fv)
+		}
+	}
 }

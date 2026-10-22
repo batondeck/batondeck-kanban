@@ -19,14 +19,15 @@ type Tasks interface {
 
 	// Update is update_task.
 	// Tier: master; version-checked (STALE). Event: task.updated. Audit: none. Doorbell: assigned when
-	// the patch gives the task a new assignee.
+	// the patch gives the task a new assignee; broadcast when it clears the assignee of a READY task.
 	Update(ctx context.Context, caller domain.Caller, req UpdateTaskReq) (UpdateTaskResp, error)
 
 	// Move is move_task.
 	// Tier: master; version-checked (STALE), the fixed table (INVALID_TRANSITION), the WIP limit
 	// (WIP_EXCEEDED), another identity's live lease (CONFLICT_LOCKED). Event: task.moved, plus
 	// task.dependency_cleared on each dependent a move to DONE unblocks. Audit: none. Doorbell: broadcast for
-	// every task that lands READY with no assignee (the moved one and the unblocked dependents).
+	// every task that lands READY with no assignee (the moved one and the unblocked dependents), and
+	// assigned to the assignee of each unblocked dependent that has one.
 	Move(ctx context.Context, caller domain.Caller, req MoveTaskReq) (MoveTaskResp, error)
 
 	// List is list_tasks.

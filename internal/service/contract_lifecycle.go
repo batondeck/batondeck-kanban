@@ -33,8 +33,9 @@ type Lifecycle interface {
 	// Complete is complete_task.
 	// Lease-guarded. Event: task.completed, plus task.review_requested when review sends it to
 	// REVIEW, task.artifact_missing / task.checkpoint_missing under a warn policy, and
-	// task.dependency_cleared on each dependent DONE unblocks. Audit: none. Doorbell: broadcast for
-	// each dependent that lands READY with no assignee.
+	// task.dependency_cleared on each dependent DONE unblocks. Audit: none. Doorbell: assigned to the
+	// reviewer when the task lands REVIEW; for each dependent DONE unblocks, assigned to its assignee
+	// if it has one, else broadcast when it lands READY.
 	Complete(ctx context.Context, caller domain.Caller, req CompleteTaskReq) (CompleteTaskResp, error)
 
 	// Block is block_task.
@@ -43,12 +44,13 @@ type Lifecycle interface {
 
 	// Fail is fail_task.
 	// Lease-guarded. Event: task.failed, plus task.poisoned when the retry policy poisons it (BLOCKED,
-	// blockedReason "poison", label poisoned). Audit: none. Doorbell: broadcast when it returns to READY.
+	// blockedReason "poison", label poisoned). Audit: none. Doorbell: broadcast when it returns to READY
+	// past its backoff (open frontier); none for READY with a backoff pending, or poisoned.
 	Fail(ctx context.Context, caller domain.Caller, req FailTaskReq) (FailTaskResp, error)
 
 	// Reap is reap_stale_leases.
 	// Tier: write. Event: task.lease_reaped per reaped task, task.poisoned on each it poisons.
-	// Audit: none. Doorbell: broadcast for each that returns to READY.
+	// Audit: none. Doorbell: none (conductor rings nothing on a reap).
 	Reap(ctx context.Context, caller domain.Caller, req ReapStaleLeasesReq) (ReapStaleLeasesResp, error)
 
 	// Handoff is handoff_task.
@@ -58,8 +60,10 @@ type Lifecycle interface {
 	// Cancel is cancel_task.
 	// The master role or the task's current owner (ADR-0001); version-checked (STALE); CONFLICT_LOCKED
 	// on another identity's live lease. Moves the task to DONE with the system label cancelled and the
-	// reason as a context note. Event: task.moved and context.added (ADR-0001 names no event of its
-	// own; R1.5 settles it). Audit: none. Doorbell: none.
+	// reason as a context note. Event: task.moved (data {to: DONE, cancelled: true, reason}),
+	// context.added for the note, and task.dependency_cleared per dependent it unblocks; no event type
+	// of its own. Audit: none. Doorbell: as Move to DONE (each unblocked dependent: assigned to its
+	// assignee if it has one, else broadcast when it lands READY).
 	Cancel(ctx context.Context, caller domain.Caller, req CancelTaskReq) (CancelTaskResp, error)
 }
 

@@ -40,13 +40,15 @@ type Context interface {
 
 	// RemoveDependency is remove_dependency.
 	// Tier: master. Event: dependency.removed, plus task.dependency_cleared when it unblocks the
-	// dependent. Audit: none. Doorbell: broadcast when the dependent lands READY with no assignee.
+	// dependent. Audit: none. Doorbell: when it unblocks the dependent, assigned to its assignee if it
+	// has one, else broadcast. The dependency_cleared event and the doorbell are a Go choice: conductor
+	// emits only dependency.removed.
 	RemoveDependency(ctx context.Context, caller domain.Caller, req RemoveDependencyReq) (RemoveDependencyResp, error)
 
 	// AddSubtask is add_subtask.
-	// Tier: master. Event: task.created (the child) and dependency.added (child blocks parent); the
-	// parent goes BLOCKED. Audit: none. Doorbell: broadcast when the child lands READY. Replays on
-	// idempotencyKey.
+	// Tier: master. Creates the child with parentTaskId in the board's first column; adds no edge and
+	// leaves the parent as it is. Event: task.created (the child, in the board's first column). Audit:
+	// none. Doorbell: broadcast only if that column is READY. Replays on idempotencyKey.
 	AddSubtask(ctx context.Context, caller domain.Caller, req AddSubtaskReq) (AddSubtaskResp, error)
 
 	// ListSubtasks is list_subtasks.

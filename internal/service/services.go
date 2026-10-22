@@ -15,7 +15,9 @@
 // guards them: contract/dto_test.go infers each pair with jsonschema-go and compares it exactly. The
 // Go-side rules: a JSON number is float64 and a JSON integer int64; an optional property is a value
 // with omitzero; a nullable one is a pointer; an enum is a named string type; custom fields are
-// map[string]FieldValue. A required slice in a response is never nil (it is [] on the wire).
+// map[string]FieldValue. A required slice in a response is never nil (it is [] on the wire; null
+// fails go-sdk's output validation): servicefake refuses a configured response that breaks it, and
+// the real implementations must hold it too.
 package service
 
 // Services is the bundle a transport is built from. One value swaps servicefake for the real

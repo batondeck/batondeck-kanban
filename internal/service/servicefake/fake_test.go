@@ -134,7 +134,7 @@ func TestNoTriggerReturnsTheConfiguredResult(t *testing.T) {
 	ctx := context.Background()
 	caller := domain.Caller{Identity: "u@example.com", Agent: "a1", Role: "worker"}
 
-	want := service.GetTaskResp{Task: service.Task{ID: "T-1", Title: "one"}}
+	want := service.GetTaskResp{Task: task("T-1")}
 	f.Set("Tasks.Get", want, nil)
 	got, err := svc.Tasks.Get(ctx, caller, service.GetTaskReq{ProjectID: "P-1", TaskID: "T-1"})
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -152,8 +152,8 @@ func TestNoTriggerReturnsTheConfiguredResult(t *testing.T) {
 			t.Errorf("Boards.List with projectId %q = %v, want no error", near, err)
 		}
 	}
-	if resp, err := svc.Context.ListSubtasks(ctx, caller, service.ListSubtasksReq{ProjectID: "P-1"}); err != nil || !reflect.DeepEqual(resp, service.ListSubtasksResp{}) {
-		t.Errorf("an unconfigured method = %+v, %v; want its zero response and nil", resp, err)
+	if resp, err := svc.Context.ListSubtasks(ctx, caller, service.ListSubtasksReq{ProjectID: "P-1"}); err != nil || !reflect.DeepEqual(resp, service.ListSubtasksResp{Tasks: []service.Task{}}) {
+		t.Errorf("an unconfigured method = %+v, %v; want its zero response with tasks [] and nil", resp, err)
 	}
 
 	calls := f.Calls()
@@ -185,5 +185,59 @@ func TestSetRefusesAMistake(t *testing.T) {
 			set(New())
 		}()
 	}
-	New().Set("Tasks.Get", service.GetTaskResp{}, nil) // the right type is accepted
+	New().Set("Tasks.Get", service.GetTaskResp{Task: task("T-1")}, nil) // the right type is accepted
+}
+
+// TestTriggerWinsOverAConfiguredResult: a trigger fires even when the method has a configured
+// success, and a trigger in a map key (a custom field's name) counts like one in a value.
+func TestTriggerWinsOverAConfiguredResult(t *testing.T) {
+	f := New()
+	svc := f.Services()
+	ctx := context.Background()
+	caller := domain.Caller{Identity: "u@example.com"}
+	f.Set("Tasks.Get", service.GetTaskResp{Task: task("T-1")}, nil)
+	_, err := svc.Tasks.Get(ctx, caller, service.GetTaskReq{ProjectID: Trigger(domain.CodeNotFound), TaskID: "T-1"})
+	wantCode(t, "Tasks.Get", "the request over a configured success", err, domain.CodeNotFound)
+	_, err = svc.Tasks.Get(ctx, domain.Caller{Identity: Trigger(domain.CodeForbidden)}, service.GetTaskReq{ProjectID: "P-1", TaskID: "T-1"})
+	wantCode(t, "Tasks.Get", "the caller over a configured success", err, domain.CodeForbidden)
+
+	f.Set("Tasks.Create", service.CreateTaskResp{Task: task("T-2")}, nil)
+	req := service.CreateTaskReq{ProjectID: "P-1", BoardID: "B-1", Title: "t",
+		CustomFields: map[string]service.FieldValue{Trigger(domain.CodeValidation): "v"}}
+	_, err = svc.Tasks.Create(ctx, caller, req)
+	wantCode(t, "Tasks.Create", "a customFields key", err, domain.CodeValidation)
+}
+
+// TestSetRefusesANilRequiredSlice: a configured response whose required slice is nil (null on
+// the wire, which output validation refuses) panics, at any depth; an unconfigured method's zero
+// response carries [] for every required slice.
+func TestSetRefusesANilRequiredSlice(t *testing.T) {
+	for name, resp := range map[string]any{
+		"top level":  service.ListTasksResp{},
+		"nested":     service.GetTaskResp{Task: service.Task{ID: "T-1"}},
+		"in an item": service.ListTasksResp{Tasks: []service.Task{{ID: "T-1"}}},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: Set accepted a nil required slice", name)
+				}
+			}()
+			method := "Tasks.List"
+			if _, ok := resp.(service.GetTaskResp); ok {
+				method = "Tasks.Get"
+			}
+			New().Set(method, resp, nil)
+		}()
+	}
+	New().Set("Tasks.Get", service.GetTaskResp{Task: task("T-1")}, nil) // filled: accepted
+	resp, err := New().Services().Tasks.List(context.Background(), domain.Caller{}, service.ListTasksReq{ProjectID: "P-1"})
+	if err != nil || resp.Tasks == nil {
+		t.Errorf("an unconfigured Tasks.List = %+v, %v; want tasks [] and nil", resp, err)
+	}
+}
+
+// task is a Task with every required slice filled.
+func task(id string) service.Task {
+	return service.Task{ID: id, BlockedBy: []string{}, Blocks: []string{}, Labels: []string{}, RequiredCapabilities: []string{}}
 }
