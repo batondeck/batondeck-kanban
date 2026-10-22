@@ -8,6 +8,22 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Local accounts and credentials (`internal/auth`): users with argon2id password hashes (t=3,
+  64 MiB, p=4) made on the host with `batondeck-kanban user add [--admin] [--name N] LOGIN` (the
+  password is read from piped stdin; there is no sign-up page), and `user disable|passwd|list`;
+  the workspace-admin flag in `migrations/{sqlite,postgres}/0002_users_workspace_admin.sql`. API
+  tokens through the TokenService, `bd_<16 hex>_<secret>`, with only the secret's SHA-256 stored:
+  `batondeck-kanban token create --user LOGIN [--label L] [--ttl D]` prints the token once (default
+  30 days, at most 365), and `token list` shows the `bd_<id>` prefix and status and never the
+  plaintext. `token revoke` makes it fail on the next call. `ResolveCaller` (the `auth.Resolver`
+  contract, with `authfake` as its double) turns a token into a `domain.Caller`, the identity and
+  the workspace-admin flag. Cookie sessions (`bk_session`, HttpOnly, SameSite=Lax, Secure over TLS,
+  7 days) opened by a login POST. A CSRF check ported from hdtp-gateway refuses with 403 and audits
+  a cross-site state change, judging browsers by Fetch Metadata or Origin and a session by its CSRF
+  token, and a bearer by the token alone. A disabled user's tokens and sessions stop within the
+  60 s account cache. The users, sessions and tokens store areas on both engines, with their
+  conformance batteries; they replace the scaffold `queries/*/auth.sql`. The login and middleware
+  handlers are not yet mounted by `serve`.
 - The base schema, `migrations/{sqlite,postgres}/0001_base.sql`: 43 tables on both engines for
   every in-scope area (projects, members, grants and the per-project `T-n` counter; boards and
   columns; tasks with the six statuses, `blocked_reason`, `claim_attempts`, `next_eligible_at`,
