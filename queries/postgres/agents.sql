@@ -9,6 +9,3 @@ SELECT * FROM agent_profiles WHERE project_id = $1 AND agent_key = $2;
 
 -- name: GetSkillStat :one
 SELECT * FROM skill_stats WHERE project_id = $1 AND agent_key = $2 AND capability = $3;
-
--- name: GetWakeSession :one
-SELECT * FROM wake_sessions WHERE id = $1;
