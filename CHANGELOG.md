@@ -49,3 +49,9 @@ Notable changes to batondeck-kanban. The format follows
   runs the new `contract` step, which refuses an `expected.json` that is not the exact derivation,
   a surface carrying `get_transitions`, `set_transitions` or `requeue_task`, and one without
   `delete_task` or `cancel_task`.
+- The gate: `pre-commit` scans the INDEX for credentials (`scripts/check-secrets.py`; a documented
+  fake carries `secret-scan-ok: <reason>`, and a marker with no reason fails); `pre-push` starts
+  `postgres:16-alpine` in Docker, exports `BATONDECK_TEST_POSTGRES_DSN` and runs `make check`,
+  refusing the push when Docker is absent; `make check` gains `sqlc-check` and `web-dist-check`
+  (each prints a skip line until `queries/*.sql` and `web/package.json` exist); a GitHub Actions
+  `check` workflow runs `make check` on pull requests against a `postgres:16` service.
