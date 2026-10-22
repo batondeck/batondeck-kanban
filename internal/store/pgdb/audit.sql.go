@@ -31,30 +31,6 @@ func (q *Queries) GetAuditLog(ctx context.Context, id int64) (AuditLog, error) {
 	return i, err
 }
 
-const getIdempotencyKey = `-- name: GetIdempotencyKey :one
-SELECT project_id, identity, key, result, created_at, expires_at FROM idempotency_keys WHERE project_id = $1 AND identity = $2 AND key = $3
-`
-
-type GetIdempotencyKeyParams struct {
-	ProjectID string
-	Identity  string
-	Key       string
-}
-
-func (q *Queries) GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (IdempotencyKey, error) {
-	row := q.db.QueryRow(ctx, getIdempotencyKey, arg.ProjectID, arg.Identity, arg.Key)
-	var i IdempotencyKey
-	err := row.Scan(
-		&i.ProjectID,
-		&i.Identity,
-		&i.Key,
-		&i.Result,
-		&i.CreatedAt,
-		&i.ExpiresAt,
-	)
-	return i, err
-}
-
 const getToolCall = `-- name: GetToolCall :one
 SELECT id, ts, tool, identity, agent, outcome, code, latency_ms, project_id FROM tool_calls WHERE id = $1
 `

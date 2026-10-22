@@ -18,9 +18,17 @@ import (
 
 // Store is the whole persistence surface every engine implements: the role interfaces below,
 // one per area of the schema. A consumer that needs one area takes that role, not the whole Store.
-// It holds no area yet; the domain lanes add them.
+// Each area's role is declared in its contract_<area>.go.
 type Store interface {
 	Lifecycle
+	Projects
+	Members
+	Boards
+	Counters
+	Idempotency
+	Users
+	Sessions
+	Tokens
 }
 
 // Lifecycle opens, migrates, transacts and closes: what every engine does before it holds anything.

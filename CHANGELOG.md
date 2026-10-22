@@ -19,6 +19,46 @@ Notable changes to batondeck-kanban. The format follows
   `web-public-check` (refuses `web/public/pitch/` and `web/ds-bundle/` anywhere under `web/`, and
   holds `web/public/` to `scripts/web-public-allowlist.txt`) and `kit-check` (every kit file
   against its sha256 in the lock).
+- The layering guard, `internal/arch/layering_test.go`, run by `make arch` before `test` in
+  `make check`. One `go list -e -deps -json` over every Go directory of the module (the walk skips
+  `node_modules`, `testdata`, dot and underscore directories and nested modules) judges the eight
+  rules of ADR-0003 §C, held as the `layeringRules` table: domain and core reach no internal package;
+  outside the store, migrations and the composition root no import chain reaches `database/sql`,
+  SQLite, pgx or goose except one through `internal/store/...` or `migrations` (rule 2, amended by
+  the orchestrator: through-store reach allowed); the store, bus/retention/auth/blob, service and
+  transport rows forbid importing a layer above; transports import no store package and not each
+  other; only `internal/mcp` and `internal/cli` import the MCP SDK; `contract/` non-test code reaches
+  no internal package. Test imports are judged directly under the looser `testRules` table, which
+  allows `memstore`, `servicefake` and `authfake`. Subjects match by path prefix, so a package such
+  as `internal/service` is judged as soon as it exists.
+- Local accounts and credentials (`internal/auth`): users with argon2id password hashes (t=3,
+  64 MiB, p=4) made on the host with `batondeck-kanban user add [--admin] [--name N] LOGIN` (the
+  password is read from piped stdin; there is no sign-up page), and `user disable|passwd|list`;
+  the workspace-admin flag in `migrations/{sqlite,postgres}/0002_users_workspace_admin.sql`. API
+  tokens through the TokenService, `bd_<16 hex>_<secret>`, with only the secret's SHA-256 stored:
+  `batondeck-kanban token create --user LOGIN [--label L] [--ttl D]` prints the token once (default
+  30 days, at most 365), and `token list` shows the `bd_<id>` prefix and status and never the
+  plaintext. `token revoke` makes it fail on the next call. `ResolveCaller` (the `auth.Resolver`
+  contract, with `authfake` as its double) turns a token into a `domain.Caller`, the identity and
+  the workspace-admin flag. Cookie sessions (`bk_session`, HttpOnly, SameSite=Lax, Secure over TLS,
+  7 days) opened by a login POST. A CSRF check ported from hdtp-gateway refuses with 403 and audits
+  a cross-site state change, judging browsers by Fetch Metadata or Origin and a session by its CSRF
+  token, and a bearer by the token alone. A disabled user's tokens and sessions stop within the
+  60 s account cache. The users, sessions and tokens store areas on both engines, with their
+  conformance batteries; they replace the scaffold `queries/*/auth.sql`. The login and middleware
+  handlers are not yet mounted by `serve`.
+- The first Store areas, on both engines, each an exported role (`store.Projects`, `Members`,
+  `Boards`, `Counters`, `Idempotency`, in `internal/store/contract_*.go`) embedded in `Store`:
+  projects (create with the creator as admin, get, list by identity with its role, settings without
+  `transitionTable`, recursive delete keeping the audit log, tool calls and change log), members (add
+  or update, remove, list, look up), boards and columns (create with the default columns Backlog,
+  Ready, In progress, Blocked, Review, Done, Review left out when `reviewEnabled` is off; get with
+  per-column task counts in two statements; list; add, update and remove a column, refusing one that
+  holds a task or is the last), the per-project `T-n` counter (`NextTaskID`) and idempotency keys
+  (`WithIdempotency`, replay within the caller's window per project, identity and key, one run under
+  concurrency). Every lookup is keyed by project. These areas are versionless, as conductor's are;
+  they write no event or audit row, which the service layer composes. The conformance suite judges
+  all five on SQLite and Postgres.
 - The base schema, `migrations/{sqlite,postgres}/0001_base.sql`: 43 tables on both engines for
   every in-scope area (projects, members, grants and the per-project `T-n` counter; boards and
   columns; tasks with the six statuses, `blocked_reason`, `claim_attempts`, `next_eligible_at`,
