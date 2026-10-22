@@ -87,6 +87,26 @@ func TestRefusalRevokedToken(t *testing.T) {
 	wantCode(t, err, domain.CodeNotFound)
 }
 
+// A whole token pasted into revoke is refused as VALIDATION without repeating it: the secret must
+// not reach the error a second time.
+func TestRevokeRefusesAWholeTokenWithoutEchoingIt(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	plain, info, _ := f.svc.Tokens.Create(ctx, "U-1", "a", "x", 0)
+	secret := plain[len(info.Display())+1:]
+	for _, bad := range []string{plain, info.ID + "_" + secret, strings.ToUpper(info.ID), "bd_xyz"} {
+		_, err := f.svc.Tokens.Revoke(ctx, bad)
+		wantCode(t, err, domain.CodeValidation)
+		e, _ := domain.AsBatonDeckError(err)
+		if s := fmt.Sprintf("%v %+v", err, e.Details); strings.Contains(s, secret) || strings.Contains(s, bad) {
+			t.Fatalf("the refusal repeats its input: %s", s)
+		}
+	}
+	if row, _ := f.st.GetToken(ctx, info.ID); row.RevokedAt != 0 {
+		t.Fatal("a refused revoke revoked the token")
+	}
+}
+
 func TestTokenExpiredWrongSecretAndMalformedAreUnauthenticated(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

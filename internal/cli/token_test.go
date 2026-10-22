@@ -48,6 +48,10 @@ func TestTokenCreateListRevoke(t *testing.T) {
 	if code != 0 || !strings.Contains(out, prefix) || !strings.Contains(out, "alice") || !strings.Contains(out, " live") || strings.Contains(out, plain[20:]) {
 		t.Fatalf("list: %d %q", code, out)
 	}
+	code, out, errs = run("token", "revoke", plain)
+	if code != 1 || !strings.Contains(errs, "VALIDATION") || strings.Count(out+errs, plain[20:]) != 0 {
+		t.Fatalf("revoke with the whole token: %d, the secret appears %d times in %q", code, strings.Count(out+errs, plain[20:]), out+errs)
+	}
 	if code, out, errs := run("token", "revoke", prefix); code != 0 || !strings.HasPrefix(out, "token revoke: "+prefix+" revoked at ") {
 		t.Fatalf("revoke: %d %q %q", code, out, errs)
 	}

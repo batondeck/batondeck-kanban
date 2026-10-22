@@ -131,13 +131,19 @@ func parseToken(presented string) (id, secret string, ok bool) {
 		return "", "", false
 	}
 	id, secret, found := strings.Cut(presented[len(TokenPrefix):], "_")
-	if !found || len(id) != 2*tokenIDBytes || len(secret) < 16 {
-		return "", "", false
-	}
-	if _, err := hex.DecodeString(id); err != nil || strings.ToLower(id) != id {
+	if !found || !validTokenID(id) || len(secret) < 16 {
 		return "", "", false
 	}
 	return id, secret, true
+}
+
+// validTokenID reports whether id has the exact shape Create makes: 16 lowercase hex characters.
+func validTokenID(id string) bool {
+	if len(id) != 2*tokenIDBytes {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil && strings.ToLower(id) == id
 }
 
 // Validate resolves a presented bearer to its live row. A malformed, unknown, wrong-secret,
@@ -165,9 +171,14 @@ func (t *TokenService) Validate(ctx context.Context, presented string) (store.To
 }
 
 // Revoke revokes the token with this id ("bd_<id>" is accepted too); NOT_FOUND when there is none.
-// Revoking a revoked token keeps its first revocation time.
+// Anything but the id's exact shape is VALIDATION, and the message never repeats the input: a whole
+// token pasted here must not reach a terminal or a log a second time. Revoking a revoked token keeps
+// its first revocation time.
 func (t *TokenService) Revoke(ctx context.Context, id string) (TokenInfo, error) {
 	id = strings.TrimPrefix(id, TokenPrefix)
+	if !validTokenID(id) {
+		return TokenInfo{}, domain.Validation("a token id is bd_ followed by 16 lowercase hex characters (the TOKEN column of `token list`), not the whole token", map[string]any{"field": "id"})
+	}
 	if err := t.Store.RevokeToken(ctx, id, t.now().UnixMilli()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return TokenInfo{}, domain.NotFound("token", id)

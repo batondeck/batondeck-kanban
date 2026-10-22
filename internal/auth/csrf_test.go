@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,12 @@ func TestRefusalCSRFCrossSite(t *testing.T) {
 		if a := f.audited(); a[len(a)-1].Actor != u.ID {
 			t.Fatalf("actor %q", a[len(a)-1].Actor)
 		}
+		// Another origin of the same site (a sibling subdomain, another port) is not this origin.
+		n = len(f.audited())
+		if w := f.post(req{session: sess, csrf: csrf, hdr: map[string]string{"Sec-Fetch-Site": "same-site"}}); w.Code != http.StatusForbidden {
+			t.Fatalf("same-site: %d", w.Code)
+		}
+		f.wantRefusalAudited(t, n, "cross_site")
 	})
 }
 
@@ -104,4 +111,28 @@ func TestCSRFSafeMethodsPass(t *testing.T) {
 			t.Fatalf("%s: %d", m, w.Code)
 		}
 	}
+}
+
+// An HTML form cannot set a header, so a session's token may come in the `csrf` form field.
+func TestCSRFFormFieldCarriesTheToken(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "pw")
+	sess, csrf := f.session(t, "alice")
+	post := func(body string) int {
+		r := httptest.NewRequest(http.MethodPost, "http://board.test/api/x", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		r.AddCookie(&http.Cookie{Name: SessionCookie, Value: sess})
+		w := httptest.NewRecorder()
+		f.protected().ServeHTTP(w, r)
+		return w.Code
+	}
+	if code := post("csrf=" + csrf + "&x=1"); code != http.StatusOK {
+		t.Fatalf("the right token in the form: %d", code)
+	}
+	n := len(f.audited())
+	if code := post("csrf=" + csrf + "0"); code != http.StatusForbidden {
+		t.Fatalf("a wrong token in the form: %d", code)
+	}
+	f.wantRefusalAudited(t, n, "csrf_token")
 }
