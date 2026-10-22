@@ -615,6 +615,23 @@ CREATE TABLE integrations (
     PRIMARY KEY (project_id, id)
 );
 
+-- An alert fingerprint's correlation to its incident ticket (conductor AlertState). task_id has
+-- no foreign key: the row outlives the ticket, and a warm fingerprint may point at a deleted one.
+CREATE TABLE alert_states (
+    project_id text NOT NULL,
+    integration_id text NOT NULL,
+    fingerprint_hash text NOT NULL,
+    fingerprint text NOT NULL,
+    task_id text NOT NULL,
+    occurrences bigint NOT NULL DEFAULT 1,
+    first_at bigint NOT NULL,
+    last_at bigint NOT NULL,
+    alert_status text NOT NULL CHECK (alert_status IN ('firing', 'resolved')),
+    expires_at bigint,
+    PRIMARY KEY (project_id, integration_id, fingerprint_hash),
+    FOREIGN KEY (project_id, integration_id) REFERENCES integrations(project_id, id) ON DELETE CASCADE
+);
+
 -- id is sha256(delivery_id), hex.
 CREATE TABLE deliveries (
     project_id text NOT NULL,
@@ -646,6 +663,7 @@ CREATE TABLE delivery_raw_bodies (
 -- +goose Down
 DROP TABLE delivery_raw_bodies;
 DROP TABLE deliveries;
+DROP TABLE alert_states;
 DROP TABLE integrations;
 DROP TABLE chronicle_blobs;
 DROP TABLE chronicle_versions;

@@ -9,6 +9,34 @@ import (
 	"context"
 )
 
+const getAlertState = `-- name: GetAlertState :one
+SELECT project_id, integration_id, fingerprint_hash, fingerprint, task_id, occurrences, first_at, last_at, alert_status, expires_at FROM alert_states WHERE project_id = ? AND integration_id = ? AND fingerprint_hash = ?
+`
+
+type GetAlertStateParams struct {
+	ProjectID       string
+	IntegrationID   string
+	FingerprintHash string
+}
+
+func (q *Queries) GetAlertState(ctx context.Context, arg GetAlertStateParams) (AlertState, error) {
+	row := q.db.QueryRowContext(ctx, getAlertState, arg.ProjectID, arg.IntegrationID, arg.FingerprintHash)
+	var i AlertState
+	err := row.Scan(
+		&i.ProjectID,
+		&i.IntegrationID,
+		&i.FingerprintHash,
+		&i.Fingerprint,
+		&i.TaskID,
+		&i.Occurrences,
+		&i.FirstAt,
+		&i.LastAt,
+		&i.AlertStatus,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
 const getDelivery = `-- name: GetDelivery :one
 SELECT project_id, integration_id, id, delivery_id, ts, kind, result, task_id, error, normalized_event, expires_at FROM deliveries WHERE project_id = ? AND integration_id = ? AND id = ?
 `

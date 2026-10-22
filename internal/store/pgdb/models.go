@@ -44,6 +44,19 @@ type AgentSession struct {
 	RevokedBy      sql.NullString
 }
 
+type AlertState struct {
+	ProjectID       string
+	IntegrationID   string
+	FingerprintHash string
+	Fingerprint     string
+	TaskID          string
+	Occurrences     int64
+	FirstAt         int64
+	LastAt          int64
+	AlertStatus     string
+	ExpiresAt       sql.NullInt64
+}
+
 type Artifact struct {
 	ProjectID        string
 	TaskID           string

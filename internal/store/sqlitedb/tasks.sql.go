@@ -194,30 +194,30 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 	return i, err
 }
 
-const matchTaskTitles = `-- name: MatchTaskTitles :many
+const searchTasks = `-- name: SearchTasks :many
 SELECT t.project_id, t.id FROM tasks_fts f JOIN tasks t ON t.rid = f.rid
-WHERE f.title MATCH ? AND t.project_id = ?
+WHERE f.search_body MATCH ? AND t.project_id = ?
 `
 
-type MatchTaskTitlesParams struct {
-	Title     string
-	ProjectID string
+type SearchTasksParams struct {
+	SearchBody string
+	ProjectID  string
 }
 
-type MatchTaskTitlesRow struct {
+type SearchTasksRow struct {
 	ProjectID string
 	ID        string
 }
 
-func (q *Queries) MatchTaskTitles(ctx context.Context, arg MatchTaskTitlesParams) ([]MatchTaskTitlesRow, error) {
-	rows, err := q.db.QueryContext(ctx, matchTaskTitles, arg.Title, arg.ProjectID)
+func (q *Queries) SearchTasks(ctx context.Context, arg SearchTasksParams) ([]SearchTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchTasks, arg.SearchBody, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []MatchTaskTitlesRow
+	var items []SearchTasksRow
 	for rows.Next() {
-		var i MatchTaskTitlesRow
+		var i SearchTasksRow
 		if err := rows.Scan(&i.ProjectID, &i.ID); err != nil {
 			return nil, err
 		}

@@ -33,7 +33,7 @@ var baseTables = []string{
 	"oauth_clients", "oauth_codes", "oauth_refresh_families", "oauth_tokens",
 	"audit_log", "tool_calls", "idempotency_keys",
 	"chronicle_pages", "chronicle_versions", "chronicle_blobs",
-	"integrations", "deliveries", "delivery_raw_bodies",
+	"integrations", "alert_states", "deliveries", "delivery_raw_bodies",
 }
 
 // baseIndexes is every access-path index 0001_base.sql names on both engines: the claim frontier,
@@ -246,9 +246,9 @@ const (
 		VALUES ('P-1', 'T-1', 'B-1', 'C-1', 'Rotate the frobnicator', 'quuxly described', 'READY', 'a0', 'zorblat', 'u', 1, 'u', 1)`
 )
 
-// On SQLite the FTS5 index finds a task by a word of its title (the generated MatchTaskTitles), and
-// by its description and search tokens (a table-wide MATCH); the triggers move it on an update and
-// remove it on a delete.
+// On SQLite the FTS5 index over tasks.search_body finds a task, through the generated SearchTasks,
+// by a word of its title, a word only in its description and a word only in its search tokens; the
+// triggers move it on an update and remove it on a delete.
 func TestSearchIndexSQLite(t *testing.T) {
 	ctx := context.Background()
 	db := openSQLiteFile(t, migratedSQLite(t))
@@ -258,9 +258,9 @@ func TestSearchIndexSQLite(t *testing.T) {
 		}
 	}
 	q := sqlitedb.New(db)
-	byTitle := func(word string) []string {
+	search := func(word string) []string {
 		t.Helper()
-		rows, err := q.MatchTaskTitles(ctx, sqlitedb.MatchTaskTitlesParams{Title: word, ProjectID: "P-1"})
+		rows, err := q.SearchTasks(ctx, sqlitedb.SearchTasksParams{SearchBody: word, ProjectID: "P-1"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -270,37 +270,30 @@ func TestSearchIndexSQLite(t *testing.T) {
 		}
 		return ids
 	}
-	anywhere := func(word string) []string {
-		t.Helper()
-		return sqliteStrings(t, db, "SELECT t.id FROM tasks_fts JOIN tasks t ON t.rid = tasks_fts.rowid WHERE tasks_fts MATCH ?", word)
-	}
-	if got := byTitle("frobnicator"); !slices.Equal(got, []string{"T-1"}) {
-		t.Fatalf("a title word found %v, want [T-1]", got)
-	}
-	for _, w := range []string{"quuxly", "zorblat"} {
-		if got := anywhere(w); !slices.Equal(got, []string{"T-1"}) {
+	for _, w := range []string{"frobnicator", "quuxly", "zorblat"} {
+		if got := search(w); !slices.Equal(got, []string{"T-1"}) {
 			t.Fatalf("%q found %v, want [T-1]", w, got)
 		}
 	}
 	if _, err := db.Exec("UPDATE tasks SET title = 'Polish the widget' WHERE project_id = 'P-1' AND id = 'T-1'"); err != nil {
 		t.Fatal(err)
 	}
-	if got := byTitle("frobnicator"); len(got) != 0 {
+	if got := search("frobnicator"); len(got) != 0 {
 		t.Fatalf("the old title word still finds %v after an update", got)
 	}
-	if got := byTitle("widget"); !slices.Equal(got, []string{"T-1"}) {
+	if got := search("widget"); !slices.Equal(got, []string{"T-1"}) {
 		t.Fatalf("the new title word found %v, want [T-1]", got)
 	}
 	if _, err := db.Exec("DELETE FROM tasks WHERE project_id = 'P-1' AND id = 'T-1'"); err != nil {
 		t.Fatal(err)
 	}
-	if got := anywhere("widget"); len(got) != 0 {
+	if got := search("widget"); len(got) != 0 {
 		t.Fatalf("a deleted task is still found: %v", got)
 	}
 }
 
-// On Postgres the generated tsvector finds the same task by the same words (the generated
-// SearchTasks), and follows an update.
+// On Postgres the generated tsvector finds the same task by the same words, a word only in its
+// description included, through the generated SearchTasks, and follows an update.
 func TestSearchIndexPostgres(t *testing.T) {
 	ctx := context.Background()
 	c := migratedPostgres(t)

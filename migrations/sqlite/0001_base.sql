@@ -117,6 +117,9 @@ CREATE TABLE tasks (
     created_at INTEGER NOT NULL,
     updated_by TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
+    -- search_tasks reads this one column: the title, description and search tokens together, so a
+    -- single-column MATCH searches all three.
+    search_body TEXT GENERATED ALWAYS AS (title || ' ' || description || ' ' || search_tokens) VIRTUAL,
     UNIQUE (project_id, id),
     FOREIGN KEY (project_id, board_id) REFERENCES boards(project_id, id) ON DELETE CASCADE
 );
@@ -124,25 +127,25 @@ CREATE TABLE tasks (
 -- best score first.
 CREATE INDEX tasks_claim_frontier ON tasks(project_id, board_id, status, next_eligible_at, score DESC);
 
--- search_tasks: external-content FTS5 over the task's title, description and search tokens. rid
--- is UNINDEXED and read from tasks itself; it is the column a query can select (sqlc v1.30.0
--- refuses a virtual table's rowid in a select list, though it accepts it in a JOIN ON).
-CREATE VIRTUAL TABLE tasks_fts USING fts5(title, description, search_tokens, rid UNINDEXED, content='tasks', content_rowid='rid');
+-- search_tasks: external-content FTS5 over tasks.search_body. rid is UNINDEXED and read from
+-- tasks itself; it is the column a query can select (sqlc v1.30.0 refuses a virtual table's rowid
+-- in a select list, though it accepts it in a JOIN ON).
+CREATE VIRTUAL TABLE tasks_fts USING fts5(search_body, rid UNINDEXED, content='tasks', content_rowid='rid');
 -- The three triggers keep the index in step with tasks.
 -- +goose StatementBegin
 CREATE TRIGGER tasks_fts_ai AFTER INSERT ON tasks BEGIN
-    INSERT INTO tasks_fts(rowid, title, description, search_tokens, rid) VALUES (new.rid, new.title, new.description, new.search_tokens, new.rid);
+    INSERT INTO tasks_fts(rowid, search_body, rid) VALUES (new.rid, new.search_body, new.rid);
 END;
 -- +goose StatementEnd
 -- +goose StatementBegin
 CREATE TRIGGER tasks_fts_ad AFTER DELETE ON tasks BEGIN
-    INSERT INTO tasks_fts(tasks_fts, rowid, title, description, search_tokens, rid) VALUES ('delete', old.rid, old.title, old.description, old.search_tokens, old.rid);
+    INSERT INTO tasks_fts(tasks_fts, rowid, search_body, rid) VALUES ('delete', old.rid, old.search_body, old.rid);
 END;
 -- +goose StatementEnd
 -- +goose StatementBegin
 CREATE TRIGGER tasks_fts_au AFTER UPDATE OF title, description, search_tokens ON tasks BEGIN
-    INSERT INTO tasks_fts(tasks_fts, rowid, title, description, search_tokens, rid) VALUES ('delete', old.rid, old.title, old.description, old.search_tokens, old.rid);
-    INSERT INTO tasks_fts(rowid, title, description, search_tokens, rid) VALUES (new.rid, new.title, new.description, new.search_tokens, new.rid);
+    INSERT INTO tasks_fts(tasks_fts, rowid, search_body, rid) VALUES ('delete', old.rid, old.search_body, old.rid);
+    INSERT INTO tasks_fts(rowid, search_body, rid) VALUES (new.rid, new.search_body, new.rid);
 END;
 -- +goose StatementEnd
 
@@ -636,6 +639,23 @@ CREATE TABLE integrations (
     PRIMARY KEY (project_id, id)
 );
 
+-- An alert fingerprint's correlation to its incident ticket (conductor AlertState). task_id has
+-- no foreign key: the row outlives the ticket, and a warm fingerprint may point at a deleted one.
+CREATE TABLE alert_states (
+    project_id TEXT NOT NULL,
+    integration_id TEXT NOT NULL,
+    fingerprint_hash TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 1,
+    first_at INTEGER NOT NULL,
+    last_at INTEGER NOT NULL,
+    alert_status TEXT NOT NULL CHECK (alert_status IN ('firing', 'resolved')),
+    expires_at INTEGER,
+    PRIMARY KEY (project_id, integration_id, fingerprint_hash),
+    FOREIGN KEY (project_id, integration_id) REFERENCES integrations(project_id, id) ON DELETE CASCADE
+);
+
 -- id is sha256(delivery_id), hex.
 CREATE TABLE deliveries (
     project_id TEXT NOT NULL,
@@ -667,6 +687,7 @@ CREATE TABLE delivery_raw_bodies (
 -- +goose Down
 DROP TABLE delivery_raw_bodies;
 DROP TABLE deliveries;
+DROP TABLE alert_states;
 DROP TABLE integrations;
 DROP TABLE chronicle_blobs;
 DROP TABLE chronicle_versions;

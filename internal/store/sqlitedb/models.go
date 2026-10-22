@@ -44,6 +44,19 @@ type AgentSession struct {
 	RevokedBy      sql.NullString
 }
 
+type AlertState struct {
+	ProjectID       string
+	IntegrationID   string
+	FingerprintHash string
+	Fingerprint     string
+	TaskID          string
+	Occurrences     int64
+	FirstAt         int64
+	LastAt          int64
+	AlertStatus     string
+	ExpiresAt       sql.NullInt64
+}
+
 type Artifact struct {
 	ProjectID        string
 	TaskID           string
@@ -478,6 +491,7 @@ type Task struct {
 	CreatedAt            int64
 	UpdatedBy            string
 	UpdatedAt            int64
+	SearchBody           sql.NullString
 }
 
 type TaskEvent struct {
@@ -493,10 +507,8 @@ type TaskEvent struct {
 }
 
 type TasksFTS struct {
-	Title        string
-	Description  string
-	SearchTokens string
-	Rid          string
+	SearchBody string
+	Rid        string
 }
 
 type Token struct {
