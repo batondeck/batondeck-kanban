@@ -8,6 +8,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pressly/goose/v3 v3.28.0
+	golang.org/x/crypto v0.55.0
 	modernc.org/sqlite v1.57.0
 )
 

@@ -128,6 +128,17 @@ func TestSchemaSQLite(t *testing.T) {
 	if got := sqliteStrings(t, db, "SELECT type FROM pragma_table_info('identities') WHERE name = 'starred_assets' AND \"notnull\" = 1"); !slices.Equal(got, []string{"TEXT"}) {
 		t.Errorf("identities.starred_assets: %v, want a NOT NULL TEXT column", got)
 	}
+	if got := sqliteStrings(t, db, "SELECT type || ' ' || dflt_value FROM pragma_table_info('users') WHERE name = 'workspace_admin' AND \"notnull\" = 1"); !slices.Equal(got, []string{"INTEGER 0"}) {
+		t.Errorf("users.workspace_admin: %v, want a NOT NULL INTEGER column defaulting to 0", got)
+	}
+	if _, err := db.Exec("INSERT INTO users (id, email, display_name, password_hash, created_at, workspace_admin) VALUES ('U-x', 'x', 'x', 'h', 1, 2)"); err == nil {
+		t.Errorf("users.workspace_admin took 2: its CHECK does not hold it to 0 and 1")
+	}
+	if _, err := db.Exec("INSERT INTO users (id, email, display_name, password_hash, created_at) VALUES ('U-y', 'y', 'y', 'h', 1)"); err != nil {
+		t.Errorf("a user without workspace_admin: %v", err)
+	} else if got := sqliteStrings(t, db, "SELECT CAST(workspace_admin AS TEXT) FROM users WHERE id = 'U-y'"); !slices.Equal(got, []string{"0"}) {
+		t.Errorf("a user without workspace_admin reads %v, want 0", got)
+	}
 	pk := sqliteStrings(t, db, "SELECT name FROM pragma_table_info('change_log') WHERE pk > 0")
 	if !slices.Equal(pk, []string{"id"}) {
 		t.Errorf("change_log's primary key is %v, want [id]", pk)
@@ -236,6 +247,10 @@ func TestSchemaPostgres(t *testing.T) {
 	starred := pgStrings(t, c, "SELECT data_type::text FROM information_schema.columns WHERE table_name = 'identities' AND column_name = 'starred_assets' AND is_nullable = 'NO'")
 	if !slices.Equal(starred, []string{"text"}) {
 		t.Errorf("identities.starred_assets: %v, want a NOT NULL text column", starred)
+	}
+	admin := pgStrings(t, c, "SELECT data_type::text || ' ' || column_default FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'workspace_admin' AND is_nullable = 'NO'")
+	if !slices.Equal(admin, []string{"boolean false"}) {
+		t.Errorf("users.workspace_admin: %v, want a NOT NULL boolean column defaulting to false", admin)
 	}
 	pk := pgStrings(t, c, `SELECT a.attname::text FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
 		WHERE i.indrelid = 'change_log'::regclass AND i.indisprimary`)
