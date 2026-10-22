@@ -9,11 +9,11 @@ Written by `make notices` (scripts/notices.mjs) for these platforms from these i
 (part of `make check`) holds it to:
 
   platforms                   linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
-  go.sum                      sha256 1bd2b42cca43b155ed4b6e56fb359fd9fe15b4844df6041a0ffbfda7771e6c6d
-  linked Go modules           20, sha256 3e985f2ade86f4c54fd0806475ffe04edd3a9806b636c7d7dfce5398db738cb6
+  go.sum                      sha256 3bde1534873f48ff4405c6c57984fdb68650667de036a5485d243f7e0cefc7d5
+  linked Go modules           21, sha256 ac65d52c76c437134ec5398c3afdf03f4399065aab2ff8b0a6cb779f81dd2600
 
 Contents
-  1. Go modules the shipped binary links: 20
+  1. Go modules the shipped binary links: 21
 
 
 ================================================================================
@@ -557,6 +557,39 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+
+--------------------------------------------------------------------------------
+golang.org/x/crypto v0.55.0
+--------------------------------------------------------------------------------
+[LICENSE]
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 --------------------------------------------------------------------------------
