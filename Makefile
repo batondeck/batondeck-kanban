@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck dist sbom build check fmt vet test conformance clean
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check dist sbom build check fmt vet test conformance contract clean
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -63,7 +63,7 @@ release-check:
 hooks:
 	git config core.hooksPath githooks
 	@echo "hooks installed: $$(git config core.hooksPath)"
-	@echo "pre-commit styles staged Go and refuses files over 5 MiB; commit-msg refuses a local path in the message; pre-push runs make check."
+	@echo "pre-commit scans the index for credentials, styles staged Go and refuses files over 5 MiB; commit-msg refuses a local path in the message; pre-push runs make check on both engines."
 
 # sbom emits CycloneDX for the shipped binary's dependency graph. Pinned, not
 # @latest: a supply-chain document produced by an unpinned tool is worth less.
@@ -90,9 +90,49 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
-# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the tests under the race detector, and
-# the store conformance suite once per engine.
-check: fmt vet staticcheck notices-check release-check test conformance
+# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
+# sources, web/dist against a fresh web build, the tests under the race detector, the store
+# conformance suite once per engine, and the MCP contract.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check test conformance contract
+
+# SQLC pins the generator, built from source at this version (minutes on a cold module cache).
+SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+
+# sqlc-check fails when the committed generated code (internal/store/{sqlitedb,pgdb}, sqlc.yaml's
+# outputs) does not match what the current queries and migrations produce. Until queries/ holds a
+# .sql file there is nothing to generate, and it says so.
+sqlc-check:
+	@if ! find queries -name '*.sql' 2>/dev/null | grep -q .; then \
+		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
+	fi; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+		cp -R internal/store/sqlitedb internal/store/pgdb "$$tmp/" \
+			|| { echo "sqlc-check: the generated code is missing - run $(SQLC) generate and commit the result" >&2; exit 1; }; \
+		$(SQLC) generate || { echo "sqlc-check: sqlc generate FAILED" >&2; exit 1; }; \
+		if diff -r "$$tmp/sqlitedb" internal/store/sqlitedb >/dev/null \
+		&& diff -r "$$tmp/pgdb" internal/store/pgdb >/dev/null; then \
+			echo "sqlc-check: generated code matches its sources"; \
+		else \
+			echo "sqlc-check: generated code is STALE - run $(SQLC) generate and commit the result"; \
+			diff -r "$$tmp/sqlitedb" internal/store/sqlitedb | head -20; \
+			diff -r "$$tmp/pgdb" internal/store/pgdb | head -20; \
+			exit 1; \
+		fi
+
+# web-dist-check builds web/ afresh and fails when the build differs from the committed web/dist
+# by a byte: a changed or deleted file (against HEAD) or a file the commit does not hold (git's
+# ignore rules apply, so a .DS_Store is not drift). The build writes web/dist in place, so a
+# failure leaves the fresh build there to commit.
+web-dist-check:
+	@if [ ! -f web/package.json ]; then echo "web-dist-check: no web/package.json yet"; exit 0; fi; \
+	cd web && npm ci && npm run build && cd .. && \
+	if git diff --quiet HEAD -- web/dist && [ -z "$$(git ls-files --others --exclude-standard -- web/dist)" ]; then \
+		echo "web-dist-check: web/dist matches a fresh build"; \
+	else \
+		echo "web-dist-check: web/dist is STALE - a fresh build changed it; commit what it wrote:"; \
+		git status --short --untracked-files=all -- web/dist; \
+		exit 1; \
+	fi
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
@@ -122,6 +162,14 @@ test:
 conformance:
 	go test -race -count=1 -v -run '^TestSQLiteConformance$$' ./internal/store/conformance/
 	go test -race -count=1 -v -run '^TestPostgresConformance$$' ./internal/store/conformance/
+
+# contract holds contract/expected.json to canonical(tools.json + admin-tools.json) ⊖ deltas.json and
+# runs the comparator's refusal controls (contract/contract_test.go). After a deliberate change to
+# deltas.json: `go test ./contract/ -run TestExpectedIsTheExactDerivation -update`. tools.json and
+# admin-tools.json come from conductor by `node scripts/contract-import.mjs <mcp.json> [--admin <dump>]`,
+# which the gate cannot run: conductor is a private sibling.
+contract:
+	go test -race ./contract/
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:
