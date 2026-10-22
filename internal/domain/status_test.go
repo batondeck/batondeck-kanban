@@ -182,6 +182,11 @@ func TestTransitionGuidance(t *testing.T) {
 		if !reflect.DeepEqual(err.Details, map[string]any{"from": Review, "to": InProgress}) {
 			t.Fatalf("details = %v", err.Details)
 		}
+		// A path without an allowed list names the route and claims no moves.
+		err = InvalidTransition(Review, Backlog, nil, ShortestPath(Review, Backlog))
+		if strings.Contains(err.Message, "you can move to") || !strings.Contains(err.Message, "REVIEW → IN_PROGRESS → READY → BACKLOG") {
+			t.Fatalf("message = %q", err.Message)
+		}
 	})
 }
 

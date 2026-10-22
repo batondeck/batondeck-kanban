@@ -94,7 +94,9 @@ func InvalidTransition(from, to Status, allowed, path []Status) *BatonDeckError 
 			allowed = []Status{}
 		}
 		details["allowed"] = allowed
-		message += fmt.Sprintf(" From %s you can move to: %s.", from, joinStatuses(allowed, ", "))
+		if len(allowed) > 0 {
+			message += fmt.Sprintf(" From %s you can move to: %s.", from, joinStatuses(allowed, ", "))
+		}
 		if len(path) > 1 {
 			details["path"] = path
 			message += fmt.Sprintf(" To reach %s, go step by step: %s.", to, joinStatuses(path, " → "))
