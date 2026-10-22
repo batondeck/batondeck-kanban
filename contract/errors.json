@@ -1,0 +1,99 @@
+{
+  "source": {
+    "repo": "conductor",
+    "path": "src/errors/index.ts",
+    "commit": "5e2baafa731718f68bc9f95ecc173067296360f8"
+  },
+  "shape": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": [
+          "VALIDATION",
+          "UNAUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "STALE",
+          "CONFLICT_LOCKED",
+          "LEASE_EXPIRED",
+          "INVALID_TRANSITION",
+          "WIP_EXCEEDED",
+          "CYCLE_DETECTED",
+          "QUOTA_EXCEEDED",
+          "RATE_LIMITED",
+          "INTERNAL"
+        ]
+      },
+      "message": {
+        "type": "string"
+      },
+      "retryable": {
+        "type": "boolean"
+      },
+      "details": {
+        "type": "object"
+      }
+    },
+    "required": [
+      "code",
+      "message",
+      "retryable"
+    ],
+    "additionalProperties": false
+  },
+  "codes": [
+    {
+      "code": "VALIDATION",
+      "retryable": false
+    },
+    {
+      "code": "UNAUTHENTICATED",
+      "retryable": false
+    },
+    {
+      "code": "FORBIDDEN",
+      "retryable": false
+    },
+    {
+      "code": "NOT_FOUND",
+      "retryable": false
+    },
+    {
+      "code": "STALE",
+      "retryable": true
+    },
+    {
+      "code": "CONFLICT_LOCKED",
+      "retryable": false
+    },
+    {
+      "code": "LEASE_EXPIRED",
+      "retryable": false
+    },
+    {
+      "code": "INVALID_TRANSITION",
+      "retryable": false
+    },
+    {
+      "code": "WIP_EXCEEDED",
+      "retryable": false
+    },
+    {
+      "code": "CYCLE_DETECTED",
+      "retryable": false
+    },
+    {
+      "code": "QUOTA_EXCEEDED",
+      "retryable": false
+    },
+    {
+      "code": "RATE_LIMITED",
+      "retryable": true
+    },
+    {
+      "code": "INTERNAL",
+      "retryable": true
+    }
+  ]
+}
