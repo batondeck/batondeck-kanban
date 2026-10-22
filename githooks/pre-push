@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Pre-push: the gate, run here before anything leaves this machine: `make check` (fmt vet
+# staticcheck notices-check release-check test). It starts no Postgres: no Postgres test exists
+# yet, so a DSN would change nothing.
+#
+# This project does not bypass its hooks: a gate that is wrong is fixed, not skipped.
+set -euo pipefail
+
+# The tree being gated is the working tree git runs this hook in: the repository's top level.
+# core.hooksPath is the relative `githooks`, so each worktree runs its own copy.
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+# The gate proves the COMMITTED go.mod and go.sum: no go.work the pusher's environment happens to
+# resolve (an umbrella's, a GOWORK variable) may stand in for them.
+export GOWORK=off
+
+# A push that only deletes refs has nothing to test.
+zero=0000000000000000000000000000000000000000
+only_deletes=true
+pushed=""
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  only_deletes=false
+  pushed="$pushed $local_sha"
+done
+if [ "$only_deletes" = true ]; then
+  exit 0
+fi
+
+# What the gate checks is the CHECKED-OUT TREE. Pushing a ref that is not HEAD —
+# `git push origin feature:main` — therefore gates the wrong commit. Saying so is honest;
+# refusing outright would break a legitimate workflow.
+head_sha="$(git rev-parse HEAD)"
+for sha in $pushed; do
+  [ "$sha" = "$head_sha" ] || echo "pre-push: NOTE — gating the checked-out tree ($(git rev-parse --short HEAD)), not $(git rev-parse --short "$sha")" >&2
+done
+
+step() {
+  echo "pre-push: make $1"
+  if ! make "$1"; then
+    echo >&2
+    echo "pre-push: make $1 failed. Fix it before pushing: hooks are never bypassed here." >&2
+    exit 1
+  fi
+}
+
+step check

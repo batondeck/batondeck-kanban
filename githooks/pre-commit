@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Pre-commit: Go arrives gofmt-styled, or it does not arrive; and nothing over 5 MiB arrives.
+#
+# Style is applied BEFORE the commit and automatically, never "fixed for style" afterwards:
+# every staged *.go file is run through gofmt and re-staged, so the commit carries the styled text
+# and `make check`'s fmt step (run again by the pre-push hook) has nothing to find.
+#
+# A file that is only PARTLY staged is refused rather than formatted: re-staging it would sweep
+# the unstaged half into the commit behind the author's back.
+set -euo pipefail
+
+top="$(git rev-parse --show-toplevel)"
+cd "$top"
+
+# Nothing over 5 MiB is committed: a build output or a binary does not belong in git, and taking
+# one out of a pushed history means rewriting it.
+max=$((5 * 1024 * 1024))
+big=()
+while IFS= read -r -d '' f; do
+  size="$(git cat-file -s ":$f")"
+  [ "$size" -le "$max" ] || big+=("$f ($size bytes)")
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
+if [ "${#big[@]}" -gt 0 ]; then
+  echo "pre-commit: refusing files over 5 MiB (5242880 bytes); a build output or a binary does not belong in git:" >&2
+  printf '              %s\n' "${big[@]}" >&2
+  exit 1
+fi
+
+staged=()
+while IFS= read -r -d '' f; do
+  case "$f" in *.go) staged+=("$f") ;; esac
+done < <(git diff --cached --name-only -z --diff-filter=ACMR)
+[ "${#staged[@]}" -gt 0 ] || exit 0
+
+partly=()
+for f in "${staged[@]}"; do
+  git diff --quiet -- "$f" || partly+=("$f")
+done
+if [ "${#partly[@]}" -gt 0 ]; then
+  echo "pre-commit: these files are only partly staged, so they cannot be styled and re-staged" >&2
+  echo "            without committing the rest of them too. Stage them whole, or stash the rest:" >&2
+  printf '              %s\n' "${partly[@]}" >&2
+  exit 1
+fi
+
+restyled=()
+for f in "${staged[@]}"; do
+  if ! out="$(gofmt < "$f")"; then
+    echo "pre-commit: gofmt could not parse $f — fix the syntax, then commit" >&2
+    exit 1
+  fi
+  if [ "$out" != "$(cat -- "$f")" ]; then
+    printf '%s\n' "$out" > "$f"
+    restyled+=("$f")
+  fi
+done
+if [ "${#restyled[@]}" -gt 0 ]; then
+  git add -- "${restyled[@]}"
+  echo "pre-commit: styled and re-staged ${#restyled[@]} file(s):"
+  printf '              %s\n' "${restyled[@]}"
+fi

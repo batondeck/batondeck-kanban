@@ -2,3 +2,10 @@ batondeck-kanban — the open-source BatonDeck task orchestrator
 Copyright 2026 Sumit Agrawal
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The repository skeleton (the command line, configuration, data-dir lock, admin socket, keyring,
+store engine pair, web UI embedding, Makefile, git hooks, Dockerfile, release and notices scripts)
+was copied from hdtp-gateway (https://github.com/humandelegatedtrustprotocol/hdtp-gateway, at
+commit 3324f09), Apache-2.0, and modified. Its NOTICE reads, in the part that covers what was
+copied: "hdtp-gateway — the HDTP node / Copyright 2026 Sumit Agrawal". The copy of frp that
+hdtp-gateway carries was not copied.
