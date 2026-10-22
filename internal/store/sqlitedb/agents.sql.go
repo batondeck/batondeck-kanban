@@ -74,7 +74,7 @@ func (q *Queries) GetAgentSession(ctx context.Context, arg GetAgentSessionParams
 }
 
 const getIdentity = `-- name: GetIdentity :one
-SELECT id, kind, display, capabilities, max_ticket_tokens, token_policy FROM identities WHERE id = ?
+SELECT id, kind, display, capabilities, max_ticket_tokens, token_policy, starred_assets FROM identities WHERE id = ?
 `
 
 func (q *Queries) GetIdentity(ctx context.Context, id string) (Identity, error) {
@@ -87,6 +87,7 @@ func (q *Queries) GetIdentity(ctx context.Context, id string) (Identity, error) 
 		&i.Capabilities,
 		&i.MaxTicketTokens,
 		&i.TokenPolicy,
+		&i.StarredAssets,
 	)
 	return i, err
 }

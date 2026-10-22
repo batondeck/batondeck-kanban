@@ -9,8 +9,8 @@
 CREATE TABLE projects (
     id text PRIMARY KEY,
     name text NOT NULL,
-    -- ProjectSettings as JSON, minus the two columns below and minus transitionTable (the table
-    -- is fixed), quotaEnabled and txnCap (metering is out of scope).
+    -- ProjectSettings as JSON (quotaEnabled and txnCap included: the contract carries them),
+    -- minus the two columns below and minus transitionTable (the table is fixed).
     settings text NOT NULL DEFAULT '{}',
     review_enabled bigint NOT NULL DEFAULT 0 CHECK (review_enabled IN (0, 1)),
     -- RetryPolicy as JSON; NULL is the default policy.
@@ -345,7 +345,9 @@ CREATE TABLE identities (
     display text NOT NULL,
     capabilities text NOT NULL DEFAULT '[]',
     max_ticket_tokens bigint,
-    token_policy text CHECK (token_policy IN ('off', 'warn', 'enforce'))
+    token_policy text CHECK (token_policy IN ('off', 'warn', 'enforce')),
+    -- Identity.starredAssets, a JSON array (get_my_settings / set_my_settings).
+    starred_assets text NOT NULL DEFAULT '[]'
 );
 
 -- MCP connection telemetry, one row per (identity, agent).

@@ -250,6 +250,7 @@ type Identity struct {
 	Capabilities    string
 	MaxTicketTokens sql.NullInt64
 	TokenPolicy     sql.NullString
+	StarredAssets   string
 }
 
 type Integration struct {

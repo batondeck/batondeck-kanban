@@ -122,6 +122,9 @@ func TestSchemaSQLite(t *testing.T) {
 	if m := missing([]string{"tasks_fts_ai", "tasks_fts_ad", "tasks_fts_au"}, triggers); len(m) > 0 {
 		t.Errorf("FTS triggers missing: %v", m)
 	}
+	if got := sqliteStrings(t, db, "SELECT type FROM pragma_table_info('identities') WHERE name = 'starred_assets' AND \"notnull\" = 1"); !slices.Equal(got, []string{"TEXT"}) {
+		t.Errorf("identities.starred_assets: %v, want a NOT NULL TEXT column", got)
+	}
 	pk := sqliteStrings(t, db, "SELECT name FROM pragma_table_info('change_log') WHERE pk > 0")
 	if !slices.Equal(pk, []string{"id"}) {
 		t.Errorf("change_log's primary key is %v, want [id]", pk)
@@ -222,6 +225,10 @@ func TestSchemaPostgres(t *testing.T) {
 	gen := pgStrings(t, c, "SELECT is_generated FROM information_schema.columns WHERE table_name = 'tasks' AND column_name = 'search' AND data_type = 'tsvector'")
 	if !slices.Equal(gen, []string{"ALWAYS"}) {
 		t.Errorf("tasks.search: %v, want a generated tsvector column", gen)
+	}
+	starred := pgStrings(t, c, "SELECT data_type::text FROM information_schema.columns WHERE table_name = 'identities' AND column_name = 'starred_assets' AND is_nullable = 'NO'")
+	if !slices.Equal(starred, []string{"text"}) {
+		t.Errorf("identities.starred_assets: %v, want a NOT NULL text column", starred)
 	}
 	pk := pgStrings(t, c, `SELECT a.attname::text FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
 		WHERE i.indrelid = 'change_log'::regclass AND i.indisprimary`)

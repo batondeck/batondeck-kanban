@@ -9,8 +9,8 @@
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    -- ProjectSettings as JSON, minus the two columns below and minus transitionTable (the table
-    -- is fixed), quotaEnabled and txnCap (metering is out of scope).
+    -- ProjectSettings as JSON (quotaEnabled and txnCap included: the contract carries them),
+    -- minus the two columns below and minus transitionTable (the table is fixed).
     settings TEXT NOT NULL DEFAULT '{}',
     review_enabled INTEGER NOT NULL DEFAULT 0 CHECK (review_enabled IN (0, 1)),
     -- RetryPolicy as JSON; NULL is the default policy.
@@ -125,8 +125,8 @@ CREATE TABLE tasks (
 CREATE INDEX tasks_claim_frontier ON tasks(project_id, board_id, status, next_eligible_at, score DESC);
 
 -- search_tasks: external-content FTS5 over the task's title, description and search tokens. rid
--- is UNINDEXED and read from tasks itself; it is the join column a query can name (sqlc v1.30.0
--- knows no rowid on a virtual table).
+-- is UNINDEXED and read from tasks itself; it is the column a query can select (sqlc v1.30.0
+-- refuses a virtual table's rowid in a select list, though it accepts it in a JOIN ON).
 CREATE VIRTUAL TABLE tasks_fts USING fts5(title, description, search_tokens, rid UNINDEXED, content='tasks', content_rowid='rid');
 -- The three triggers keep the index in step with tasks.
 -- +goose StatementBegin
@@ -366,7 +366,9 @@ CREATE TABLE identities (
     display TEXT NOT NULL,
     capabilities TEXT NOT NULL DEFAULT '[]',
     max_ticket_tokens INTEGER,
-    token_policy TEXT CHECK (token_policy IN ('off', 'warn', 'enforce'))
+    token_policy TEXT CHECK (token_policy IN ('off', 'warn', 'enforce')),
+    -- Identity.starredAssets, a JSON array (get_my_settings / set_my_settings).
+    starred_assets TEXT NOT NULL DEFAULT '[]'
 );
 
 -- MCP connection telemetry, one row per (identity, agent).
