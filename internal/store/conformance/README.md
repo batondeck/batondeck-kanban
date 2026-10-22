@@ -20,7 +20,7 @@ every HDTP area removed.
 
 | Area (file) | Subtests |
 |---|---|
-| lifecycle (`conformance.go`) | `MigrateUpDownUp`; `ASecondMigrateAppliesNothing`; `TheSchemaIsCurrentOnceMigrated`; `ServerVersionIsReadFromTheConnection`; `AtomicallyReturnsItsCallbacksErrorAndNests` |
+| lifecycle (`conformance.go`) | `MigrateUpDownUp`; `ASecondMigrateAppliesNothing`; `TheSchemaIsCurrentOnceMigrated`; `ServerVersionIsReadFromTheConnection`; `AStoreUsedAfterItsAtomicallyReturnedWritesNothing`; `AtomicallyReturnsItsCallbacksErrorAndNests` |
 | projects (`conformance_projects.go`) | create, read, list, settings (transitionTable refused), recursive delete; each with its NOT_FOUND and VALIDATION cases |
 | members (`conformance_projects.go`) | add (an upsert), list, look up and remove members; each with its NOT_FOUND and VALIDATION cases |
 | boards and columns (`conformance_boards.go`) | default and given columns, idempotent create, reads keyed by project, list, column add, update and remove, each with its refusals |

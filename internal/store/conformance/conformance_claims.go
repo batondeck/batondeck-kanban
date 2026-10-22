@@ -284,6 +284,25 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("PreviewFrontierBreaksTiesByIDAsBytes", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		for i := range 10 {
+			f.add(t, fmt.Sprint("tie ", i+1), nil) // T-1..T-10: one score, priority and order key
+		}
+		got, err := f.s.PreviewFrontier(ctx, f.frontier(), 3)
+		mustOK(t, err)
+		if ids := taskIDs(got); !reflect.DeepEqual(ids, []string{"T-1", "T-10", "T-2"}) {
+			t.Fatalf("frontier %v, want [T-1 T-10 T-2]", ids)
+		}
+		won, ok, err := f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("bob", "a1", "L-1"))
+		mustOK(t, err)
+		claimed, _, err := f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("bob", "a2", "L-2"))
+		mustOK(t, err)
+		if !ok || won.ID != "T-1" || claimed.ID != "T-10" {
+			t.Fatalf("claimed %s then %s, want T-1 then T-10", won.ID, claimed.ID)
+		}
+	})
+
 	t.Run("PreviewFrontierFiltersByAssigneeAndCapabilities", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "go", func(in *store.CreateTaskInput) { in.RequiredCapabilities = []string{"go"}; in.OrderKey = "a1" })

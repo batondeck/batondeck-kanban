@@ -24,7 +24,8 @@ type ClaimInput struct {
 // READY, nothing in BlockedBy, not poisoned, not racing, no live lease, past NextEligibleAt), with
 // Assignee set only those assigned to it, and with Capabilities not empty only those whose
 // RequiredCapabilities are all among them. The frontier is best first: Score descending, then
-// priority (urgent, high, normal, low), then order key, then id.
+// priority (urgent, high, normal, low), then order key, then id, the two keys compared as bytes
+// (Postgres: COLLATE "C"), so T-10 comes before T-9.
 type FrontierQuery struct {
 	ProjectID    string
 	BoardID      string
@@ -62,7 +63,7 @@ type Claims interface {
 	// ReleaseLease drops the lease after the same checks as Heartbeat and returns the task.
 	ReleaseLease(ctx context.Context, projectID, taskID, leaseID, owner string, now int64) (Task, error)
 	// ListExpiredLeases is the tasks of the project (of boardID, or every board when it is "")
-	// holding a lease expired at now, the oldest expiry first (then id). A limit <= 0 is 50 and
+	// holding a lease expired at now, the oldest expiry first (then id, as bytes). A limit <= 0 is 50 and
 	// above 200 is 200.
 	ListExpiredLeases(ctx context.Context, projectID, boardID string, now int64, limit int) ([]Task, error)
 	// PreviewFrontier is the first limit tasks of the frontier, best first, claiming nothing. A

@@ -158,6 +158,27 @@ func lifecycle(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("AStoreUsedAfterItsAtomicallyReturnedWritesNothing", func(t *testing.T) {
+		s := migrated(t, newStore)
+		ctx := context.Background()
+		for _, fail := range []bool{false, true} {
+			var escaped store.Store
+			_ = s.Atomically(ctx, func(tx store.Store) error {
+				escaped = tx
+				if fail {
+					return errors.New("boom")
+				}
+				return nil
+			})
+			if _, err := escaped.CreateProject(ctx, store.CreateProjectInput{Name: "late", CreatedBy: "mallory"}, store.WriteOptions{Identity: "mallory"}); err == nil {
+				t.Fatalf("a write through a Store that escaped its Atomically (rolled back: %v) succeeded", fail)
+			}
+		}
+		if ps, err := s.ListProjects(ctx, "mallory"); err != nil || len(ps) != 0 {
+			t.Fatalf("after the late writes: %d projects, %v", len(ps), err)
+		}
+	})
+
 	t.Run("AtomicallyReturnsItsCallbacksErrorAndNests", func(t *testing.T) {
 		s := migrated(t, newStore)
 		ctx := context.Background()

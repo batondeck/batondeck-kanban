@@ -165,7 +165,8 @@ type TaskPage struct {
 // new version (one higher); a version that is not the task's is domain.Stale(expected, actual) and
 // changes nothing. A write never appends an event, an audit row or a change-log row: that
 // composition is the service's (ADR-0003), inside Atomically. Lists are ordered by (order key, id)
-// ascending and paged by cursor: base64url JSON {"order","id"} of the last row (EncodeCursor),
+// ascending, both compared as bytes (Postgres: COLLATE "C"), so "Zz" sorts before "a0" as lexorank
+// needs and T-10 before T-9; paged by cursor: base64url JSON {"order","id"} of the last row (EncodeCursor),
 // read strictly after; a malformed cursor is VALIDATION. A limit <= 0 is 50 and above 200 is 200.
 type Tasks interface {
 	// CreateTask mints the project's next T-n and inserts the task at version 1, in one

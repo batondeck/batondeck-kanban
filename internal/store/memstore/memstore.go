@@ -12,8 +12,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -27,6 +29,9 @@ type Store struct {
 	// tx is true for the Store an Atomically callback is handed: its calls run under the mutex the
 	// transaction already holds.
 	tx bool
+	// done is set once that callback has returned: the transaction is over, and a call through a
+	// Store that escaped it fails, as it does on a committed or rolled-back engine transaction.
+	done *atomic.Bool
 }
 
 type database struct {
@@ -85,6 +90,9 @@ var _ store.Store = (*Store)(nil)
 // holds. A cancelled context, a closed store and an unmigrated one fail before fn runs.
 func (s *Store) do(ctx context.Context, fn func(st *state) error) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.over(); err != nil {
 		return err
 	}
 	if !s.tx {
@@ -161,6 +169,9 @@ func (s *Store) Close() error {
 // error or panics. Called inside fn, it runs fn on the same transaction.
 func (s *Store) Atomically(ctx context.Context, fn func(tx store.Store) error) (err error) {
 	if s.tx {
+		if err := s.over(); err != nil {
+			return err
+		}
 		return fn(s)
 	}
 	if err := ctx.Err(); err != nil {
@@ -178,10 +189,20 @@ func (s *Store) Atomically(ctx context.Context, fn func(tx store.Store) error) (
 			s.db.st = snapshot
 		}
 	}()
-	if err := fn(&Store{db: s.db, tx: true}); err != nil {
+	tx := &Store{db: s.db, tx: true, done: new(atomic.Bool)}
+	defer tx.done.Store(true)
+	if err := fn(tx); err != nil {
 		return err
 	}
 	committed = true
+	return nil
+}
+
+// over refuses a call through a transaction's Store after its Atomically has returned.
+func (s *Store) over() error {
+	if s.tx && s.done.Load() {
+		return domain.NewError(domain.CodeInternal, "memstore: a transaction's Store was used after its Atomically returned", nil)
+	}
 	return nil
 }
 

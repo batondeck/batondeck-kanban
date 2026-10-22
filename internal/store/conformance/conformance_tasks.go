@@ -499,6 +499,29 @@ func tasks(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("ListTasksComparesOrderKeysAndIdsAsBytes", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		for i := range 10 {
+			f.add(t, fmt.Sprint("tie ", i+1), nil) // T-1..T-10, all at "a0"
+		}
+		f.add(t, "upper", func(in *store.CreateTaskInput) { in.OrderKey = "Zz" }) // T-11: 'Z' < 'a' as bytes
+		want := []string{"T-11", "T-1", "T-10", "T-2", "T-3", "T-4", "T-5", "T-6", "T-7", "T-8", "T-9"}
+		var got []string
+		cursor := ""
+		for {
+			page, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, cursor, 3)
+			mustOK(t, err)
+			got = append(got, taskIDs(page.Tasks)...)
+			if page.NextCursor == "" {
+				break
+			}
+			cursor = page.NextCursor
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("order %v, want %v", got, want)
+		}
+	})
+
 	t.Run("ListTasksAndCountTasksRefusals", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		_, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: "B-missing"}, "", 10)
