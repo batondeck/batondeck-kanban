@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pre-commit: Go arrives gofmt-styled, or it does not arrive; and nothing over 5 MiB arrives.
+# Pre-commit: Go arrives gofmt-styled, or it does not arrive; nothing over 5 MiB arrives; and no
+# credential arrives (a secret scan of the INDEX).
 #
 # Style is applied BEFORE the commit and automatically, never "fixed for style" afterwards:
 # every staged *.go file is run through gofmt and re-staged, so the commit carries the styled text
@@ -25,6 +26,16 @@ if [ "${#big[@]}" -gt 0 ]; then
   printf '              %s\n' "${big[@]}" >&2
   exit 1
 fi
+
+# No credential is committed: scripts/check-secrets.py reads every staged file from the INDEX
+# (`git show :path`), so what it scans is what the commit will hold. A documented fake carries
+# the scanner's marker, with a reason, on its line or the line above (its docstring says how).
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "pre-commit: python3 is not on PATH, and the secret scan (scripts/check-secrets.py) needs it." >&2
+  echo "            Install Python 3 and commit again: a skipped scan is not a pass." >&2
+  exit 1
+fi
+python3 scripts/check-secrets.py
 
 staged=()
 while IFS= read -r -d '' f; do
