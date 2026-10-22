@@ -221,7 +221,7 @@ func TestSetRefusesANilRequiredSlice(t *testing.T) {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("%s: Set accepted a nil required slice", name)
+					t.Errorf("%s: Set accepted a nil required slice or map", name)
 				}
 			}()
 			method := "Tasks.List"
