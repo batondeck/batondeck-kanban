@@ -42,9 +42,12 @@ task through the Store.
 The twelve areas from ContextItems on are store contract II (`internal/store/contract_<area>.go`). Each runs
 as one subtest named for its area, and SKIPS, naming the task that builds it, while the engine's methods
 are unbuilt: `internal/store/stubs_contract_ii.go` returns INTERNAL with the task under the detail
-`unbuilt`, and `store.UnbuiltTask` is what `area` (`conformance_seed.go`) checks. Any other error fails.
-A battery standing on projects, boards and tasks takes them from the store's `seeder`; no engine offers
-one until `store.Tasks` exists (R0.18), and until then it skips saying so. Meanwhile
+`unbuilt`, and `store.UnbuiltTask` is what `area` (`conformance_seed.go`) checks; `noErr` and `wantErr`
+skip on it too. Every other outcome of a built area fails, including a missing seeder: a battery standing
+on projects, boards and tasks takes them from the store's `seeder`, and a store that is built but offers
+none fails the battery rather than skipping it. The engine seeder adapter over `store.Projects`, `Boards`
+and `Tasks` is R0.10's; until it lands, the engines never reach a seeder, because every area skips as
+unbuilt first. Meanwhile
 `TestContractIIBatteriesOnAReference` (`reference_test.go`) runs all twelve against a map-backed
 reference that keeps the contract, which is where the batteries are proven to pass and to fail.
 
