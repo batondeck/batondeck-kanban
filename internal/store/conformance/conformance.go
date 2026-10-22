@@ -23,18 +23,79 @@ type Migratable interface {
 // Factory returns a NEW, empty, unmigrated store. The suite migrates it. Clean-up is the factory's.
 type Factory func(t *testing.T) Migratable
 
-// Run judges one engine by the whole suite, area by area, in one fixed order. An area is a function
-// of this package, `func <area>(t *testing.T, newStore Factory)`, in its own file, and one line
-// here.
+// Run judges one engine by the whole suite: lifecycle, then every area of areas in that order, each
+// as a subtest named for it. An area is a function of this package, `func <area>(t *testing.T,
+// newStore Factory)`, in its own file conformance_<area>.go, which hands it to register from an
+// init; its line in areas is already here, so a lane adds a file and never a line. An area whose
+// file has not landed yet SKIPS, naming the task that writes it.
 func Run(t *testing.T, newStore Factory) {
 	lifecycle(t, newStore)
-	projects(t, newStore)
-	boards(t, newStore)
-	counters(t, newStore)
-	idempotency(t, newStore)
-	users(t, newStore)
-	sessions(t, newStore)
-	tokens(t, newStore)
+	for _, a := range areas {
+		t.Run(a.name, func(t *testing.T) {
+			battery, ok := batteries[a.name]
+			if !ok {
+				t.Skipf("no battery for %s yet: %s writes it", a.name, a.owner)
+			}
+			battery(t, newStore)
+		})
+	}
+}
+
+// areas is every area of the Store (ADR-0003 B2), in the order Run judges them, with the task that
+// owns its contract and battery.
+var areas = []struct{ name, owner string }{
+	{"projects", "R0.8"},
+	{"members", "R0.8"}, // conformance_projects.go, beside projects
+	{"boards", "R0.8"},
+	{"counters", "R0.8"},
+	{"idempotency", "R0.8"},
+	{"users", "R0.12"},
+	{"sessions", "R0.12"},
+	{"tokens", "R0.12"},
+	{"tasks", "R0.18"},
+	{"claims", "R0.18"},
+	{"events", "R0.18"},
+	{"changelog", "R0.18"},
+	{"context", "R0.19"},
+	{"memory", "R0.19"},
+	{"summaries", "R0.19"},
+	{"dependencies", "R0.19"},
+	{"subtasks", "R0.19"},
+	{"audit", "R0.19"},
+	{"toolcalls", "R0.19"},
+	{"agentsessions", "R0.19"},
+	{"wakesessions", "R0.19"},
+	{"attachments", "R0.19"},
+	{"blobs", "R0.19"},
+	{"search", "R0.19"},
+}
+
+// batteries is each registered area's battery, by name.
+var batteries = map[string]func(t *testing.T, newStore Factory){
+	// The areas whose batteries predate register.
+	"projects":    projects,
+	"members":     members,
+	"boards":      boards,
+	"counters":    counters,
+	"idempotency": idempotency,
+	"users":       users,
+	"sessions":    sessions,
+	"tokens":      tokens,
+}
+
+// register hands an area's battery to Run. A name that is not in areas, or registered twice,
+// panics at init: a battery Run would never call is a battery that never ran.
+func register(name string, battery func(t *testing.T, newStore Factory)) {
+	if _, dup := batteries[name]; dup {
+		panic("conformance: area " + name + " registered twice")
+	}
+	for _, a := range areas {
+		if a.name == name {
+			batteries[name] = battery
+			return
+		}
+	}
+	panic("conformance: area " + name + " is not in areas")
 }
 
 func migrated(t *testing.T, newStore Factory) Migratable {
@@ -94,6 +155,27 @@ func lifecycle(t *testing.T, newStore Factory) {
 		}
 		if strings.TrimSpace(v) == "" {
 			t.Fatal("the connection reported an empty version")
+		}
+	})
+
+	t.Run("AStoreUsedAfterItsAtomicallyReturnedWritesNothing", func(t *testing.T) {
+		s := migrated(t, newStore)
+		ctx := context.Background()
+		for _, fail := range []bool{false, true} {
+			var escaped store.Store
+			_ = s.Atomically(ctx, func(tx store.Store) error {
+				escaped = tx
+				if fail {
+					return errors.New("boom")
+				}
+				return nil
+			})
+			if _, err := escaped.CreateProject(ctx, store.CreateProjectInput{Name: "late", CreatedBy: "mallory"}, store.WriteOptions{Identity: "mallory"}); err == nil {
+				t.Fatalf("a write through a Store that escaped its Atomically (rolled back: %v) succeeded", fail)
+			}
+		}
+		if ps, err := s.ListProjects(ctx, "mallory"); err != nil || len(ps) != 0 {
+			t.Fatalf("after the late writes: %d projects, %v", len(ps), err)
 		}
 	})
 

@@ -8,6 +8,24 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Store contract I (ADR-0003 B2): the `store.Tasks`, `Claims`, `Events` and `ChangeLog` roles in
+  `internal/store/contract_{tasks,claims,events,changelog}.go`, embedded in `Store`, with doc
+  comments pinning keys `(project_id, task_id)`, `domain.Stale(expected, actual)` on a versioned
+  write, the NOT_FOUND, CONFLICT_LOCKED and LEASE_EXPIRED shapes (`store.LeaseExpired`), and the
+  base64url `{"order","id"}` page cursor (`store.EncodeCursor`/`DecodeCursor`). Their batteries,
+  `conformance_{tasks,claims,events,changelog}.go`, cover every method's happy path and declared
+  error, 50 concurrent `ClaimNext` callers winning 50 distinct tasks and one winner of two
+  `ClaimTask` callers. `conformance.Run` now lists all 24 areas, each a named subtest; an area file
+  registers its battery from `init`, and an area with no file yet, or whose engine methods are still
+  unbuilt (`store.UnbuiltTask`), skips naming the task that builds it. On SQLite and Postgres the
+  four areas are stubs answering INTERNAL until R0.9 writes their statements. `internal/store/memstore`,
+  a test-only in-memory `Store` (maps under one mutex, `Atomically` as snapshot and rollback), passes
+  the suite for these four areas and for projects, members, boards, counters, idempotency, users,
+  sessions and tokens (`TestMemstoreConformance`), and refuses a call through a transaction's Store
+  after its `Atomically` has returned, as the engines do. Order keys and ids compare as bytes. The members battery is split out of the projects
+  battery unchanged. `queries/{sqlite,postgres}/` gains `artifacts.sql`, `runs.sql`, `search.sql`,
+  `summaries.sql` and `wake_sessions.sql`, moved byte for byte out of `tasks.sql` and `agents.sql`;
+  the generated declarations are identical.
 - The service contract (`internal/service`, ADR-0003 B3): the nine interfaces the transports call
   (Projects, Boards, Tasks, Lifecycle with cancel, Context, Media, Feed, Sessions, ToolCalls; 50
   methods, each `(ctx, domain.Caller, Req) (Resp, error)`), their request and response DTOs, and
