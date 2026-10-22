@@ -46,6 +46,9 @@ var baseIndexes = []string{
 	"dependencies_dependent",
 }
 
+// alertStatesKey is alert_states' primary key, in order: one fingerprint's state per integration.
+var alertStatesKey = []string{"project_id", "integration_id", "fingerprint_hash"}
+
 // missing is what of want is not in have.
 func missing(want, have []string) []string {
 	var out []string
@@ -128,6 +131,10 @@ func TestSchemaSQLite(t *testing.T) {
 	pk := sqliteStrings(t, db, "SELECT name FROM pragma_table_info('change_log') WHERE pk > 0")
 	if !slices.Equal(pk, []string{"id"}) {
 		t.Errorf("change_log's primary key is %v, want [id]", pk)
+	}
+	pk = sqliteStrings(t, db, "SELECT name FROM pragma_table_info('alert_states') WHERE pk > 0 ORDER BY pk")
+	if want := alertStatesKey; !slices.Equal(pk, want) {
+		t.Errorf("alert_states' primary key is %v, want %v in that order", pk, want)
 	}
 }
 
@@ -234,6 +241,13 @@ func TestSchemaPostgres(t *testing.T) {
 		WHERE i.indrelid = 'change_log'::regclass AND i.indisprimary`)
 	if !slices.Equal(pk, []string{"id"}) {
 		t.Errorf("change_log's primary key is %v, want [id]", pk)
+	}
+	pk = pgStrings(t, c, `SELECT a.attname::text FROM pg_index i
+		CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, n)
+		JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+		WHERE i.indrelid = 'alert_states'::regclass AND i.indisprimary ORDER BY k.n`)
+	if want := alertStatesKey; !slices.Equal(pk, want) {
+		t.Errorf("alert_states' primary key is %v, want %v in that order", pk, want)
 	}
 }
 
