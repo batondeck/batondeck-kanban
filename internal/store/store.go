@@ -29,6 +29,18 @@ type Store interface {
 	Users
 	Sessions
 	Tokens
+	Context
+	Memory
+	Summaries
+	Dependencies
+	Subtasks
+	Audit
+	ToolCalls
+	AgentSessions
+	WakeSessions
+	Attachments
+	Blobs
+	Search
 	Tasks
 	Claims
 	Events
