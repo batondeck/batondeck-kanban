@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/web"
 )
 
@@ -39,7 +41,11 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 		return serve(rest, version, stderr)
 	case "healthcheck":
 		return healthcheck(rest, stderr)
-	case "migrate", "token", "user", "doctor":
+	case "migrate":
+		return migrate(rest, stdout, stderr)
+	case "doctor":
+		return doctor(rest, stdout, stderr)
+	case "token", "user":
 		fmt.Fprintf(stderr, "%s: not implemented in this release\n", cmd)
 		return 2
 	default:
@@ -53,11 +59,11 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: batondeck-kanban <command> [flags]
 
 commands:
-  serve        run the server: GET /healthz and the embedded web UI
-  migrate      run store migrations (not implemented in this release)
+  serve        migrate the store, then run the server: GET /healthz and the embedded web UI
+  migrate      run the store's migrations on the engine database.url selects
   token        manage API tokens (not implemented in this release)
   user         manage users (not implemented in this release)
-  doctor       diagnose configuration and store (not implemented in this release)
+  doctor       check the config and report the store engine the connection answers as
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
   version      print the version
 `)
@@ -78,6 +84,31 @@ func commonFlags(name string, cfgPath *string, stderr io.Writer) *flag.FlagSet {
 
 func loadConfig(cfgPath string) (*core.Config, error) {
 	return core.Load(cfgPath, os.LookupEnv)
+}
+
+// openStore opens the engine database.url selects. For SQLite, create says whether a missing file
+// may be made (with its directory): serve and migrate make it, doctor does not.
+func openStore(ctx context.Context, cfg *core.Config, create bool) (store.Store, error) {
+	if cfg.Engine() == core.EnginePostgres {
+		return store.OpenPostgres(ctx, cfg.Database.URL)
+	}
+	path := cfg.SQLitePath()
+	if create {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	return store.OpenSQLite(path, cfg.Database.Synchronous)
+}
+
+// migratedLine says what one Migrate did.
+func migratedLine(m store.Migrated) string {
+	if m.None {
+		return "no migrations in this binary; goose's version table is in place"
+	}
+	return fmt.Sprintf("%d applied, schema at version %d", m.Applied, m.Version)
 }
 
 // healthBody is /healthz's whole answer: liveness only, naming the binary and its version.
@@ -107,6 +138,23 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	log := core.NewLogger(stderr)
+	// The store is migrated before anything listens, so a fresh SQLite file has its schema by the
+	// time /healthz answers (hdtp-gateway's serve does the same).
+	st, err := openStore(context.Background(), cfg, true)
+	if err != nil {
+		fmt.Fprintf(stderr, "serve: %s: %v\n", cfg.Engine(), err)
+		return 1
+	}
+	defer st.Close()
+	m, err := st.Migrate(context.Background())
+	if err == nil {
+		err = st.SchemaCurrent(context.Background())
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "serve: %s: %v\n", cfg.Engine(), err)
+		return 1
+	}
+	log.Printf("serve: store %s: %s", cfg.Engine(), migratedLine(m))
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
