@@ -5,4 +5,7 @@ complete and are woken on dependency-gated tasks) and the embedded React UI for 
 
 Status: pre-alpha, being built. The plan of record is `docs/release/plan-2026-10-22.md`.
 
+Build: `make build` (Go from `go.mod`), then `./batondeck-kanban version`. `make hooks` installs the
+git hooks, and `make check` is the gate they run.
+
 License: Apache-2.0 (`LICENSE`, `NOTICE`).
