@@ -19,9 +19,9 @@ Notable changes to batondeck-kanban. The format follows
   and as text; a go-sdk argument refusal is VALIDATION; a panic is INTERNAL (retryable) and its log
   line carries the stack. Sessions are collected after 30 min idle (`Options.SessionIdle`) and
   answer 404 "session not found" afterwards; at most 1000 live (`Options.MaxSessions`), an
-  initialize past it refused. Each initialised session is mirrored through `service.Sessions`:
-  touched at initialize with the client's name and version and on every later request, removed when
-  the session ends (idle, DELETE or close). `tools/list` is filtered per audience (the workspace-admin
+  initialize past it refused. Each initialised session is mirrored through `service.Sessions` as the
+  caller's agent session (key `<identity>::<agent id>`): written at initialize with the client's name
+  and version, touched by every tool call, removed when the session ends (idle, DELETE or close). `tools/list` is filtered per audience (the workspace-admin
   flag) and memoised per audience; `mcp.AddTool` registers a tool with its visibility. `serve` mounts
   `/mcp` over the store's API tokens. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
   its linked dependencies (THIRD_PARTY_NOTICES: 21 to 28 linked modules).

@@ -122,9 +122,9 @@ func TestInitializeAnswersEmptyLists(t *testing.T) {
 	}
 	first := touches[0]
 	req := first.Req.(service.TouchAgentSessionReq)
-	if first.Caller.Identity != "u-ada" || req.SessionKey != cs.ID() || req.ClientName != "harness" ||
+	if len(touches) != 1 || first.Caller.Identity != "u-ada" || req.SessionKey != "u-ada::id:u-ada" || req.ClientName != "harness" ||
 		req.ClientVersion != "0.0.1" || req.AgentName != "harness" || req.Kind != "service_account" || req.Tool != "" {
-		t.Errorf("first touch = %+v as %q, want session %s of client harness 0.0.1 as u-ada", req, first.Caller.Identity, cs.ID())
+		t.Errorf("touches = %+v; want one, the connection of client harness 0.0.1 as u-ada (no list or ping counts as one)", touches)
 	}
 }
 
@@ -350,13 +350,14 @@ func TestToolListPerAudienceMemoised(t *testing.T) {
 func TestSessionsCollectedWhenIdle(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver(), func(o *Options) { o.SessionIdle = 2 * time.Second })
+	plant(h)
 	idle, active := h.connect(t, tokenAda), h.connect(t, tokenGrace)
 	start := len(calls(f, "Sessions.TouchAgentSession"))
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := active.Ping(ctx(t), nil); err != nil {
-			t.Fatalf("active ping: %v", err)
+		if _, err := active.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1"}}); err != nil {
+			t.Fatalf("active call: %v", err)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
@@ -377,17 +378,17 @@ func TestSessionsCollectedWhenIdle(t *testing.T) {
 	for _, c := range calls(f, "Sessions.RemoveAgentSession") {
 		removed[c.Req.(service.RemoveAgentSessionReq).SessionKey] = true
 	}
-	if !removed[idle.ID()] || removed[active.ID()] {
-		t.Errorf("removed %v, want the idle session %s only", removed, idle.ID())
+	if !removed["u-ada::id:u-ada"] || removed["u-grace::id:u-grace"] {
+		t.Errorf("removed %v, want the idle session's u-ada::id:u-ada only", removed)
 	}
 	refreshed := 0
 	for _, c := range calls(f, "Sessions.TouchAgentSession")[start:] {
-		if c.Req.(service.TouchAgentSessionReq).SessionKey == active.ID() {
+		if r := c.Req.(service.TouchAgentSessionReq); r.SessionKey == "u-grace::id:u-grace" && r.Tool == "whoami" {
 			refreshed++
 		}
 	}
 	if refreshed < 5 {
-		t.Errorf("the active session was touched %d times in 3s of pings, want each request", refreshed)
+		t.Errorf("the active session was touched %d times in 3s of tool calls, want each call", refreshed)
 	}
 }
 
@@ -399,7 +400,7 @@ func TestSessionCountBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cs, err := h.dial(tokenAda); err == nil {
-		_ = cs.Close()
+		go cs.Close()
 		t.Fatal("a second session past MaxSessions 1 was admitted")
 	}
 	_ = first.Close() // DELETE: the session ends and frees its slot
@@ -418,11 +419,12 @@ func TestBookkeepingFailureDoesNotFailTheRequest(t *testing.T) {
 	f := servicefake.New()
 	failing := authfake.Resolver{Callers: map[string]domain.Caller{tokenAda: {Identity: servicefake.Trigger(domain.CodeInternal)}}}
 	h := bootHarness(t, f.Services(), failing)
+	plant(h)
 	cs := h.connect(t, tokenAda)
-	if _, err := cs.ListTools(ctx(t), nil); err != nil {
-		t.Errorf("tools/list failed with the session touch failing: %v", err)
+	if res, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1"}}); err != nil || res.IsError {
+		t.Errorf("a tool call failed with the session touch failing: %+v %v", res, err)
 	}
-	if !strings.Contains(h.log.String(), "agent session") {
+	if logs := h.log.String(); !strings.Contains(logs, "create agent session") || !strings.Contains(logs, "touch agent session") {
 		t.Errorf("the touch failure was not logged: %q", h.log.String())
 	}
 }

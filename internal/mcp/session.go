@@ -34,14 +34,6 @@ func (t *sessionTable) reserve(id string) bool {
 	return true
 }
 
-// has reports whether id is an initialised session.
-func (t *sessionTable) has(id string) bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	_, ok := t.live[id]
-	return ok
-}
-
 func (t *sessionTable) release(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -52,10 +44,13 @@ func (t *sessionTable) release(id string) {
 // TODO(R0.13): oauth_user for an OAuth access token.
 const sessionKind service.SessionKind = "service_account"
 
-// sessionMiddleware keeps the agent_sessions row of each MCP session: created at initialize (a
+// sessionMiddleware keeps the agent_sessions row of each MCP session: written at initialize (a
 // session over the bound is refused there, and go-sdk drops a session whose initialize failed),
-// touched by every later request of an initialised session, removed when the session ends, by idle collection, DELETE or
-// close. A bookkeeping failure is logged and never fails the request.
+// touched by every tool call, removed when the session ends, by idle
+// collection, DELETE or close. A bookkeeping failure is logged and never fails the request.
+//
+// The row is keyed by (identity, agent), not by MCP session: service.Sessions reads a touch with
+// no tool as a connection (its session count grows), so only initialize sends one.
 func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		ss, ok := req.GetSession().(*mcp.ServerSession)
@@ -66,16 +61,11 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		switch {
 		case method == "initialize":
 			return s.initialize(ctx, ss, caller, method, req, next)
-		case isNotification(method) || !s.sessions.has(ss.ID()):
-			// A notification is no request; a session that never initialised (a client probing
-			// with server/discover first) has no agent session to touch.
-		default:
-			touch := service.TouchAgentSessionReq{SessionKey: ss.ID(), AgentName: agentName(caller, ss.InitializeParams()), Kind: sessionKind}
-			if method == "tools/call" {
-				touch.Tool = toolName(req)
-			}
+		case method == "tools/call":
+			touch := service.TouchAgentSessionReq{SessionKey: agentSessionKey(caller), AgentName: agentName(caller, ss.InitializeParams()),
+				Kind: sessionKind, Tool: toolName(req)}
 			if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
-				s.log.Printf("mcp: touch agent session %s failed: %+v", ss.ID(), err)
+				s.log.Printf("mcp: touch agent session %s failed: %+v", touch.SessionKey, err)
 			}
 		}
 		return next(ctx, method, req)
@@ -94,22 +84,36 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 		return res, err
 	}
 	params, _ := req.GetParams().(*mcp.InitializeParams)
-	touch := service.TouchAgentSessionReq{SessionKey: id, AgentName: agentName(caller, params), Kind: sessionKind}
+	key := agentSessionKey(caller)
+	touch := service.TouchAgentSessionReq{SessionKey: key, AgentName: agentName(caller, params), Kind: sessionKind}
 	if params != nil && params.ClientInfo != nil {
 		touch.ClientName, touch.ClientVersion = params.ClientInfo.Name, params.ClientInfo.Version
 	}
 	if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
-		s.log.Printf("mcp: create agent session %s failed: %+v", id, err)
+		s.log.Printf("mcp: create agent session %s failed: %+v", key, err)
 	}
 	go func() {
 		_ = ss.Wait()
 		s.sessions.release(id)
-		// The request's context is gone with its request; the removal outlives it.
-		if _, err := s.services.Sessions.RemoveAgentSession(context.WithoutCancel(ctx), caller, service.RemoveAgentSessionReq{SessionKey: id}); err != nil {
-			s.log.Printf("mcp: remove agent session %s failed: %+v", id, err)
+		// The request's context is gone with its request; the removal outlives it. NOT_FOUND is
+		// another session of the same agent having removed the row first.
+		_, err := s.services.Sessions.RemoveAgentSession(context.WithoutCancel(ctx), caller, service.RemoveAgentSessionReq{SessionKey: key})
+		if e, ok := domain.AsBatonDeckError(err); err != nil && !(ok && e.Code == domain.CodeNotFound) {
+			s.log.Printf("mcp: remove agent session %s failed: %+v", key, err)
 		}
 	}()
 	return res, nil
+}
+
+// agentSessionKey is the caller's agent-session key, service core's "<identity>::<agent id>" with
+// the agent id the caller's agent, else "id:<identity>".
+// TODO(R0.21): service.SessionKey(caller.Identity, service.AgentID(caller)) once service core lands.
+func agentSessionKey(c domain.Caller) string {
+	agent := c.Agent
+	if agent == "" {
+		agent = "id:" + c.Identity
+	}
+	return c.Identity + "::" + agent
 }
 
 // agentName is the session's display label: the caller's agent, else the client's name.
@@ -121,10 +125,6 @@ func agentName(c domain.Caller, p *mcp.InitializeParams) string {
 		return p.ClientInfo.Name
 	}
 	return "mcp"
-}
-
-func isNotification(method string) bool {
-	return len(method) > len("notifications/") && method[:len("notifications/")] == "notifications/"
 }
 
 // subscribe refuses every URI: R0 has no resource, and a subscription that can never deliver is
