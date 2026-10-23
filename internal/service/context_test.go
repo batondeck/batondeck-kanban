@@ -392,7 +392,9 @@ func TestRecallMemoryNeverCrossesProjects(t *testing.T) {
 		if err != nil || len(inA.Entries) != 1 || inA.Entries[0].Value != "in A" {
 			t.Fatalf("recall in A %+v %v, want the entry", inA.Entries, err)
 		}
-		// agent_global is the caller's: alice's is never bob's
+		// agent_global is the caller's: alice's is never bob's. Newest first is (ts, id) with random
+		// ids, so two writes in one millisecond tie by design: the 2 ms keeps the order asserted below.
+		time.Sleep(2 * time.Millisecond)
 		if _, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, Scope: domain.MemoryScopeAgentGlobal, Key: "alice-own", Value: 1.0}); err != nil {
 			t.Fatal(err)
 		}
