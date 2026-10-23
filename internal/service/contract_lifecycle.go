@@ -11,7 +11,7 @@ import (
 type Lifecycle interface {
 	// Claim is claim_task.
 	// Tier: write; version-checked (STALE); CONFLICT_LOCKED on a live lease. Event: task.claimed.
-	// Audit: none. Doorbell: assigned (the task gains the caller as assignee).
+	// Audit: none. Doorbell: assigned, rung to the claimer; the claim leaves the assignee as it was.
 	Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error)
 
 	// ClaimNext is claim_next.
