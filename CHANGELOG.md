@@ -98,7 +98,8 @@ Notable changes to batondeck-kanban. The format follows
   source's connector, and one `Core.ingest` per event under `<source id or body hash>#<fingerprint>`.
   Accepted is 202 with each event's result; a refused signature is 401 and a stderr line naming the
   integration; a refused signature or an unparsable body is a `rejected` delivery whose raw body (64
-  KiB) is kept 7 days, 20 an hour per integration. The tradeoff the plan names is accepted under its
+  KiB) is kept 7 days, 20 an hour per integration. The route's own refusals (an id of the wrong
+  shape, a body over the 512 KiB cap) are stderr lines too, naming the presented id. The tradeoff the plan names is accepted under its
   open question 6: the parser of attacker-controlled JSON shares a process with full DB access, and
   single-workspace removes the cross-tenant blast radius.
 - The eight connectors (`internal/oncall/connectors`): alertmanager, datadog, dynatrace, gcp,
@@ -118,7 +119,11 @@ Notable changes to batondeck-kanban. The format follows
   `delete_task`'s cascade (the delivery keeps its dangling `taskId`) and annotates any other, and
   `correlate` always annotates. Untouched is TODO, unclaimed, never attempted and nothing written: the
   `incident.ingestVersion` field is the version the ingest last left the ticket at, carried forward
-  only while it still matches, so a write by anyone else is never laundered by a later append. A new
+  only while it still matches, so a write by anyone else is never laundered by a later append — and,
+  since some writes hang things off a ticket without bumping it, a ticket the cascade would take
+  anything more with (a subtask or run, a dependency edge of any type, an attachment, task- or
+  shared-scope memory, a context item not by the ingest) is annotated, never deleted; a project-scope
+  memory entry naming it as provenance survives the cascade and does not hold it. A new
   ticket carries the event's snapshot as a note (annotations filtered by `annotationAllowlist`).
   Ingest runs under the project lock.
 - One per-integration rate budget (conductor's token bucket, `ceil(ratePerMin/4)` refilled at
