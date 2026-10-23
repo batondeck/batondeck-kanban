@@ -43,7 +43,7 @@ every HDTP area removed.
 | wakesessions (`conformance_wakesessions.go`) | put, get, replace keeping created-at, delete, expiry at the read; NOT_FOUND and VALIDATION |
 | attachments (`conformance_attachments.go`) | pending then ready on an existing blob, oldest-first list, per-task delete, project isolation; NOT_FOUND task/attachment/blob, VALIDATION |
 | blobs (`conformance_blobs.go`) | put once, get, delete, a referenced blob kept, the unreferenced list by age and limit; VALIDATION |
-| search (`conformance_search.go`) | ten pinned queries over one corpus with their ordered ids and counts, cursor paging through ranks and ties, no hit, the index following a title and token update and a delete; VALIDATION |
+| search (`conformance_search.go`) | ten pinned queries over one corpus with their ordered ids and counts, cursor paging through ranks and ties, no hit, the index following a title and token update and a delete, scores and order another project's tasks cannot move, no index row left by a delete under a reused row id; VALIDATION |
 
 The two-statement pin on `GetBoard` is `internal/store/boards_test.go`; task counts over real tasks and
 the refusal to remove a column holding a task are there too, and in the tasks battery.

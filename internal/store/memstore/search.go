@@ -14,7 +14,7 @@ import (
 // The search area of contract_search.go: a scan of the project's tasks. The query and each body
 // (title, description, search tokens) are split by store.SearchTerms, as the engines' match
 // strings are built; rank is how many of the body's tokens the terms match, which orders this
-// store's results as bm25 and ts_rank order the engines' over bodies of one length.
+// store's results as SQLite's matched-token count and Postgres's ts_rank order the engines'.
 
 func (s *Store) SearchTasks(ctx context.Context, projectID, query string, f store.SearchFilter, cursor string, limit int) (store.SearchPage, error) {
 	hits, err := get(ctx, s, func(st *state) ([]store.SearchHit, error) { return st.searchHits(projectID, query, f) })

@@ -11,10 +11,10 @@ import (
 )
 
 // searchCorpus is the one corpus the search battery pins its orders over. Every body (title, then
-// description) is six tokens, so a ranking that weights a token by how often it occurs (bm25 and
-// ts_rank both do) orders it the same on both engines; where two bodies tie on a multi-term query,
-// they hold the terms the same distance apart, so ts_rank's proximity weighting ties them too and
-// task number decides.
+// description) is six tokens, so a ranking that weights a token by how often it occurs (SQLite's
+// matched-token count and ts_rank both do) orders it the same on both engines; where two bodies
+// tie on a multi-term query, they hold the terms the same distance apart, so ts_rank's proximity
+// weighting ties them too and task number decides.
 var searchCorpus = []struct {
 	board       int // 0 or 1: the project's first or second board
 	status      domain.Status

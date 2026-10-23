@@ -45,11 +45,13 @@ Notable changes to batondeck-kanban. The format follows
   hold every term of the query, best first, at most `k` (default 10, at most 50), each with the
   engine's rank as `score`; `mode` semantic is `VALIDATION` (the plan keeps no embeddings), hybrid and
   keyword run keyword and answer `mode: "keyword"`. The query is split into letters-and-digits terms
-  (`word*` a prefix) and only those reach the engine: an FTS5 match of quoted tokens ranked by `bm25`
-  on SQLite, a `to_tsquery('simple', …)` of quoted lexemes ranked by `ts_rank` on Postgres, each a
+  (`word*` a prefix) and only those reach the engine: an FTS5 match of quoted tokens ranked by how many of
+  the task's own tokens it matched (FTS5 `highlight`; not `bm25`, whose IDF counts every project's
+  tasks) on SQLite, a `to_tsquery('simple', …)` of quoted lexemes ranked by `ts_rank` on Postgres, each a
   bound parameter; a query with no term is `VALIDATION`. Two statements (the page, then its tasks by
   id), pinned on both engines. `store.Search` is built on SQLite, Postgres and memstore, and the
-  search battery gains the index following a title and token update and a delete; with search, the
+  search battery gains the index following a title and token update and a delete, scores another project's tasks cannot
+  move, and no index row left by a delete under a reused row id; with search, the
   last unbuilt contract II area, `internal/store/conformance/reference_test.go` is gone.
 - `batondeck-kanban session register --role worker|master [--agent LABEL]` and `session unregister`
   (R3.3), the client half of the device session directory, for the plugin's SessionStart and
