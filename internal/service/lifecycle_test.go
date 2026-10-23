@@ -252,8 +252,11 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 		if d.Status != domain.Blocked || !slices.Equal(d.BlockedBy, []string{blocker.ID}) {
 			t.Fatalf("dependent moved on REVIEW: %+v", d)
 		}
-		if p.Kind != DoorbellAssigned || ch.Scope != "carol" || p.TaskID != blocker.ID {
+		if p.Kind != DoorbellAssigned || ch.Scope != "carol" || p.TaskID != blocker.ID || p.Tool != "complete_task" {
 			t.Fatalf("reviewer doorbell %+v scope %s", p, ch.Scope)
+		}
+		if rows := e.assignedRows(t); len(rows) != 1 || rows[0] != "complete_task@carol" {
+			t.Fatalf("assigned rows %v, want exactly the reviewer's from complete_task", rows)
 		}
 		if len(ofType(e.events(t, blocker.ID), domain.EventTaskReviewRequested)) != 1 {
 			t.Fatal("no task.review_requested")
@@ -544,8 +547,8 @@ func TestLifecycleDoorbells(t *testing.T) {
 			t.Fatal(err)
 		}
 		ch, p := e.lastChange(t)
-		if p.Kind != DoorbellAssigned || ch.Scope != "bob" || p.TaskID != task.ID || p.Tool != "claim_next" {
-			t.Fatalf("claim doorbell %+v scope %s", p, ch.Scope)
+		if p.Kind != ChangeKindChanged || ch.Scope != BroadcastScope(e.project) || p.TaskID != task.ID || p.Tool != "claim_next" {
+			t.Fatalf("claim change row %+v scope %s, want changed", p, ch.Scope)
 		}
 		if _, err := lc.Release(e.ctx, bob, ReleaseTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: *next.LeaseID}); err != nil {
 			t.Fatal(err)
@@ -573,7 +576,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 		if err != nil || len(mem) != 1 || !strings.Contains(string(mem[0].Value), "over to you") {
 			t.Fatalf("handoff memory %+v %v", mem, err)
 		}
-		t.Logf("claim→assigned@bob, release→broadcast, fail→changed, handoff→assigned@%s with memory %s", AgentScope("reviewer-bot"), mem[0].Value)
+		t.Logf("claim→changed (no ring), release→broadcast, fail→changed, handoff→assigned@%s with memory %s", AgentScope("reviewer-bot"), mem[0].Value)
 	})
 }
 
@@ -1010,4 +1013,92 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		t.Fatalf("empty next_task %d statements %v", r, m)
 	}
 	t.Logf("next_task empty   %v", m)
+}
+
+// assignedRows is every assigned change row as tool@scope, oldest first.
+func (e *lcEnv) assignedRows(t *testing.T) []string {
+	t.Helper()
+	ch, err := e.st.ReadChanges(e.ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, c := range ch {
+		var p changePayload
+		_ = json.Unmarshal(c.Payload, &p)
+		if p.Kind == DoorbellAssigned {
+			out = append(out, p.Tool+"@"+c.Scope)
+		}
+	}
+	return out
+}
+
+// Owner ruling 2026-10-23: a claim, a claim_next and a self-assignment ring nobody. Each still writes
+// its change row (kind changed) for the bus. The control: the same handoff and review to someone
+// else rings them.
+func TestAClaimOrASelfAssignmentRingsNobody(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		lc := e.c.Lifecycle()
+		a, b := e.task(t, domain.Ready), e.task(t, domain.Ready)
+		before := e.changeCount(t)
+		ca := e.claim(t, bob, a.ID, 0)
+		next, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || next.Task == nil || next.Task.ID != b.ID {
+			t.Fatalf("claim_next %+v %v", next.Task, err)
+		}
+		if _, err := lc.Handoff(e.ctx, bob, HandoffTaskReq{ProjectID: e.project, TaskID: a.ID, LeaseID: ca.LeaseID, ToAgent: "bob"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := lc.Complete(e.ctx, bob, CompleteTaskReq{ProjectID: e.project, TaskID: b.ID, LeaseID: *next.LeaseID, Reviewer: "bob"}); err != nil {
+			t.Fatal(err)
+		}
+		if n := e.changeCount(t) - before; n != 4 {
+			t.Fatalf("%d change rows for 4 mutations", n)
+		}
+		if rows := e.assignedRows(t); len(rows) != 0 {
+			t.Fatalf("claim / claim_next / self-handoff / self-review rang %v, want nobody", rows)
+		}
+		// The control: handing over and reviewing to someone else rings them.
+		ca = e.claim(t, bob, a.ID, 0)
+		if _, err := lc.Handoff(e.ctx, bob, HandoffTaskReq{ProjectID: e.project, TaskID: a.ID, LeaseID: ca.LeaseID, ToAgent: "alice"}); err != nil {
+			t.Fatal(err)
+		}
+		rows := e.assignedRows(t)
+		t.Logf("after claim, claim_next, self-handoff, self-review: assigned rows [] ; after handoff to alice: %v", rows)
+		if !slices.Equal(rows, []string{"handoff_task@alice"}) {
+			t.Fatalf("control rows %v", rows)
+		}
+	})
+}
+
+// RingFor (the rule every other service's assignment goes through) leaves out a self-assignment and
+// keeps an assignment to someone else and an auto-unblock's ring to its assignee.
+func TestRingForSkipsASelfAssignment(t *testing.T) {
+	e := newLC(t, engineCases[0].open(t))
+	for _, c := range []struct {
+		assignee  string
+		unblocked bool
+		want      int
+	}{{"alice", false, 0}, {"bob", false, 1}, {"alice", true, 1}} {
+		task := e.task(t, domain.Ready)
+		before := len(e.assignedRows(t))
+		_, err := mutate(e.ctx, e.c, e.alice, mutation{Tool: "update_task", ProjectID: e.project, TaskID: task.ID}, func(tx *txn) (struct{}, error) {
+			after := *tx.Task
+			after.Assignee = &c.assignee
+			prev := *tx.Task
+			if c.unblocked {
+				prev.Status = domain.Blocked
+				prev.Assignee = &c.assignee
+			}
+			tx.RingFor(&prev, after, c.unblocked)
+			return struct{}{}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(e.assignedRows(t)) - before; got != c.want {
+			t.Fatalf("RingFor to %s (unblocked %v) wrote %d assigned rows, want %d", c.assignee, c.unblocked, got, c.want)
+		}
+	}
 }

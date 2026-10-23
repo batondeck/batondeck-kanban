@@ -242,7 +242,8 @@ func replayedLease(task *Task, now time.Time) error {
 // Claim is claim_task. ClaimTaskReq carries no version (conductor's schema): the store write is
 // checked against the version mutate loaded, and a lost race is re-judged (retryStale), so the loser
 // of two concurrent claims answers CONFLICT_LOCKED. The task gains no assignee (conductor's
-// performClaim sets none); the assigned doorbell rings the winner.
+// performClaim sets none). It rings nobody (owner ruling 2026-10-23): mutate's change row is
+// ChangeKindChanged.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -283,7 +284,6 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if err := t.event(task, domain.EventTaskClaimed, map[string]any{"leaseSeconds": secs}); err != nil {
 				return ClaimTaskResp{}, err
 			}
-			t.Ring(Doorbell{Kind: DoorbellAssigned, Agent: caller.Identity, TaskID: task.ID, BoardID: task.BoardID})
 			out, err := withSummary(ctx, t.Tx, task)
 			if err != nil {
 				return ClaimTaskResp{}, err
@@ -308,7 +308,7 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 // inside mutate. An empty frontier writes nothing; it reaps the board's expired leases (lazy
 // recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
-// claim (1) and the summary (1). shard lanes, sprintId and maxConcurrency are refused, not ignored.
+// claim (1) and the summary (1). It rings nobody, as Claim. shard lanes, sprintId and maxConcurrency are refused, not ignored.
 func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_next", domain.GrantSubject{BoardID: req.BoardID}, false)
 	if err != nil {
@@ -384,7 +384,6 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 		if err := t.event(task, domain.EventTaskClaimed, map[string]any{"leaseSeconds": secs}); err != nil {
 			return ClaimNextResp{}, err
 		}
-		t.Ring(Doorbell{Kind: DoorbellAssigned, Agent: caller.Identity, TaskID: task.ID, BoardID: task.BoardID})
 		out, err := withSummary(ctx, t.Tx, task)
 		if err != nil {
 			return ClaimNextResp{}, err
@@ -774,7 +773,7 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 					return CompleteTaskResp{}, err
 				}
 				if reviewer != "" {
-					t.Ring(Doorbell{Kind: DoorbellAssigned, Agent: reviewer, TaskID: after.ID, BoardID: after.BoardID})
+					t.RingAssigned(reviewer, after) // conductor lifecycle.ts:935
 					if !member {
 						warnings = append(warnings, "Reviewer '"+reviewer+"' is not a member of "+req.ProjectID+": the handover was not recorded. "+
 							"The ticket is still assigned to '"+reviewer+"' (agent names route via assignment); add_member them to get a recorded handover.")
@@ -1102,7 +1101,7 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 			if _, err := t.Tx.WriteMemory(ctx, store.WriteMemoryInput{ProjectID: req.ProjectID, TaskID: cur.ID, Scope: store.MemoryTask, Key: "handoff", Value: value, Author: caller.Identity}); err != nil {
 				return HandoffTaskResp{}, err
 			}
-			t.Ring(Doorbell{Kind: DoorbellAssigned, Agent: to, TaskID: after.ID, BoardID: after.BoardID})
+			t.RingAssigned(to, after)
 			out, err := withSummary(ctx, t.Tx, after)
 			return HandoffTaskResp{Task: out}, err
 		})

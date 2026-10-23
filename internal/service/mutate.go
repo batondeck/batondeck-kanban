@@ -144,9 +144,25 @@ func (t *txn) BoardEvent(e store.EventInput) {
 // Ring adds a doorbell.
 func (t *txn) Ring(d Doorbell) { t.bells = append(t.bells, d) }
 
-// RingFor adds the doorbells of the F4 rule for one task's change (doorbellsFor).
+// RingFor adds the doorbells of the F4 rule for one task's change (doorbellsFor), less a
+// self-assignment: a task the caller assigned to itself rings nobody (owner ruling 2026-10-23).
+// An auto-unblock (unblocked) still rings its assignee, whoever caused it.
 func (t *txn) RingFor(before *store.Task, after store.Task, unblocked bool) {
-	t.bells = append(t.bells, doorbellsFor(before, after, unblocked)...)
+	for _, d := range doorbellsFor(before, after, unblocked) {
+		if !unblocked && d.Kind == DoorbellAssigned && d.Agent == t.Caller.Identity {
+			continue
+		}
+		t.bells = append(t.bells, d)
+	}
+}
+
+// RingAssigned rings assignee assigned for task, unless the caller is assigning the task to itself
+// (owner ruling 2026-10-23: a claim, claim_next or self-assignment rings nobody).
+func (t *txn) RingAssigned(assignee string, task store.Task) {
+	if assignee == t.Caller.Identity {
+		return
+	}
+	t.Ring(Doorbell{Kind: DoorbellAssigned, Agent: assignee, TaskID: task.ID, BoardID: task.BoardID})
 }
 
 // mutate is the only composition of a mutation (ADR-0003), in one store transaction: the
@@ -300,13 +316,9 @@ type changePayload struct {
 }
 
 // assigneeScope is the token scope an assigned doorbell rings: the assignee's identity when it is a
-// member of the project (one GetMember, inside the transaction; none when the assignee is the caller,
-// whom authorize has just found a member), else AgentScope(assignee), since an assignee may be a
-// free-text agent label (conductor's handoff_task toAgent).
+// member of the project (one GetMember, inside the transaction), else AgentScope(assignee), since an
+// assignee may be a free-text agent label (conductor's handoff_task toAgent).
 func (t *txn) assigneeScope(assignee string) (string, error) {
-	if assignee == t.Caller.Identity {
-		return assignee, nil
-	}
 	_, err := t.Tx.GetMember(t.ctx, t.ProjectID, assignee)
 	if err == nil {
 		return assignee, nil
