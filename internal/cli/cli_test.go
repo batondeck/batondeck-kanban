@@ -49,7 +49,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 }
 
 func TestHealthzNamesBinaryAndVersion(t *testing.T) {
-	srv := httptest.NewServer(handler("1.2.3-test"))
+	srv := httptest.NewServer(handler("1.2.3-test", http.NotFoundHandler()))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/healthz")
 	if err != nil {
@@ -74,7 +74,7 @@ func TestHealthzNamesBinaryAndVersion(t *testing.T) {
 }
 
 func TestHealthcheckExitCodes(t *testing.T) {
-	srv := httptest.NewServer(handler("x"))
+	srv := httptest.NewServer(handler("x", http.NotFoundHandler()))
 	addr := strings.TrimPrefix(srv.URL, "http://")
 	t.Setenv("BATONDECK_LISTEN", addr)
 	if code, _, errs := run("healthcheck"); code != 0 {
