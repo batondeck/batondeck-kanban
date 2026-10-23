@@ -35,6 +35,32 @@ func sessions(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("SessionsDeleteEndsTheSession", func(t *testing.T) {
+		s := migrated(t, newStore)
+		if err := s.CreateUser(ctx, testUser("U-1", "a@x.test", 1)); err != nil {
+			t.Fatal(err)
+		}
+		other := sess
+		other.IDHash = "h2"
+		for _, x := range []store.Session{sess, other} {
+			if err := s.CreateSession(ctx, x); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.DeleteSession(ctx, "h1"); err != nil {
+			t.Fatalf("DeleteSession: %v", err)
+		}
+		if _, err := s.GetSession(ctx, "h1"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetSession after DeleteSession: %v, want ErrNotFound", err)
+		}
+		if got, err := s.GetSession(ctx, "h2"); err != nil || got != other {
+			t.Fatalf("the user's other session: %+v %v, want it kept", got, err)
+		}
+		if err := s.DeleteSession(ctx, "h1"); err != nil {
+			t.Fatalf("DeleteSession of a missing hash: %v, want nil", err)
+		}
+	})
+
 	t.Run("SessionsRefuseAnUnknownUser", func(t *testing.T) {
 		s := migrated(t, newStore)
 		if err := s.CreateSession(ctx, sess); err == nil {

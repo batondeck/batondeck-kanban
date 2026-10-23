@@ -8,6 +8,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
+  R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
+  message for an unknown login, a wrong password and a disabled account) and the form shows it; on
+  success the route asked for renders, with no navigation. The WorkOS button, the tenant and access
+  copy and the dead demo button are gone. New `POST /api/logout` (behind the session and CSRF)
+  deletes the session row (`Store.DeleteSession`, both engines) and expires both cookies: sign-out
+  called the unmounted `/auth/logout` before (P-198). New `GET` and `POST /api/users`, the workspace
+  admin's only (anyone else is 403 `FORBIDDEN`): list the local accounts (login, name, role,
+  disabled) and add a member, whose generated password the answer carries once; disable, password
+  reset and role changes stay with `batondeck-kanban user`. Settings shows the Users panel to the
+  workspace admin in place of the WorkOS invitation panel, and `web/src/api/tenants.ts` is gone. A
+  disabled user's open session is 401 within the 60 s account-cache window.
 - The SPA on five states (R1.14, ADR-0005): `Status` is `TODO · IN_PROGRESS · BLOCKED · REVIEW ·
   DONE`, derived from the exported `STATUSES`; every status map, filter, chart order, the move-button
   fallback table and the ticket-search aliases follow it (no `CANCELLED`, `BACKLOG`, `READY`, and the
@@ -115,6 +127,18 @@ Notable changes to batondeck-kanban. The format follows
 - The retention sweep deletes expired deliveries and raw bodies (`Swept.Deliveries`, `RawBodies`),
   on the expiry stamped on each row at write time (30 and 7 days).
 
+- The Chronicle (R2.6): `create_chronicle_page`, `ingest_chronicle_page`, `edit_chronicle_page` and
+  `delete_chronicle_page` (tier write, grant-governed), and the six chronicle resource templates
+  (`chronicle`, `chronicle-cursor`, `chronicle-page`, `chronicle-history`, `chronicle-history-cursor`,
+  `chronicle-version`), all leaving `contract/pending.json`. `store.Chronicle` is conductor's eleven
+  chronicle Store methods on SQLite, Postgres and memstore, judged by `conformance_chronicle.go`.
+  A version is immutable; a page's head moves only from the version the writer read (`STALE` with
+  `expectedVersionId`/`actualVersionId`, in the statement too, so racing writers land one). A
+  re-ingest is conductor's three-way merge (`domain.MergeVersions`) in one transaction with one
+  idempotency key. Bodies are `chronicle_blobs` rows keyed `<pageId>/<sha256>`, written and deleted in
+  the page's own transaction; they are never files and never signed URLs. A body over
+  `blob.max_bytes` is `VALIDATION` on every write. `delete_chronicle_page` leaves no version and no
+  body of the page. New: `service.Chronicle` (the four tools and the four reads R2.7's routes need).
 - The on-call integrations and their delivery log (R2.8, ADR-0004): nine tools,
   `create_integration`, `update_integration`, `delete_integration`, `list_integrations`,
   `rotate_integration_secret`, `list_deliveries`, `read_delivery_raw`, `replay_delivery` and

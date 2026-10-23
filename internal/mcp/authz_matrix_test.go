@@ -65,6 +65,11 @@ var expectedPosture = map[string]pinnedPosture{
 	"remove_dependency": {tier: domain.TierMaster, tenantScoped: true},
 	"add_subtask":       {tier: domain.TierMaster, tenantScoped: true},
 	"list_subtasks":     {tier: domain.TierRead, tenantScoped: true},
+	// The chronicle writes are conductor's requireWriter: tier write, and governed by a grant.
+	"create_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	"edit_chronicle_page":   {tier: domain.TierWrite, tenantScoped: true},
+	"delete_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	// The on-call tools are workspace-admin only (ADR-0004), then tiered on the project as conductor's
 	// manifest.ts:203-215: the mutations structural, the reads and the two that file tickets master.
 	"create_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},

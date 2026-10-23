@@ -31,22 +31,6 @@
       "set_sprint",
       "start_runs",
       "update_sprint"
-    ],
-    "P6 chronicle": [
-      "create_chronicle_page",
-      "delete_chronicle_page",
-      "edit_chronicle_page",
-      "ingest_chronicle_page"
-    ]
-  },
-  "resourceTemplates": {
-    "P6 chronicle": [
-      "chronicle",
-      "chronicle-cursor",
-      "chronicle-history",
-      "chronicle-history-cursor",
-      "chronicle-page",
-      "chronicle-version"
     ]
   }
 }
