@@ -14,7 +14,7 @@ func RegisterProjects(s *mcp.Server, svc service.Services) {
 		"Create a project. The caller becomes its admin.",
 		p.Create)
 	mcp.Tool(s, "projects", "get_project",
-		"Get a project with its members and settings. `memberDisplay` maps each member id to a name a human recognises (the user's name, else their email), derived at read; a member absent from it has no better label than its id.",
+		"Get a project with its members and settings. `memberDisplay` maps each member id to a name a human recognises (the user's display name, else their login), derived at read; a member absent from it has no better label than its id.",
 		p.Get)
 	mcp.Tool(s, "projects", "list_projects",
 		"List the projects the caller is a member of, with the caller's role in each. `all: true` is refused: for a workspace admin with VALIDATION (this deployment has no read of every project), for anyone else with FORBIDDEN.",
@@ -26,7 +26,7 @@ func RegisterProjects(s *mcp.Server, svc service.Services) {
 		"Delete a project and everything in it (boards, tasks, events, memory). Irreversible. Requires the project's admin role, or workspace admin.",
 		p.Delete)
 	mcp.Tool(s, "projects", "add_member",
-		"Add a member to a project, or change a member's role (project admin). `identityId` is a user id or a user's email; anything else is kept as given. Demoting the last admin is refused.",
+		"Add a member to a project, or change a member's role (project admin). `identityId` is a user id or a user's login; anything else is kept as given. Demoting the last admin is refused.",
 		p.AddMember)
 	mcp.Tool(s, "projects", "remove_member",
 		"Remove a member from a project (project admin). Removing the last admin is refused.",

@@ -9,9 +9,9 @@ Notable changes to batondeck-kanban. The format follows
 ### Added
 
 - The MCP tool registry and the first thirteen tools (R1.1). `internal/mcp/tools` holds one file per
-  area, each registering through its `Register<Area>` hook; `registry.go` pre-lists every area a plan task names a tools file for,
-  with the task that writes it, so a lane adds a file. `mcp.Tool` (`internal/mcp/middleware.go`)
-  registers a tool as one service call, its input and output schemas inferred from the service DTOs
+  area, each registering through its `Register<Area>` hook; `registry.go` pre-lists every area a plan
+  task names a tools file for, with the task that writes it, so a lane adds a file. `mcp.Tool`
+  (`internal/mcp/middleware.go`) registers a tool as one service call, its input and output schemas inferred from the service DTOs
   by `internal/service/dtoschema` (the recipe moved out of `contract/dto_test.go`, which now compares
   exactly what the server serves), and refuses a tool with no `domain.ToolPosture`; `Server.Manifest`
   lists what is registered, by area, with its posture. Arguments are checked by go-sdk against that
