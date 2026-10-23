@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/oncall"
+	"github.com/batondeck/batondeck-kanban/internal/oncall/connectors"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -136,6 +138,20 @@ func checkMapping(source string, m IntegrationMapping) error {
 	}
 	if err := checkLabelList("mapping.labels", m.Labels); err != nil {
 		return err
+	}
+	// The webhook connector's paths are refused on save, named, not missed on a real alert.
+	if custom {
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return internalf("oncall: %v", err)
+		}
+		var cm connectors.Mapping
+		if err := json.Unmarshal(raw, &cm); err != nil {
+			return internalf("oncall: %v", err)
+		}
+		if problems := connectors.ValidateMapping(cm); len(problems) > 0 {
+			return domain.Validation("mapping: "+problems[0], map[string]any{"field": "mapping", "problems": problems})
+		}
 	}
 	for k, p := range m.SeverityMap {
 		if err := checkPriority(p); err != nil {
@@ -811,21 +827,34 @@ func incidentTitle(ev oncall.Event, m IntegrationMapping) string {
 }
 
 // ingest files one verified, normalized event against integration under deliveryID, in one
-// transaction: a delivery id already recorded answers its recorded outcome and changes nothing;
-// otherwise oncall.Decide picks the action, the action's writes land, and the delivery row and the
-// incident.delivery event record it. Correlation is not built yet: every event is decided as if no
-// incident is open, so only the create and record arms run here — R2.9 adds append, annotate and
-// close over alert_states, and the rate check. A created incident lands TODO on the integration's
-// column (or the board's first TODO column), labelled incident (and test for a test event), and
-// rings its routed assignee assigned, else the project broadcast.
+// transaction under the project lock (two firings of one fingerprint must not both find no open
+// ticket and both file one): a delivery id already recorded answers its recorded outcome and changes
+// nothing; otherwise the fingerprint's alert state names the open ticket (one not DONE), oncall.Decide
+// picks the action (incident.ts:167-182), the action's writes land, and the delivery row and the
+// incident.delivery event record it. Before the transaction the delivery is charged to the
+// integration's rate budget, which POST /hooks, send_test_event and replay_delivery share: over it
+// is RATE_LIMITED and nothing is written. A created incident lands TODO on the integration's column
+// (or the board's first TODO column), labelled incident (and test for a test event), and rings its
+// routed assignee assigned, else the project broadcast; an append, annotation or close rings nobody.
+// A close deletes an untouched ticket through delete_task's cascade (its delivery rows keep the
+// dangling taskId); any other resolve annotates.
 func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a access, integration store.Integration, ev oncall.Event, deliveryID string) (Ingested, error) {
 	var mapping IntegrationMapping
 	var routing IntegrationRouting
-	if err := json.Unmarshal(integration.Mapping, &mapping); err != nil {
-		return Ingested{}, c.mapErr(tool, fmt.Errorf("integration %s mapping: %w", integration.ID, err))
+	var limits IntegrationLimits
+	for _, f := range []struct {
+		name string
+		raw  json.RawMessage
+		dst  any
+	}{{"mapping", integration.Mapping, &mapping}, {"routing", integration.Routing, &routing}, {"limits", integration.Limits, &limits}} {
+		if err := json.Unmarshal(f.raw, f.dst); err != nil {
+			return Ingested{}, c.mapErr(tool, fmt.Errorf("integration %s %s: %w", integration.ID, f.name, err))
+		}
 	}
-	if err := json.Unmarshal(integration.Routing, &routing); err != nil {
-		return Ingested{}, c.mapErr(tool, fmt.Errorf("integration %s routing: %w", integration.ID, err))
+	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), c.now(), deliveryID) {
+		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %s refused", integration.ID, int(limits.RatePerMin), deliveryID)
+		return Ingested{}, domain.NewError(domain.CodeRateLimited, "Rate limit exceeded for integration "+integration.ID,
+			map[string]any{"integrationId": integration.ID, "ratePerMin": limits.RatePerMin})
 	}
 	event, err := json.Marshal(ev)
 	if err != nil {
@@ -839,27 +868,108 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		kind = store.DeliveryResolved
 	}
 	actor := IngestActor(integration.ID)
-	return mutate(ctx, c, caller, mutation{
+	var blobs []string
+	out, err := mutate(ctx, c, caller, mutation{
 		Tool: tool, Args: map[string]any{"projectId": integration.ProjectID, "integrationId": integration.ID},
-		ProjectID: integration.ProjectID, Access: a,
+		ProjectID: integration.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (Ingested, error) {
+		blobs = nil
 		if prior, err := t.Tx.GetDelivery(ctx, integration.ProjectID, integration.ID, deliveryID); err == nil {
 			return Ingested{Result: prior.Result, TaskID: prior.TaskID, Replayed: true, Doorbell: "none"}, nil
-		} else if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeNotFound {
+		} else if !isNotFound(err) {
 			return Ingested{}, err
 		}
+		ts := t.Now.UnixMilli()
+		// The lifecycle table consults correlation only for a correlated, non-test event.
+		correlates := integration.Lifecycle != "per_event" && ev.Status != oncall.StatusTest
+		var state store.AlertState
+		var open *store.Task
+		if correlates {
+			st, err := t.Tx.GetAlertState(ctx, integration.ProjectID, integration.ID, ev.Fingerprint)
+			switch {
+			case err == nil:
+				state = st
+				task, err := t.Tx.GetTask(ctx, integration.ProjectID, st.TaskID)
+				switch {
+				case err == nil && task.Status != domain.Done:
+					open = &task
+				case err != nil && !isNotFound(err):
+					return Ingested{}, err
+				}
+			case !isNotFound(err):
+				return Ingested{}, err
+			}
+		}
+		untouched := open != nil && oncall.Untouched(string(open.Status), open.Claim != nil, open.ClaimAttempts, open.Version, ingestStamp(*open))
+		if untouched && ev.Status == oncall.StatusResolved && integration.Lifecycle == "autoclose" {
+			// The delete would take more than the ticket: what hangs off it is someone's write.
+			kept, err := t.incidentKeeps(*open, actor)
+			if err != nil {
+				return Ingested{}, err
+			}
+			untouched = kept == ""
+		}
 		out := Ingested{Result: store.ResultRecorded, Doorbell: "none"}
-		if oncall.Decide(integration.Lifecycle, ev.Status, false, false) == oncall.ActionCreate {
+		var eventTask *string // the task the incident.delivery event hangs on; nil is the board
+		switch oncall.Decide(integration.Lifecycle, ev.Status, open != nil, untouched) {
+		case oncall.ActionCreate:
 			task, err := c.fileIncident(ctx, t, integration, mapping, routing, ev, actor)
 			if err != nil {
 				return Ingested{}, err
 			}
-			out.Result, out.TaskID = store.ResultCreated, &task.ID
+			out.Result, out.TaskID, eventTask = store.ResultCreated, &task.ID, &task.ID
 			for _, b := range t.bells {
 				out.Doorbell = b.Kind
 			}
+			if correlates {
+				state = store.AlertState{ProjectID: integration.ProjectID, IntegrationID: integration.ID, Fingerprint: ev.Fingerprint, TaskID: task.ID,
+					Occurrences: 1, FirstAt: ts, LastAt: ts, AlertStatus: oncall.StatusFiring, ExpiresAt: t.Now.Add(DeliveryRetention).UnixMilli()}
+				if err := t.Tx.PutAlertState(ctx, state); err != nil {
+					return Ingested{}, err
+				}
+			}
+		case oncall.ActionAppend:
+			state.Occurrences++
+			after, err := c.stampIncident(ctx, t, *open, actor, map[string]any{"incident.occurrences": state.Occurrences, "incident.alertStatus": oncall.StatusFiring})
+			if err != nil {
+				return Ingested{}, err
+			}
+			state.LastAt, state.AlertStatus, state.ExpiresAt = ts, oncall.StatusFiring, t.Now.Add(DeliveryRetention).UnixMilli()
+			if err := t.Tx.PutAlertState(ctx, state); err != nil {
+				return Ingested{}, err
+			}
+			out.Result, out.TaskID, eventTask = store.ResultAppended, &after.ID, &after.ID
+		case oncall.ActionAnnotate:
+			if _, err := t.Tx.AddContextItem(ctx, store.AddContextItemInput{ProjectID: integration.ProjectID, TaskID: open.ID, Kind: store.ContextNote,
+				Body: "Alert resolved upstream at " + ev.OccurredAt + ". The ticket stays open — close it through the normal path.", Author: actor}); err != nil {
+				return Ingested{}, err
+			}
+			after, err := c.stampIncident(ctx, t, *open, actor, map[string]any{"incident.alertStatus": oncall.StatusResolved})
+			if err != nil {
+				return Ingested{}, err
+			}
+			if err := c.resolveEvent(t, integration, ev, &after.ID, store.ResultAnnotated); err != nil {
+				return Ingested{}, err
+			}
+			out.Result, out.TaskID, eventTask = store.ResultAnnotated, &after.ID, &after.ID
+		case oncall.ActionClose:
+			freed, err := t.deleteCascade(*open)
+			if err != nil {
+				return Ingested{}, err
+			}
+			blobs = freed
+			if err := c.resolveEvent(t, integration, ev, nil, store.ResultClosed); err != nil {
+				return Ingested{}, err
+			}
+			id := open.ID
+			out.Result, out.TaskID = store.ResultClosed, &id
 		}
-		ts := t.Now.UnixMilli()
+		if open != nil && ev.Status == oncall.StatusResolved {
+			state.LastAt, state.AlertStatus = ts, oncall.StatusResolved
+			if err := t.Tx.PutAlertState(ctx, state); err != nil {
+				return Ingested{}, err
+			}
+		}
 		if _, _, err := t.Tx.InsertDelivery(ctx, store.Delivery{
 			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: ts, Kind: kind,
 			Result: out.Result, TaskID: out.TaskID, NormalizedEvent: event, ExpiresAt: t.Now.Add(DeliveryRetention).UnixMilli(),
@@ -870,14 +980,178 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		if err != nil {
 			return Ingested{}, err
 		}
-		if out.TaskID != nil {
-			t.Event(store.EventInput{TaskID: *out.TaskID, BoardID: integration.BoardID, Actor: actor, Type: domain.EventIncidentDelivery, Data: data})
+		if eventTask != nil {
+			t.Event(store.EventInput{TaskID: *eventTask, BoardID: integration.BoardID, Actor: actor, Type: domain.EventIncidentDelivery, Data: data})
 		} else {
 			t.BoardEvent(store.EventInput{BoardID: integration.BoardID, Actor: actor, Type: domain.EventIncidentDelivery, Data: data})
 		}
 		return out, nil
 	})
+	if err != nil {
+		return Ingested{}, err
+	}
+	c.blobGC(ctx, blobs)
+	return out, nil
 }
+
+// incidentKeeps names what deleteCascade would take with task beyond the ticket and the ingest's
+// own writes, "" for nothing: a subtask or run (its deletion set), a dependency edge of any type to
+// or from it, an attachment, a task- or shared-scope memory entry, or a context item by anyone but
+// actor (an agent-scope entry is private to its author and not read here; writing one bumps the
+// ticket). Autoclose deletes only a ticket that keeps none of them, whether or not the write that put
+// it there bumped the ticket's version (add_subtask, create_task with a parent and a relates edge do
+// not). A project-scope memory entry naming the ticket as provenance is not here: the cascade keeps
+// it. The context items read are the newest 50; the ingest writes one (the snapshot) to a ticket it
+// may still delete.
+func (t *txn) incidentKeeps(task store.Task, actor string) (string, error) {
+	set, err := t.deletionSet(task)
+	if err != nil {
+		return "", err
+	}
+	if len(set) > 1 {
+		return "subtasks", nil
+	}
+	for _, list := range []func(context.Context, string, string) ([]store.DependencyEdge, error){t.Tx.ListBlockers, t.Tx.ListDependents} {
+		edges, err := list(t.ctx, task.ProjectID, task.ID)
+		if err != nil {
+			return "", err
+		}
+		if len(edges) > 0 {
+			return "dependencies", nil
+		}
+	}
+	atts, err := t.Tx.ListAttachments(t.ctx, task.ProjectID, task.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(atts) > 0 {
+		return "attachments", nil
+	}
+	for _, scope := range []store.MemoryScope{store.MemoryTask, store.MemoryShared} {
+		mem, err := t.Tx.ReadMemory(t.ctx, task.ProjectID, task.ID, store.ReadMemoryQuery{Scope: scope, Limit: 1})
+		if err != nil {
+			return "", err
+		}
+		if len(mem) > 0 {
+			return "memory", nil
+		}
+	}
+	items, err := t.Tx.ListContextItems(t.ctx, task.ProjectID, task.ID, store.ContextItemsQuery{Limit: 50})
+	if err != nil {
+		return "", err
+	}
+	for _, it := range items.Items {
+		if it.Author != actor {
+			return "context items", nil
+		}
+	}
+	return "", nil
+}
+
+// ingestVersionField is the custom field holding the version the ingest last left an incident
+// ticket at (oncall.Untouched): stamped on create, carried forward by each ingest write only while it
+// still matches.
+const ingestVersionField = "incident.ingestVersion"
+
+// ingestStamp is task's ingestVersionField, 0 when absent.
+func ingestStamp(task store.Task) int64 {
+	var f map[string]any
+	if json.Unmarshal(task.CustomFields, &f) != nil {
+		return 0
+	}
+	n, _ := f[ingestVersionField].(float64)
+	return int64(n)
+}
+
+// stampIncident merges set into task's custom fields as the ingest, one versioned write, carrying
+// the ingest stamp forward only when no one else wrote the ticket since the last ingest write.
+func (c *Core) stampIncident(ctx context.Context, t *txn, task store.Task, actor string, set map[string]any) (store.Task, error) {
+	fields := map[string]any{}
+	if len(task.CustomFields) > 0 {
+		if err := json.Unmarshal(task.CustomFields, &fields); err != nil {
+			return store.Task{}, internalf("task %s custom fields: %v", task.ID, err)
+		}
+	}
+	for k, v := range set {
+		fields[k] = v
+	}
+	if ingestStamp(task) == task.Version {
+		fields[ingestVersionField] = task.Version + 1
+	}
+	raw, err := marshalObject(fields)
+	if err != nil {
+		return store.Task{}, err
+	}
+	after, err := t.Tx.UpdateTask(ctx, task.ProjectID, task.ID, task.Version, store.TaskPatch{CustomFields: &raw, UpdatedBy: actor, UpdatedAt: t.Now.UnixMilli()})
+	if err != nil {
+		return store.Task{}, err
+	}
+	t.Wrote(after)
+	return after, nil
+}
+
+// resolveEvent appends incident.resolved: on the ticket when it is still there, on the board when
+// autoclose deleted it.
+func (c *Core) resolveEvent(t *txn, integration store.Integration, ev oncall.Event, taskID *string, outcome store.DeliveryResult) error {
+	data, err := marshalObject(map[string]any{"integrationId": integration.ID, "fingerprint": ev.Fingerprint, "outcome": outcome})
+	if err != nil {
+		return err
+	}
+	in := store.EventInput{BoardID: integration.BoardID, Actor: IngestActor(integration.ID), Type: domain.EventIncidentResolved, Data: data}
+	if taskID == nil {
+		t.BoardEvent(in)
+		return nil
+	}
+	in.TaskID = *taskID
+	t.Event(in)
+	return nil
+}
+
+// incidentSnapshot is the ticket's copy of the event (conductor ticketSnapshot, incident.ts:73-92):
+// annotations filtered by the integration's allowlist, which is the privacy boundary, since a
+// ticket outlives the delivery log's retention.
+func incidentSnapshot(ev oncall.Event, allowlist []string) string {
+	lines := []string{
+		"**" + strings.ToUpper(ev.Status) + "** " + ev.Title,
+		"severity: " + ev.Severity + " · source: " + ev.Source + " · fingerprint: " + ev.Fingerprint,
+		"occurred: " + ev.OccurredAt,
+	}
+	if ev.Description != "" {
+		lines = append(lines, "", ev.Description)
+	}
+	section := func(name string, m map[string]string, sep string, keep func(string) bool) {
+		var ks []string
+		for k := range m {
+			if keep(k) {
+				ks = append(ks, k)
+			}
+		}
+		if len(ks) == 0 {
+			return
+		}
+		slices.Sort(ks)
+		lines = append(lines, "", name+":")
+		for _, k := range ks {
+			lines = append(lines, "- "+k+sep+m[k])
+		}
+	}
+	section("labels", ev.Labels, "=", func(string) bool { return true })
+	section("annotations", ev.Annotations, ": ", func(k string) bool { return len(allowlist) == 0 || slices.Contains(allowlist, k) })
+	if len(ev.Links) > 0 {
+		lines = append(lines, "", "links:")
+		for _, l := range ev.Links {
+			lines = append(lines, "- "+l)
+		}
+	}
+	text := strings.Join(lines, "\n")
+	if r := []rune(text); len(r) > snapshotMaxChars {
+		text = string(r[:snapshotMaxChars]) + "…[truncated]"
+	}
+	return text
+}
+
+// snapshotMaxChars bounds one event's ticket snapshot (conductor SNAPSHOT_MAX_CHARS).
+const snapshotMaxChars = 8000
 
 // fileIncident creates the incident ticket for ev on the integration's target and rings it.
 func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integration, mapping IntegrationMapping, routing IntegrationRouting, ev oncall.Event, actor string) (store.Task, error) {
@@ -911,6 +1185,7 @@ func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integ
 	fields, err := marshalObject(map[string]any{
 		"incident.fingerprint": ev.Fingerprint, "incident.source": ev.Source, "incident.integrationId": integration.ID,
 		"incident.occurrences": 1, "incident.alertStatus": map[bool]string{true: "resolved", false: "firing"}[ev.Status == oncall.StatusResolved],
+		ingestVersionField: 1,
 	})
 	if err != nil {
 		return store.Task{}, err
@@ -932,6 +1207,10 @@ func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integ
 		return store.Task{}, err
 	}
 	t.Event(store.EventInput{TaskID: task.ID, BoardID: task.BoardID, Actor: actor, Type: domain.EventTaskCreated, Data: data})
+	if _, err := t.Tx.AddContextItem(ctx, store.AddContextItemInput{ProjectID: task.ProjectID, TaskID: task.ID, Kind: store.ContextNote,
+		Body: incidentSnapshot(ev, mapping.AnnotationAllowlist), Author: actor}); err != nil {
+		return store.Task{}, err
+	}
 	t.Wrote(task)
 	if assignee != nil {
 		t.RingAssigned(*assignee, task)

@@ -88,6 +88,60 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 	}
 }
 
+// R2.9: a sweep deletes the on-call deliveries past their 30-day expiry (each with its raw body) and
+// the raw bodies past their 7-day expiry, and keeps a delivery whose raw body went, on memstore and
+// both engines. The expiries are stamped at write time, so the sweep compares with now.
+func TestASweepRemovesExpiredDeliveriesAndRawBodies(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "on-call", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.CreateIntegration(ctx, store.CreateIntegrationInput{ProjectID: p.ID, ID: "I-r", Name: "r", Source: "generic", BoardID: "B-x",
+				Auth: json.RawMessage(`{"mode":"api_key"}`), Routing: json.RawMessage(`{"mode":"broadcast"}`), Lifecycle: "correlate",
+				Limits: json.RawMessage(`{"ratePerMin":60,"payloadCapKb":256}`), CreatedBy: "alice", CreatedAt: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// written 31 days ago (expired), 8 days ago (kept, its raw body expired) and today.
+			for _, d := range []struct {
+				id  string
+				ago time.Duration
+			}{{"old", 31 * day}, {"mid", 8 * day}, {"new", 0}} {
+				ts := now.Add(-d.ago)
+				if _, _, err := s.InsertDelivery(ctx, store.Delivery{ProjectID: p.ID, IntegrationID: "I-r", DeliveryID: d.id, TS: ts.UnixMilli(),
+					Kind: store.DeliveryRejected, Result: store.ResultRejected, ExpiresAt: ts.Add(30 * day).UnixMilli()}); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.PutDeliveryRawBody(ctx, p.ID, "I-r", d.id, []byte(d.id), ts.Add(7*day).UnixMilli()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := (&Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(ctx)
+			if got.Deliveries != 1 || got.RawBodies != 1 {
+				t.Fatalf("swept %+v, want one delivery (with its raw body) and one more raw body", got)
+			}
+			if _, err := s.GetDelivery(ctx, p.ID, "I-r", "old"); err == nil {
+				t.Fatal("the 31-day-old delivery outlived its expiry")
+			}
+			if _, err := s.GetDelivery(ctx, p.ID, "I-r", "mid"); err != nil {
+				t.Fatalf("the 8-day-old delivery went with its raw body: %v", err)
+			}
+			if _, err := s.GetDeliveryRawBody(ctx, p.ID, "I-r", "mid"); err == nil {
+				t.Fatal("the 8-day-old raw body outlived its 7 days")
+			}
+			if body, err := s.GetDeliveryRawBody(ctx, p.ID, "I-r", "new"); err != nil || string(body) != "new" {
+				t.Fatalf("today's raw body: %q, %v", body, err)
+			}
+		})
+	}
+}
+
 // fake deletes whatever it is asked to, or fails one step.
 type fake struct {
 	calls map[string]int
@@ -114,6 +168,14 @@ func (f *fake) DeleteToolCallsOlderThan(_ context.Context, _ int64, limit int) (
 	return f.del("tool calls", limit)
 }
 
+func (f *fake) DeleteExpiredDeliveries(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("deliveries", limit)
+}
+
+func (f *fake) DeleteExpiredDeliveryRawBodies(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("raw bodies", limit)
+}
+
 func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
 	return nil, nil
 }
@@ -124,7 +186,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {

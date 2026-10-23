@@ -7,6 +7,11 @@ RETURNING *;
 -- name: GetIntegration :one
 SELECT * FROM integrations WHERE project_id = ? AND id = ? AND deleted_at IS NULL;
 
+-- The one id-only lookup: POST /hooks/{id} resolves its project from the integration id, which is
+-- unguessable and UNIQUE on its own. A tombstone is not found.
+-- name: GetIntegrationByID :one
+SELECT * FROM integrations WHERE id = ? AND deleted_at IS NULL;
+
 -- The project's integrations, newest first ((created_at, id) descending); tombstones only when
 -- include_deleted is 1.
 -- name: ListIntegrations :many
@@ -24,6 +29,13 @@ RETURNING *;
 
 -- name: GetAlertState :one
 SELECT * FROM alert_states WHERE project_id = ? AND integration_id = ? AND fingerprint_hash = ?;
+
+-- A fingerprint's correlation row, written whole: inserted on the first event, replaced after.
+-- name: PutAlertState :exec
+INSERT INTO alert_states (project_id, integration_id, fingerprint_hash, fingerprint, task_id, occurrences, first_at, last_at, alert_status, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (project_id, integration_id, fingerprint_hash) DO UPDATE SET fingerprint = excluded.fingerprint, task_id = excluded.task_id,
+  occurrences = excluded.occurrences, first_at = excluded.first_at, last_at = excluded.last_at, alert_status = excluded.alert_status, expires_at = excluded.expires_at;
 
 -- A delivery is recorded once: a second insert of its id changes nothing and returns no row.
 -- name: InsertDelivery :one
