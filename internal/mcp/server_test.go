@@ -21,6 +21,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
 
 const (
@@ -130,8 +131,15 @@ func TestInitializeAnswersTheSurface(t *testing.T) {
 	}
 }
 
+// It runs over servicefake and over the real service on every selected engine, where a valid
+// bearer's initialize writes its agent session through the real store.
 func TestBearerResolvesOrIs401(t *testing.T) {
-	h := bootHarness(t, servicefake.New().Services(), resolver())
+	t.Run("servicefake", func(t *testing.T) { bearerResolvesOrIs401(t, servicefake.New().Services()) })
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) { bearerResolvesOrIs401(t, s.Services) })
+}
+
+func bearerResolvesOrIs401(t *testing.T, svc service.Services) {
+	h := bootHarness(t, svc, resolver())
 
 	none := rawPOST(t, h.url, "", "", initBody)
 	revoked := rawPOST(t, h.url, "bk_revoked_or_unknown", "", initBody)

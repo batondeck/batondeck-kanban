@@ -75,6 +75,42 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `plugin/`, the batondeck-kanban plugin for Claude Code (R3.4, ADR-0004, ADR-0005), loaded with
+  `claude --plugin-dir plugin`: `.mcp.json` points the session at `http://localhost:8080/mcp` with
+  `Authorization: Bearer ${BATONDECK_TOKEN}` (a CLI token from `batondeck-kanban token create`), and
+  `hooks/hooks.json` registers exactly SessionStart and SessionEnd, both `hooks/session.sh`, which run
+  `batondeck-kanban session register --role "${BATONDECK_ROLE:-worker}"` (with `--agent
+  "$BATONDECK_AGENT"` when set) and `session unregister`, stdout sent to stderr, always exit 0. The
+  `batondeck-worker` and `batondeck-chronicle` skills and the `worker`, `master`, `work`,
+  `work-assigned`, `runs` and `chronicle` commands are rewritten for the five states, the fixed table
+  and the socket doorbell; `scripts/mcp.sh` makes one tool call from a shell, the bearer passed to
+  curl on stdin, never in its argv. `plugin/TRIM.md` has a
+  keep / drop / rewrite row for each of conductor's 51 plugin files.
+- `make skill-lint` (`scripts/skill-lint.py`, in `make check`): every lowercase snake_case word a plugin
+  skill or command writes, in any form, is a tool in `contract/expected.json` (or a contract enum value,
+  or one of the server's four prompts), every script it or `hooks.json` names is in `plugin/`, no plugin
+  file but `TRIM.md` names a dropped conductor tool or a retired state, and `hooks.json` registers
+  SessionStart and SessionEnd only. It also warns, without failing, about the named tools the server does
+  not register yet (read from the `mcp.Tool` calls in `internal/mcp/tools/`).
+- `make hook-check` (`scripts/hook-check.py`, in `make check`): runs the real binary's `session register`
+  and `unregister`, and every command `plugin/hooks/hooks.json` declares (as Claude Code runs it, under
+  each scenario of its event), as subprocesses against a scratch server on a Unix socket, and fails on a
+  declared script that does not exist, any byte written to stdout, or a hook exit other than 0.
+- The join (R1.18, ADR-0003 B3): the transports' tests run on the real service. The new
+  `internal/service/servicetest` opens the real service, its store and a bus over one engine;
+  `BATONDECK_TEST_ENGINE=memstore|sqlite|postgres` picks one, unset runs all three (Postgres skips
+  without `BATONDECK_TEST_POSTGRES_DSN`, and a named `postgres` without one fails). Over it: every one
+  of the 43 registered tools answers once on the real stack (`TestEveryToolOnTheRealStack`, which
+  fails when a registered tool has no call there), the per-area schema comparison against
+  `contract/expected.json`, the bearer test, `search_tasks` end to end, `GET` board's shape and the
+  five `/api/stream` tests. The mapping tests that assert on servicefake's recorded calls stay on it.
+- The plan's proofs through real clients over the serve composition (`internal/cli/proofs_test.go`,
+  every engine): the 25 `move_task` verdicts (14 legal with 5 same-status, 11 `INVALID_TRANSITION`
+  carrying `allowed` and `path`); poison by three `fail_task`, skipped by `claim_next`, refused to a
+  worker and lifted by a master; the last-dependency poison refusal and its control; the eight
+  `delete_task` cases; two concurrent `claim_task` with one winner (20 rounds); 50 concurrent
+  `claim_next` with 50 distinct winners and their latency; a claim writing no doorbell row and a
+  handoff one `assigned` row; an `/api/stream` board frame after an MCP `move_task`.
 - The rest of the REST BFF's route table as stubs (R1.12): 41 more routes in `internal/api/{me,agents,
   notifications,comments,followups,sprints,runs,oncall,chronicle,analytics}.go`, each answering `404
   {"code":"NOT_FOUND","message":"<tool> lands in <lane>"}` until its lane (R2.1, R2.2, R2.3, R2.5, R2.7,

@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract clean web-public-check kit-check
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -93,8 +93,9 @@ image:
 # THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
 # sources, web/dist against a fresh web build, the layering guard, the tests under the race
 # detector, the store conformance suite once per engine, the MCP contract, web/public against its
-# allow-list, the vendored brand kit against its lock, and the SPA's states against the five.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract web-public-check kit-check web-states-check
+# allow-list, the vendored brand kit against its lock, the plugin: its instructions against the
+# contract (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against the five.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -222,3 +223,15 @@ web-public-check:
 # stray file in a vendored directory (web/tools/kit.mjs says how).
 kit-check:
 	node web/tools/kit.mjs check
+
+# skill-lint holds plugin/ to this repository (scripts/skill-lint.py says how): every tool a skill or
+# command names is in contract/expected.json, every script it names is in plugin/, no file names a
+# dropped conductor tool or a retired state, and hooks.json registers SessionStart and SessionEnd only.
+skill-lint:
+	python3 scripts/skill-lint.py
+
+# hook-check runs the real binary's `session register|unregister` and plugin/hooks/session.sh as
+# subprocesses against a scratch server and fails on any byte written to stdout (a SessionStart hook's
+# stdout reaches the model) or a hook exit other than 0.
+hook-check:
+	python3 scripts/hook-check.py
