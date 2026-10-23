@@ -88,10 +88,8 @@ func CheckSprintPatch(p SprintPatch) error {
 	if err := validWriter(p.UpdatedBy, p.UpdatedAt); err != nil {
 		return err
 	}
-	for name, v := range map[string]*string{"name": p.Name, "goal": p.Goal, "acceptance": p.Acceptance} {
-		if v != nil && *v == "" {
-			return domain.Validation("a sprint's "+name+" is not empty", map[string]any{"field": name})
-		}
+	if p.Name != nil && *p.Name == "" {
+		return domain.Validation("a sprint's name is not empty", map[string]any{"field": "name"})
 	}
 	if p.Status != nil {
 		if _, err := domain.ParseSprintStatus(string(*p.Status)); err != nil {

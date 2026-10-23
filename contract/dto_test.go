@@ -15,7 +15,7 @@ import (
 // dtoTools maps each tool to the service method whose request and response types are its input and
 // output schemas: the 42 CORE tools of plan §Target surface, cancel_task (ADR-0001, after the 42
 // was counted), list_agent_sessions (service.Sessions.ListAgentSessions), the 4 chronicle tools
-// (R2.6) and the nine on-call tools (service.Oncall, R2.8).
+// (R2.6), the nine on-call tools (service.Oncall, R2.8) and the ten runs and sprints tools (R2.2).
 var dtoTools = []struct {
 	tool   string
 	iface  reflect.Type
@@ -78,6 +78,16 @@ var dtoTools = []struct {
 	{"read_delivery_raw", reflect.TypeFor[service.Oncall](), "ReadDeliveryRaw"},
 	{"replay_delivery", reflect.TypeFor[service.Oncall](), "ReplayDelivery"},
 	{"send_test_event", reflect.TypeFor[service.Oncall](), "SendTestEvent"},
+	{"start_runs", reflect.TypeFor[service.Runs](), "Start"},
+	{"open_run", reflect.TypeFor[service.Runs](), "Open"},
+	{"pick_run", reflect.TypeFor[service.Runs](), "Pick"},
+	{"cancel_runs", reflect.TypeFor[service.Runs](), "Cancel"},
+	{"list_runs", reflect.TypeFor[service.Runs](), "List"},
+	{"create_sprint", reflect.TypeFor[service.Sprints](), "Create"},
+	{"update_sprint", reflect.TypeFor[service.Sprints](), "Update"},
+	{"set_sprint", reflect.TypeFor[service.Sprints](), "Set"},
+	{"get_sprint", reflect.TypeFor[service.Sprints](), "Get"},
+	{"list_sprints", reflect.TypeFor[service.Sprints](), "List"},
 }
 
 // toolShaped are the interfaces every method of which is one tool: a method added to one without a
@@ -85,7 +95,7 @@ var dtoTools = []struct {
 var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Projects](), reflect.TypeFor[service.Boards](), reflect.TypeFor[service.Tasks](),
 	reflect.TypeFor[service.Lifecycle](), reflect.TypeFor[service.Context](), reflect.TypeFor[service.Media](),
-	reflect.TypeFor[service.Oncall](),
+	reflect.TypeFor[service.Oncall](), reflect.TypeFor[service.Runs](), reflect.TypeFor[service.Sprints](),
 }
 
 // dtoSchema is typ's schema as internal/service/dtoschema builds it for the tool registration,
@@ -155,8 +165,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 57 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 4 chronicle tools and the 9 on-call tools (57)", len(names))
+	if len(names) != 67 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 4 chronicle tools, the 9 on-call tools and the 10 runs and sprints tools (67)", len(names))
 	}
 }
 

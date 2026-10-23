@@ -64,12 +64,25 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 //  4. root's parent: root stripped from its blockedBy and the same unblock;
 //  5. each member's task-scope memory and attachments, then the task (its events, context items,
 //     summary, edges, comments and follow-ups go with it: the schema cascades);
-//  6. a run's parent: if no run is left and it is racing, racing:false and TODO (cancel_runs);
+//  6. a run's parent: if no run is left and it is racing, racing:false and TODO (endRace);
 //  7. the board-level task.deleted {id, title, status} on root, a change-log row per deleted task.
 //
 // It returns the blob hashes the deleted attachments held. Idempotency keys are kept: they are keyed
 // (project, identity, key), not by task, so a create replayed within the TTL answers the deleted task.
+// root is the mutation's task: it is recorded as deleted.
 func (t *txn) deleteCascade(root store.Task) ([]string, error) {
+	blobs, err := t.deleteTree(root)
+	if err != nil {
+		return nil, err
+	}
+	t.Deleted()
+	return blobs, nil
+}
+
+// deleteTree is deleteCascade for a root that need not be the mutation's task: pick_run and
+// cancel_runs delete each losing run through it inside the parent's mutation (plan §Fold 2: one
+// delete path).
+func (t *txn) deleteTree(root store.Task) ([]string, error) {
 	set, err := t.deletionSet(root)
 	if err != nil {
 		return nil, err
@@ -116,7 +129,6 @@ func (t *txn) deleteCascade(root store.Task) ([]string, error) {
 		return nil, err
 	}
 	t.BoardEvent(store.EventInput{BoardID: root.BoardID, Type: domain.EventTaskDeleted, Data: data})
-	t.Deleted()
 	return blobs, nil
 }
 
@@ -224,11 +236,8 @@ func (t *txn) deleteAttachments(x store.Task) ([]string, error) {
 	return hashes, nil
 }
 
-// settleRace is cancel_runs's parent write (conductor runs.ts:540-555) when a run of parentID was
-// deleted and none is left: racing false, raceOpenedAt cleared, TODO in the board's TODO column,
-// the lease dropped. Event run.discarded {runId, reason: "deleted"} on the parent whenever it is
-// racing. The parent moves two versions when it was not TODO (UpdateTask, then SetStatus): no store
-// call writes racing and status together.
+// settleRace is run when a run of parentID was deleted: event run.discarded {runId, reason:
+// "deleted"} on the parent whenever it is racing, and, when no run is left, endRace.
 func (t *txn) settleRace(parentID, runID string) error {
 	p, err := t.Tx.GetTask(t.ctx, t.ProjectID, parentID)
 	if err != nil {
@@ -250,23 +259,29 @@ func (t *txn) settleRace(parentID, runID string) error {
 		t.Ring(Doorbell{Kind: ChangeKindChanged, TaskID: p.ID, BoardID: p.BoardID})
 		return nil
 	}
+	return t.endRace(p)
+}
+
+// endRace is cancel_runs's parent write (conductor runs.ts:540-555), in one versioned write: racing
+// false, raceOpenedAt cleared, TODO (in the board's TODO column when it was not TODO), the lease
+// dropped. When p is the mutation's own task it is recorded as written (cancel_runs).
+func (t *txn) endRace(p store.Task) error {
 	off := false
-	after, err := t.Tx.UpdateTask(t.ctx, p.ProjectID, p.ID, p.Version, store.TaskPatch{
-		Racing: &off, RaceOpenedAt: &store.Nullable[int64]{}, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
-	})
-	if err != nil {
-		return err
-	}
-	if after.Status != domain.Todo || after.Claim != nil {
+	ch := store.StatusChange{Status: domain.Todo, ClearClaim: true, Racing: &off, RaceOpenedAt: &store.Nullable[int64]{},
+		UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli()}
+	if p.Status != domain.Todo {
 		board, _, err := t.Tx.GetBoard(t.ctx, p.ProjectID, p.BoardID)
 		if err != nil {
 			return err
 		}
-		if after, err = t.Tx.SetStatus(t.ctx, p.ProjectID, p.ID, after.Version, store.StatusChange{
-			Status: domain.Todo, ColumnID: todoColumn(board), ClearClaim: true, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
-		}); err != nil {
-			return err
-		}
+		ch.ColumnID = todoColumn(board)
+	}
+	after, err := t.Tx.SetStatus(t.ctx, p.ProjectID, p.ID, p.Version, ch)
+	if err != nil {
+		return err
+	}
+	if t.Task != nil && t.Task.ID == p.ID {
+		t.Wrote(after)
 	}
 	bells := doorbellsFor(&p, after, false)
 	if len(bells) == 0 && after.Status == domain.Todo && after.Assignee == nil {

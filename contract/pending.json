@@ -5,32 +5,22 @@
       "add_artifact",
       "add_comment",
       "add_follow_up",
-      "cancel_runs",
-      "create_sprint",
       "detect_anomalies",
       "disconnect_agent",
       "get_my_settings",
       "get_skill_stats",
-      "get_sprint",
       "grant_capabilities",
       "list_agent_sessions",
       "list_audit_log",
       "list_comments",
       "list_follow_ups",
       "list_notifications",
-      "list_runs",
-      "list_sprints",
       "mark_notifications_read",
-      "open_run",
       "orchestrate_subtasks",
-      "pick_run",
       "rank_tasks",
       "register_agent_profile",
       "retract_artifact",
-      "set_my_settings",
-      "set_sprint",
-      "start_runs",
-      "update_sprint"
+      "set_my_settings"
     ]
   }
 }

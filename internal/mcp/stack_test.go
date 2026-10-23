@@ -208,6 +208,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 		c.call("delete_chronicle_page", map[string]any{"projectId": p, "pageId": page, "expectedHeadVersionId": str(edited["versionId"])})
 
 		oncallOnTheStack(t, h, s, c, p, b)
+		runsAndSprintsOnTheStack(t, c, p, b, task, get)
 
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
 		c.call("remove_member", map[string]any{"projectId": p, "identityId": "u-grace"})

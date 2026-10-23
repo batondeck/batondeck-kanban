@@ -74,8 +74,8 @@ type SprintPage struct {
 
 // Sprints is the sprint area (conductor's store.ts:1075-1123). Keys: (project_id, sprint_id).
 // Errors: a missing sprint is domain.NotFound("Sprint", id); a board that is not the project's is
-// domain.NotFound("Board", id); an empty name, goal, acceptance or creator, a status outside the
-// four, or no UpdatedBy or UpdatedAt is domain.Validation. A versioned write takes expectedVersion
+// domain.NotFound("Board", id); an empty name (and, on a create, an empty goal, acceptance or
+// creator), a status outside the four, or no UpdatedBy or UpdatedAt is domain.Validation. A versioned write takes expectedVersion
 // and returns the sprint one version higher; another version is domain.Stale(expected, actual) and
 // changes nothing. A write appends no event: that is the service's, inside Atomically.
 type Sprints interface {

@@ -70,6 +70,17 @@ var expectedPosture = map[string]pinnedPosture{
 	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	"edit_chronicle_page":   {tier: domain.TierWrite, tenantScoped: true},
 	"delete_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	// Runs and sprints are conductor's requireMaster for every write, membership for the reads.
+	"start_runs":    {tier: domain.TierMaster, tenantScoped: true},
+	"open_run":      {tier: domain.TierMaster, tenantScoped: true},
+	"pick_run":      {tier: domain.TierMaster, tenantScoped: true},
+	"cancel_runs":   {tier: domain.TierMaster, tenantScoped: true},
+	"list_runs":     {tier: domain.TierRead, tenantScoped: true},
+	"create_sprint": {tier: domain.TierMaster, tenantScoped: true},
+	"update_sprint": {tier: domain.TierMaster, tenantScoped: true},
+	"set_sprint":    {tier: domain.TierMaster, tenantScoped: true},
+	"get_sprint":    {tier: domain.TierRead, tenantScoped: true},
+	"list_sprints":  {tier: domain.TierRead, tenantScoped: true},
 	// The on-call tools are workspace-admin only (ADR-0004), then tiered on the project as conductor's
 	// manifest.ts:203-215: the mutations structural, the reads and the two that file tickets master.
 	"create_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
