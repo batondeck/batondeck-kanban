@@ -89,6 +89,9 @@ func rowOf(id int64, scope string, projectID *string, kind string, payload []byt
 
 // masterSilent is the tools whose rows ring no master: a claim (owner ruling 2026-10-23), the lease
 // heartbeat, which changes no task, and the comment-like context writes ("comments ring nobody").
+// It is a DENYLIST: every other tool's row rings the project's masters. A new tool that changes no
+// task's state (add_comment among them, when it ships) must be added here deliberately, with a case
+// in TestDirectoryMasterSilentTools; nothing else stops it ringing.
 var masterSilent = map[string]bool{
 	"claim_task": true, "claim_next": true, "heartbeat_task": true,
 	"add_context_item": true, "set_summary": true, "write_memory": true, "attach_file": true,

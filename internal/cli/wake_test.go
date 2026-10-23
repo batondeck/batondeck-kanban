@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,6 +135,12 @@ func seedDirectory(t *testing.T) (*countedSQLite, person, person, person, string
 
 // startDirectory serves the app over st (nil: a freshly seeded store) until the test ends or stop.
 func startDirectory(t *testing.T, from *dirServer) *dirServer {
+	return startDirectoryWith(t, from, false)
+}
+
+// startDirectoryWith is startDirectory with the blob store, and with public_url set to the TCP
+// listener (the OAuth authorization server on) when oauth.
+func startDirectoryWith(t *testing.T, from *dirServer, oauth bool) *dirServer {
 	t.Helper()
 	s := &dirServer{logs: &lockedLog{}}
 	if from == nil {
@@ -146,7 +153,21 @@ func startDirectory(t *testing.T, from *dirServer) *dirServer {
 	wakeRegistry = func() string { return s.reg }
 	t.Cleanup(func() { wakeRegistry = oldReg })
 	logger := log.New(s.logs, "", 0)
-	a, err := compose(s.st, "x", "", logger, s.keys, service.MediaOptions{})
+	s.sock = filepath.Join(shortDir(t, "bks"), "bk.sock")
+	lns, err := listenAll([]string{"tcp://127.0.0.1:0", "unix://" + s.sock}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tcp = lns[0].Addr().String()
+	media, err := mediaOptions(&core.Config{Blob: core.Blob{Dir: t.TempDir(), MaxBytes: 1 << 20}}, s.keys, lns, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := ""
+	if oauth {
+		public = "http://" + s.tcp
+	}
+	a, err := compose(s.st, "x", public, logger, s.keys, media)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +182,6 @@ func startDirectory(t *testing.T, from *dirServer) *dirServer {
 			s.columns[c.Status] = c.ID
 		}
 	}
-	s.sock = filepath.Join(shortDir(t, "bks"), "bk.sock")
-	lns, err := listenAll([]string{"tcp://127.0.0.1:0", "unix://" + s.sock}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.tcp = lns[0].Addr().String()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- serveUntil(ctx, lns, a, "x", logger) }()
@@ -728,5 +743,219 @@ func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
 	}
 	if !strings.Contains(again.logs.String(), fmt.Sprintf("dropped the row of pid %d at start-up", dead.pid)) {
 		t.Fatalf("the dead row's drop is not logged:\n%s", again.logs.String())
+	}
+}
+
+// setProcStart rewrites c's registry entry with another procStart, as a reused pid's new process
+// would have.
+func (s *dirServer) setProcStart(t *testing.T, c *client, procStart string) {
+	t.Helper()
+	entry, _ := json.Marshal(map[string]any{"pid": c.pid, "sessionId": c.session, "cwd": "/x", "status": "idle", "procStart": procStart,
+		"messagingSocketPath": c.sock, "peerProtocol": 1})
+	if err := os.WriteFile(filepath.Join(s.reg, strconv.FormatInt(c.pid, 10)+".json"), entry, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review B1 (tested): another identity re-registering a live, registered pid is 403 and changes
+// nothing: alice keeps the entry and is still rung. A forged sessionId or procStart against the
+// registry is 400 and registers nothing. No bearer reaches the log.
+func TestDirectoryRefusesAnotherIdentityTakingAPid(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	u := unixHTTP(s.sock)
+	post := func(tok, body string) (int, string) {
+		return httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", tok, body)
+	}
+	if code, got := post(s.alice.token, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q,"sessionId":"forged"}`, c.pid, c.sock)); code != http.StatusBadRequest || !strings.Contains(got, "sessionId") {
+		t.Fatalf("a forged sessionId: %d %s, want 400", code, got)
+	}
+	if code, got := post(s.alice.token, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q,"procStart":"Thu Jan  1 00:00:00 1970"}`, c.pid, c.sock)); code != http.StatusBadRequest || !strings.Contains(got, "procStart") {
+		t.Fatalf("a forged procStart: %d %s, want 400", code, got)
+	}
+	if len(s.pids()) != 0 {
+		t.Fatalf("the refusals left %v", s.pids())
+	}
+	s.register(t, s.alice, c, "worker")
+	code, got := post(s.bob.token, fmt.Sprintf(`{"pid":%d,"role":"master","socket":%q,"sessionId":%q}`, c.pid, c.sock, c.session))
+	t.Logf("bob re-registering alice's pid: %d %s", code, got)
+	if code != http.StatusForbidden || !strings.Contains(got, "registered by another identity") {
+		t.Fatalf("bob takes over alice's pid: %d %s, want 403", code, got)
+	}
+	if e := s.a.dir.Entries(); len(e) != 1 || e[0].IdentityID != s.alice.id || e[0].Role != "worker" {
+		t.Fatalf("after the refusal the entry is %+v, want alice's worker", e)
+	}
+	if strings.Contains(s.logs.String(), s.alice.token) || strings.Contains(s.logs.String(), s.bob.token) {
+		t.Fatal("a bearer is in the log")
+	}
+	s.task(t, s.bob, s.alice.id)
+	if f := content(t, c.frame(t, 2*time.Second)); f.Kind != wake.KindAssigned {
+		t.Fatalf("alice after the refusal: %+v, want assigned", f)
+	}
+}
+
+// Review B2 (tested): a delivery whose registry entry names the pid with another procStart (the pid
+// now belongs to another process) drops the entry and writes nothing; the unchanged registry is
+// rung (the positive control).
+func TestDirectoryDropsAReusedPidAtDelivery(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	s.task(t, s.bob, s.alice.id)
+	_ = c.frame(t, 2*time.Second)
+	before := s.a.dir.Writes()
+	s.setProcStart(t, c, "Sat Oct 24 09:00:00 2026")
+	s.task(t, s.bob, s.alice.id)
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its pid now names another process", c.pid, s.alice.id), 1)
+	c.none(t, 500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 || len(s.pids()) != 0 {
+		t.Fatalf("after the procStart moved: %d writes, pids %v; want 0 and none", n, s.pids())
+	}
+}
+
+// Review A41-9 (tested): RingAssigned's self-skip. A handoff to oneself rings no one; a handoff to
+// bob rings bob's worker (the positive control).
+func TestDirectoryHandoffToSelfRingsNobody(t *testing.T) {
+	s := startDirectory(t, nil)
+	a, b := s.client(t, "s-alice", ""), s.client(t, "s-bob", "")
+	s.register(t, s.alice, a, "worker")
+	s.register(t, s.bob, b, "worker")
+	ctx := context.Background()
+	mine, theirs := s.task(t, s.alice, ""), s.task(t, s.alice, "")
+	_ = b.frame(t, wake.SlowWindow+time.Second) // the creates' broadcast to bob; alice's own is not rung
+	_ = a.frame(t, time.Second)
+	handoff := func(task service.Task, to string) {
+		t.Helper()
+		cl, err := s.a.core.Lifecycle().Claim(ctx, s.alice.caller(), service.ClaimTaskReq{ProjectID: s.project, TaskID: task.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.a.core.Lifecycle().Handoff(ctx, s.alice.caller(), service.HandoffTaskReq{ProjectID: s.project, TaskID: task.ID, LeaseID: cl.LeaseID, ToAgent: to, MemoryNote: "n"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := s.a.dir.Writes()
+	handoff(mine, s.alice.id)
+	a.none(t, wake.SlowWindow+500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 {
+		t.Fatalf("a handoff to oneself wrote %d doorbells, want 0", n)
+	}
+	handoff(theirs, s.bob.id)
+	if f := content(t, b.frame(t, 2*time.Second)); f.Kind != wake.KindAssigned {
+		t.Fatalf("the handoff to bob rang %+v, want assigned", f)
+	}
+}
+
+// Review A41-3 (tested): each master-silent extra rings no master. A worker claims a task, then
+// heartbeats, adds a context item, sets the summary, writes memory and attaches a file: the
+// master hears nothing; the worker's move rings it (the positive control).
+func TestDirectoryMasterSilentTools(t *testing.T) {
+	s := startDirectory(t, nil)
+	w, m := s.client(t, "s-worker", ""), s.client(t, "s-master", "")
+	s.register(t, s.alice, w, "worker")
+	s.register(t, s.bob, m, "master")
+	ctx := context.Background()
+	al := s.alice.caller()
+	task := s.task(t, s.bob, "")
+	_ = w.frame(t, wake.SlowWindow+time.Second)
+	cl, err := s.a.core.Lifecycle().Claim(ctx, al, service.ClaimTaskReq{ProjectID: s.project, TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.none(t, wake.SlowWindow+500*time.Millisecond) // the claim (ruled) is quiet before the extras start
+	before := s.a.dir.Writes()
+	steps := []struct {
+		tool string
+		run  func() error
+	}{
+		{"heartbeat_task", func() error {
+			_, err := s.a.core.Lifecycle().Heartbeat(ctx, al, service.HeartbeatTaskReq{ProjectID: s.project, TaskID: task.ID, LeaseID: cl.LeaseID})
+			return err
+		}},
+		{"add_context_item", func() error {
+			_, err := s.a.core.Context().AddItem(ctx, al, service.AddContextItemReq{ProjectID: s.project, TaskID: task.ID, Kind: "note", Body: "b"})
+			return err
+		}},
+		{"set_summary", func() error {
+			got, err := s.a.core.Tasks().Get(ctx, al, service.GetTaskReq{ProjectID: s.project, TaskID: task.ID})
+			if err != nil {
+				return err
+			}
+			_, err = s.a.core.Context().SetSummary(ctx, al, service.SetSummaryReq{ProjectID: s.project, TaskID: task.ID, Summary: "s", Version: int64(got.Task.Version)})
+			return err
+		}},
+		{"write_memory", func() error {
+			_, err := s.a.core.Context().WriteMemory(ctx, al, service.WriteMemoryReq{ProjectID: s.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "k", Value: "v"})
+			return err
+		}},
+		{"attach_file", func() error {
+			_, err := s.a.core.Media().AttachFile(ctx, al, service.AttachFileReq{ProjectID: s.project, TaskID: task.ID, FileName: "a.txt", Kind: "file", MimeType: "text/plain", Bytes: 3})
+			return err
+		}},
+	}
+	for _, st := range steps {
+		if err := st.run(); err != nil {
+			t.Fatalf("%s: %v", st.tool, err)
+		}
+	}
+	for _, st := range steps { // each wrote its row: the silence is the dispatcher's, not a missing row
+		if !s.changeOf(t, st.tool) {
+			t.Fatalf("no change row from %s", st.tool)
+		}
+	}
+	m.none(t, wake.SlowWindow+500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 {
+		t.Fatalf("the master-silent tools wrote %d doorbells, want 0", n)
+	}
+	got, err := s.a.core.Tasks().Get(ctx, al, service.GetTaskReq{ProjectID: s.project, TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.move(t, s.alice, got.Task, domain.Blocked)
+	if f := content(t, m.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindChanged {
+		t.Fatalf("the move rang the master %+v, want changed", f)
+	}
+}
+
+// changeOf reports whether the change log holds a row written by tool.
+func (s *dirServer) changeOf(t *testing.T, tool string) bool {
+	t.Helper()
+	rows, err := s.st.ReadChanges(context.Background(), 0, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if strings.Contains(string(r.Payload), `"tool":"`+tool+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// Review A41-5 (tested), replacing the refresh-reuse test /wake took with it: an entry registered
+// with an OAuth access token is dropped by the sweep once a reused refresh token revokes the family.
+func TestDirectoryDropsAnOAuthEntryAfterRefreshReuse(t *testing.T) {
+	old := wakeSweep
+	wakeSweep = 300 * time.Millisecond
+	t.Cleanup(func() { wakeSweep = old })
+	s := startDirectoryWith(t, nil, true)
+	public := "http://" + s.tcp
+	clientID, access, refresh := oauthGrant(t, public, "alice", "pw-alice")
+	c := s.client(t, "s-oauth", "")
+	s.register(t, person{id: s.alice.id, token: access}, c, "worker")
+	s.waitLog(t, fmt.Sprintf("registered pid %d", c.pid), 1)
+	time.Sleep(2 * wakeSweep)
+	if len(s.pids()) != 1 {
+		t.Fatalf("the OAuth entry did not hold before the reuse: %v", s.pids())
+	}
+	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["_status"] != http.StatusOK {
+		t.Fatalf("first refresh: %v", m)
+	}
+	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["error"] != "invalid_grant" {
+		t.Fatalf("refresh reuse: %v, want invalid_grant", m)
+	}
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its bearer no longer resolves", c.pid, s.alice.id), 1)
+	if len(s.pids()) != 0 {
+		t.Fatalf("pids %v after the family was revoked", s.pids())
 	}
 }
