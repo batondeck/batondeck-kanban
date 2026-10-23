@@ -139,10 +139,10 @@ func TestGrantGovernance(t *testing.T) {
 	}
 }
 
-// targetSurface is the 93 tools of the plan's target surface: conductor's 91 in scope, delete_task
-// (plan §Fold 2) and cancel_task (ADR-0001). Written out, so a tool dropped from or added to the
-// posture table fails here.
-var targetSurface = []string{"ack_follow_up", "add_artifact", "add_column", "add_comment", "add_context_item", "add_dependency", "add_follow_up", "add_member", "add_subtask", "attach_file", "block_task", "cancel_runs", "cancel_task", "claim_next", "claim_task", "complete_task", "create_board", "create_chronicle_page", "create_cli_token", "create_integration", "create_project", "create_sprint", "create_task", "delete_chronicle_page", "delete_integration", "delete_project", "delete_task", "detect_anomalies", "disconnect_agent", "edit_chronicle_page", "fail_task", "find_tools", "get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint", "get_task", "get_task_context", "get_tool_schema", "grant_capabilities", "handoff_task", "heartbeat_task", "ingest_chronicle_page", "invoke_tool", "list_agent_sessions", "list_attachments", "list_audit_log", "list_boards", "list_cli_tokens", "list_comments", "list_deliveries", "list_follow_ups", "list_integrations", "list_notifications", "list_projects", "list_runs", "list_sprints", "list_subtasks", "list_tasks", "mark_notifications_read", "move_task", "next_task", "open_run", "orchestrate_subtasks", "pick_run", "prune_agent_sessions", "rank_tasks", "read_delivery_raw", "read_memory", "reap_stale_leases", "recall_memory", "register_agent_profile", "release_task", "remove_column", "remove_dependency", "remove_member", "replay_delivery", "retract_artifact", "revoke_cli_token", "rotate_integration_secret", "search_tasks", "send_test_event", "set_my_settings", "set_sprint", "set_summary", "start_runs", "update_column", "update_integration", "update_settings", "update_sprint", "update_task", "write_memory"}
+// targetSurface is the 86 tools of the plan's target surface: conductor's 91 in scope, delete_task
+// (plan §Fold 2) and cancel_task (ADR-0001), less ADR-0004's 7. Written out, so a tool dropped
+// from or added to the posture table fails here.
+var targetSurface = []string{"ack_follow_up", "add_artifact", "add_column", "add_comment", "add_context_item", "add_dependency", "add_follow_up", "add_member", "add_subtask", "attach_file", "block_task", "cancel_runs", "cancel_task", "claim_next", "claim_task", "complete_task", "create_board", "create_chronicle_page", "create_integration", "create_project", "create_sprint", "create_task", "delete_chronicle_page", "delete_integration", "delete_project", "delete_task", "detect_anomalies", "disconnect_agent", "edit_chronicle_page", "fail_task", "get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint", "get_task", "get_task_context", "grant_capabilities", "handoff_task", "heartbeat_task", "ingest_chronicle_page", "list_agent_sessions", "list_attachments", "list_audit_log", "list_boards", "list_comments", "list_deliveries", "list_follow_ups", "list_integrations", "list_notifications", "list_projects", "list_runs", "list_sprints", "list_subtasks", "list_tasks", "mark_notifications_read", "move_task", "next_task", "open_run", "orchestrate_subtasks", "pick_run", "rank_tasks", "read_delivery_raw", "read_memory", "reap_stale_leases", "recall_memory", "register_agent_profile", "release_task", "remove_column", "remove_dependency", "remove_member", "replay_delivery", "retract_artifact", "rotate_integration_secret", "search_tasks", "send_test_event", "set_my_settings", "set_sprint", "set_summary", "start_runs", "update_column", "update_integration", "update_settings", "update_sprint", "update_task", "write_memory"}
 
 func TestPostureCoversTheTargetSurface(t *testing.T) {
 	want := slices.Clone(targetSurface)
@@ -164,17 +164,16 @@ func TestPostureLandingInvariant(t *testing.T) {
 
 func TestGrantSetsPinned(t *testing.T) {
 	exempt := []string{
-		"create_cli_token", "create_project", "find_tools", "get_board", "get_my_settings", "get_project",
-		"get_skill_stats", "get_sprint", "get_task", "get_task_context", "get_tool_schema", "invoke_tool",
-		"list_attachments", "list_boards", "list_cli_tokens", "list_comments", "list_follow_ups",
-		"list_notifications", "list_runs", "list_sprints", "list_subtasks", "list_tasks",
-		"mark_notifications_read", "next_task", "rank_tasks", "read_memory", "recall_memory",
-		"revoke_cli_token", "search_tasks", "set_my_settings",
+		"create_project", "get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint",
+		"get_task", "get_task_context", "list_attachments", "list_boards", "list_comments",
+		"list_follow_ups", "list_notifications", "list_runs", "list_sprints", "list_subtasks",
+		"list_tasks", "mark_notifications_read", "next_task", "rank_tasks", "read_memory",
+		"recall_memory", "search_tasks", "set_my_settings",
 	}
 	if got := GrantExemptTools(); !reflect.DeepEqual(got, exempt) {
 		t.Errorf("exempt set\n got %q\nwant %q", got, exempt)
 	}
-	unscoped := []string{"disconnect_agent", "list_agent_sessions", "list_audit_log", "list_projects", "prune_agent_sessions"}
+	unscoped := []string{"disconnect_agent", "list_agent_sessions", "list_audit_log", "list_projects"}
 	if got := GrantUnscopedTools(); !reflect.DeepEqual(got, unscoped) {
 		t.Errorf("unscoped set\n got %q\nwant %q", got, unscoped)
 	}

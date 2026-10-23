@@ -147,8 +147,8 @@ func TestNoRemovedStatusRemains(t *testing.T) {
 	}
 }
 
-// TestCounts pins the scope the plan states (93 tools: 91 in-scope names plus delete_task and
-// cancel_task, ADR-0001; 40 published tools removed) and prints every count.
+// TestCounts pins the scope the plan states (86 tools: 91 in-scope names plus delete_task and
+// cancel_task, ADR-0001, less ADR-0004's 7; 47 published tools removed) and prints every count.
 func TestCounts(t *testing.T) {
 	var src, admin SourceFile
 	var d Deltas
@@ -172,7 +172,7 @@ func TestCounts(t *testing.T) {
 	for _, k := range []string{"tools.json tools", "admin-tools.json tools", "deltas removedTools", "deltas removedProps", "deltas removedEnumValues", "deltas renamedEnumValues", "deltas addedTools", "deltas addedProps", "expected.json tools", "expected.json tools (derived)"} {
 		t.Logf("%-30s %d", k, got[k])
 	}
-	for k, want := range map[string]int{"tools.json tools": 130, "admin-tools.json tools": 1, "deltas removedTools": 40, "expected.json tools": 93} {
+	for k, want := range map[string]int{"tools.json tools": 130, "admin-tools.json tools": 1, "deltas removedTools": 47, "expected.json tools": 86} {
 		if got[k] != want {
 			t.Errorf("%s = %d, the plan's scope is %d", k, got[k], want)
 		}
