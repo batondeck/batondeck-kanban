@@ -53,7 +53,8 @@ var searchQueries = []struct {
 func init() { register("search", search) }
 
 // search is lexical task search: the ten pinned queries, the count, paging, no hit, the index
-// following an update and a delete, and the refusals.
+// following an update and a delete, scores another project cannot move, no row left by a delete,
+// and the refusals.
 func search(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -190,6 +191,58 @@ func search(t *testing.T, newStore Factory) {
 				if got := hit(q); len(got) != 0 {
 					t.Fatalf("%q still finds %v after the delete", q, got)
 				}
+			}
+		})
+
+		// A project's scores and order read only its own tasks: another project gaining tasks that
+		// hold the words moves neither (bm25's IDF, which counts every project's rows, would).
+		t.Run("AnotherProjectsRowsMoveNoScore", func(t *testing.T) {
+			s, p, _ := corpus(t)
+			queries := []string{"alpha", "login sso", "auth*", "gamma"}
+			before := map[string]store.SearchPage{}
+			for _, q := range queries {
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				before[q] = page
+			}
+			sd := s.(seeder)
+			other, ob, err := sd.seedProject(ctx)
+			noErr(t, err)
+			for _, title := range []string{"alpha login sso", "authorize alpha gamma", "alpha alpha alpha", "gamma auth login", "sso alpha"} {
+				_, err := sd.seedTask(ctx, seedTaskInput{ProjectID: other, BoardID: ob, Title: title, Description: "alpha"})
+				noErr(t, err)
+			}
+			for _, q := range queries {
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				if !slices.Equal(page.Hits, before[q].Hits) {
+					t.Errorf("%q in %s: %v before another project's tasks, %v after", q, p, before[q].Hits, page.Hits)
+				}
+			}
+		})
+
+		// A deleted task leaves no index row: a task of another project that reuses its row id
+		// (SQLite's rid has no AUTOINCREMENT) is never found by the deleted task's words.
+		t.Run("ADeletedTasksWordsNeverMatchARowThatReusesItsID", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			id, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: "zorblat launch", Description: "quuxly"})
+			noErr(t, err)
+			noErr(t, s.DeleteTask(ctx, p, id, stateOf(t, sd, p, id).Version))
+			q, qb, err := sd.seedProject(ctx)
+			noErr(t, err)
+			_, err = sd.seedTask(ctx, seedTaskInput{ProjectID: q, BoardID: qb, Title: "plain words", Description: "nothing more"})
+			noErr(t, err)
+			for _, w := range []string{"zorblat", "quuxly"} {
+				page, err := s.SearchTasks(ctx, q, w, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				if len(page.Hits) != 0 {
+					t.Errorf("%q in %s found %v: a deleted task's words match another project's task", w, q, ids(page.Hits))
+				}
+			}
+			page, err := s.SearchTasks(ctx, q, "plain", store.SearchFilter{}, "", 0)
+			noErr(t, err)
+			if got := ids(page.Hits); !slices.Equal(got, []string{"T-1"}) {
+				t.Errorf("plain in %s found %v, want [T-1]", q, got)
 			}
 		})
 
