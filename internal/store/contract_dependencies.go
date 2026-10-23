@@ -44,8 +44,9 @@ type AddEdgeInput struct {
 // mutation (service.mutate, ADR-0003), so an add_dependency moves each task's version at most once.
 // Lists are in (ts, id) order and not paginated.
 type Dependencies interface {
-	// AddEdge adds the edge. For blocks it runs domain.CheckCycle over the project's blocks edges
-	// first, then appends FromTaskID to the dependent's blockedBy and ToTaskID to the blocker's
+	// AddEdge adds the edge. It takes the project's lock (Locks.LockProject) before anything else,
+	// so concurrent edge writes of one project are serialised wherever they are called from. For
+	// blocks it runs domain.CheckCycle over the project's blocks edges first, then appends FromTaskID to the dependent's blockedBy and ToTaskID to the blocker's
 	// blocks (each at most once). An edge equal to an existing one (same from, to and type) returns
 	// the existing edge and writes nothing.
 	AddEdge(ctx context.Context, in AddEdgeInput) (DependencyEdge, error)
