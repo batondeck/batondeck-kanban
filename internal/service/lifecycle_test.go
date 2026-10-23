@@ -406,8 +406,8 @@ func TestExpiredLeaseIsFreeOnTheNextClaim(t *testing.T) {
 		if err != nil {
 			t.Fatalf("live heartbeat: %v", err)
 		}
-		if got := e.get(t, task.ID); got.Version != e.get(t, task.ID).Version || isoMs(got.Claim.ExpiresAt) != hb.ExpiresAt {
-			t.Fatalf("heartbeat expiry %s vs %+v", hb.ExpiresAt, got.Claim)
+		if got := e.get(t, task.ID); float64(got.Version) != c.Task.Version || isoMs(got.Claim.ExpiresAt) != hb.ExpiresAt {
+			t.Fatalf("heartbeat moved the version %d -> %d, or expiry %s vs %+v", int64(c.Task.Version), got.Version, hb.ExpiresAt, got.Claim)
 		}
 		before := e.get(t, task.ID).Version
 		e.clock.advance(2 * time.Second)
