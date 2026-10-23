@@ -11,7 +11,7 @@ import (
 )
 
 const blobExists = `-- name: BlobExists :one
-SELECT EXISTS (SELECT 1 FROM blobs WHERE sha256 = $1)::int8 AS found
+SELECT CAST(EXISTS (SELECT 1 FROM blobs WHERE sha256 = $1) AS integer) AS found
 `
 
 func (q *Queries) BlobExists(ctx context.Context, sha256 string) (int64, error) {

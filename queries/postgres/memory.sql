@@ -7,7 +7,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING id, project_id, task_id, scope, key, value, blob_sha256, author, ts, expires_at;
 
 -- name: BlobExists :one
-SELECT EXISTS (SELECT 1 FROM blobs WHERE sha256 = $1)::int8 AS found;
+SELECT CAST(EXISTS (SELECT 1 FROM blobs WHERE sha256 = $1) AS integer) AS found;
 
 -- ReadMemory in one statement, window first: the task's newest `window_limit` task, agent and
 -- shared entries ((ts, id) descending, of every author, live or expired), and only then the TTL,
