@@ -12,6 +12,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/auth/oauth"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
+	"github.com/batondeck/batondeck-kanban/internal/mcp/tools"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
@@ -19,9 +20,10 @@ import (
 // mcpServer is the MCP server over st. A bearer is an API token (`batondeck-kanban token
 // create`) or, when publicURL is set, an OAuth access token the authorization server it returns
 // issued for /mcp; both resolve through the one auth service. With publicURL unset there is no
-// authorization server and /mcp's 401 names no resource metadata. The session bookkeeping and the
-// tool_calls rows go through the service core. R0 registers no tool; R1.18 wires the remaining
-// services. Close the core after the HTTP server, so it flushes the tool calls still buffered.
+// authorization server and /mcp's 401 names no resource metadata. The session bookkeeping, the
+// tool_calls rows and the projects and boards tools go through the service core; R1.18 wires the
+// remaining services. Close the core after the HTTP server, so it flushes the tool calls still
+// buffered.
 func mcpServer(st store.Store, version, publicURL string, logger *log.Logger) (*mcp.Server, *oauth.Server, *service.Core, error) {
 	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st}, Sessions: st}
 	var as *oauth.Server
@@ -38,13 +40,15 @@ func mcpServer(st store.Store, version, publicURL string, logger *log.Logger) (*
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
-		Services: service.Services{Sessions: core.Sessions(), ToolCalls: core.ToolCalls()},
+		Services: service.Services{Projects: core.Projects(), Boards: core.Boards(), Sessions: core.Sessions(), ToolCalls: core.ToolCalls()},
 		Logger:   logger,
 	}
 	if as != nil {
 		opts.ResourceMetadataURL = as.ResourceMetadataURL()
 	}
-	return mcp.New(opts), as, core, nil
+	srv := mcp.New(opts)
+	tools.Register(srv, opts.Services)
+	return srv, as, core, nil
 }
 
 // shutdownBudget bounds the MCP session close and the HTTP drain; flushBudget the tool-call flush

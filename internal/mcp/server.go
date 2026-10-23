@@ -56,6 +56,7 @@ type Server struct {
 	handler  http.Handler
 	sessions *sessionTable
 	tools    *toolList
+	manifest *manifest
 	halted   context.Context // done once Close has given up waiting for the handlers
 	halt     context.CancelFunc
 }
@@ -75,6 +76,7 @@ func New(o Options) *Server {
 	s := &Server{services: o.Services, log: o.Logger}
 	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}}
+	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{

@@ -8,6 +8,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The MCP tool registry and the first thirteen tools (R1.1). `internal/mcp/tools` holds one file per
+  area, each registering through its `Register<Area>` hook; `registry.go` pre-lists every area a plan task names a tools file for,
+  with the task that writes it, so a lane adds a file. `mcp.Tool` (`internal/mcp/middleware.go`)
+  registers a tool as one service call, its input and output schemas inferred from the service DTOs
+  by `internal/service/dtoschema` (the recipe moved out of `contract/dto_test.go`, which now compares
+  exactly what the server serves), and refuses a tool with no `domain.ToolPosture`; `Server.Manifest`
+  lists what is registered, by area, with its posture. Arguments are checked by go-sdk against that
+  schema before the service runs: an unknown key, a wrong type, a value outside an enum, a null sent
+  to an `Optional` field and a number its integer cannot hold are all `VALIDATION`. Registered and
+  served by `serve`: `create_project`, `get_project`, `list_projects`, `update_settings`,
+  `delete_project`, `add_member`, `remove_member`, `create_board`, `list_boards`, `get_board`,
+  `add_column`, `update_column`, `remove_column`. Each records one `tool_calls` row.
 - The OAuth 2.1 authorization server for MCP remote connectors (R0.13), `internal/auth/oauth`, mounted
   by `serve` when `public_url` (`BATONDECK_PUBLIC_URL`) is set, every URL built from it:
   `GET /.well-known/oauth-authorization-server` (RFC 8414, no `jwks_uri`, PKCE `S256` only, token
