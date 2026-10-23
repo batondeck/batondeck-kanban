@@ -87,6 +87,21 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Runs and sprints (R2.2): `start_runs`, `open_run`, `pick_run`, `cancel_runs`, `list_runs`,
+  `create_sprint`, `get_sprint`, `list_sprints`, `set_sprint` and `update_sprint`, with conductor's
+  names and inputs, leave `contract/pending.json`. **Named deviation (plan §Fold 2):** a losing run is
+  deleted through `delete_task`'s cascade (`service.deleteTree`), never marked `CANCELLED`: `pick_run`
+  deletes every run but the winner, a DONE one included, `cancel_runs` every run, each leaving a
+  `run.discarded` on the parent and a `task.deleted` on the board, and `list_runs` lists what exists.
+  `pick_run` lands the parent REVIEW (the project reviews) or DONE with the winner's deliverable and
+  `racing` false; `cancel_runs` lands it TODO; `start_runs`, `pick_run` and `cancel_runs` move the
+  parent one version (`store.StatusChange` gains `Racing` and `RaceOpenedAt`, both engines and
+  memstore, no migration). A poisoned task cannot be raced. `get_sprint`'s `workflow.transitions` is
+  the fixed table, its `counts.poisoned` replaces `deadLetter` (a cancelled member is not `done`),
+  and update_sprint's close warning names the members not DONE. New: `store.Runs` and `store.Sprints`
+  with their batteries, `service.Runs` and `service.Sprints`, `internal/domain/sprints.go` (the sprint
+  table, the membership and activation gates), the eight routes `internal/api/{runs,sprints}.go` in
+  place of R1.12's stubs, and the Runs screen without a discarded state.
 - The Chronicle (R2.6): `create_chronicle_page`, `ingest_chronicle_page`, `edit_chronicle_page` and
   `delete_chronicle_page` (tier write, grant-governed), and the six chronicle resource templates
   (`chronicle`, `chronicle-cursor`, `chronicle-page`, `chronicle-history`, `chronicle-history-cursor`,

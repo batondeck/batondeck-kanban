@@ -1,7 +1,8 @@
 /**
  * Runs (Phase 3): the race section in the task drawer. A racing parent fans out into N run children
  * (each a real claimable task). Workers claim/work/complete a run like any task; a lead PICKS the winner,
- * which promotes its deliverable onto the parent and cancels the losers.
+ * which promotes its deliverable onto the parent and deletes the losers: a losing run is gone, not kept
+ * under a status, so the list is every run there is.
  *
  * Reads list_runs through the gateway; pick/cancel mutate the PARENT (version-checked). Invalidates the
  * drawer's `runs`, `task`, `ctx`, and `hist` queries so the live race state, winner highlight, and parent
@@ -12,20 +13,20 @@ import { Icon } from '../icons.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as runsApi from '../api/runs.js';
 import { Avatar, timeAgo } from '../components.js';
-import type { RunView, Status, Task } from '../types.js';
+import type { RunView, Task } from '../types.js';
 
-// A run is "submitted" (pickable) when it carries a deliverable — the core sets this on complete_task,
-// landing the run in REVIEW/DONE. Running = an active, non-terminal run still being worked.
-function runState(r: RunView): 'submitted' | 'running' | 'discarded' {
-  if (r.hasDeliverable || r.status === 'REVIEW' || r.status === 'DONE') return 'submitted';
+// A run is "submitted" (pickable) when it carries a deliverable in REVIEW/DONE — the core's own rule
+// for pick_run, so a run cancel_task closed (DONE, no deliverable) is not offered for a pick the core
+// would refuse. Running = every other run.
+function runState(r: RunView): 'submitted' | 'running' {
+  if (r.hasDeliverable && (r.status === 'REVIEW' || r.status === 'DONE')) return 'submitted';
   return 'running';
 }
 
-function StatePill({ state }: { state: 'submitted' | 'running' | 'discarded' }) {
+function StatePill({ state }: { state: 'submitted' | 'running' }) {
   const map = {
     running: { color: 'var(--progress)', text: 'Running' },
     submitted: { color: 'var(--review)', text: 'Submitted' },
-    discarded: { color: 'var(--text-muted)', text: 'Discarded' },
   } as const;
   const { color, text } = map[state];
   return (
@@ -146,12 +147,8 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
     }
   };
 
-  const submittedStatuses: Status[] = ['REVIEW', 'DONE'];
-  // After a pick, the parent is no longer racing and exactly one run keeps its deliverable in a
-  // non-cancelled, submitted state — highlight that as the winner.
-  const winnerId = !racing
-    ? runs.find((r) => r.hasDeliverable || submittedStatuses.includes(r.status))?.taskId
-    : undefined;
+  // After a pick the parent is no longer racing and the winner is the run left with its deliverable.
+  const winnerId = !racing ? runs.find((r) => runState(r) === 'submitted')?.taskId : undefined;
 
   return (
     <section>
@@ -250,7 +247,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
       {err && <p className="error" style={{ fontSize: 11, margin: '10px 0 0' }}>{err}</p>}
       {racing && (
         <p className="muted" style={{ fontSize: 12, margin: '10px 0 0', lineHeight: 1.5 }}>
-          Picking a run promotes its deliverable to {taskId} and cancels the others.
+          Picking a run promotes its deliverable to {taskId} and deletes the others.
         </p>
       )}
     </section>
