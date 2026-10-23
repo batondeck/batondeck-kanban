@@ -9,45 +9,109 @@ import (
 	"context"
 )
 
-const getAuditLog = `-- name: GetAuditLog :one
-SELECT id, ts, "action", actor, agent, subject, project_id, result, error_code, data FROM audit_log WHERE id = ?
+const appendAudit = `-- name: AppendAudit :one
+INSERT INTO audit_log (ts, action, actor, agent, subject, project_id, result, error_code, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+RETURNING id
 `
 
-func (q *Queries) GetAuditLog(ctx context.Context, id int64) (AuditLog, error) {
-	row := q.db.QueryRowContext(ctx, getAuditLog, id)
-	var i AuditLog
-	err := row.Scan(
-		&i.ID,
-		&i.Ts,
-		&i.Action,
-		&i.Actor,
-		&i.Agent,
-		&i.Subject,
-		&i.ProjectID,
-		&i.Result,
-		&i.ErrorCode,
-		&i.Data,
-	)
-	return i, err
+type AppendAuditParams struct {
+	Ts        int64
+	Action    string
+	Actor     string
+	Agent     string
+	Subject   string
+	ProjectID string
+	Result    string
+	ErrorCode string
+	Data      string
 }
 
-const getToolCall = `-- name: GetToolCall :one
-SELECT id, ts, tool, identity, agent, outcome, code, latency_ms, project_id FROM tool_calls WHERE id = ?
+func (q *Queries) AppendAudit(ctx context.Context, arg AppendAuditParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, appendAudit,
+		arg.Ts,
+		arg.Action,
+		arg.Actor,
+		arg.Agent,
+		arg.Subject,
+		arg.ProjectID,
+		arg.Result,
+		arg.ErrorCode,
+		arg.Data,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const listAuditLog = `-- name: ListAuditLog :many
+SELECT id, ts, action, actor, agent, subject, project_id, result, error_code, data FROM audit_log
+WHERE (CAST(?1 AS TEXT) = '' OR project_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR actor = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR action = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = '' OR subject = CAST(?4 AS TEXT))
+  AND ts >= CAST(?5 AS INTEGER) AND ts <= CAST(?6 AS INTEGER)
+  AND (ts < CAST(?7 AS INTEGER)
+       OR (ts = CAST(?7 AS INTEGER) AND id < CAST(?8 AS INTEGER)))
+ORDER BY ts DESC, id DESC
+LIMIT ?9
 `
 
-func (q *Queries) GetToolCall(ctx context.Context, id int64) (ToolCall, error) {
-	row := q.db.QueryRowContext(ctx, getToolCall, id)
-	var i ToolCall
-	err := row.Scan(
-		&i.ID,
-		&i.Ts,
-		&i.Tool,
-		&i.Identity,
-		&i.Agent,
-		&i.Outcome,
-		&i.Code,
-		&i.LatencyMs,
-		&i.ProjectID,
+type ListAuditLogParams struct {
+	ProjectID string
+	Actor     string
+	Action    string
+	Subject   string
+	Since     int64
+	Until     int64
+	AfterTs   int64
+	AfterID   int64
+	PageLimit int64
+}
+
+// One page of the audit log, newest first ((ts, id) descending), strictly after the cursor's
+// (after_ts, after_id). An empty string filter matches every row; since and until bound ts,
+// inclusive (the caller passes the extremes for "unbounded", and for "no cursor").
+func (q *Queries) ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error) {
+	rows, err := q.db.QueryContext(ctx, listAuditLog,
+		arg.ProjectID,
+		arg.Actor,
+		arg.Action,
+		arg.Subject,
+		arg.Since,
+		arg.Until,
+		arg.AfterTs,
+		arg.AfterID,
+		arg.PageLimit,
 	)
-	return i, err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.Action,
+			&i.Actor,
+			&i.Agent,
+			&i.Subject,
+			&i.ProjectID,
+			&i.Result,
+			&i.ErrorCode,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
