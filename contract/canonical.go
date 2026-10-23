@@ -401,6 +401,16 @@ type Deltas struct {
 	RenamedEnumValues []RenamedEnum `json:"renamedEnumValues"`
 	AddedTools        []RawTool     `json:"addedTools"`
 	AddedProps        []AddedProp   `json:"addedProps"`
+	// ErrorDeltas are wire-code departures; no schema shows them, so Apply reads none.
+	ErrorDeltas []ErrorDelta `json:"errorDeltas"`
+}
+
+// ErrorDelta is one case where this server answers another error code than conductor.
+type ErrorDelta struct {
+	Case      string `json:"case"`
+	Conductor string `json:"conductor"`
+	Go        string `json:"go"`
+	Why       string `json:"why"`
 }
 
 // RenamedEnum renames the enum value at Pointer (…/enum/<value>) to To, keeping the enum's place

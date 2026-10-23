@@ -89,10 +89,13 @@ type agent struct {
 }
 
 // user adds login with a password and an API token, and opens its MCP session.
-func (j *joined) user(login string) *agent {
+func (j *joined) user(login string) *agent { j.t.Helper(); return j.account(login, false) }
+
+// account is user, a workspace admin when admin is set.
+func (j *joined) account(login string, admin bool) *agent {
 	j.t.Helper()
 	ctx := context.Background()
-	u, err := (&auth.Accounts{Store: j.st, Params: auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}}).Add(ctx, login, login, joinPassword, false)
+	u, err := (&auth.Accounts{Store: j.st, Params: auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}}).Add(ctx, login, login, joinPassword, admin)
 	if err != nil {
 		j.t.Fatal(err)
 	}
