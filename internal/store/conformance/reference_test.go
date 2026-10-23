@@ -151,6 +151,15 @@ func (r *reference) Atomically(ctx context.Context, fn func(tx store.Store) erro
 	return err
 }
 
+// LockProject is a no-op inside a transaction (the reference runs one at a time) and INTERNAL
+// outside one, as the engines.
+func (r *reference) LockProject(context.Context, string) error {
+	if !r.inTx {
+		return domain.NewError(domain.CodeInternal, "store: LockProject outside Atomically", nil)
+	}
+	return nil
+}
+
 // --- seeder ---
 
 func (r *reference) seedProject(ctx context.Context) (string, string, error) {
