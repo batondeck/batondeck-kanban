@@ -70,6 +70,9 @@ type state struct {
 	wake         map[string]store.WakeSession       // by id
 	attachments  map[[3]string]store.Attachment     // by (project, task, attachment)
 	blobs        map[string]store.Blob              // by sha256
+	integrations map[[2]string]store.Integration    // by (project, integration)
+	deliveries   map[[3]string]store.Delivery       // by (project, integration, delivery key)
+	rawBodies    map[[3]string]rawBody              // by (project, integration, delivery key)
 
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
@@ -108,6 +111,9 @@ func newState() *state {
 		wake:         map[string]store.WakeSession{},
 		attachments:  map[[3]string]store.Attachment{},
 		blobs:        map[string]store.Blob{},
+		integrations: map[[2]string]store.Integration{},
+		deliveries:   map[[3]string]store.Delivery{},
+		rawBodies:    map[[3]string]rawBody{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -296,6 +302,15 @@ func (st *state) clone() *state {
 	}
 	maps.Copy(c.attachments, st.attachments)
 	maps.Copy(c.blobs, st.blobs)
+	for k, v := range st.integrations {
+		c.integrations[k] = cloneIntegration(v)
+	}
+	for k, v := range st.deliveries {
+		c.deliveries[k] = cloneDelivery(v)
+	}
+	for k, v := range st.rawBodies {
+		c.rawBodies[k] = rawBody{body: append([]byte(nil), v.body...), expiresAt: v.expiresAt}
+	}
 	for k, v := range st.oauthClients {
 		c.oauthClients[k] = cloneOAuthClient(v)
 	}

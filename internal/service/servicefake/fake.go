@@ -59,6 +59,7 @@ func (f *Fake) Services() service.Services {
 		Feed:      feedFake{f},
 		Sessions:  sessionsFake{f},
 		ToolCalls: toolCallsFake{f},
+		Oncall:    oncallFake{f},
 	}
 }
 
