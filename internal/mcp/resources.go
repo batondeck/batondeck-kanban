@@ -121,19 +121,16 @@ func (r resource) match(uri string) (projectID string, vars []string, cursor str
 	return u.Host, vars, u.Query().Get("cursor"), true
 }
 
-// readError is a failed read as a JSON-RPC error: NOT_FOUND is MCP's resource-not-found, VALIDATION
-// invalid params, any other BatonDeckError internal error; each carries the BatonDeckError
-// {code, message, details?, retryable} as its data, and any other error is INTERNAL.
+// readError is a failed read as a JSON-RPC error: NOT_FOUND and VALIDATION are invalid params (MCP's
+// resource-not-found code, SEP-2164), any other BatonDeckError internal error; each carries the
+// BatonDeckError {code, message, details?, retryable} as its data, and any other error is INTERNAL.
 func readError(uri string, err error) error {
 	e, ok := domain.AsBatonDeckError(err)
 	if !ok {
 		e = domain.NewError(domain.CodeInternal, "internal error", nil)
 	}
 	code := int64(jsonrpc.CodeInternalError)
-	switch e.Code {
-	case domain.CodeNotFound:
-		code = mcp.CodeResourceNotFound
-	case domain.CodeValidation:
+	if e.Code == domain.CodeNotFound || e.Code == domain.CodeValidation {
 		code = jsonrpc.CodeInvalidParams
 	}
 	data, merr := json.Marshal(e)
