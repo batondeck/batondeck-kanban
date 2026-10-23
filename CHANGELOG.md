@@ -8,6 +8,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- The board snapshot cache serves (P-100, ADR-0004): `serve` subscribes it to the bus with a second
+  `bus.Tap` that feeds `Core.ObserveChange`, so a second `get_board`, `get_task_context`, `claim_next`
+  or `/api/stream` board frame on an unchanged board reads no board (2 statements saved), and any
+  change-log row naming the board (any project-wide row: every board of it) drops it. The tap adds no
+  statement and no poll; a change it drops clears every snapshot, and the cache turns off when the
+  bus closes. `service.mutate` drops the snapshot of every board its change rows name, and of its
+  task's board, once the transaction commits, so a writer reads its own write before the bus delivers
+  the row; this replaces the four hand-placed drops in `add_column`, `update_column`,
+  `remove_column` and `delete_project`. New: `Core.ResetSnapshots(live bool)`.
+- `move_task` to DONE writes a `changed` row naming its own task's board before it unblocks the
+  dependents, as `complete_task` does (P-187): a move whose only dependent sat on another board wrote
+  one row naming only the dependent's board, so every other process served the moved task's board
+  from a stale snapshot.
 - The pre-push gate removes its Postgres container with `docker rm -f -v`, so a gate run no longer
   leaves an anonymous volume behind (P-130: about 57 GB had piled up and filled the disk twice).
 - `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills` runs with a 3 s gap timeout instead of 1 s, so a

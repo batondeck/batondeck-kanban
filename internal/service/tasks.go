@@ -543,6 +543,8 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		t.Event(store.EventInput{Type: domain.EventTaskMoved, Data: data})
 		t.RingFor(&cur, after, false)
 		if after.Status == domain.Done && cur.Status != domain.Done {
+			// Its own row first, as complete_task: a dependent's doorbell names only its own board (P-187).
+			t.ringChanged(after)
 			if err := t.unblockDependentsOf(cur.ID, nil); err != nil {
 				return MoveTaskResp{}, err
 			}
