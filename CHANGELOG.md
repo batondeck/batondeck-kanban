@@ -17,6 +17,10 @@ Notable changes to batondeck-kanban. The format follows
   task's board, once the transaction commits, so a writer reads its own write before the bus delivers
   the row; this replaces the four hand-placed drops in `add_column`, `update_column`,
   `remove_column` and `delete_project`. New: `Core.ResetSnapshots(live bool)`.
+- `move_task` to DONE writes a `changed` row naming its own task's board before it unblocks the
+  dependents, as `complete_task` does (P-187): a move whose only dependent sat on another board wrote
+  one row naming only the dependent's board, so every other process served the moved task's board
+  from a stale snapshot.
 - The pre-push gate removes its Postgres container with `docker rm -f -v`, so a gate run no longer
   leaves an anonymous volume behind (P-130: about 57 GB had piled up and filled the disk twice).
 - `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills` runs with a 3 s gap timeout instead of 1 s, so a

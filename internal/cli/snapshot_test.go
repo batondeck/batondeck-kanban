@@ -84,18 +84,20 @@ func TestServeFeedsTheBoardSnapshotCacheFromTheBus(t *testing.T) {
 		}
 		return st.boards.Load() - before
 	}
-	// eventually is a pair of calls whose second reads no board, within 5 s.
+	// eventually is pairs of calls until one's second reads no board, within 5 s. Before the tap is
+	// subscribed a pair is [1 1]; it logs every pair, so the cold call is the one that shows 1.
 	eventually := func(what string) {
 		t.Helper()
-		var last []int64
+		var pairs [][]int64
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-			last = []int64{reads(), reads()}
+			last := []int64{reads(), reads()}
+			pairs = append(pairs, last)
 			if last[1] == 0 {
-				t.Logf("%s: GetBoard per call %v (cold, warm)", what, last)
+				t.Logf("%s: GetBoard per call, pair by pair until warm: %v", what, pairs)
 				return
 			}
 		}
-		t.Fatalf("%s: the second get_task_context still read the board after 5 s: GetBoard per call %v; the snapshot cache is not fed by the bus", what, last)
+		t.Fatalf("%s: the second get_task_context still read the board after 5 s: GetBoard per call %v; the snapshot cache is not fed by the bus", what, pairs[len(pairs)-1])
 	}
 	eventually("served")
 
@@ -121,4 +123,133 @@ func TestServeFeedsTheBoardSnapshotCacheFromTheBus(t *testing.T) {
 		t.Fatalf("after change #%d the recomposed snapshot was not cached: GetBoard %d", id, warm)
 	}
 	t.Logf("change #%d: next call cold (GetBoard %d), the one after warm (0)", id, cold)
+}
+
+// tapFix is a composed app over a counted SQLite store holding project A with boards X and Y and one
+// task on X; its tests drive their own tap and feedSnapshots, without serveUntil.
+type tapFix struct {
+	st       *boardCounting
+	a        *app
+	projectA string
+	boardX   string
+	boardY   string
+	taskX    string
+}
+
+func newTapFix(t *testing.T) *tapFix {
+	t.Helper()
+	inner, err := store.OpenSQLite(migratedDB(t), "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { inner.Close() })
+	st := &boardCounting{SQLite: inner}
+	ctx := context.Background()
+	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bx, err := st.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "X", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	by, err := st.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "Y", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var todo string
+	for _, c := range bx.Columns {
+		if c.Status == domain.Todo {
+			todo = c.ID
+		}
+	}
+	task, err := st.CreateTask(ctx, store.CreateTaskInput{ProjectID: p.ID, BoardID: bx.ID, ColumnID: todo, Title: "t",
+		Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := mustCompose(t, st, "", log.New(io.Discard, "", 0))
+	return &tapFix{st: st, a: a, projectA: p.ID, boardX: bx.ID, boardY: by.ID, taskX: task.ID}
+}
+
+func (f *tapFix) reads(t *testing.T) int64 {
+	t.Helper()
+	before := f.st.boards.Load()
+	alice := domain.Caller{Identity: "alice", Agent: "claude", TokenScope: "alice"}
+	if _, err := f.a.core.Context().GetTaskContext(context.Background(), alice, service.GetTaskContextReq{ProjectID: f.projectA, TaskID: f.taskX}); err != nil {
+		t.Fatal(err)
+	}
+	return f.st.boards.Load() - before
+}
+
+func (f *tapFix) appendChange(t *testing.T, boardID string) int64 {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]string{"kind": service.ChangeKindChanged, "projectId": f.projectA, "boardId": boardID})
+	id, err := f.st.AppendChange(context.Background(), store.ChangeInput{Scope: service.BroadcastScope(f.projectA), ProjectID: f.projectA,
+		Kind: service.ChangeKindChanged, Payload: payload, Ts: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A change the tap dropped (buffer 1: Y fits, X's two rows do not) must clear X's snapshot.
+func TestTapDropClearsEverySnapshot(t *testing.T) {
+	f := newTapFix(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tap, err := f.a.bus.Tap(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.a.bus.Close()
+	f.a.core.ResetSnapshots(true)
+	f.reads(t)
+	if warm := f.reads(t); warm != 0 {
+		t.Fatalf("not warm before the drop: %d", warm)
+	}
+	f.appendChange(t, f.boardY)
+	f.appendChange(t, f.boardX)
+	last := f.appendChange(t, f.boardX)
+	for deadline := time.Now().Add(5 * time.Second); tap.Dropped() < 2 || f.a.bus.Frontier() < last; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("tap dropped %d, frontier %d, want 2 and %d", tap.Dropped(), f.a.bus.Frontier(), last)
+		}
+	}
+	if warm := f.reads(t); warm != 0 {
+		t.Fatalf("X went cold before the feed ran: %d", warm)
+	}
+	go feedSnapshots(tap, f.a.core, log.New(io.Discard, "", 0))
+	var cold int64
+	for deadline := time.Now().Add(3 * time.Second); cold == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		cold = f.reads(t)
+	}
+	if cold != 1 {
+		t.Fatalf("after the tap dropped X's rows, get_task_context on X read the board %d times, want 1: a stale snapshot is served", cold)
+	}
+}
+
+// A closed tap turns the cache off: two reads in a row both read the board.
+func TestTapCloseTurnsTheCacheOff(t *testing.T) {
+	f := newTapFix(t)
+	tap, err := f.a.bus.Tap(context.Background(), 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.a.core.ResetSnapshots(true)
+	done := make(chan struct{})
+	go func() { feedSnapshots(tap, f.a.core, log.New(io.Discard, "", 0)); close(done) }()
+	f.reads(t)
+	if warm := f.reads(t); warm != 0 {
+		t.Fatalf("not warm while the tap is open: %d", warm)
+	}
+	f.a.bus.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("feedSnapshots did not return after the bus closed")
+	}
+	if got := []int64{f.reads(t), f.reads(t)}; got[0] != 1 || got[1] != 1 {
+		t.Fatalf("after the tap closed: GetBoard per call %v, want [1 1] (cache off)", got)
+	}
 }

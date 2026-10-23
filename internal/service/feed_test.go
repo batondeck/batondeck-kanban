@@ -369,8 +369,8 @@ func TestMoveTaskThenGetBoardReadsTheMove(t *testing.T) {
 	}
 }
 
-// A move to DONE whose only doorbell is a dependent on another board writes no change row naming the
-// moved task's board; mutate still drops that board, so the writer reads its own move.
+// A move to DONE that unblocks a dependent on another board: the writer reads its own move at once
+// (mutate drops the task's own board whatever its rows name).
 func TestMoveToDoneWithACrossBoardDependentDropsItsBoard(t *testing.T) {
 	f, n := counted(t)
 	f.wire()
@@ -411,5 +411,86 @@ func TestMoveToDoneWithACrossBoardDependentDropsItsBoard(t *testing.T) {
 	t.Logf("the move's change rows: %v; get_board: REVIEW %v, DONE %v, reads %v", named, got.TaskCounts[review], got.TaskCounts[done], n.take())
 	if got.TaskCounts[review] != 0 || got.TaskCounts[done] != 1 {
 		t.Fatalf("get_board after the move to DONE: REVIEW %v, DONE %v; want 0, 1", got.TaskCounts[review], got.TaskCounts[done])
+	}
+}
+
+// mutate drops the board an idempotent create wrote, after the commit; a replay of the same key
+// writes nothing and drops nothing.
+func TestIdempotentCreateDropsItsBoardAndReplayDropsNothing(t *testing.T) {
+	f, n := counted(t)
+	f.wire()
+	total := func(s BoardSnapshotResp) (sum float64) {
+		for _, v := range s.TaskCounts {
+			sum += v
+		}
+		return sum
+	}
+	f.snapshot(t)
+	before := total(f.snapshot(t))
+	req := CreateTaskReq{ProjectID: f.project.ID, BoardID: f.board.ID, Title: "idem", IdempotencyKey: "probe-key-1"}
+	if _, err := f.c.Tasks().Create(f.ctx, f.alice, req); err != nil {
+		t.Fatal(err)
+	}
+	n.take()
+	if got := total(f.snapshot(t)); got != before+1 {
+		t.Fatalf("get_board right after an idempotent create_task: %v tasks, want %v (reads %v)", got, before+1, n.take())
+	}
+	f.snapshot(t)
+	n.take()
+	if _, err := f.c.Tasks().Create(f.ctx, f.alice, req); err != nil {
+		t.Fatal(err)
+	}
+	n.take()
+	f.snapshot(t)
+	if reads := n.take(); reads["GetBoard"] != 0 {
+		t.Fatalf("a replay dropped the snapshot: reads %v", reads)
+	}
+}
+
+// P-187 on a second process: process 2 moves a task to DONE whose only dependent is on another
+// board; process 1 sees every change row the move wrote (as its bus would), and one of them must
+// name the moved task's board, or process 1 serves that board from a stale snapshot.
+func TestCrossProcessDoneWithACrossBoardDependentDropsItsBoard(t *testing.T) {
+	f := newFixture(t, Options{})
+	f.wire()
+	p2 := New(f.st, Options{Now: f.clock.now, ToolCallFlush: -1})
+	t.Cleanup(func() { _ = p2.Close(f.ctx) })
+	other, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "B2", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, done := f.column(t, domain.Review), f.column(t, domain.Done)
+	blocker := f.task(t, domain.Review, nil)
+	var todo2 string
+	for _, c := range other.Columns {
+		if c.Status == domain.Todo {
+			todo2 = c.ID
+		}
+	}
+	dep, err := f.st.CreateTask(f.ctx, store.CreateTaskInput{ProjectID: f.project.ID, BoardID: other.ID, ColumnID: todo2, Title: "d", Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: f.clock.now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.Context().AddDependency(f.ctx, f.alice, AddDependencyReq{ProjectID: f.project.ID, FromTaskID: blocker.ID, ToTaskID: dep.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if blocker, err = f.st.GetTask(f.ctx, f.project.ID, blocker.ID); err != nil {
+		t.Fatal(err)
+	}
+	seen := len(f.changes(t))
+	for _, ch := range f.changes(t) {
+		f.c.ObserveChange(ch)
+	}
+	f.snapshot(t) // process 1 caches board B
+	if _, err := p2.Tasks().Move(f.ctx, f.alice, MoveTaskReq{ProjectID: f.project.ID, TaskID: blocker.ID, Version: blocker.Version, ToStatus: domain.Done}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ch := range f.changes(t)[seen:] {
+		t.Logf("row %d: %s", ch.ID, ch.Payload)
+		f.c.ObserveChange(ch) // the bus delivering process 2's rows to process 1
+	}
+	got := f.snapshot(t)
+	if got.TaskCounts[review] != 0 || got.TaskCounts[done] != 1 {
+		t.Fatalf("process 1's get_board after process 2's move to DONE, every row delivered: REVIEW %v, DONE %v; want 0, 1 (stale snapshot)", got.TaskCounts[review], got.TaskCounts[done])
 	}
 }
