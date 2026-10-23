@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -40,10 +41,10 @@ func (t *txn) mentionsOf(body string) ([]string, error) {
 	for _, m := range members {
 		ids = append(ids, m.IdentityID)
 		u, err := t.Tx.GetUser(t.ctx, m.IdentityID)
+		if errors.Is(err, store.ErrNotFound) {
+			continue // not an account: the member keeps matching on its identity alone
+		}
 		if err != nil {
-			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
-				continue // not an account: the member keeps matching on its identity alone
-			}
 			return nil, err
 		}
 		aliases[m.IdentityID] = []string{u.Email, u.DisplayName}
