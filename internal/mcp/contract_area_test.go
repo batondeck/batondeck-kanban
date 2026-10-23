@@ -7,18 +7,26 @@ import (
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/contract"
+	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
 
 // TestAreaSchemasEqualExpected: per area, the input and output schema of every registered tool, as
 // a real client reads them from tools/list, canonicalised, equal that tool's contract/expected.json
-// entry exactly. A lane's drift fails here, in its own area, before R1.10's whole-surface test.
+// entry exactly. A lane's drift fails here, in its own area, before R1.10's whole-surface test. It
+// runs over servicefake and over the real service on every selected engine, the registry serve builds.
 func TestAreaSchemasEqualExpected(t *testing.T) {
+	t.Run("servicefake", func(t *testing.T) { areaSchemasEqualExpected(t, servicefake.New().Services()) })
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) { areaSchemasEqualExpected(t, s.Services) })
+}
+
+func areaSchemasEqualExpected(t *testing.T, svc service.Services) {
 	var want contract.Surface
 	if err := contract.ReadJSON(filepath.Join("..", "..", "contract", "expected.json"), &want); err != nil {
 		t.Fatal(err)
 	}
-	h := bootTools(t, servicefake.New().Services())
+	h := bootTools(t, svc)
 	listed, err := h.Connect(t, bearerAdmin).ListTools(testCtx(t), nil)
 	if err != nil {
 		t.Fatal(err)

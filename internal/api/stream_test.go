@@ -14,32 +14,19 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
-	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
 
-func servicesOf(c *service.Core) service.Services {
-	return service.Services{Projects: c.Projects(), Boards: c.Boards(), Tasks: c.Tasks(), Lifecycle: c.Lifecycle(),
-		Context: c.Context(), Media: c.Media(), Feed: c.Feed(), Sessions: c.Sessions(), ToolCalls: c.ToolCalls()}
-}
-
-// live is the BFF over the real service and the real bus over memstore, which has no commit wake,
-// so the bus polls every 10 ms.
+// live is the BFF over the real service and the real bus of a stack (R1.18: every engine
+// servicetest selects; the engines wake the bus on commit, memstore's polls every 10 ms).
 type live struct {
 	*harness
 	core *service.Core
 	bus  *bus.Bus
 }
 
-func newLive(t *testing.T, o Options) *live {
-	l := &live{}
-	l.harness = newHarness(t, func(st *memstore.Store) Options {
-		l.core = service.New(st, service.Options{ToolCallFlush: -1})
-		l.bus = bus.New(st, bus.Options{PollInterval: 10 * time.Millisecond})
-		o.Services, o.Bus = servicesOf(l.core), l.bus
-		return o
-	})
-	t.Cleanup(l.bus.Close)
-	return l
+func newLive(t *testing.T, s *servicetest.Stack, o Options) *live {
+	return &live{harness: newStackHarness(t, s, o), core: s.Core, bus: s.Bus}
 }
 
 func (h *harness) caller() domain.Caller {
@@ -202,148 +189,154 @@ func decodeBoard(t *testing.T, f frame) boardData {
 	return d
 }
 
-// AC2: a change-log row written by a real mutation, delivered by the real bus over memstore, is one
+// AC2: a change-log row written by a real mutation, delivered by the real bus on each engine, is one
 // board frame within 200 ms, after ready and before the next ping, followed by its updated frame.
 func TestStreamBoardFrameOnAChange(t *testing.T) {
-	l := newLive(t, Options{Ping: time.Second})
-	pid, bid := seedBoard(t, l.harness, l.core, "Live")
-	c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
-	if c.status != 200 {
-		t.Fatalf("stream: %d %s", c.status, c.body)
-	}
-	opened := time.Now()
-	if f := c.next(t, time.Second); f.event != "ready" {
-		t.Fatalf("first frame %+v, want ready", f)
-	}
-	time.Sleep(50 * time.Millisecond) // the tail is reading
-	start := time.Now()
-	l.addTask(t, l.caller(), pid, bid, "first")
-	f := c.next(t, time.Second)
-	if f.event != "board" {
-		t.Fatalf("after the change: %+v, want board", f)
-	}
-	if took := f.at.Sub(start); took > 200*time.Millisecond {
-		t.Fatalf("the board frame took %v, want <= 200ms", took)
-	}
-	d := decodeBoard(t, f)
-	if d.Board.Board.ID != bid || len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "first" || f.id == "" {
-		t.Fatalf("board frame: id %q %s", f.id, f.data)
-	}
-	t.Logf("board frame %v after the change, id %s", f.at.Sub(start), f.id)
-	u := c.next(t, time.Second)
-	if u.event != "updated" || u.data != `{"uri":"batondeck://`+pid+`/board/`+bid+`/feed","count":1}` {
-		t.Fatalf("after board: %+v, want updated count 1", u)
-	}
-	p := c.next(t, 2*time.Second)
-	if p.event != "ping" {
-		t.Fatalf("then %+v, want ping (one board frame for one change)", p)
-	}
-	if at := p.at.Sub(opened); at < 900*time.Millisecond || at > 1500*time.Millisecond {
-		t.Fatalf("ping at %v after open, want the 1s keepalive", at)
-	}
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Second})
+		pid, bid := seedBoard(t, l.harness, l.core, "Live")
+		c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		if c.status != 200 {
+			t.Fatalf("stream: %d %s", c.status, c.body)
+		}
+		opened := time.Now()
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("first frame %+v, want ready", f)
+		}
+		time.Sleep(50 * time.Millisecond) // the tail is reading
+		start := time.Now()
+		l.addTask(t, l.caller(), pid, bid, "first")
+		f := c.next(t, time.Second)
+		if f.event != "board" {
+			t.Fatalf("after the change: %+v, want board", f)
+		}
+		if took := f.at.Sub(start); took > 200*time.Millisecond {
+			t.Fatalf("the board frame took %v, want <= 200ms", took)
+		}
+		d := decodeBoard(t, f)
+		if d.Board.Board.ID != bid || len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "first" || f.id == "" {
+			t.Fatalf("board frame: id %q %s", f.id, f.data)
+		}
+		t.Logf("board frame %v after the change, id %s", f.at.Sub(start), f.id)
+		u := c.next(t, time.Second)
+		if u.event != "updated" || u.data != `{"uri":"batondeck://`+pid+`/board/`+bid+`/feed","count":1}` {
+			t.Fatalf("after board: %+v, want updated count 1", u)
+		}
+		p := c.next(t, 2*time.Second)
+		if p.event != "ping" {
+			t.Fatalf("then %+v, want ping (one board frame for one change)", p)
+		}
+		if at := p.at.Sub(opened); at < 900*time.Millisecond || at > 1500*time.Millisecond {
+			t.Fatalf("ping at %v after open, want the 1s keepalive", at)
+		}
+	})
 }
 
 // AC6: a stream for project p carries p's rows and not project q's; a stream for a board of a
 // project the caller is not a member of is refused 403 before any frame.
 func TestStreamIsScopedToTheProject(t *testing.T) {
-	l := newLive(t, Options{Ping: time.Minute})
-	pid, bid := seedBoard(t, l.harness, l.core, "P")
-	qid, qbid := seedBoard(t, l.harness, l.core, "Q")
-	c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
-	if c.next(t, time.Second).event != "ready" {
-		t.Fatal("no ready")
-	}
-	time.Sleep(50 * time.Millisecond)
-	// q's rows: a task on q's board, and a settings change naming q and no board, which only the
-	// project subscription keeps off p's stream.
-	l.addTask(t, l.caller(), qid, qbid, "in q")
-	l.setColor(t, qid, "#aa0000")
-	c.quiet(t, 400*time.Millisecond)
-	l.addTask(t, l.caller(), pid, bid, "in p")
-	if f := c.next(t, time.Second); f.event != "board" || !strings.Contains(f.data, `"in p"`) || strings.Contains(f.data, `"in q"`) {
-		t.Fatalf("after p's change: %+v, want p's board frame", f)
-	}
-	if u := c.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":1`) {
-		t.Fatalf("%+v, want updated count 1", u)
-	}
-	l.setColor(t, pid, "#0000aa") // the positive control: a project-wide row of p is p's board's too
-	if f := c.next(t, time.Second); f.event != "board" {
-		t.Fatalf("after p's settings change: %+v, want board", f)
-	}
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		qid, qbid := seedBoard(t, l.harness, l.core, "Q")
+		c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		if c.next(t, time.Second).event != "ready" {
+			t.Fatal("no ready")
+		}
+		time.Sleep(50 * time.Millisecond)
+		// q's rows: a task on q's board, and a settings change naming q and no board, which only the
+		// project subscription keeps off p's stream.
+		l.addTask(t, l.caller(), qid, qbid, "in q")
+		l.setColor(t, qid, "#aa0000")
+		c.quiet(t, 400*time.Millisecond)
+		l.addTask(t, l.caller(), pid, bid, "in p")
+		if f := c.next(t, time.Second); f.event != "board" || !strings.Contains(f.data, `"in p"`) || strings.Contains(f.data, `"in q"`) {
+			t.Fatalf("after p's change: %+v, want p's board frame", f)
+		}
+		if u := c.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":1`) {
+			t.Fatalf("%+v, want updated count 1", u)
+		}
+		l.setColor(t, pid, "#0000aa") // the positive control: a project-wide row of p is p's board's too
+		if f := c.next(t, time.Second); f.event != "board" {
+			t.Fatalf("after p's settings change: %+v, want board", f)
+		}
 
-	other := domain.Caller{Identity: "U-other", TokenScope: "U-other"}
-	op, err := l.core.Projects().Create(context.Background(), other, service.CreateProjectReq{Name: "Theirs"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ob, err := l.core.Boards().Create(context.Background(), other, service.CreateBoardReq{ProjectID: op.ProjectID, Name: "Theirs"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	refused := l.stream(t, "?projectId="+op.ProjectID+"&boardId="+ob.Board.ID, nil)
-	if refused.status != http.StatusForbidden || !strings.Contains(refused.body, `"FORBIDDEN"`) {
-		t.Fatalf("a non-member's board stream: %d %s, want 403 FORBIDDEN", refused.status, refused.body)
-	}
-	if lone := l.stream(t, "?projectId="+pid, nil); lone.status != http.StatusBadRequest {
-		t.Fatalf("projectId without boardId: %d, want 400", lone.status)
-	}
+		other := domain.Caller{Identity: "U-other", TokenScope: "U-other"}
+		op, err := l.core.Projects().Create(context.Background(), other, service.CreateProjectReq{Name: "Theirs"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ob, err := l.core.Boards().Create(context.Background(), other, service.CreateBoardReq{ProjectID: op.ProjectID, Name: "Theirs"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused := l.stream(t, "?projectId="+op.ProjectID+"&boardId="+ob.Board.ID, nil)
+		if refused.status != http.StatusForbidden || !strings.Contains(refused.body, `"FORBIDDEN"`) {
+			t.Fatalf("a non-member's board stream: %d %s, want 403 FORBIDDEN", refused.status, refused.body)
+		}
+		if lone := l.stream(t, "?projectId="+pid, nil); lone.status != http.StatusBadRequest {
+			t.Fatalf("projectId without boardId: %d, want 400", lone.status)
+		}
+	})
 }
 
 // A reconnect with the last board frame's id (Last-Event-ID, or ?cursor=) replays what it missed as
 // one board frame counting the project's board rows; a cursor more than ReplayCap rows old gets
 // resync and no board frame.
 func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
-	l := newLive(t, Options{Ping: time.Minute, ReplayCap: 6})
-	pid, bid := seedBoard(t, l.harness, l.core, "R")
-	qid, qbid := seedBoard(t, l.harness, l.core, "Q")
-	c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
-	c.next(t, time.Second)
-	time.Sleep(50 * time.Millisecond)
-	l.addTask(t, l.caller(), pid, bid, "seen")
-	seen := c.next(t, time.Second)
-	if seen.event != "board" || seen.id == "" {
-		t.Fatalf("%+v, want a board frame with an id", seen)
-	}
-	c.cancel()
-	for _, title := range []string{"m1", "m2", "m3"} {
-		l.addTask(t, l.caller(), pid, bid, title)
-	}
-	l.addTask(t, l.caller(), qid, qbid, "q1")
-	l.setColor(t, qid, "#aa0000") // q's, naming no board: only the replay's project filter drops it
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute, ReplayCap: 6})
+		pid, bid := seedBoard(t, l.harness, l.core, "R")
+		qid, qbid := seedBoard(t, l.harness, l.core, "Q")
+		c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		c.next(t, time.Second)
+		time.Sleep(50 * time.Millisecond)
+		l.addTask(t, l.caller(), pid, bid, "seen")
+		seen := c.next(t, time.Second)
+		if seen.event != "board" || seen.id == "" {
+			t.Fatalf("%+v, want a board frame with an id", seen)
+		}
+		c.cancel()
+		for _, title := range []string{"m1", "m2", "m3"} {
+			l.addTask(t, l.caller(), pid, bid, title)
+		}
+		l.addTask(t, l.caller(), qid, qbid, "q1")
+		l.setColor(t, qid, "#aa0000") // q's, naming no board: only the replay's project filter drops it
 
-	for _, via := range []struct {
-		query  string
-		header map[string]string
-	}{{"", map[string]string{"Last-Event-ID": seen.id}}, {"&cursor=" + seen.id, nil}} {
-		r := l.stream(t, "?projectId="+pid+"&boardId="+bid+via.query, via.header)
-		if f := r.next(t, time.Second); f.event != "ready" {
-			t.Fatalf("%+v, want ready", f)
+		for _, via := range []struct {
+			query  string
+			header map[string]string
+		}{{"", map[string]string{"Last-Event-ID": seen.id}}, {"&cursor=" + seen.id, nil}} {
+			r := l.stream(t, "?projectId="+pid+"&boardId="+bid+via.query, via.header)
+			if f := r.next(t, time.Second); f.event != "ready" {
+				t.Fatalf("%+v, want ready", f)
+			}
+			f := r.next(t, time.Second)
+			d := decodeBoard(t, f)
+			if f.event != "board" || len(d.Tasks.Tasks) != 4 || atoi(t, f.id) <= atoi(t, seen.id) {
+				t.Fatalf("replay (%v): %+v, want a board frame of 4 tasks past id %s", via, f, seen.id)
+			}
+			if u := r.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":3`) {
+				t.Fatalf("replay (%v): %+v, want updated count 3 (q's rows are not p's)", via, u)
+			}
+			r.cancel()
 		}
-		f := r.next(t, time.Second)
-		d := decodeBoard(t, f)
-		if f.event != "board" || len(d.Tasks.Tasks) != 4 || atoi(t, f.id) <= atoi(t, seen.id) {
-			t.Fatalf("replay (%v): %+v, want a board frame of 4 tasks past id %s", via, f, seen.id)
-		}
-		if u := r.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":3`) {
-			t.Fatalf("replay (%v): %+v, want updated count 3 (q's rows are not p's)", via, u)
-		}
-		r.cancel()
-	}
 
-	l.addTask(t, l.caller(), pid, bid, "m4") // 6 rows after the cursor: still within the cap of 6
-	within := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
-	within.next(t, time.Second)
-	if f := within.next(t, time.Second); f.event != "board" {
-		t.Fatalf("6 rows after the cursor, cap 6: %+v, want board", f)
-	}
-	within.cancel()
-	l.addTask(t, l.caller(), qid, qbid, "q3") // 7 rows: past the cap
-	old := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
-	old.next(t, time.Second)
-	if f := old.next(t, time.Second); f.event != "resync" {
-		t.Fatalf("7 rows after the cursor, cap 6: %+v, want resync", f)
-	}
-	old.quiet(t, 300*time.Millisecond)
+		l.addTask(t, l.caller(), pid, bid, "m4") // 6 rows after the cursor: still within the cap of 6
+		within := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
+		within.next(t, time.Second)
+		if f := within.next(t, time.Second); f.event != "board" {
+			t.Fatalf("6 rows after the cursor, cap 6: %+v, want board", f)
+		}
+		within.cancel()
+		l.addTask(t, l.caller(), qid, qbid, "q3") // 7 rows: past the cap
+		old := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
+		old.next(t, time.Second)
+		if f := old.next(t, time.Second); f.event != "resync" {
+			t.Fatalf("7 rows after the cursor, cap 6: %+v, want resync", f)
+		}
+		old.quiet(t, 300*time.Millisecond)
+	})
 }
 
 // fakeDirectory is the device session directory's double: Register and Unregister change its
@@ -395,66 +388,70 @@ func (d *fakeDirectory) unregister(pid int64) {
 // AC6: the stream's presence frames are the caller's live processes on the device: one on connect,
 // one per register and unregister that changes them; another user's process is not shown.
 func TestStreamPresenceFollowsTheDirectory(t *testing.T) {
-	dir := newFakeDirectory()
-	l := newLive(t, Options{Ping: time.Minute, Presence: dir})
-	c := l.stream(t, "", nil)
-	if f := c.next(t, time.Second); f.event != "ready" {
-		t.Fatalf("%+v, want ready", f)
-	}
-	if f := c.next(t, time.Second); f.event != "presence" || f.data != `{"sessions":[]}` {
-		t.Fatalf("on connect: %+v, want an empty presence frame", f)
-	}
-	dir.register(PresenceEntry{PID: 4242, Role: "worker", IdentityID: l.userID, AgentID: "builder-1", Adapter: "claude-code", RegisteredAt: "2026-10-23T00:00:00Z"})
-	f := c.next(t, time.Second)
-	if f.event != "presence" || !strings.Contains(f.data, `"pid":4242`) || !strings.Contains(f.data, `"role":"worker"`) {
-		t.Fatalf("after register: %+v, want a presence frame naming pid 4242", f)
-	}
-	t.Logf("register: event: %s data: %s", f.event, f.data)
-	dir.register(PresenceEntry{PID: 7, Role: "master", IdentityID: "U-someone-else", AgentID: "m", RegisteredAt: "2026-10-23T00:00:01Z"})
-	c.quiet(t, 200*time.Millisecond)
-	dir.unregister(4242)
-	f = c.next(t, time.Second)
-	if f.event != "presence" || f.data != `{"sessions":[]}` {
-		t.Fatalf("after unregister: %+v, want an empty presence frame", f)
-	}
-	t.Logf("unregister: event: %s data: %s", f.event, f.data)
-	c.quiet(t, 200*time.Millisecond)
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		dir := newFakeDirectory()
+		l := newLive(t, s, Options{Ping: time.Minute, Presence: dir})
+		c := l.stream(t, "", nil)
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		if f := c.next(t, time.Second); f.event != "presence" || f.data != `{"sessions":[]}` {
+			t.Fatalf("on connect: %+v, want an empty presence frame", f)
+		}
+		dir.register(PresenceEntry{PID: 4242, Role: "worker", IdentityID: l.userID, AgentID: "builder-1", Adapter: "claude-code", RegisteredAt: "2026-10-23T00:00:00Z"})
+		f := c.next(t, time.Second)
+		if f.event != "presence" || !strings.Contains(f.data, `"pid":4242`) || !strings.Contains(f.data, `"role":"worker"`) {
+			t.Fatalf("after register: %+v, want a presence frame naming pid 4242", f)
+		}
+		t.Logf("register: event: %s data: %s", f.event, f.data)
+		dir.register(PresenceEntry{PID: 7, Role: "master", IdentityID: "U-someone-else", AgentID: "m", RegisteredAt: "2026-10-23T00:00:01Z"})
+		c.quiet(t, 200*time.Millisecond)
+		dir.unregister(4242)
+		f = c.next(t, time.Second)
+		if f.event != "presence" || f.data != `{"sessions":[]}` {
+			t.Fatalf("after unregister: %+v, want an empty presence frame", f)
+		}
+		t.Logf("unregister: event: %s data: %s", f.event, f.data)
+		c.quiet(t, 200*time.Millisecond)
+	})
 }
 
 // A member removed while their stream is open has it closed at the next board frame, which
 // re-authorizes as them; nothing of the board reaches them after the removal (the reviewer's probe
 // of PR #43). remove_member writes a change-log row of the project, so that frame is due at once.
 func TestStreamClosesWhenTheMemberIsRemoved(t *testing.T) {
-	l := newLive(t, Options{Ping: 200 * time.Millisecond})
-	pid, bid := seedBoard(t, l.harness, l.core, "P")
-	bob := l.as("bob")
-	if _, err := l.core.Projects().AddMember(context.Background(), l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
-		t.Fatal(err)
-	}
-	c := bob.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
-	if c.status != http.StatusOK {
-		t.Fatalf("bob's stream: %d %s", c.status, c.body)
-	}
-	if f := c.next(t, time.Second); f.event != "ready" {
-		t.Fatalf("%+v, want ready", f)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if _, err := l.core.Projects().RemoveMember(context.Background(), l.caller(), service.RemoveMemberReq{ProjectID: pid, IdentityID: bob.userID}); err != nil {
-		t.Fatal(err)
-	}
-	l.addTask(t, l.caller(), pid, bid, "after the removal")
-	deadline := time.After(time.Second)
-	for {
-		select {
-		case f, ok := <-c.frames:
-			if !ok {
-				return
-			}
-			if f.event != "ping" {
-				t.Fatalf("a %s frame after the removal: %s", f.event, f.data)
-			}
-		case <-deadline:
-			t.Fatal("the stream is still open 1s after the member was removed")
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 200 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		bob := l.as("bob")
+		if _, err := l.core.Projects().AddMember(context.Background(), l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+			t.Fatal(err)
 		}
-	}
+		c := bob.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		if c.status != http.StatusOK {
+			t.Fatalf("bob's stream: %d %s", c.status, c.body)
+		}
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if _, err := l.core.Projects().RemoveMember(context.Background(), l.caller(), service.RemoveMemberReq{ProjectID: pid, IdentityID: bob.userID}); err != nil {
+			t.Fatal(err)
+		}
+		l.addTask(t, l.caller(), pid, bid, "after the removal")
+		deadline := time.After(time.Second)
+		for {
+			select {
+			case f, ok := <-c.frames:
+				if !ok {
+					return
+				}
+				if f.event != "ping" {
+					t.Fatalf("a %s frame after the removal: %s", f.event, f.data)
+				}
+			case <-deadline:
+				t.Fatal("the stream is still open 1s after the member was removed")
+			}
+		}
+	})
 }
