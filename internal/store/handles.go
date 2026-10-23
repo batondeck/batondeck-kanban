@@ -69,7 +69,7 @@ func (s *SQLite) queries(write bool) sqlQueries {
 	case write:
 		db = s.w
 	}
-	return sqlitedb.New(sqliteCounted{db})
+	return sqlitedb.New(sqliteCounted{db, s.issued})
 }
 
 // queries is the transaction inside Atomically, the pool outside it.
@@ -78,7 +78,7 @@ func (s *Postgres) queries(bool) sqlQueries {
 	if s.tx != nil {
 		db = s.tx
 	}
-	return pgQueries{pgdb.New(pgCounted{db})}
+	return pgQueries{pgdb.New(pgCounted{db, s.issued})}
 }
 
 // on is the engine behind a Store that Atomically handed its callback, which is always this
@@ -94,16 +94,24 @@ func countingStatements(ctx context.Context, n *atomic.Int64) context.Context {
 	return context.WithValue(ctx, statementCounter{}, n)
 }
 
-func countStatement(ctx context.Context) {
+// countStatement adds one statement to the engine's issued count and, under countingStatements, to
+// the context's.
+func countStatement(ctx context.Context, issued *atomic.Int64) {
+	if issued != nil {
+		issued.Add(1)
+	}
 	if n, ok := ctx.Value(statementCounter{}).(*atomic.Int64); ok {
 		n.Add(1)
 	}
 }
 
-type sqliteCounted struct{ db sqlitedb.DBTX }
+type sqliteCounted struct {
+	db     sqlitedb.DBTX
+	issued *atomic.Int64
+}
 
 func (c sqliteCounted) ExecContext(ctx context.Context, q string, args ...interface{}) (sql.Result, error) {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.ExecContext(ctx, q, args...)
 }
 
@@ -112,29 +120,32 @@ func (c sqliteCounted) PrepareContext(ctx context.Context, q string) (*sql.Stmt,
 }
 
 func (c sqliteCounted) QueryContext(ctx context.Context, q string, args ...interface{}) (*sql.Rows, error) {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.QueryContext(ctx, q, args...)
 }
 
 func (c sqliteCounted) QueryRowContext(ctx context.Context, q string, args ...interface{}) *sql.Row {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.QueryRowContext(ctx, q, args...)
 }
 
-type pgCounted struct{ db pgdb.DBTX }
+type pgCounted struct {
+	db     pgdb.DBTX
+	issued *atomic.Int64
+}
 
 func (c pgCounted) Exec(ctx context.Context, q string, args ...interface{}) (pgconn.CommandTag, error) {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.Exec(ctx, q, args...)
 }
 
 func (c pgCounted) Query(ctx context.Context, q string, args ...interface{}) (pgx.Rows, error) {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.Query(ctx, q, args...)
 }
 
 func (c pgCounted) QueryRow(ctx context.Context, q string, args ...interface{}) pgx.Row {
-	countStatement(ctx)
+	countStatement(ctx, c.issued)
 	return c.db.QueryRow(ctx, q, args...)
 }
 
