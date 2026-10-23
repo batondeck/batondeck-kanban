@@ -765,7 +765,7 @@ func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, func(), cha
 func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 	b := postgresBackend(t)
 	rep := &reporter{}
-	gap := time.Second
+	gap := 3 * time.Second                                         // wide enough that a loaded gate does not pass hole 2 before its commit (P-141, P-147)
 	write(t, b.store, change("project:P-1", 0))                    // 1
 	idA, relA, doneA := hold(t, b.store, change("project:P-1", 1)) // 2 in flight
 	write(t, b.store, change("project:P-1", 2))                    // 3
