@@ -8,6 +8,12 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The R3.1 socket-wake spike findings (`docs/release/socket-wake-spike-2026-10.md`) and its scratch
+  writer (`docs/release/spikes/socket-wake/doorbell.py`), measured on Claude Code 2.1.309: a
+  newline-delimited `{"type":"user",…}` frame written to a session's `CLAUDE_CODE_MESSAGING_SOCKET`
+  starts a turn in an idle session (19–105 ms to dequeue) and is queued between tool calls in a busy
+  one; the auth line is optional on macOS; `crossSessionInbound` `hold`/`refuse` start no turn. No
+  product code.
 - The MCP tool registry and the first thirteen tools (R1.1). `internal/mcp/tools` holds one file per
   area, each registering through its `Register<Area>` hook; `registry.go` pre-lists every area a plan
   task names a tools file for, with the task that writes it, so a lane adds a file. `mcp.Tool`
