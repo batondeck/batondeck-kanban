@@ -30,9 +30,8 @@ type app struct {
 	mcp  *mcp.Server
 	core *service.Core
 	bus  *bus.Bus
-	// mount adds GET /wake to the mux handler builds; mountUnix adds POST /internal/wake-session to
-	// the one only the Unix listeners serve, so over TCP that path answers as a missing one does.
-	mount, mountUnix func(*http.ServeMux)
+	// mount adds GET /wake and the socket-only POST /internal/wake-session to the mux handler builds.
+	mount func(*http.ServeMux)
 }
 
 // compose builds the app over st. sealer seals a wake session's inbox token; nil refuses one.
@@ -51,30 +50,27 @@ func compose(st store.Store, version string, logger *log.Logger, sealer service.
 	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger})
 	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
 	return &app{mcp: srv, core: sc, bus: b,
-		mount:     func(mux *http.ServeMux) { mux.Handle("GET /wake", doorbell) },
-		mountUnix: func(mux *http.ServeMux) { mux.Handle("POST /internal/wake-session", inbox) },
+		mount: func(mux *http.ServeMux) {
+			mux.Handle("GET /wake", doorbell)
+			mux.Handle("POST "+internalPrefix+"wake-session", inbox)
+		},
 	}
 }
 
 // internalPrefix is the socket-only namespace: no path under it is served over TCP.
 const internalPrefix = "/internal/"
 
-// handler is the app's routes: a request that arrived on a Unix socket (core.ViaUnixSocket) is
-// served by a mux holding the socket-only routes as well; one over TCP by a mux that never held
-// them, and every path under /internal/ is 404 there whatever its method, so a socket-only route
-// answers over TCP exactly as one that does not exist.
+// handler is the app's routes on both networks. Over TCP every path under /internal/ is 404 whatever
+// its method, before the mux sees it, so a socket-only route answers there exactly as one that does
+// not exist (no 405, no Allow header naming its method).
 func (a *app) handler(version string) http.Handler {
-	tcp := handler(version, a.mcp.Handler(), a.mount)
-	unix := handler(version, a.mcp.Handler(), a.mount, a.mountUnix)
+	mux := handler(version, a.mcp.Handler(), a.mount)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case core.ViaUnixSocket(r.Context()):
-			unix.ServeHTTP(w, r)
-		case strings.HasPrefix(r.URL.Path, internalPrefix):
+		if !core.ViaUnixSocket(r.Context()) && strings.HasPrefix(r.URL.Path, internalPrefix) {
 			http.NotFound(w, r)
-		default:
-			tcp.ServeHTTP(w, r)
+			return
 		}
+		mux.ServeHTTP(w, r)
 	})
 }
 

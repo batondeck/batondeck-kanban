@@ -840,3 +840,24 @@ func TestWakeCatchUpPagesPastOneReplay(t *testing.T) {
 	}
 	w.none(t, 300*time.Millisecond)
 }
+
+// A recheck that cannot read the scopes ends the stream rather than trusting them, naming its cursor.
+func TestWakeRecheckEndsWhenItCannotConfirm(t *testing.T) {
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	var calls atomic.Int64
+	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
+		Logger: log.New(io.Discard, "", 0), Recheck: 200 * time.Millisecond,
+		Scopes: func(context.Context, domain.Caller) ([]string, error) {
+			if calls.Add(1) > 1 {
+				return nil, fmt.Errorf("store down")
+			}
+			return []string{"U-1"}, nil
+		}})
+	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t"}
+	w := s.open(t, "?since=0")
+	if got := w.last(t, 500*time.Millisecond); got != "recheck failed, reconnect with since=0" {
+		t.Fatalf("last comment %q", got)
+	}
+}
