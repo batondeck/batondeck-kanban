@@ -41,7 +41,7 @@ describe('SprintsRail', () => {
     render(
       <SprintsRail
         sprints={[sprint({})]}
-        tasks={[task('T-1', 'DONE', ['S-1']), task('T-2', 'READY', ['S-1']), task('T-3', 'DONE')]}
+        tasks={[task('T-1', 'DONE', ['S-1']), task('T-2', 'TODO', ['S-1']), task('T-3', 'DONE')]}
         filterSprint=""
         onFilter={() => {}}
         onOpenTask={() => {}}
@@ -174,7 +174,7 @@ describe('SprintsRail: the sprint lifecycle (T-330)', () => {
     render(
       <SprintsRail
         sprints={[sprint({ id: 'S-9', status: 'ACTIVE' })]}
-        tasks={[task('T-1', 'DONE', ['S-9']), task('T-2', 'READY', ['S-9'])]}
+        tasks={[task('T-1', 'DONE', ['S-9']), task('T-2', 'TODO', ['S-9'])]}
         filterSprint=""
         onFilter={() => {}}
         onOpenTask={() => {}}

@@ -10,19 +10,17 @@ import * as tenantsApi from '../api/tenants.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar, ConfirmButton, timeAgo } from '../components.js';
 import type { Status } from '../types.js';
+import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can } from '../permissions.js';
 import { useAuth } from '../auth.js';
 
-const STATUSES: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 
 /** A small bordered card used as a settings panel. */
@@ -700,7 +698,7 @@ export function Settings() {
 
   const [member, setMember] = useState('');
   const [role, setRole] = useState('member');
-  const [col, setCol] = useState({ name: '', status: 'READY' as Status, wip: '' });
+  const [col, setCol] = useState({ name: '', status: 'TODO' as Status, wip: '' });
   const [drafts, setDrafts] = useState<Record<string, { name: string; wip: string }>>({});
   const [err, setErr] = useState<string | null>(null);
 
@@ -717,7 +715,7 @@ export function Settings() {
   const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
     mutationFn: () => boardsApi.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
-    onSuccess: () => { setCol({ name: '', status: 'READY', wip: '' }); refresh(); },
+    onSuccess: () => { setCol({ name: '', status: 'TODO', wip: '' }); refresh(); },
     onError: (e) => setErr(String(e)),
   });
 

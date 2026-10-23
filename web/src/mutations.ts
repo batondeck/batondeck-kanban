@@ -146,7 +146,7 @@ export function useTaskCreate(projectId: string, boardId: string) {
         projectId,
         boardId,
         columnId: '',
-        status: 'BACKLOG',
+        status: 'TODO',
         title: body.title,
         description: '',
         priority: (body.priority ?? 'normal') as Task['priority'],

@@ -193,7 +193,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
               if (Number.isNaN(due.getTime())) return null; // core doesn't validate dueAt format
               const dueDay = due.toISOString().slice(0, 10);
               const today = new Date().toISOString().slice(0, 10);
-              const overdue = dueDay < today && task.status !== 'DONE' && task.status !== 'CANCELLED';
+              const overdue = dueDay < today && task.status !== 'DONE';
               const c = overdue ? 'var(--blocked)' : 'var(--text-2)';
               return (
                 <span title={due.toLocaleString()} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 'var(--r-1)', border: `1px solid ${overdue ? 'var(--blocked)' : 'var(--border)'}`, fontSize: 12, color: c }}>

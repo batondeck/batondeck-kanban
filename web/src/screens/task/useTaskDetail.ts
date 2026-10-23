@@ -20,17 +20,14 @@ import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
 import type { ActivityEvent, Status, Task } from '../../types.js';
 
-// Default fallback mirroring the core DEFAULT_TRANSITION_TABLE (src/domain/status.ts). The move
-// buttons prefer the project's own settings.transitionTable (per-project overrides) and fall back to
-// this when none is set — so they always offer exactly the transitions the server accepts.
-const NEXT: Record<string, Status[]> = {
-  BACKLOG: ['READY', 'CANCELLED'],
-  READY: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
-  IN_PROGRESS: ['REVIEW', 'BLOCKED', 'READY', 'CANCELLED'],
-  BLOCKED: ['IN_PROGRESS', 'READY'],
+// The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
+// get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
+const NEXT: Record<Status, Status[]> = {
+  TODO: ['IN_PROGRESS'],
+  IN_PROGRESS: ['REVIEW', 'BLOCKED', 'TODO'],
+  BLOCKED: ['IN_PROGRESS', 'TODO'],
   REVIEW: ['DONE', 'IN_PROGRESS'],
   DONE: ['IN_PROGRESS'],
-  CANCELLED: [],
 };
 
 /** Fire a write, refresh the ticket's caches, surface the error instead of throwing. */
@@ -164,7 +161,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
   const subs = subQ.data?.tasks ?? [];
-  const subsDone = subs.filter((s) => s.status === 'DONE' || s.status === 'CANCELLED').length;
+  const subsDone = subs.filter((s) => s.status === 'DONE').length;
   const subsPct = subs.length ? Math.round((subsDone / subs.length) * 100) : 0;
 
   // Dependency chips, split into blocked-by / blocks relative to this task.
@@ -178,11 +175,11 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const taskById = new Map<string, Task>((boardTasksQ.data?.tasks ?? []).map((t) => [t.id, t]));
 
   // Board-aware move targets — shared by the header status select and the Actions move buttons.
-  // Prefer the board's transition table (per-project overrides), fall back to the default; only offer
-  // statuses that have a column on THIS board once it loads (labels use the column's name).
+  // The board's transition table (the fixed one, read-only), else the default; only offer statuses
+  // that have a column on THIS board once it loads (labels use the column's name).
   const cols = boardQ.data?.board.columns ?? [];
   const colFor = (s: string): { name: string } | undefined => cols.find((c) => c.status === s);
-  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? projectQ.data?.project.settings.transitionTable?.[task.status] ?? NEXT[task.status])) ?? [];
+  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? NEXT[task.status])) ?? [];
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 

@@ -31,13 +31,11 @@ export const mdComponents: Components = {
 export const mdPlugins: ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm];
 
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 const PRIORITY_COLOR: Record<Priority, string> = {
   low: 'var(--text-muted)',

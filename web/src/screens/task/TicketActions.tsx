@@ -38,7 +38,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
   const { task, projectId, taskId, run, move, myLease, heldByOther, setLease, colFor, moveTargets, agentList } = d;
   const [handoff, setHandoff] = useState<{ to: string; note: string } | null>(null);
   const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
-  const readyName = colFor('READY')?.name ?? 'Ready';
+  const readyName = colFor('TODO')?.name ?? 'To do';
   const stuck = moveTargets.length === 0;
 
   return (
@@ -97,7 +97,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
 
         <div>
           <span style={{ ...label, display: 'block', marginBottom: 7 }}>Work the task</span>
-          {task.status === 'READY' && !task.claim && (
+          {task.status === 'TODO' && !task.claim && (
             <Cluster gap={8} wrap>
               <Button
                 variant="primary"
@@ -126,7 +126,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               Held by <strong style={{ color: 'var(--text-2)' }}>{task.claim?.agent || task.claim?.owner}</strong> — wait for release to claim it.
             </span>
           )}
-          {task.status !== 'READY' && !task.claim && (
+          {task.status !== 'TODO' && !task.claim && (
             <span className="muted" style={{ fontSize: 12 }}>
               Move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong> to claim it.
             </span>

@@ -28,7 +28,7 @@ const task: Task = {
   columnId: 'c1',
   title: 'Ship the parser',
   description: '',
-  status: 'READY',
+  status: 'TODO',
   priority: 'high',
   assignee: null,
   labels: LABELS,
@@ -52,7 +52,7 @@ const board = {
   id: 'b1',
   projectId: 'p1',
   name: 'Board',
-  columns: [{ id: 'c1', name: 'Ready', order: 1, status: 'READY', wipLimit: null }],
+  columns: [{ id: 'c1', name: 'To do', order: 1, status: 'TODO', wipLimit: null }],
 };
 
 beforeEach(() => {

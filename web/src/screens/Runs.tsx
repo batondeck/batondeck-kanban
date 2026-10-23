@@ -17,7 +17,6 @@ import type { RunView, Status, Task } from '../types.js';
 // A run is "submitted" (pickable) when it carries a deliverable — the core sets this on complete_task,
 // landing the run in REVIEW/DONE. Running = an active, non-terminal run still being worked.
 function runState(r: RunView): 'submitted' | 'running' | 'discarded' {
-  if (r.status === 'CANCELLED') return 'discarded';
   if (r.hasDeliverable || r.status === 'REVIEW' || r.status === 'DONE') return 'submitted';
   return 'running';
 }
@@ -151,7 +150,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
   // After a pick, the parent is no longer racing and exactly one run keeps its deliverable in a
   // non-cancelled, submitted state — highlight that as the winner.
   const winnerId = !racing
-    ? runs.find((r) => r.status !== 'CANCELLED' && (r.hasDeliverable || submittedStatuses.includes(r.status)))?.taskId
+    ? runs.find((r) => r.hasDeliverable || submittedStatuses.includes(r.status))?.taskId
     : undefined;
 
   return (
@@ -227,7 +226,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
         <div style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 12px', marginBottom: 12, borderRadius: 'var(--r-2)', background: 'color-mix(in srgb, var(--progress) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--progress) 25%, transparent)' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--progress)' }}>
             <Icon name="finish" size={12} />
-            Racing · {runs.filter((r) => r.status !== 'CANCELLED').length} runs open
+            Racing · {runs.length} runs open
             {task.raceOpenedAt && <span className="mono" style={{ fontSize: 11 }}>· started {timeAgo(task.raceOpenedAt)}</span>}
           </span>
           <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => void guard(() => runsApi.cancelRuns(projectId, taskId, task.version))}>

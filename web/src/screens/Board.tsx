@@ -34,6 +34,7 @@ import { type AgentEntry, STATE_META, buildAgentList, busyAgentNames, isLiveEntr
 import { uiSettings } from '../settings.js';
 import { StatusDot } from '../AgentSelect.js';
 import type { ActivityEvent, AgentSession, Board as BoardT, Sprint, SprintStatus, Status, Task } from '../types.js';
+import { STATUSES } from '../types.js';
 import { mergePresence } from '../presenceMerge.js';
 
 const SPRINT_STATUS_COLOR: Record<SprintStatus, string> = {
@@ -73,12 +74,11 @@ function AgentPresence({ agents }: { agents: AgentEntry[] }) {
   );
 }
 
-const STATUSES: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
 const PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 
 // Lifecycle tools advance a task's *status* in place (only an explicit move changes columnId), so the
 // board places a card by the column whose status matches the task — falling back to its columnId for
-// columnless statuses (BLOCKED/CANCELLED), which are surfaced via a StatusPill.
+// columnless statuses (BLOCKED), which are surfaced via a StatusPill.
 function columnIdOf(board: BoardT | undefined, t: Task): string {
   if (!board) return t.columnId;
   const own = board.columns.find((c) => c.id === t.columnId);
@@ -930,7 +930,6 @@ export function Board() {
   // search results (T-37) so "keyword + status:review + assignee:alice" narrows both consistently.
   const facetMatch = useCallback(
     (t: Task): boolean => {
-      if (t.status === 'CANCELLED' && filters.status !== 'CANCELLED') return false;
       if (filters.status && t.status !== filters.status) return false;
       if (filters.assignee && t.assignee !== filters.assignee) return false;
       if (filters.label && !t.labels.includes(filters.label)) return false;
@@ -1037,7 +1036,6 @@ export function Board() {
 
   const counts: Record<string, number> = {};
   for (const t of allTasks) {
-    if (t.status === 'CANCELLED') continue;
     const cid = columnIdOf(board, t);
     counts[cid] = (counts[cid] ?? 0) + 1;
   }

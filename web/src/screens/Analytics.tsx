@@ -12,19 +12,17 @@ import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
-import { isAgent } from '../types.js';
+import { STATUSES, isAgent } from '../types.js';
 import type { ActivityEvent, Status } from '../types.js';
 import { Cluster, Stack, Tabs } from '../ui.js';
 
-const STATUS_ORDER: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
+const STATUS_ORDER: Status[] = [...STATUSES];
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 
 function Stat({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
@@ -191,7 +189,6 @@ export function Analytics() {
     if (!board) return [] as Array<{ id: string; name: string; status: Status; count: number; wipLimit: number | null }>;
     const counts = new Map<string, number>();
     for (const t of tasks) {
-      if (t.status === 'CANCELLED') continue;
       const own = board.columns.find((c) => c.id === t.columnId);
       let cid = t.columnId;
       if (!own || own.status !== t.status) {

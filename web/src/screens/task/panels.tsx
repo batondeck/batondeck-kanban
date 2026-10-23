@@ -19,7 +19,7 @@ import { FollowUps } from '../FollowUps.js';
 import { LIMITS, type Artifact, type Task } from '../../types.js';
 import type { LoadedTaskDetail } from './useTaskDetail.js';
 
-const SCOLOR_DOT: Record<string, string> = { BACKLOG: '--backlog', READY: '--ready', IN_PROGRESS: '--progress', BLOCKED: '--blocked', REVIEW: '--review', DONE: '--done' };
+const SCOLOR_DOT: Record<string, string> = { TODO: '--ready', IN_PROGRESS: '--progress', BLOCKED: '--blocked', REVIEW: '--review', DONE: '--done' };
 export const statusDot = (s: string | undefined): string => `var(${(s && SCOLOR_DOT[s]) ?? '--text-muted'})`;
 
 // customFields that are really task metadata (legacy agents write effort/rank/model there) — surfaced
