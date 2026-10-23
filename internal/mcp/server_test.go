@@ -569,3 +569,159 @@ func TestCloseEndsLiveSessions(t *testing.T) {
 		t.Error("a session was admitted after Close")
 	}
 }
+
+// initialized opens a session over raw POSTs and returns its id.
+func initialized(t *testing.T, h *harness, bearer string) string {
+	t.Helper()
+	sid := rawPOST(t, h.url, bearer, "", initBody).Header.Get("Mcp-Session-Id")
+	if sid == "" {
+		t.Fatal("initialize answered no session id")
+	}
+	rawPOST(t, h.url, bearer, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	return sid
+}
+
+// A second initialize on a live session is refused by go-sdk and leaves the session in the
+// table, so Close still ends it and removes its agent session, once.
+func TestDuplicateInitializeKeepsTheSession(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver())
+	sid := initialized(t, h, tokenAda)
+	dup, _ := io.ReadAll(rawPOST(t, h.url, tokenAda, sid, initBody).Body)
+	if !strings.Contains(string(dup), `duplicate \"initialize\"`) {
+		t.Fatalf("duplicate initialize answered %s, want go-sdk's refusal", dup)
+	}
+	h.srv.sessions.mu.Lock()
+	_, live := h.srv.sessions.live[sid]
+	h.srv.sessions.mu.Unlock()
+	if !live {
+		t.Error("the duplicate initialize evicted its live session from the table")
+	}
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := h.srv.Close(c); err != nil {
+		t.Fatalf("Close: %v after %s", err, time.Since(start))
+	}
+	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 1 {
+		t.Errorf("%d agent sessions removed by Close, want 1", n)
+	}
+}
+
+// A duplicate initialize frees no slot: with MaxSessions 1 the next session is still refused,
+// and admitted once the first ends.
+func TestDuplicateInitializeKeepsTheBound(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver(), func(o *Options) { o.MaxSessions = 1 })
+	sid := initialized(t, h, tokenAda)
+	for range 3 {
+		_, _ = io.ReadAll(rawPOST(t, h.url, tokenAda, sid, initBody).Body)
+	}
+	if cs, err := h.dial(tokenGrace); err == nil {
+		t.Cleanup(func() { _ = cs.Close() })
+		t.Fatal("a second session past MaxSessions 1 was admitted after duplicate initializes")
+	}
+	del, err := http.NewRequest(http.MethodDelete, h.url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	del.Header.Set("Authorization", "Bearer "+tokenAda)
+	del.Header.Set("Mcp-Session-Id", sid)
+	del.Header.Set("Mcp-Protocol-Version", "2025-11-25")
+	resp, err := http.DefaultClient.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
+	if cs, err := h.dial(tokenGrace); err != nil {
+		t.Errorf("after the first session ended: %v", err)
+	} else {
+		_ = cs.Close()
+	}
+}
+
+// parked registers a tool that signals entered and then waits for release, or for its context
+// when honour is set.
+func parked(h *harness, honour bool) (entered, release, cancelled chan struct{}) {
+	entered, release, cancelled = make(chan struct{}), make(chan struct{}), make(chan struct{})
+	AddTool(h.srv, &mcp.Tool{Name: "park"}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, _ plantIn) (*mcp.CallToolResult, plantOut, error) {
+		close(entered)
+		done := ctx.Done()
+		if !honour {
+			done = nil
+		}
+		select {
+		case <-done:
+			close(cancelled)
+		case <-release:
+		}
+		return nil, plantOut{}, nil
+	})
+	return entered, release, cancelled
+}
+
+// Close returns ctx's error at its deadline while a handler that ignores its context is still
+// running: a session's end waits for its handlers, Close does not.
+func TestCloseBoundedByAParkedHandler(t *testing.T) {
+	h := bootHarness(t, servicefake.New().Services(), resolver())
+	entered, release, _ := parked(h, false)
+	cs := h.connect(t, tokenAda)
+	t.Cleanup(func() { close(release) }) // first, so the client's DELETE and the listener can end
+	go func() {
+		_, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "park", Arguments: map[string]any{"projectId": "P-1"}})
+	}()
+	<-entered
+	c, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- h.srv.Close(c) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Close = %v after %s, want context.DeadlineExceeded", err, time.Since(start))
+		}
+		if took := time.Since(start); took > 1500*time.Millisecond {
+			t.Errorf("Close took %s with a 500ms ctx", took)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close(500ms ctx) still blocked after 3s behind a parked handler")
+	}
+}
+
+// At its deadline, not before, Close cancels the context of every handler still running, so one
+// that honours it returns rather than outliving the stop; until then it may finish.
+func TestCloseCancelsHandlersAtItsDeadline(t *testing.T) {
+	h := bootHarness(t, servicefake.New().Services(), resolver())
+	entered, release, cancelled := parked(h, true)
+	cs := h.connect(t, tokenAda)
+	t.Cleanup(func() {
+		select {
+		case <-cancelled:
+		default:
+			close(release)
+		}
+	})
+	go func() {
+		_, _ = cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "park", Arguments: map[string]any{"projectId": "P-1"}})
+	}()
+	<-entered
+	c, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- h.srv.Close(c) }()
+	select {
+	case <-cancelled:
+		t.Fatal("the handler was cancelled before Close's deadline")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Close = %v, want context.DeadlineExceeded", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the parked handler's context was not cancelled at Close's deadline")
+	}
+}

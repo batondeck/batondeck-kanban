@@ -23,18 +23,19 @@ type sessionTable struct {
 	ends   sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
-// reserve admits ss, or refuses when the table is full or closed.
-func (t *sessionTable) reserve(ss *mcp.ServerSession) bool {
+// reserve admits ss, or refuses when the table is full or closed. fresh is false for an id
+// already live: a second initialize on its session, which this call did not admit.
+func (t *sessionTable) reserve(ss *mcp.ServerSession) (ok, fresh bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, ok := t.live[ss.ID()]; ok {
-		return true
+	if _, live := t.live[ss.ID()]; live {
+		return true, false
 	}
 	if t.closed || len(t.live) >= t.max {
-		return false
+		return false, false
 	}
 	t.live[ss.ID()] = ss
-	return true
+	return true, true
 }
 
 // closeAll refuses new sessions and returns the live ones.
@@ -110,9 +111,14 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 
 func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller domain.Caller, method string, req mcp.Request, next mcp.MethodHandler) (mcp.Result, error) {
 	id := ss.ID()
-	if !s.sessions.reserve(ss) {
+	ok, fresh := s.sessions.reserve(ss)
+	if !ok {
 		s.log.Printf("mcp: session limit %d reached; initialize refused", s.sessions.max)
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "too many MCP sessions; retry later"}
+	}
+	if !fresh {
+		// Another initialize admitted this session and keeps its bookkeeping; go-sdk answers this one.
+		return next(ctx, method, req)
 	}
 	res, err := next(ctx, method, req)
 	if err != nil {

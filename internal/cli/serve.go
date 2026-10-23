@@ -32,18 +32,23 @@ func mcpServer(st store.Store, version string, logger *log.Logger) (*mcp.Server,
 }
 
 // shutdownBudget bounds the MCP session close and the HTTP drain; flushBudget the tool-call flush
-// after them.
-const (
+// after them, with its own clock. Variables only so a test can spend the first quickly.
+var (
 	shutdownBudget = 10 * time.Second
 	flushBudget    = 5 * time.Second
 )
 
-// runServer serves on ln until ctx ends or the listener fails, then stops in order: the MCP
-// sessions (an attached client's open GET stream would otherwise hold Shutdown to its deadline),
-// the HTTP server, and, once no handler can run, the tool-call flush. It returns the first
-// failure, naming the step.
+// runServer serves the MCP server over st on ln until ctx ends or the listener fails.
 func runServer(ctx context.Context, ln net.Listener, st store.Store, version string, logger *log.Logger) error {
 	mcpSrv, core := mcpServer(st, version, logger)
+	return serveUntil(ctx, ln, mcpSrv, core, version, logger)
+}
+
+// serveUntil serves until ctx ends or the listener fails, then stops in order: the MCP sessions
+// (an attached client's open GET stream would otherwise hold Shutdown to its deadline; a handler
+// still running at the deadline is cancelled), the HTTP server, and the tool-call flush. It
+// returns the first failure, naming the step.
+func serveUntil(ctx context.Context, ln net.Listener, mcpSrv *mcp.Server, core *service.Core, version string, logger *log.Logger) error {
 	srv := &http.Server{Handler: handler(version, mcpSrv.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
@@ -56,8 +61,8 @@ func runServer(ctx context.Context, ln net.Listener, st store.Store, version str
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 	defer cancel()
-	if err := mcpSrv.Close(shutdown); err != nil {
-		logger.Printf("serve: closing the MCP sessions: %+v", err)
+	if err := mcpSrv.Close(shutdown); err != nil && failed == nil {
+		failed = fmt.Errorf("closing the MCP sessions: %w", err)
 	}
 	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
 		failed = fmt.Errorf("http shutdown: %w", err)

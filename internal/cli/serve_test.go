@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -202,5 +204,153 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	t.Logf("stopped in %s", time.Since(start))
 	if rows, err := st.ListAgentSessions(ctx, user.ID, 10); err != nil || len(rows) != 0 {
 		t.Errorf("agent sessions after the stop = %+v, %v; want none", rows, err)
+	}
+}
+
+// served starts serveUntil over st with a probe tool and a client attached as a fresh account;
+// park, when non-nil, is the tool's body. It returns the client, the stop, runServer's result and
+// the server's log.
+func served(t *testing.T, st store.Store, park func(context.Context)) (*sdk.ClientSession, context.CancelFunc, <-chan error, *lockedLog) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, _, err := (&auth.TokenService{Store: st}).Create(ctx, user.ID, "", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &lockedLog{}
+	logger := log.New(logs, "", 0)
+	mcpSrv, core := mcpServer(st, "x", logger)
+	type in struct {
+		ProjectID string `json:"projectId"`
+	}
+	type out struct {
+		OK bool `json:"ok"`
+	}
+	mcp.AddTool(mcpSrv, &sdk.Tool{Name: "probe"}, nil, func(ctx context.Context, _ *sdk.CallToolRequest, _ in) (*sdk.CallToolResult, out, error) {
+		if park != nil {
+			park(ctx)
+		}
+		return nil, out{OK: true}, nil
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- serveUntil(serveCtx, ln, mcpSrv, core, "x", logger) }()
+	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
+	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
+		HTTPClient: &http.Client{Transport: bearerRT{live}}, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cs, stop, done, logs
+}
+
+// shrink sets *v to d for the test.
+func shrink(t *testing.T, v *time.Duration, d time.Duration) {
+	old := *v
+	*v = d
+	t.Cleanup(func() { *v = old })
+}
+
+type lockedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// A tool still running at the stop, and ignoring its context, holds the stop no longer than the
+// shutdown budget, and runServer names the step that ran out.
+func TestRunServerBoundedByAParkedTool(t *testing.T) {
+	shrink(t, &shutdownBudget, 300*time.Millisecond)
+	entered, release := make(chan struct{}), make(chan struct{})
+	cs, stop, done, _ := served(t, memstore.New(), func(context.Context) { close(entered); <-release })
+	defer close(release)
+	go func() {
+		_, _ = cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "probe", Arguments: map[string]any{"projectId": "P-1"}})
+	}()
+	<-entered
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "closing the MCP sessions: context deadline exceeded") {
+			t.Errorf("runServer = %v, want the MCP close named as the failure", err)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("runServer took %s with a %s budget", took, shutdownBudget)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("runServer still stopping 5s after the stop, budget %s, behind a parked tool", shutdownBudget)
+	}
+}
+
+// slowFlush is a store whose InsertToolCalls signals and takes 600ms before writing.
+type slowFlush struct {
+	*memstore.Store
+	started chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	written int
+}
+
+func (s *slowFlush) InsertToolCalls(ctx context.Context, batch []store.ToolCall) error {
+	s.once.Do(func() { close(s.started) })
+	time.Sleep(600 * time.Millisecond)
+	if err := s.Store.InsertToolCalls(context.WithoutCancel(ctx), batch); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.written += len(batch)
+	return nil
+}
+
+// The flush after the stop runs on its own budget: with the shutdown budget already spent, the
+// background flush in progress is still waited for, so its rows are written before runServer
+// returns.
+func TestFlushOutlivesASpentShutdown(t *testing.T) {
+	st := &slowFlush{Store: memstore.New(), started: make(chan struct{})}
+	cs, stop, done, logs := served(t, st, nil)
+	if _, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "probe", Arguments: map[string]any{"projectId": "P-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = cs.Close()
+	select {
+	case <-st.started: // the background flush holds the row
+	case <-time.After(5 * time.Second):
+		t.Fatal("no background flush began in 5s")
+	}
+	shrink(t, &shutdownBudget, time.Nanosecond)
+	stop()
+	<-done
+	st.mu.Lock()
+	written := st.written
+	st.mu.Unlock()
+	if written != 1 {
+		t.Errorf("%d tool_calls rows written when runServer returned, want 1: the stop did not wait for the flush in progress", written)
+	}
+	if strings.Contains(logs.String(), "flushing the buffered tool calls") {
+		t.Errorf("the flush failed:\n%s", logs.String())
 	}
 }

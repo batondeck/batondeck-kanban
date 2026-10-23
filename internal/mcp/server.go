@@ -53,6 +53,8 @@ type Server struct {
 	handler  http.Handler
 	sessions *sessionTable
 	tools    *toolList
+	halted   context.Context // done once Close has given up waiting for the handlers
+	halt     context.CancelFunc
 }
 
 // New builds the server: tools, prompts and resources declared (all empty in R0), both subscribe
@@ -68,6 +70,7 @@ func New(o Options) *Server {
 		o.Logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{services: o.Services, log: o.Logger}
+	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
@@ -79,9 +82,10 @@ func New(o Options) *Server {
 		SubscribeHandler:   subscribe,
 		UnsubscribeHandler: unsubscribe,
 	})
-	// The first is outermost: the caller rides the context into the session bookkeeping, the
-	// tools/list filter and the error shape, which sits next to the tool handler.
-	s.sdk.AddReceivingMiddleware(withCaller, s.sessionMiddleware, s.tools.middleware, s.errorMiddleware)
+	// The first is outermost: the handler's context is cancelled at Close's deadline, and the caller
+	// rides it into the session bookkeeping, the tools/list filter and the error shape, which sits
+	// next to the tool handler.
+	s.sdk.AddReceivingMiddleware(s.haltable, withCaller, s.sessionMiddleware, s.tools.middleware, s.errorMiddleware)
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s.sdk }, &mcp.StreamableHTTPOptions{
 		Stateless:      false,
 		SessionTimeout: o.SessionIdle,
@@ -90,16 +94,20 @@ func New(o Options) *Server {
 	return s
 }
 
-// Close ends every live session, each as any other end does (its agent session removed with the
-// last of its agent's), refuses new ones, and waits for that bookkeeping or ctx. Call it before
-// the HTTP server's Shutdown: a session's open GET stream would otherwise hold Shutdown until its
-// deadline.
+// Close refuses new sessions, ends every live one, each as any other end does (its agent session
+// removed with the last of its agent's), and waits for that bookkeeping or ctx. A session's end
+// waits for its in-flight handlers, so at ctx's end Close cancels their contexts and returns
+// ctx.Err(). Call it before the HTTP server's Shutdown: a session's open GET stream would
+// otherwise hold Shutdown until its deadline.
 func (s *Server) Close(ctx context.Context) error {
-	for _, ss := range s.sessions.closeAll() {
-		_ = ss.Close()
-	}
+	live := s.sessions.closeAll()
 	done := make(chan struct{})
 	go func() {
+		var closing sync.WaitGroup
+		for _, ss := range live {
+			closing.Go(func() { _ = ss.Close() })
+		}
+		closing.Wait()
 		s.sessions.ends.Wait()
 		close(done)
 	}()
@@ -107,7 +115,18 @@ func (s *Server) Close(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		s.halt()
 		return ctx.Err()
+	}
+}
+
+// haltable derives every handler's context from the server's, which Close cancels at its deadline.
+func (s *Server) haltable(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		defer context.AfterFunc(s.halted, cancel)()
+		return next(ctx, method, req)
 	}
 }
 
