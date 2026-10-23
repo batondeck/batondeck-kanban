@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -89,7 +90,10 @@ func requestIsTLS(r *http.Request) bool {
 }
 
 // LoginHandler answers POST with the form fields `login` and `password`: 204 and the two cookies
-// on success, 401 otherwise. Wrap it in CSRF, so a page of another site cannot sign a browser in.
+// on success, 401 otherwise. With a `next` field that is a path on this server (the OAuth
+// server's sign-in page sends one), success is instead 303 to next, and failure 303 to next with
+// `login=failed` added, so a plain HTML form lands back where it started. Any other next is 400.
+// Wrap it in CSRF, so a page of another site cannot sign a browser in.
 func (s *Service) LoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -102,9 +106,18 @@ func (s *Service) LoginHandler() http.Handler {
 			http.Error(w, "bad form", http.StatusBadRequest)
 			return
 		}
+		next := r.PostForm.Get("next")
+		if next != "" && !LocalPath(next) {
+			http.Error(w, "next is not a path on this server", http.StatusBadRequest)
+			return
+		}
 		secret, sess, err := s.Login(r.Context(), r.PostForm.Get("login"), r.PostForm.Get("password"))
 		if err != nil {
 			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
+				if next != "" {
+					http.Redirect(w, r, withQuery(next, "login", "failed"), http.StatusSeeOther)
+					return
+				}
 				http.Error(w, "invalid credentials", http.StatusUnauthorized)
 				return
 			}
@@ -117,8 +130,40 @@ func (s *Service) LoginHandler() http.Handler {
 			HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 		http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: sess.CSRFToken, Path: "/", Expires: expires,
 			HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode})
+		if next != "" {
+			http.Redirect(w, r, next, http.StatusSeeOther)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// LocalPath reports whether p is a path on this server, safe to redirect a browser to: it starts
+// with one "/", names no scheme or host, and holds no backslash or control character (a browser
+// reads "/\\host" as another host).
+func LocalPath(p string) bool {
+	if len(p) > 8192 || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") {
+		return false
+	}
+	for _, c := range p {
+		if c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(p)
+	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil
+}
+
+// withQuery is p with key=value set in its query.
+func withQuery(p, key, value string) string {
+	u, err := url.Parse(p)
+	if err != nil {
+		return p
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 type ctxKey int
@@ -134,7 +179,9 @@ func CallerFrom(ctx context.Context) (domain.Caller, bool) {
 	return c, ok
 }
 
-func sessionFrom(ctx context.Context) (store.Session, bool) {
+// SessionFrom is the browser session Authenticate put on the request's context: absent when the
+// request was authenticated by a bearer.
+func SessionFrom(ctx context.Context) (store.Session, bool) {
 	sess, ok := ctx.Value(sessionKey).(store.Session)
 	return sess, ok
 }

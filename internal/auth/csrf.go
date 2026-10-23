@@ -31,7 +31,7 @@ func (s *Service) CSRF(next http.Handler) http.Handler {
 			s.refuse(w, r, "cross_site")
 			return
 		}
-		if sess, ok := sessionFrom(r.Context()); ok {
+		if sess, ok := SessionFrom(r.Context()); ok {
 			h := r.Header.Get(CSRFHeader)
 			if h == "" {
 				r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)

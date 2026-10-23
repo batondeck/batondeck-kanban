@@ -42,12 +42,13 @@ func checkWIPLimit(field string, v *int64) error {
 	return nil
 }
 
-// columnOrder is a column's order as the store keeps it: an integer. 0 is absent (the DTO's
-// omitzero), so it is nil and the store places the column.
-func columnOrder(v float64) (*int64, error) {
-	if v == 0 {
+// columnOrder is a column's order as the store keeps it: an integer. Absent is nil, and the store
+// places the column; 0 is a position.
+func columnOrder(o Optional[float64]) (*int64, error) {
+	if !o.Set {
 		return nil, nil
 	}
+	v := o.V
 	if v != math.Trunc(v) || math.IsInf(v, 0) || math.Abs(v) > 1<<53 {
 		// DEVIATION: conductor's order is any number; the store's column order is an integer.
 		return nil, domain.Validation("order must be an integer", map[string]any{"field": "order"})
@@ -202,12 +203,12 @@ func (b boards) UpdateColumn(ctx context.Context, caller domain.Caller, req Upda
 		}
 		patch.Status = &req.Status
 	}
-	// nil is "unchanged": the DTO cannot tell a JSON null (clear the limit) from an absent field.
-	if req.WIPLimit != nil {
-		if err := checkWIPLimit("wipLimit", req.WIPLimit); err != nil {
+	// Absent leaves the limit; null clears it.
+	if req.WIPLimit.Set {
+		if err := checkWIPLimit("wipLimit", req.WIPLimit.Ptr()); err != nil {
 			return UpdateColumnResp{}, err
 		}
-		patch.SetWIPLimit, patch.WIPLimit = true, req.WIPLimit
+		patch.SetWIPLimit, patch.WIPLimit = true, req.WIPLimit.Ptr()
 	}
 	if patch.Order, err = columnOrder(req.Order); err != nil {
 		return UpdateColumnResp{}, err

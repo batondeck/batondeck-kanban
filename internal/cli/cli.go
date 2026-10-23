@@ -119,7 +119,8 @@ func migratedLine(m store.Migrated) string {
 func healthBody(version string) string { return "batondeck-kanban " + version + " ok\n" }
 
 // handler is everything serve answers: /healthz, the MCP server at /mcp, the routes mounts add
-// (compose's /wake and /internal/wake-session), and the embedded SPA for every other path.
+// (compose's OAuth server when public_url is set, /wake and /internal/wake-session), and the
+// embedded SPA for every other path.
 func handler(version string, mcp http.Handler, mounts ...func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
 	for _, m := range mounts {
@@ -198,7 +199,7 @@ func serve(args []string, version string, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, lns, st, version, log, sealer); err != nil {
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}

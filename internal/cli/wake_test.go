@@ -107,7 +107,7 @@ func startWake(t *testing.T, sealer service.Sealer) *wakeServer {
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- runServer(serveCtx, lns, st, "x", logger, sealer) }()
+	go func() { done <- runServer(serveCtx, lns, st, "x", "", logger, sealer) }()
 	t.Cleanup(func() {
 		stop()
 		if err := <-done; err != nil {

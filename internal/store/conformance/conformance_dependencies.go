@@ -247,5 +247,26 @@ func dependencies(t *testing.T, newStore Factory) {
 				t.Fatalf("refused adds left %v", got)
 			}
 		})
+
+		// Locks.LockProject, which the service takes before add_dependency's task locks (P-110):
+		// INTERNAL outside a transaction (a lock that ends with its statement serialises nothing),
+		// and taken, held across the edge write and released at the end, inside one.
+		t.Run("LockProjectOnlyInsideATransaction", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			pt := seedTasks(t, sd, p, b, "a", "b")
+			wantErr(t, s.LockProject(ctx, p), domain.CodeInternal, "")
+			for range 2 {
+				noErr(t, s.Atomically(ctx, func(tx store.Store) error {
+					if err := tx.LockProject(ctx, p); err != nil {
+						return err
+					}
+					_, err := tx.AddEdge(ctx, blocks(p, pt[0], pt[1]))
+					return err
+				}))
+			}
+			if got := edgeIDs(t, s, p); len(got) != 1 {
+				t.Fatalf("two locked adds of one edge left %v", got)
+			}
+		})
 	})
 }

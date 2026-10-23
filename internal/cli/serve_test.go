@@ -48,7 +48,7 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	a := compose(st, "x", log.New(io.Discard, "", 0), nil)
+	a := mustCompose(t, st, "", log.New(io.Discard, "", 0))
 	mcpSrv, core := a.mcp, a.core
 	defer core.Close(context.Background())
 	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
@@ -109,7 +109,7 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := compose(st, "x", log.New(io.Discard, "", 0), nil)
+	a := mustCompose(t, st, "", log.New(io.Discard, "", 0))
 	mcpSrv, core := a.mcp, a.core
 	defer core.Close(context.Background())
 	type in struct {
@@ -179,7 +179,7 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- runServer(serveCtx, []net.Listener{ln}, st, "x", log.New(io.Discard, "", 0), nil) }()
+	go func() { done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil) }()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
 	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
@@ -228,7 +228,7 @@ func served(t *testing.T, st store.Store, park func(context.Context)) (*sdk.Clie
 	}
 	logs := &lockedLog{}
 	logger := log.New(logs, "", 0)
-	a := compose(st, "x", logger, nil)
+	a := mustCompose(t, st, "", logger)
 	mcpSrv := a.mcp
 	type in struct {
 		ProjectID string `json:"projectId"`
@@ -360,4 +360,14 @@ func TestFlushOutlivesASpentShutdown(t *testing.T) {
 	if strings.Contains(logs.String(), "flushing the buffered tool calls") {
 		t.Errorf("the flush failed:\n%s", logs.String())
 	}
+}
+
+// mustCompose is compose with no keyring, failing the test on an error.
+func mustCompose(t *testing.T, st store.Store, publicURL string, logger *log.Logger) *app {
+	t.Helper()
+	a, err := compose(st, "x", publicURL, logger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
