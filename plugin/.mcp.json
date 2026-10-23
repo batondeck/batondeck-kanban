@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "batondeck-kanban": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer ${BATONDECK_TOKEN}"
+      }
+    }
+  }
+}
