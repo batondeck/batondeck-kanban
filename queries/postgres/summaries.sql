@@ -1,2 +1,10 @@
+-- The task's summary in one statement: no row is a missing task, NULL columns a task with none.
 -- name: GetSummary :one
-SELECT * FROM summaries WHERE project_id = $1 AND task_id = $2;
+SELECT t.id AS task_id, s.body, s.updated_by, s.updated_at
+FROM tasks t LEFT JOIN summaries s ON s.project_id = t.project_id AND s.task_id = t.id
+WHERE t.project_id = $1 AND t.id = $2;
+
+-- name: UpsertSummary :one
+INSERT INTO summaries (project_id, task_id, body, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (project_id, task_id) DO UPDATE SET body = excluded.body, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+RETURNING project_id, task_id, body, updated_by, updated_at;

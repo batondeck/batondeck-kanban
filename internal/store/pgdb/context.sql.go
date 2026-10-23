@@ -7,20 +7,59 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
 
-const getContextItem = `-- name: GetContextItem :one
-SELECT project_id, task_id, id, kind, body, author, ts FROM context_items WHERE project_id = $1 AND task_id = $2 AND id = $3
+const deleteContextItemsByTask = `-- name: DeleteContextItemsByTask :execrows
+DELETE FROM context_items WHERE project_id = $1 AND task_id = $2
 `
 
-type GetContextItemParams struct {
+type DeleteContextItemsByTaskParams struct {
 	ProjectID string
 	TaskID    string
-	ID        string
 }
 
-func (q *Queries) GetContextItem(ctx context.Context, arg GetContextItemParams) (ContextItem, error) {
-	row := q.db.QueryRow(ctx, getContextItem, arg.ProjectID, arg.TaskID, arg.ID)
+func (q *Queries) DeleteContextItemsByTask(ctx context.Context, arg DeleteContextItemsByTaskParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteContextItemsByTask, arg.ProjectID, arg.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertContextItem = `-- name: InsertContextItem :one
+
+INSERT INTO context_items (project_id, task_id, id, kind, body, author, ts)
+SELECT t.project_id, t.id, $1::text, $2::text, $3::text,
+  $4::text, $5::bigint
+FROM tasks t WHERE t.project_id = $6 AND t.id = $7
+RETURNING project_id, task_id, id, kind, body, author, ts
+`
+
+type InsertContextItemParams struct {
+	ID        string
+	Kind      string
+	Body      string
+	Author    string
+	Ts        int64
+	ProjectID string
+	TaskID    string
+}
+
+// The context-item area. Every read starts FROM the task, so one statement answers both "no such
+// task" (no row) and "no items" (one row whose item columns are NULL). Ids order and compare
+// COLLATE "C", as bytes, as SQLite's BINARY does.
+// An item on the task, in one statement: no row is a missing task.
+func (q *Queries) InsertContextItem(ctx context.Context, arg InsertContextItemParams) (ContextItem, error) {
+	row := q.db.QueryRow(ctx, insertContextItem,
+		arg.ID,
+		arg.Kind,
+		arg.Body,
+		arg.Author,
+		arg.Ts,
+		arg.ProjectID,
+		arg.TaskID,
+	)
 	var i ContextItem
 	err := row.Scan(
 		&i.ProjectID,
@@ -34,24 +73,125 @@ func (q *Queries) GetContextItem(ctx context.Context, arg GetContextItemParams) 
 	return i, err
 }
 
-const getMemory = `-- name: GetMemory :one
-SELECT id, project_id, task_id, scope, key, value, blob_sha256, author, ts, expires_at FROM memory WHERE id = $1
+const listContextItemsNewest = `-- name: ListContextItemsNewest :many
+SELECT t.id AS task_id, c.id, c.kind, c.body, c.author, c.ts
+FROM tasks t LEFT JOIN context_items c ON c.project_id = t.project_id AND c.task_id = t.id
+  AND ($1::text = '' OR c.ts < $2::bigint
+       OR (c.ts = $2::bigint AND c.id COLLATE "C" < $1::text))
+WHERE t.project_id = $3 AND t.id = $4
+ORDER BY c.ts DESC, c.id COLLATE "C" DESC
+LIMIT $5::bigint
 `
 
-func (q *Queries) GetMemory(ctx context.Context, id string) (Memory, error) {
-	row := q.db.QueryRow(ctx, getMemory, id)
-	var i Memory
-	err := row.Scan(
-		&i.ID,
-		&i.ProjectID,
-		&i.TaskID,
-		&i.Scope,
-		&i.Key,
-		&i.Value,
-		&i.BlobSha256,
-		&i.Author,
-		&i.Ts,
-		&i.ExpiresAt,
+type ListContextItemsNewestParams struct {
+	AfterID   string
+	AfterTs   int64
+	ProjectID string
+	TaskID    string
+	PageLimit int64
+}
+
+type ListContextItemsNewestRow struct {
+	TaskID string
+	ID     sql.NullString
+	Kind   sql.NullString
+	Body   sql.NullString
+	Author sql.NullString
+	Ts     sql.NullInt64
+}
+
+// One page of the task's items, newest first ((ts, id) descending, as bytes), strictly after the
+// cursor's (after_ts, after_id); after_id ” is the first page.
+func (q *Queries) ListContextItemsNewest(ctx context.Context, arg ListContextItemsNewestParams) ([]ListContextItemsNewestRow, error) {
+	rows, err := q.db.Query(ctx, listContextItemsNewest,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.PageLimit,
 	)
-	return i, err
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListContextItemsNewestRow
+	for rows.Next() {
+		var i ListContextItemsNewestRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.Kind,
+			&i.Body,
+			&i.Author,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listContextItemsOldest = `-- name: ListContextItemsOldest :many
+SELECT t.id AS task_id, c.id, c.kind, c.body, c.author, c.ts
+FROM tasks t LEFT JOIN context_items c ON c.project_id = t.project_id AND c.task_id = t.id
+  AND ($1::text = '' OR c.ts > $2::bigint
+       OR (c.ts = $2::bigint AND c.id COLLATE "C" > $1::text))
+WHERE t.project_id = $3 AND t.id = $4
+ORDER BY c.ts, c.id COLLATE "C"
+LIMIT $5::bigint
+`
+
+type ListContextItemsOldestParams struct {
+	AfterID   string
+	AfterTs   int64
+	ProjectID string
+	TaskID    string
+	PageLimit int64
+}
+
+type ListContextItemsOldestRow struct {
+	TaskID string
+	ID     sql.NullString
+	Kind   sql.NullString
+	Body   sql.NullString
+	Author sql.NullString
+	Ts     sql.NullInt64
+}
+
+// The same page oldest first.
+func (q *Queries) ListContextItemsOldest(ctx context.Context, arg ListContextItemsOldestParams) ([]ListContextItemsOldestRow, error) {
+	rows, err := q.db.Query(ctx, listContextItemsOldest,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListContextItemsOldestRow
+	for rows.Next() {
+		var i ListContextItemsOldestRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.Kind,
+			&i.Body,
+			&i.Author,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

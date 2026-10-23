@@ -2,7 +2,9 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -12,9 +14,9 @@ import (
 // subtasks,audit,toolcalls,agentsessions,wakesessions,attachments,blobs,search}.go) share. Each
 // registers with Run, which gives it the subtest named for its area; that subtest SKIPS, naming the
 // task that builds the area, while the store's methods are unbuilt (store.UnbuiltTask), so a store
-// is never failed for a lane not merged yet. A battery whose rows hang off a task stands on a seeder; an engine gets one through
-// the adapter R0.10 writes here over store.Projects, Boards and Tasks, and a built area on a store
-// without one FAILS.
+// is never failed for a lane not merged yet. A battery whose rows hang off a task stands on a
+// seeder; a store gets one through WithSeeder, the adapter over its own store.Projects, Boards and
+// Tasks, and a built area on a store without one FAILS.
 
 // seedTaskInput is a task to put in place. Status "" is READY.
 type seedTaskInput struct {
@@ -41,6 +43,67 @@ type seeder interface {
 	seedBoard(ctx context.Context, projectID string) (string, error)
 	seedTask(ctx context.Context, in seedTaskInput) (string, error)
 	taskState(ctx context.Context, projectID, taskID string) (seededTask, error)
+}
+
+// WithSeeder is the seeder adapter: s, with the seeder the contract II batteries stand on, which
+// seeds through s's own Projects, Boards and Tasks and reads a task back through Tasks.GetTask.
+// An engine's or memstore's factory returns WithSeeder(store); every other call goes to s.
+func WithSeeder(s Migratable) Migratable { return storeSeeder{s} }
+
+type storeSeeder struct{ Migratable }
+
+// seedIdentity creates and owns every seeded row.
+const seedIdentity = "seeder"
+
+func (s storeSeeder) seedProject(ctx context.Context) (string, string, error) {
+	p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "seeded", CreatedBy: seedIdentity}, store.WriteOptions{Identity: seedIdentity})
+	if err != nil {
+		return "", "", err
+	}
+	b, err := s.seedBoard(ctx, p.ID)
+	return p.ID, b, err
+}
+
+// seedBoard is a board of the default columns, one per status but REVIEW's when the project has
+// review off: a task is seeded into the column of its status.
+func (s storeSeeder) seedBoard(ctx context.Context, projectID string) (string, error) {
+	b, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: projectID, Name: "seeded", CreatedBy: seedIdentity}, store.WriteOptions{Identity: seedIdentity})
+	return b.ID, err
+}
+
+func (s storeSeeder) seedTask(ctx context.Context, in seedTaskInput) (string, error) {
+	status := in.Status
+	if status == "" {
+		status = domain.Ready
+	}
+	b, _, err := s.GetBoard(ctx, in.ProjectID, in.BoardID)
+	if err != nil {
+		return "", err
+	}
+	column := ""
+	for _, c := range b.Columns {
+		if c.Status == status {
+			column = c.ID
+			break
+		}
+	}
+	if column == "" {
+		return "", fmt.Errorf("seeder: board %s has no %s column", in.BoardID, status)
+	}
+	var parent *string
+	if in.ParentTaskID != "" {
+		parent = &in.ParentTaskID
+	}
+	t, err := s.CreateTask(ctx, store.CreateTaskInput{
+		ProjectID: in.ProjectID, BoardID: in.BoardID, ColumnID: column, Title: in.Title, Description: in.Description,
+		Status: status, ParentTaskID: parent, OrderKey: "a0", CreatedBy: seedIdentity, CreatedAt: time.Now().UnixMilli(),
+	})
+	return t.ID, err
+}
+
+func (s storeSeeder) taskState(ctx context.Context, projectID, taskID string) (seededTask, error) {
+	t, err := s.GetTask(ctx, projectID, taskID)
+	return seededTask{Version: t.Version, BlockedBy: t.BlockedBy, Blocks: t.Blocks}, err
 }
 
 // area runs battery inside the subtest Run gave the area, or skips that subtest when probe's call, on
@@ -91,7 +154,7 @@ func seeded(t *testing.T, newStore Factory) (store.Store, seeder, string, string
 	s := migrated(t, newStore)
 	sd, ok := s.(seeder)
 	if !ok {
-		t.Fatalf("the area is built, but this store has no seeder for the projects, boards and tasks the battery stands on: the engine seeder adapter (conformance_seed.go, over store.Projects, Boards and Tasks) is R0.10's")
+		t.Fatalf("the area is built, but this store has no seeder for the projects, boards and tasks the battery stands on: its factory must return conformance.WithSeeder(store)")
 	}
 	p, b, err := sd.seedProject(context.Background())
 	if err != nil {
