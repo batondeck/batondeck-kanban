@@ -65,6 +65,7 @@ type Core struct {
 	grants  GrantLookup
 	access  *accessCache
 	calls   *toolCalls
+	boards  *snapshotCache
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.
@@ -87,6 +88,7 @@ func New(st store.Store, o Options) *Core {
 		c.now = time.Now
 	}
 	c.access = newAccessCache(orDefault(o.AccessTTL, DefaultAccessTTL))
+	c.boards = newSnapshotCache()
 	c.calls = newToolCalls(c, orDefault(o.ToolCallBatch, DefaultToolCallBatch), orDefault(o.ToolCallBuffer, DefaultToolCallBuffer), orDefault(o.ToolCallFlush, DefaultToolCallFlush))
 	return c
 }

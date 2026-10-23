@@ -41,6 +41,25 @@ Notable changes to batondeck-kanban. The format follows
   `BATONDECK_RETENTION_TOOL_CALLS_DAYS` — 500 rows a statement and at most 50,000 a table a sweep,
   hourly; task events are kept. Deliveries and raw webhook bodies are not swept yet (no Store
   method). `internal/store/storetest` opens migrated engine stores for tests above the store.
+- The projects, boards and feed services (R1.16, ADR-0003 B3): `Core.Projects()`, `Core.Boards()`
+  and `Core.Feed()` in `internal/service/{projects,members,boards,feed}.go` implement R0.20's
+  contracts, every mutation through `mutate` and every check through `authorize`. `create_project`
+  and `create_board` replay on `idempotencyKey` (kept by `mutate` alone; the store write carries no
+  key); a board created with no columns gets the store's six default columns, none Cancelled;
+  `remove_column` is refused while the column holds a task; `get_board` and `list_boards` answer
+  the fixed transition table; `delete_project` is the project admin's (or a workspace admin's) and
+  recursive; the last admin cannot be removed or demoted; `add_member` keys a membership by the
+  account id a login names. `add_member`, `remove_member` and `delete_project` call
+  `Core.InvalidateAccess` after their commit, so a removed or demoted member is refused on its next
+  call. `update_settings` takes no `transitionTable` (the request has no such field) and refuses
+  `quotaEnabled`/`txnCap` (metering is dropped). The board snapshot cache: `Boards.Get` and
+  `Feed.BoardSnapshot` serve a board from it until a change row names that board, which the bus
+  delivers through `Core.ObserveChange` (the invalidation hook) and which this process's own column
+  mutations drop directly after commit; a miss costs one `store.GetBoard` (two statements). Board
+  mutations ring a `changed` row naming their board. `Feed.BoardFeed` pages `ListBoardFeed`. Tests
+  over memstore: one event, audit row and change row per mutation as each contract names them, 0
+  then 1 `GetBoard` around a change row, and 21 mutations each killed by its test. The cache
+  serves nothing until the bus has delivered a change: before that every read composes.
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
   (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
