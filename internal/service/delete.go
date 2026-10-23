@@ -11,8 +11,8 @@ import (
 )
 
 // BlobGC is the delete cascade's blob hook: called once after each delete_task commits, with the
-// content hashes of the deleted attachments' blobs (none while attachments have no blobs, R1.8).
-// R1.8 fills it; the Options default is a no-op.
+// content hashes of the deleted attachments' blobs. Core.CollectBlobs (media.go) is the one serve
+// installs.
 type BlobGC func(ctx context.Context, sha256s []string)
 
 // Delete is delete_task (plan §Fold 2), master tier: version-checked by mutate (STALE), another
@@ -207,13 +207,8 @@ func (t *txn) stripFromBlockers(id string, skip map[string]bool) error {
 }
 
 // deleteAttachments deletes x's attachment rows and returns the blob hashes they held.
-// ponytail: the engines' Attachments are unbuilt until R1.8 and the schema cascades their rows with
-// the task, so an unbuilt R1.8 answer is no rows; delete this tolerance when R1.8 lands.
 func (t *txn) deleteAttachments(x store.Task) ([]string, error) {
 	atts, err := t.Tx.ListAttachments(t.ctx, x.ProjectID, x.ID)
-	if task, unbuilt := store.UnbuiltTask(err); unbuilt && task == "R1.8" {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}

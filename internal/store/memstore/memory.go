@@ -10,8 +10,8 @@ import (
 )
 
 // The memory area of contract_memory.go. Its foreign keys are the engines' after migration 0003: an
-// entry goes with its project, never with its task (DeleteMemoryByTask is the task cascade). This
-// store holds no blobs yet (P-67), so a BlobSHA256 names no blob and is NOT_FOUND.
+// entry goes with its project, never with its task (DeleteMemoryByTask is the task cascade). A
+// BlobSHA256 must name a blob of this store (blobs.go) or the write is NOT_FOUND.
 
 func cloneMemory(e store.MemoryEntry) store.MemoryEntry {
 	e.Value = cloneBytes(e.Value)
@@ -60,7 +60,7 @@ func (s *Store) WriteMemory(ctx context.Context, in store.WriteMemoryInput) (sto
 				return store.MemoryEntry{}, domain.NotFound("Project", in.ProjectID)
 			}
 		}
-		if in.BlobSHA256 != "" {
+		if _, ok := st.blobs[in.BlobSHA256]; in.BlobSHA256 != "" && !ok {
 			return store.MemoryEntry{}, domain.NotFound("Blob", in.BlobSHA256)
 		}
 		e.TS = nowMillis()

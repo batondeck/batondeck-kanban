@@ -1,5 +1,5 @@
-// Package api is the HTTP routes outside /mcp and /wake. R0.15 adds the first,
-// POST /internal/wake-session.
+// Package api is the HTTP routes outside /mcp and /wake: POST /internal/wake-session (R0.15) and
+// the signed PUT and GET /blobs/{id} (R1.8, blobs.go).
 package api
 
 import (
@@ -86,6 +86,8 @@ func writeServiceError(w http.ResponseWriter, err error, logger *log.Logger) {
 		status = http.StatusForbidden
 	case domain.CodeNotFound:
 		status = http.StatusNotFound
+	case domain.CodeInvalidTransition:
+		status = http.StatusConflict
 	}
 	auth.WriteError(w, status, e.Code, e.Message)
 }

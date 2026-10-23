@@ -36,7 +36,8 @@ func TestRegisterRefusesUnknownAndDuplicateAreas(t *testing.T) {
 	}
 }
 
-// TestRegisterAddsEveryAreasTools: Register adds the projects and boards tools, each under its area.
+// TestRegisterAddsEveryAreasTools: Register adds the projects, boards and media tools, each under its
+// area.
 func TestRegisterAddsEveryAreasTools(t *testing.T) {
 	svc := servicefake.New().Services()
 	s := mcp.New(mcp.Options{Version: "test", Resolver: authfake.Resolver{}, Services: svc})
@@ -48,9 +49,10 @@ func TestRegisterAddsEveryAreasTools(t *testing.T) {
 	want := map[string]string{
 		"projects": "add_member create_project delete_project get_project list_projects remove_member update_settings",
 		"boards":   "add_column create_board get_board list_boards remove_column update_column",
+		"media":    "attach_file list_attachments",
 	}
 	if len(got) != len(want) {
-		t.Errorf("areas registered = %v, want projects and boards", got)
+		t.Errorf("areas registered = %v, want projects, boards and media", got)
 	}
 	for area, names := range want {
 		if strings.Join(got[area], " ") != names {

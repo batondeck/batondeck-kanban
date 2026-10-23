@@ -7,10 +7,29 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
 
+const deleteAttachmentsByTask = `-- name: DeleteAttachmentsByTask :execrows
+DELETE FROM attachments WHERE project_id = ? AND task_id = ?
+`
+
+type DeleteAttachmentsByTaskParams struct {
+	ProjectID string
+	TaskID    string
+}
+
+func (q *Queries) DeleteAttachmentsByTask(ctx context.Context, arg DeleteAttachmentsByTaskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAttachmentsByTask, arg.ProjectID, arg.TaskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getAttachment = `-- name: GetAttachment :one
-SELECT project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts FROM attachments WHERE project_id = ? AND task_id = ? AND id = ?
+SELECT project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
+FROM attachments WHERE project_id = ? AND task_id = ? AND id = ?
 `
 
 type GetAttachmentParams struct {
@@ -37,13 +56,144 @@ func (q *Queries) GetAttachment(ctx context.Context, arg GetAttachmentParams) (A
 	return i, err
 }
 
-const getBlob = `-- name: GetBlob :one
-SELECT sha256, bytes, created_at FROM blobs WHERE sha256 = ?
+const insertAttachment = `-- name: InsertAttachment :one
+
+INSERT INTO attachments (project_id, task_id, id, mime_type, bytes, kind, status, created_by, ts)
+VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
 `
 
-func (q *Queries) GetBlob(ctx context.Context, sha256 string) (Blob, error) {
-	row := q.db.QueryRowContext(ctx, getBlob, sha256)
-	var i Blob
-	err := row.Scan(&i.Sha256, &i.Bytes, &i.CreatedAt)
+type InsertAttachmentParams struct {
+	ProjectID string
+	TaskID    string
+	ID        string
+	MimeType  string
+	Bytes     int64
+	Kind      string
+	CreatedBy string
+	Ts        int64
+}
+
+// The attachment area. A row is created pending with no blob, and made ready on its uploaded blob
+// once; the task's own row is the existence check of a list.
+func (q *Queries) InsertAttachment(ctx context.Context, arg InsertAttachmentParams) (Attachment, error) {
+	row := q.db.QueryRowContext(ctx, insertAttachment,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.ID,
+		arg.MimeType,
+		arg.Bytes,
+		arg.Kind,
+		arg.CreatedBy,
+		arg.Ts,
+	)
+	var i Attachment
+	err := row.Scan(
+		&i.ProjectID,
+		&i.TaskID,
+		&i.ID,
+		&i.BlobSha256,
+		&i.MimeType,
+		&i.Bytes,
+		&i.Kind,
+		&i.Status,
+		&i.CreatedBy,
+		&i.Ts,
+	)
+	return i, err
+}
+
+const listAttachments = `-- name: ListAttachments :many
+SELECT t.id AS task_id, a.id, a.blob_sha256, a.mime_type, a.bytes, a.kind, a.status, a.created_by, a.ts
+FROM tasks t LEFT JOIN attachments a ON a.project_id = t.project_id AND a.task_id = t.id
+WHERE t.project_id = ? AND t.id = ?
+ORDER BY a.ts, a.id
+`
+
+type ListAttachmentsParams struct {
+	ProjectID string
+	ID        string
+}
+
+type ListAttachmentsRow struct {
+	TaskID     string
+	ID         sql.NullString
+	BlobSha256 sql.NullString
+	MimeType   sql.NullString
+	Bytes      sql.NullInt64
+	Kind       sql.NullString
+	Status     sql.NullString
+	CreatedBy  sql.NullString
+	Ts         sql.NullInt64
+}
+
+// The task's attachments, oldest first, in one statement: no row is a missing task, one row whose
+// attachment columns are NULL a task with none.
+func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams) ([]ListAttachmentsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAttachments, arg.ProjectID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAttachmentsRow
+	for rows.Next() {
+		var i ListAttachmentsRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.BlobSha256,
+			&i.MimeType,
+			&i.Bytes,
+			&i.Kind,
+			&i.Status,
+			&i.CreatedBy,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setAttachmentReady = `-- name: SetAttachmentReady :one
+UPDATE attachments SET blob_sha256 = ?1, status = 'ready'
+WHERE project_id = ?2 AND task_id = ?3 AND id = ?4 AND status = 'pending'
+RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
+`
+
+type SetAttachmentReadyParams struct {
+	BlobSha256 sql.NullString
+	ProjectID  string
+	TaskID     string
+	ID         string
+}
+
+func (q *Queries) SetAttachmentReady(ctx context.Context, arg SetAttachmentReadyParams) (Attachment, error) {
+	row := q.db.QueryRowContext(ctx, setAttachmentReady,
+		arg.BlobSha256,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.ID,
+	)
+	var i Attachment
+	err := row.Scan(
+		&i.ProjectID,
+		&i.TaskID,
+		&i.ID,
+		&i.BlobSha256,
+		&i.MimeType,
+		&i.Bytes,
+		&i.Kind,
+		&i.Status,
+		&i.CreatedBy,
+		&i.Ts,
+	)
 	return i, err
 }

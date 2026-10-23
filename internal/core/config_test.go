@@ -134,3 +134,34 @@ func TestRetentionWindows(t *testing.T) {
 		}
 	}
 }
+
+// The blob store: "blobs" beside the SQLite file (beside DefaultSQLitePath on Postgres) and 50 MiB
+// by default, the file's object over them, the environment over the file, and a size below one byte
+// (or not a number) refused by name.
+func TestBlobConfig(t *testing.T) {
+	c, err := Load("", env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BlobDir() != filepath.Join("data", "blobs") || c.Blob.MaxBytes != 50<<20 {
+		t.Fatalf("default blob dir %q, max %d", c.BlobDir(), c.Blob.MaxBytes)
+	}
+	if c, err = Load("", env(map[string]string{"BATONDECK_DATABASE_URL": "/srv/bk/bk.db"})); err != nil || c.BlobDir() != "/srv/bk/blobs" {
+		t.Fatalf("beside the SQLite file: %q, %v", c.BlobDir(), err)
+	}
+	if c, err = Load("", env(map[string]string{"BATONDECK_DATABASE_URL": "postgres://h/db"})); err != nil || c.BlobDir() != filepath.Join("data", "blobs") {
+		t.Fatalf("postgres: %q, %v", c.BlobDir(), err)
+	}
+	p := writeConfig(t, `{"blob":{"dir":"/srv/blobs","max_bytes":1024}}`)
+	if c, err = Load(p, env(nil)); err != nil || c.BlobDir() != "/srv/blobs" || c.Blob.MaxBytes != 1024 {
+		t.Fatalf("file blob %+v, %v", c.Blob, err)
+	}
+	if c, err = Load(p, env(map[string]string{"BATONDECK_BLOB_DIR": "/var/b", "BATONDECK_BLOB_MAX_BYTES": "7"})); err != nil || c.Blob != (Blob{Dir: "/var/b", MaxBytes: 7}) {
+		t.Fatalf("env blob %+v, %v", c.Blob, err)
+	}
+	for _, bad := range []map[string]string{{"BATONDECK_BLOB_MAX_BYTES": "0"}, {"BATONDECK_BLOB_MAX_BYTES": "1MiB"}} {
+		if _, err := Load("", env(bad)); err == nil || !strings.Contains(err.Error(), RuleBlob) {
+			t.Fatalf("%v: %v, want %s", bad, err, RuleBlob)
+		}
+	}
+}
