@@ -79,6 +79,8 @@ def main():
                 ("unregister", [binary, "session", "unregister"], tok, "removed"),
                 ("unregister: nothing registered", [binary, "session", "unregister"], tok, "refused"),
                 ("hook start", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_ROLE": "master"}, "registered as master"),
+                ("hook start: agent", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_AGENT": "hook-check"},
+                 "agent hook-check"),
                 ("hook end", ["sh", HOOK, "end"], {**tok, **hook_path}, "session unregister"),
                 ("hook start: bad role", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_ROLE": "boss"}, "usage"),
                 ("hook start: binary not on PATH", ["sh", HOOK, "start"], {**tok, "PATH": "/usr/bin:/bin"}, "not on PATH"),
