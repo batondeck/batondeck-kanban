@@ -1,6 +1,5 @@
-// Owner: R2.5 fills these bodies; R1.12 copied the signatures from api.ts, which R1.14 splits onto them.
+// Owner: R2.5 fills these bodies; R1.12 copied the signatures from api.ts.
 import type { MySettings } from '../types.js';
-import type { CliTokenRow } from '../api.js';
 import { req } from './http.js';
 
 /** T-201: the signed-in user's OWN preferences. No identity parameter exists — by design. */
@@ -21,3 +20,28 @@ export const revokeCliToken = (id: string) =>
     'POST',
     `/api/me/cli-tokens/${encodeURIComponent(id)}/revoke`,
   );
+
+/** One CLI token as a read path returns it — no value, by construction (T-457). */
+export interface CliTokenRow {
+  id: string;
+  label: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  status: 'live' | 'expired' | 'revoked';
+}
+
+// UNMOUNTED: the plan dropped /api/me/marketplace-key (routes.json); Settings still calls these three
+// until P-184 removes the panel. Kept so that screen compiles.
+export const getMarketplaceKey = () =>
+  req<{ key: string | null; createdAt: string | null; rotated: boolean; lastUsedAt: string | null; useCount: number; recentUses: Array<{ ts: string; kind: 'catalog' | 'archive'; pluginName?: string; semver?: string; ip?: string; userAgent?: string }> }>(
+    'GET',
+    '/api/me/marketplace-key',
+  );
+
+export const createMarketplaceKey = () =>
+  req<{ key: string; rotated: boolean }>('POST', '/api/me/marketplace-key', {});
+
+export const rotateMarketplaceKey = () =>
+  req<{ key: string; rotated: boolean }>('POST', '/api/me/marketplace-key/rotate', {});

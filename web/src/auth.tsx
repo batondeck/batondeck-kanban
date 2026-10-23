@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api } from './api.js';
+import * as sessionApi from './api/session.js';
 import { UI_DEFAULTS, hydrateUiSettings, type UiSettings } from './settings.js';
 
 interface AuthState {
@@ -87,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = async (): Promise<void> => {
     try {
-      const s = await api.session();
+      const s = await sessionApi.session();
       setIdentity(s.identity);
       setIsAdmin(s.isAdmin);
       // `?? []` at the ONE place the wire is read. Absent means none (see permissions.ts).
@@ -107,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh().finally(() => setLoading(false));
-    // api.ts fires this when any call returns 401 mid-session (expired/revoked cookie): drop the
+    // api/http.ts fires this when any call returns 401 mid-session (expired/revoked cookie): drop the
     // identity so the app falls back to the sign-in screen instead of silently failing every request.
     const onUnauthorized = (): void => setIdentity(null);
     window.addEventListener('batondeck:unauthorized', onUnauthorized);
@@ -115,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = async (): Promise<void> => {
-    await api.logout();
+    await sessionApi.logout();
     setIdentity(null);
   };
 

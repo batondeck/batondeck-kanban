@@ -9,7 +9,8 @@ import { Fragment, useRef, useState } from 'react';
 import { useDisplayNames } from '../../displayNames.js';
 import { Icon } from '../../icons.js';
 import ReactMarkdown from 'react-markdown';
-import { api } from '../../api.js';
+import * as contextApi from '../../api/context.js';
+import * as tasksApi from '../../api/tasks.js';
 import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, timeAgo } from '../../components.js';
 import { AppLinkCard, normalizeLink } from '../../AppLink.js';
 import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
@@ -72,7 +73,7 @@ export function DescriptionPanel({ d }: P) {
       {editing ? (
         <>
           <textarea className="input" maxLength={LIMITS.description} style={{ width: '100%', minHeight: 100 }} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-          <Button style={{ marginTop: 8 }} variant="primary" onClick={() => void run(api.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
+          <Button style={{ marginTop: 8 }} variant="primary" onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
         </>
       ) : task.description ? (
         // Agents write markdown briefs — render them (same .md styling as comments) instead of raw text.
@@ -103,7 +104,7 @@ export function DigestPanel({ d }: P) {
           <>
             <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft} onChange={(e) => setSummaryDraft(e.target.value)} />
             <Cluster gap={4} style={{ marginTop: 6 }}>
-              <Button variant="primary" onClick={() => void run(api.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
+              <Button variant="primary" onClick={() => void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
               <Button onClick={() => setSummaryDraft(null)}>Cancel</Button>
             </Cluster>
           </>
@@ -189,7 +190,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
               {blockedByEdges.map((e) => (
                 <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <DepChip id={e.fromTaskId} linked={taskById.get(e.fromTaskId)} onOpen={onOpenTask} />
-                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(api.removeDependency(projectId, e.id))}>×</Button>
+                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
                 </span>
               ))}
             </Cluster>
@@ -214,7 +215,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
               {blocksEdges.map((e) => (
                 <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <DepChip id={e.toTaskId} linked={taskById.get(e.toTaskId)} onOpen={onOpenTask} />
-                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(api.removeDependency(projectId, e.id))}>×</Button>
+                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
                 </span>
               ))}
             </Cluster>
@@ -222,7 +223,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
         </div>
         <Cluster gap={4}>
           <input className="input" style={{ flex: 1 }} placeholder="blocked by task id (e.g. T-3)" value={depId} onChange={(e) => setDepId(e.target.value)} />
-          <Button disabled={!depId} onClick={() => void run(api.addDependency(projectId, depId, taskId), () => setDepId(''))}>Add</Button>
+          <Button disabled={!depId} onClick={() => void run(contextApi.addDependency(projectId, depId, taskId), () => setDepId(''))}>Add</Button>
         </Cluster>
       </Stack>
     </Panel>
@@ -252,7 +253,7 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
                 checked={done}
                 aria-label={`Mark ${s.id} ${done ? 'not done' : 'done'}`}
                 style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
-                onChange={() => void run(api.moveTask(projectId, s.id, s.version, { toStatus: done ? 'IN_PROGRESS' : 'DONE' }))}
+                onChange={() => void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: done ? 'IN_PROGRESS' : 'DONE' }))}
               />
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, minWidth: 0 }}>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.id}</span>
@@ -275,8 +276,8 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
         })}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 10 }}>
-        <input className="input" style={{ flex: 1 }} placeholder="New subtask" value={subTitle} onChange={(e) => setSubTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subTitle) void run(api.addSubtask(projectId, taskId, subTitle), () => setSubTitle('')); }} />
-        <Button disabled={!subTitle} onClick={() => void run(api.addSubtask(projectId, taskId, subTitle), () => setSubTitle(''))}>Add</Button>
+        <input className="input" style={{ flex: 1 }} placeholder="New subtask" value={subTitle} onChange={(e) => setSubTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subTitle) void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle('')); }} />
+        <Button disabled={!subTitle} onClick={() => void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle(''))}>Add</Button>
       </Cluster>
     </Panel>
   );
@@ -316,8 +317,8 @@ export function ContextPanel({ d }: P) {
         ))}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 8 }}>
-        <input className="input" style={{ flex: 1 }} placeholder="Add a note…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && note) void run(api.addContextItem(projectId, taskId, 'note', note), () => setNote('')); }} />
-        <Button disabled={!note} onClick={() => void run(api.addContextItem(projectId, taskId, 'note', note), () => setNote(''))}>Add</Button>
+        <input className="input" style={{ flex: 1 }} placeholder="Add a note…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && note) void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote('')); }} />
+        <Button disabled={!note} onClick={() => void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote(''))}>Add</Button>
       </Cluster>
     </Panel>
   );
@@ -342,9 +343,9 @@ export function LinksPanel({ d }: P) {
           placeholder="Paste a link (Lucid, Google Docs, Figma…)"
           value={link}
           onChange={(e) => setLink(e.target.value)}
-          onKeyDown={(e) => { const u = normalizeLink(link); if (e.key === 'Enter' && u) void run(api.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}
+          onKeyDown={(e) => { const u = normalizeLink(link); if (e.key === 'Enter' && u) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}
         />
-        <Button disabled={!normalizeLink(link)} onClick={() => { const u = normalizeLink(link); if (u) void run(api.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}>Attach</Button>
+        <Button disabled={!normalizeLink(link)} onClick={() => { const u = normalizeLink(link); if (u) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}>Attach</Button>
       </Cluster>
       {link.trim().length > 0 && !normalizeLink(link) && (
         <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>Not a valid URL — paste a full http(s) link.</p>
@@ -375,7 +376,7 @@ export function MemoryPanel({ d }: P) {
       <Cluster gap={4} style={{ marginTop: 10 }}>
         <input className="input" style={{ width: 90 }} placeholder="key" value={memKey} onChange={(e) => setMemKey(e.target.value)} />
         <input className="input" style={{ flex: 1 }} placeholder="value" value={memVal} onChange={(e) => setMemVal(e.target.value)} />
-        <Button disabled={!memKey} onClick={() => void run(api.writeMemory(projectId, taskId, 'shared', memKey, memVal), () => { setMemKey(''); setMemVal(''); })}>Save</Button>
+        <Button disabled={!memKey} onClick={() => void run(contextApi.writeMemory(projectId, taskId, 'shared', memKey, memVal), () => { setMemKey(''); setMemVal(''); })}>Save</Button>
       </Cluster>
     </Panel>
   );
@@ -679,14 +680,14 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
       <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 10px', alignItems: 'center', fontSize: 14 }}>
         <span className="muted">Priority</span>
         <select className="input" value={task.priority}
-          onChange={(e) => void run(api.updateTask(projectId, taskId, task.version, { priority: e.target.value }))}>
+          onChange={(e) => void run(tasksApi.updateTask(projectId, taskId, task.version, { priority: e.target.value }))}>
           {['low', 'normal', 'high', 'urgent'].map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <span className="muted">Assignee</span>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <input className="input" list="agent-names" key={`as${task.version}`} defaultValue={task.assignee ?? ''} placeholder="agent name, email, or SA"
             onKeyDown={escapeResets(task.assignee ?? '')}
-            onBlur={(e) => { const v = e.target.value.trim(); if (v !== (task.assignee ?? '')) void run(api.updateTask(projectId, taskId, task.version, { assignee: v || null })); }} />
+            onBlur={(e) => { const v = e.target.value.trim(); if (v !== (task.assignee ?? '')) void run(tasksApi.updateTask(projectId, taskId, task.version, { assignee: v || null })); }} />
           <datalist id="agent-names">
             {[...new Set([
               ...(agentsQ.data?.sessions ?? []).map((s) => s.agentName),
@@ -706,23 +707,23 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
             const v = e.target.value;
             if (v === (task.dueAt ? task.dueAt.slice(0, 10) : '')) return;
             const iso = v ? new Date(v).toISOString() : null;
-            void run(api.updateTask(projectId, taskId, task.version, { dueAt: iso }));
+            void run(tasksApi.updateTask(projectId, taskId, task.version, { dueAt: iso }));
           }} />
         <span className="muted">Estimate</span>
         <input className="input" type="number" key={`est${task.version}`} defaultValue={task.estimate ?? ''}
           onKeyDown={escapeResets(task.estimate != null ? String(task.estimate) : '')}
-          onBlur={(e) => { const v = e.target.value.trim(); const n = v ? Number(v) : null; if (n !== null && !Number.isFinite(n)) return; if (n !== task.estimate) void run(api.updateTask(projectId, taskId, task.version, { estimate: n })); }} />
+          onBlur={(e) => { const v = e.target.value.trim(); const n = v ? Number(v) : null; if (n !== null && !Number.isFinite(n)) return; if (n !== task.estimate) void run(tasksApi.updateTask(projectId, taskId, task.version, { estimate: n })); }} />
         <span className="muted">Labels</span>
         <ChipField
           values={task.labels}
           placeholder="add a label"
-          onChange={(labels) => void run(api.updateTask(projectId, taskId, task.version, { labels }))}
+          onChange={(labels) => void run(tasksApi.updateTask(projectId, taskId, task.version, { labels }))}
         />
         <span className="muted">Capabilities</span>
         <ChipField
           values={task.requiredCapabilities}
           placeholder="add a capability"
-          onChange={(requiredCapabilities) => void run(api.updateTask(projectId, taskId, task.version, { requiredCapabilities }))}
+          onChange={(requiredCapabilities) => void run(tasksApi.updateTask(projectId, taskId, task.version, { requiredCapabilities }))}
         />
       </div>
       {/* CUSTOM FIELDS, on the SAME `auto 1fr` grid as the fields above.
@@ -747,7 +748,7 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
                       title={`Remove ${k}`}
                       className="btn secondary"
                       style={{ padding: '0 8px', lineHeight: '22px' }}
-                      onClick={() => { const next = { ...task.customFields }; delete next[k]; void run(api.updateTask(projectId, taskId, task.version, { customFields: next })); }}
+                      onClick={() => { const next = { ...task.customFields }; delete next[k]; void run(tasksApi.updateTask(projectId, taskId, task.version, { customFields: next })); }}
                     >
                       ×
                     </button>
@@ -758,7 +759,7 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
             <Cluster gap={4}>
               <input className="input" style={{ width: 110 }} placeholder="field" value={cf.k} onChange={(e) => setCf({ ...cf, k: e.target.value })} />
               <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="value" value={cf.v} onChange={(e) => setCf({ ...cf, v: e.target.value })} />
-              <Button disabled={!cf.k} onClick={() => void run(api.updateTask(projectId, taskId, task.version, { customFields: { ...task.customFields, [cf.k]: cf.v } }), () => setCf({ k: '', v: '' }))}>Add</Button>
+              <Button disabled={!cf.k} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { customFields: { ...task.customFields, [cf.k]: cf.v } }), () => setCf({ k: '', v: '' }))}>Add</Button>
             </Cluster>
           </div>
         );

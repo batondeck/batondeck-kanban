@@ -19,7 +19,8 @@
  */
 import { useEffect, useMemo } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as analyticsApi from '../api/analytics.js';
+import * as boardsApi from '../api/boards.js';
 import { PageHeader } from '../components.js';
 import { AreaLine, ChartFrame, Donut, RankedBars, StackedBars, describeQueryError, type Slice } from '../charts.js';
 import { useProject } from '../projectContext.js';
@@ -79,7 +80,7 @@ export function Reports() {
 
   const boardsQ = useQuery({
     queryKey: ['boards', projectId],
-    queryFn: () => api.listBoards(projectId),
+    queryFn: () => boardsApi.listBoards(projectId),
     enabled: !!projectId,
   });
   const board = boardsQ.data?.boards[0];
@@ -91,7 +92,7 @@ export function Reports() {
     queryKey: ['task-census', projectId, boardId],
     initialPageParam: '',
     queryFn: ({ pageParam }) =>
-      api.listTasks(projectId, boardId!, {
+      boardsApi.listTasks(projectId, boardId!, {
         limit: String(PAGE),
         ...((pageParam as string) ? { cursor: pageParam as string } : {}),
       }),
@@ -108,7 +109,7 @@ export function Reports() {
 
   const opsQ = useQuery({
     queryKey: ['analytics-ops', projectId],
-    queryFn: () => api.analyticsOperations(projectId, 30),
+    queryFn: () => analyticsApi.analyticsOperations(projectId, 30),
     enabled: !!projectId,
     retry: false,
   });

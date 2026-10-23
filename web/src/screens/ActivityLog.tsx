@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useDisplayNames } from '../displayNames.js';
 import { Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as boardsApi from '../api/boards.js';
+import * as feedApi from '../api/feed.js';
+import * as mediaApi from '../api/media.js';
+import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
@@ -50,7 +54,7 @@ export function ActivityLog() {
 
   const boardsQ = useQuery({
     queryKey: ['boards', projectId],
-    queryFn: () => api.listBoards(projectId),
+    queryFn: () => boardsApi.listBoards(projectId),
     enabled: !!projectId,
   });
   const boards = useMemo(() => boardsQ.data?.boards ?? [], [boardsQ.data]);
@@ -63,7 +67,7 @@ export function ActivityLog() {
   const allSessions = can(permissions, SUPERADMIN);
   const sessionsQ = useQuery({
     queryKey: ['agentSessions', allSessions],
-    queryFn: () => api.agentSessions(ui.sessionsLimit, allSessions),
+    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit, allSessions),
     staleTime: 60000,
   });
   const toolMap = useMemo(() => toolByAgent(sessionsQ.data?.sessions ?? []), [sessionsQ.data]);
@@ -88,7 +92,7 @@ export function ActivityLog() {
   // server max (50); the display paginates by ui.searchK.
   const serverQ = useQuery({
     queryKey: ['ticketSearch', projectId, parsed.text],
-    queryFn: () => api.search(projectId, parsed.text, 50),
+    queryFn: () => mediaApi.search(projectId, parsed.text, 50),
     enabled: searching && !!projectId && parsed.text.length > 0,
   });
   // Filter-only queries have nothing to rank — list every board's tasks once and narrow locally.
@@ -97,7 +101,7 @@ export function ActivityLog() {
   const allTasksQ = useQuery({
     queryKey: ['allProjectTasks', projectId],
     queryFn: async () => {
-      const perBoard = await Promise.all(boards.map((b) => api.listTasks(projectId, b.id, { limit: String(ui.taskPageLimit) })));
+      const perBoard = await Promise.all(boards.map((b) => boardsApi.listTasks(projectId, b.id, { limit: String(ui.taskPageLimit) })));
       return perBoard.flatMap((r) => r.tasks);
     },
     enabled: needAllTasks && !!projectId && boards.length > 0,
@@ -135,7 +139,7 @@ export function ActivityLog() {
   const feedQ = useQuery({
     queryKey: ['feed', projectId, boardIds.join(',')],
     queryFn: async () => {
-      const per = await Promise.all(boardIds.map((id) => api.feed(projectId, id)));
+      const per = await Promise.all(boardIds.map((id) => feedApi.feed(projectId, id)));
       return { events: per.flatMap((r) => r.events) };
     },
     enabled: !!projectId && boardIds.length > 0,
@@ -145,7 +149,7 @@ export function ActivityLog() {
   // screen; other boards' events land on the next first-board tick or refetch.
   useEffect(() => {
     if (!projectId || !boardId) return;
-    return api.stream(projectId, boardId, () =>
+    return streamApi.stream(projectId, boardId, () =>
       void qc.invalidateQueries({ queryKey: ['feed', projectId] }),
     );
   }, [projectId, boardId, qc]);

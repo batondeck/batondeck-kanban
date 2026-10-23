@@ -1,4 +1,4 @@
-// Owner: R2.3 fills these bodies; R1.12 copied the signatures from api.ts, which R1.14 splits onto them.
+// Owner: R2.3 fills these bodies; R1.12 copied the signatures from api.ts.
 import type { Notification } from '../types.js';
 import { req } from './http.js';
 

@@ -44,7 +44,8 @@
  */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from './api.js';
+import * as oncallApi from './api/oncall.js';
+import * as projectsApi from './api/projects.js';
 import { useProject } from './projectContext.js';
 
 /**
@@ -80,7 +81,7 @@ export function useMayReadIntegrations(projectId: string | undefined): boolean {
 export function useDisplayNames(projectId: string | undefined): Record<string, string> {
   const projectQ = useQuery({
     queryKey: ['project-member-display', projectId],
-    queryFn: () => api.getProject(projectId!),
+    queryFn: () => projectsApi.getProject(projectId!),
     enabled: !!projectId,
     staleTime: STALE_MS,
     retry: false,
@@ -90,7 +91,7 @@ export function useDisplayNames(projectId: string | undefined): Record<string, s
 
   const integrationsQ = useQuery({
     queryKey: ['oncall-integrations-names', projectId],
-    queryFn: () => api.listIntegrations(projectId!),
+    queryFn: () => oncallApi.listIntegrations(projectId!),
     enabled: !!projectId && mayReadIntegrations,
     staleTime: STALE_MS,
     retry: false,

@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { Icon } from '../icons.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as runsApi from '../api/runs.js';
 import { Avatar, timeAgo } from '../components.js';
 import type { RunView, Status, Task } from '../types.js';
 
@@ -104,7 +104,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
   // subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
   const runsQ = useQuery({
     queryKey: ['runs', projectId, taskId],
-    queryFn: () => api.listRuns(projectId, taskId),
+    queryFn: () => runsApi.listRuns(projectId, taskId),
     refetchInterval: 30000,
   });
   const [busy, setBusy] = useState(false);
@@ -128,7 +128,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
   /**
   * Run one action at a time, surfacing failures through `err`.
   *
-  * Takes a THUNK, not a promise. `guard(api.pickRun(…))` evaluates the call at the CALL SITE, so the
+  * Takes a THUNK, not a promise. `guard(runsApi.pickRun(…))` evaluates the call at the CALL SITE, so the
   * request was already in flight before `if (busy) return` could stop it: a second Pick reached the
   * server carrying a now-stale `task.version`, and because `guard` returned before its `await` that
   * rejection was unhandled — no `err`, nothing on screen, a pick that looked like it did nothing.
@@ -161,7 +161,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
         {/* "+ Add run" opens one more run child into the live race; the count badge sits beside it. */}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           {racing && (
-            <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => void guard(() => api.openRun(projectId, taskId, {}))}>
+            <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => void guard(() => runsApi.openRun(projectId, taskId, {}))}>
               + Add run
             </button>
           )}
@@ -202,7 +202,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
                   disabled={busy}
                   // Close the form only when the start actually succeeded — guard() swallows the rejection
                   // (surfacing it via err), so chaining after guard would close on failure too.
-                  onClick={() => void guard(() => api.startRuns(projectId, taskId, task.version, { count: Math.max(2, Math.min(RACE_CAP, count)) }).then((r) => { setStartOpen(false); return r; }))}
+                  onClick={() => void guard(() => runsApi.startRuns(projectId, taskId, task.version, { count: Math.max(2, Math.min(RACE_CAP, count)) }).then((r) => { setStartOpen(false); return r; }))}
                 >
                   Start
                 </button>
@@ -230,7 +230,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
             Racing · {runs.filter((r) => r.status !== 'CANCELLED').length} runs open
             {task.raceOpenedAt && <span className="mono" style={{ fontSize: 11 }}>· started {timeAgo(task.raceOpenedAt)}</span>}
           </span>
-          <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => void guard(() => api.cancelRuns(projectId, taskId, task.version))}>
+          <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} onClick={() => void guard(() => runsApi.cancelRuns(projectId, taskId, task.version))}>
             Cancel race
           </button>
         </div>
@@ -243,7 +243,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
             run={r}
             racing={racing}
             won={r.taskId === winnerId}
-            onPick={() => void guard(() => api.pickRun(projectId, taskId, r.taskId, task.version))}
+            onPick={() => void guard(() => runsApi.pickRun(projectId, taskId, r.taskId, task.version))}
           />
         ))}
       </div>

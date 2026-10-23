@@ -4,7 +4,7 @@
  * settle. Errors roll back here; the user-facing toast comes from the global MutationCache handler.
  */
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { api } from './api.js';
+import * as boardsApi from './api/boards.js';
 import type { Task } from './types.js';
 
 type TaskPage = { tasks: Task[]; nextCursor?: string };
@@ -109,7 +109,7 @@ function reconcile(qc: QueryClient, projectId: string, taskId?: string): void {
  * An optimistic task mutation: `patch` runs against the cached task instantly; `run` does the server
  * call; settle reconciles. Usage:
  *   const move = useTaskAction(projectId, (to: Status, t) => ({ ...t, status: to }),
- *                              (to, task) => api.moveTask(projectId, task.id, task.version, { toStatus: to }));
+ *                              (to, task) => tasksApi.moveTask(projectId, task.id, task.version, { toStatus: to }));
  *   move.mutate({ vars: 'DONE', task });
  */
 export function useTaskAction<TVars>(
@@ -121,7 +121,7 @@ export function useTaskAction<TVars>(
   return useMutation({
     mutationFn: ({ vars, task }: { vars: TVars; task: Task }) => run(vars, task),
     onMutate: async ({ vars, task }) => {
-      // markLocalEdit is applied in api.req() — the choke point every task write goes through.
+      // markLocalEdit is applied in req() (api/http.ts) — the choke point every task write goes through.
       await qc.cancelQueries({ queryKey: ['tasks', projectId] });
       await qc.cancelQueries({ queryKey: ['task', projectId, task.id] });
       return { snapshot: patchTaskCaches(qc, projectId, task.id, (t) => patch(vars, t)), taskId: task.id };
@@ -136,7 +136,7 @@ export function useTaskAction<TVars>(
 export function useTaskCreate(projectId: string, boardId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { title: string; priority?: string }) => api.createTask(projectId, boardId, body),
+    mutationFn: (body: { title: string; priority?: string }) => boardsApi.createTask(projectId, boardId, body),
     onMutate: async (body) => {
       await qc.cancelQueries({ queryKey: ['tasks', projectId, boardId] });
       // Must match the Task interface exactly (no phantom/missing fields) — this short-lived placeholder is

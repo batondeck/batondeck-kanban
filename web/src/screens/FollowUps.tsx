@@ -10,7 +10,7 @@
 import { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as followupsApi from '../api/followups.js';
 import { Avatar, timeAgo } from '../components.js';
 import type { FollowUp, Status, Task } from '../types.js';
 import { Stack } from '../ui.js';
@@ -77,7 +77,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
   // resource subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
   const followUpsQ = useQuery({
     queryKey: ['followups', projectId, taskId],
-    queryFn: () => api.listFollowUps(projectId, taskId),
+    queryFn: () => followupsApi.listFollowUps(projectId, taskId),
     refetchInterval: 30000,
   });
   const [body, setBody] = useState('');
@@ -109,7 +109,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
     setBusy(true);
     setErr(null);
     try {
-      await api.addFollowUp(projectId, taskId, text, canReopen && reopen);
+      await followupsApi.addFollowUp(projectId, taskId, text, canReopen && reopen);
       setBody('');
       setReopen(false);
       refresh();
@@ -123,7 +123,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
   const ack = async (id: string): Promise<void> => {
     setErr(null);
     try {
-      await api.ackFollowUp(projectId, taskId, id);
+      await followupsApi.ackFollowUp(projectId, taskId, id);
       refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));

@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, defaultBoardName } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as boardsApi from '../api/boards.js';
+import * as projectsApi from '../api/projects.js';
+import { defaultBoardName } from '../api/boards.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
 import { useProject } from '../projectContext.js';
@@ -26,7 +29,7 @@ export function Projects() {
   const { permissions, ui } = useAuth();
   const { projectId: selected, projects: roster } = useProject();
   const [name, setName] = useState('');
-  const projects = useQuery({ queryKey: ['projects'], queryFn: () => api.listProjects() });
+  const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
   const list = projects.data?.projects ?? [];
 
   // The sidebar switcher scopes this grid: "All projects" ('') shows every PROJECT card; a selected
@@ -44,7 +47,7 @@ export function Projects() {
 
   const boardsQ = useQuery({
     queryKey: ['boards', selected],
-    queryFn: () => api.listBoards(selected),
+    queryFn: () => boardsApi.listBoards(selected),
     enabled: !!selected,
   });
   const boards = boardsQ.data?.boards ?? [];
@@ -59,7 +62,7 @@ export function Projects() {
   const allSessions = can(permissions, SUPERADMIN);
   const sessionsQ = useQuery({
     queryKey: ['agentSessions', allSessions],
-    queryFn: () => api.agentSessions(ui.sessionsLimit, allSessions),
+    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit, allSessions),
     staleTime: 60000,
   });
   const agentsByProject = useMemo(() => {
@@ -78,8 +81,8 @@ export function Projects() {
     // Color is assigned once at creation — a random palette pick persisted to settings (no on-card
     // picker; older projects without a stored color keep the id-hash fallback below).
     mutationFn: async (n: string) => {
-      const { projectId } = await api.createProject(n);
-      await api.updateSettings(projectId, { color: PALETTE[Math.floor(Math.random() * PALETTE.length)] }).catch(() => {});
+      const { projectId } = await projectsApi.createProject(n);
+      await projectsApi.updateSettings(projectId, { color: PALETTE[Math.floor(Math.random() * PALETTE.length)] }).catch(() => {});
       return projectId;
     },
     onSuccess: () => {
@@ -89,7 +92,7 @@ export function Projects() {
   });
 
   const createBoard = useMutation({
-    mutationFn: (n: string) => api.createBoard(selected, n),
+    mutationFn: (n: string) => boardsApi.createBoard(selected, n),
     onSuccess: () => {
       setName('');
       void qc.invalidateQueries({ queryKey: ['boards', selected] });
@@ -98,8 +101,8 @@ export function Projects() {
 
   async function open(projectId: string): Promise<void> {
     const projectName = list.find((p) => p.projectId === projectId)?.name;
-    const { boards } = await api.listBoards(projectId);
-    const board = boards[0] ?? (await api.createBoard(projectId, defaultBoardName(projectName))).board;
+    const { boards } = await boardsApi.listBoards(projectId);
+    const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
     nav(`/projects/${projectId}/boards/${board.id}`);
   }
 

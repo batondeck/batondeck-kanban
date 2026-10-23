@@ -112,14 +112,14 @@ describe('the wiring that makes the spinner correct', () => {
 
   it('the board no longer refetches ITS OWN three queries off the nudge — that is the snapshot`s job', () => {
     const src = boardSrc;
-    // Scope to the api.stream(...) CALL, not to a slice of the file.
+    // Scope to the streamApi.stream(...) CALL, not to a slice of the file.
     //
     // The first version of this sliced at `src.indexOf('setStreamLive')`, which finds the useState
     // declaration near the TOP of the file — so it asserted against a region that never contained the
     // handler and passed with the refetches restored. Fourth vacuous guard in this lane; mutation
     // testing caught every one. Anchoring on the actual call is what makes it bite.
-    const handler = /api\.stream\([\s\S]*?\n {6}\),/.exec(src)?.[0] ?? '';
-    expect(handler, 'no api.stream(...) call found — the anchor moved').not.toBe('');
+    const handler = /streamApi\.stream\([\s\S]*?\n {6}\),/.exec(src)?.[0] ?? '';
+    expect(handler, 'no streamApi.stream(...) call found — the anchor moved').not.toBe('');
     const code = handler.replace(/\/\/[^\n]*/g, '');
     expect(code, 'invalidating here fires exactly the three refetches the snapshot exists to remove')
       .not.toMatch(/invalidateQueries\(\{\s*queryKey:\s*\['(feed|board|tasks)', projectId, boardId\]/);

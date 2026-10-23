@@ -12,7 +12,8 @@ import { useMemo, useState } from 'react';
 import { useMayReadIntegrations } from '../displayNames.js';
 import { Icon } from '../icons.js';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as oncallApi from '../api/oncall.js';
+import * as projectsApi from '../api/projects.js';
 import type { Delivery, Integration } from '../types.js';
 import { Cluster, Empty, Note, Panel, Stack, Tile, Tiles } from '../ui.js';
 import { EmptyState, PageHeader, timeAgo } from '../components.js';
@@ -26,7 +27,7 @@ function sourceLabel(s: string): string {
 function Health({ projectId, integration }: { projectId: string; integration: Integration }) {
   const q = useQuery({
     queryKey: ['oncall-health', projectId, integration.id],
-    queryFn: () => api.listDeliveries(projectId, integration.id, undefined, 25),
+    queryFn: () => oncallApi.listDeliveries(projectId, integration.id, undefined, 25),
     refetchInterval: 30_000,
     retry: false,
   });
@@ -60,7 +61,7 @@ export default function Oncall() {
   const [setupOpen, setSetupOpen] = useState(false);
   const projectsQ = useQuery({
     queryKey: ['projects'],
-    queryFn: () => api.listProjects(),
+    queryFn: () => projectsApi.listProjects(),
     retry: false,
   });
   // `listProjects` returns membership rows (projectId + name + role), not full Project docs.
@@ -71,7 +72,7 @@ export default function Oncall() {
   const mayReadIntegrations = useMayReadIntegrations(activeProject);
   const integrationsQ = useQuery({
     queryKey: ['oncall-integrations', activeProject],
-    queryFn: () => api.listIntegrations(activeProject),
+    queryFn: () => oncallApi.listIntegrations(activeProject),
     // Role-gated: `list_integrations` is master-tier and its refusal emits an escalation signal
     // `escalation-deny.yaml` files on. With the 60s refetch below this fired without the reader
     // touching anything, so four sub-master identities with this page open would file between them.

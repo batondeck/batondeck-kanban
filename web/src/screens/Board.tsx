@@ -17,7 +17,14 @@ import { DndContext, DragOverlay, PointerSensor, closestCorners, useDroppable, u
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { generateKeyBetween } from 'fractional-indexing';
-import { api, isLocalEdit } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as boardsApi from '../api/boards.js';
+import * as feedApi from '../api/feed.js';
+import * as mediaApi from '../api/media.js';
+import * as sprintsApi from '../api/sprints.js';
+import * as streamApi from '../api/stream.js';
+import * as tasksApi from '../api/tasks.js';
+import { isLocalEdit } from '../api/http.js';
 import { Avatar, Marquee, PageHeader, PriorityDot, StatusPill, eventActor, eventVerb, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
@@ -602,7 +609,7 @@ export function Board() {
   // Board switcher + creation: a project has many boards — let the user jump between them and add one
   // right here, without going back to the Projects page.
   const displayNames = useDisplayNames(projectId);
-  const projectBoardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => api.listBoards(projectId), enabled: !!projectId });
+  const projectBoardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
   const projectBoards = projectBoardsQ.data?.boards ?? [];
   const [newBoardOpen, setNewBoardOpen] = useState(false);
   const [newBoardName, setNewBoardName] = useState('');
@@ -620,7 +627,7 @@ export function Board() {
    */
   const sprintLifecycle = useMutation({
     mutationFn: ({ sprint, status }: { sprint: Sprint; status: SprintStatus }) =>
-      api.updateSprint(projectId, sprint.id, sprint.version, { status }),
+      sprintsApi.updateSprint(projectId, sprint.id, sprint.version, { status }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['sprints', projectId, boardId] });
       // Members become claimable on activation and are released on close/abandon, so the board itself
@@ -633,7 +640,7 @@ export function Board() {
   });
 
   const createBoard = useMutation({
-    mutationFn: (n: string) => api.createBoard(projectId, n),
+    mutationFn: (n: string) => boardsApi.createBoard(projectId, n),
     onSuccess: (r) => {
       setNewBoardName('');
       setNewBoardOpen(false);
@@ -649,7 +656,7 @@ export function Board() {
   // framer-motion card glide animates moves.
   //
   // *** WHILE THE STREAM IS LIVE THERE IS NO POLL AT ALL. *** It used to run at 30s even in the healthy
-  // case, as a backstop against a stalled-but-open connection. That backstop is redundant: `api.stream`
+  // case, as a backstop against a stalled-but-open connection. That backstop is redundant: `streamApi.stream`
   // already reports health through `setStreamLive`, driven by the server's named `ping` frames and a
   // stall watchdog that reconnects after three missed (T-47) — so a silently-dead stream flips
   // `streamLive` to false and the fallback below takes over. Paying a 30s refetch on every open tab to
@@ -675,7 +682,7 @@ export function Board() {
 
   const [streamLive, setStreamLive] = useState(true);
   const pollMs = streamLive ? (false as const) : 10000;
-  const boardQ = useQuery({ queryKey: ['board', projectId, boardId], queryFn: () => api.getBoard(projectId, boardId), refetchInterval: pollMs });
+  const boardQ = useQuery({ queryKey: ['board', projectId, boardId], queryFn: () => boardsApi.getBoard(projectId, boardId), refetchInterval: pollMs });
   const [limit, setLimit] = useState(() => uiSettings().taskPageLimit);
   // `limit` IS part of the key — see `boardTasksKey`. It used to be held out of it and forced through a
   // manual invalidate effect, which left one cache entry shared with TaskDrawer's differently-sized
@@ -684,11 +691,11 @@ export function Board() {
   // with no cached entry, so without it `tasksQ.data` is undefined for a whole round-trip — the board
   // would blank out and the "Load more" button (gated on `nextCursor`) would vanish mid-click. The old
   // shape got this for free by mutating one entry; this restores it explicitly.
-  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => api.listTasks(projectId, boardId, { limit: String(limit) }), refetchInterval: pollMs, placeholderData: keepPreviousData });
-  const feedQ = useQuery({ queryKey: ['feed', projectId, boardId], queryFn: () => api.feed(projectId, boardId), refetchInterval: pollMs });
+  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => boardsApi.listTasks(projectId, boardId, { limit: String(limit) }), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  const feedQ = useQuery({ queryKey: ['feed', projectId, boardId], queryFn: () => feedApi.feed(projectId, boardId), refetchInterval: pollMs });
   const searchQ = useQuery({
     queryKey: ['search', projectId, filters.q],
-    queryFn: () => api.search(projectId, filters.q),
+    queryFn: () => mediaApi.search(projectId, filters.q),
     enabled: filters.q.trim().length > 1,
   });
   // Sprints on this board (T-257). Gated so a board with no sprint members and a closed rail pays
@@ -698,7 +705,7 @@ export function Board() {
   // SSE frame.
   const sprintsQ = useQuery({
     queryKey: ['sprints', projectId, boardId],
-    queryFn: () => api.listSprints(projectId, boardId),
+    queryFn: () => sprintsApi.listSprints(projectId, boardId),
     enabled: sprintRailOpen || (tasksQ.data?.tasks ?? []).some((t) => (t.sprintIds?.length ?? 0) > 0),
     refetchInterval: pollMs,
   });
@@ -721,11 +728,11 @@ export function Board() {
   // moved to the server, which is the honest description and still removes the client cost.
   //
   // The initial fetch stays: a tab must render presence before the first tick arrives.
-  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => api.agentSessions(uiSettings().sessionsLimit) });
+  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit) });
 
   useEffect(
     () =>
-      api.stream(
+      streamApi.stream(
         projectId,
         boardId,
         () => {
@@ -758,7 +765,7 @@ export function Board() {
             // teleports twice under a veil advertising "uncertain" says the wrong thing.
             //
             // `isLocalEdit` is the mechanism that already exists for exactly this (5s window, stamped
-            // in `api.req()` — the choke point every task write goes through, so it covers moves AND
+            // in `req() (api/http.ts)` — the choke point every task write goes through, so it covers moves AND
             // assigns). Reused rather than adding a second notion of "recently touched by me".
             //
             // MERGE, not skip: every OTHER task in the snapshot still lands, so a colleague's change to
@@ -803,7 +810,7 @@ export function Board() {
   const [sprintMsg, setSprintMsg] = useState<string | null>(null);
   const moveCard = useMutation({
     mutationFn: (v: { taskId: string; version: number; toColumnId: string; order: string }) =>
-      api.moveTask(projectId, v.taskId, v.version, { toColumnId: v.toColumnId, order: v.order }),
+      tasksApi.moveTask(projectId, v.taskId, v.version, { toColumnId: v.toColumnId, order: v.order }),
     onMutate: async (v) => {
       // *** THE KEY MUST BE `boardTasksKey`, WHICH INCLUDES `limit`. ***
       // This read and wrote `['tasks', projectId, boardId]` — one segment short of the key the board
@@ -813,7 +820,7 @@ export function Board() {
       //
       // It hid because `invalidateQueries` matches by PREFIX and so did hit the real entry — the card
       // moved on the refetch, which looks like a slow optimistic update rather than a broken one.
-      // Your own drag must not flash the "changed under you" ring at you — api.req() marks it.
+      // Your own drag must not flash the "changed under you" ring at you — req() (api/http.ts) marks it.
       await qc.cancelQueries({ queryKey: ['tasks', projectId] });
       const targetStatus = board?.columns.find((c) => c.id === v.toColumnId)?.status;
       // PREFIX-BASED. Building an exact key here is what produced this bug, the identical one in
@@ -875,7 +882,7 @@ export function Board() {
   // wait_for_task / next_task {assignee} picks up). Optimistic; the next poll reconciles version.
   const assignMut = useMutation({
     mutationFn: (v: { taskId: string; version: number; assignee: string | null }) =>
-      api.updateTask(projectId, v.taskId, v.version, { assignee: v.assignee }),
+      tasksApi.updateTask(projectId, v.taskId, v.version, { assignee: v.assignee }),
     onMutate: async (v) => {
       // THE SAME DEFECT `moveCard` HAD, still here twenty lines below the fix for it — found in review,
       // not by me. And worse than moveCard's, because `['tasks', projectId, boardId]` is not merely an
@@ -899,12 +906,12 @@ export function Board() {
   const setStatus = useTaskAction<Status>(
     projectId,
     (to, t) => ({ ...t, status: to }),
-    (to, task) => api.moveTask(projectId, task.id, task.version, { toStatus: to }),
+    (to, task) => tasksApi.moveTask(projectId, task.id, task.version, { toStatus: to }),
   );
   const setPriority = useTaskAction<Task['priority']>(
     projectId,
     (to, t) => ({ ...t, priority: to }),
-    (to, task) => api.updateTask(projectId, task.id, task.version, { priority: to }),
+    (to, task) => tasksApi.updateTask(projectId, task.id, task.version, { priority: to }),
   );
 
   const childStats = useMemo(() => {

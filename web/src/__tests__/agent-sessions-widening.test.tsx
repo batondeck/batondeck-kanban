@@ -76,7 +76,7 @@ async function renderAt(path: string): Promise<void> {
 /**
  * THE SCREENS THAT WIDEN, AND THE ROUTE EACH IS REACHED AT.
  *
- * Six screens call `api.agentSessions`; only these three pass the second argument. The other three
+ * Six screens call `agentsApi.agentSessions`; only these three pass the second argument. The other three
  * (`Settings`, `Agents`, `Board`/task drawer) ask identity-scoped and always did — including them here
  * would assert a widening that is not theirs.
  */
@@ -104,8 +104,8 @@ const SCREEN_SOURCES = import.meta.glob('../screens/**/*.{ts,tsx}', {
 describe('which screens widen — the table cannot drift from the source', () => {
   const widensInSource = (): string[] =>
     Object.entries(SCREEN_SOURCES)
-      // A SECOND ARGUMENT to agentSessions IS the widening. `api.agentSessions(limit)` is not.
-      .filter(([, src]) => /api\.agentSessions\([^)]*,[^)]*\)/.test(src))
+      // A SECOND ARGUMENT to agentSessions IS the widening. `agentsApi.agentSessions(limit)` is not.
+      .filter(([, src]) => /agentsApi\.agentSessions\([^)]*,[^)]*\)/.test(src))
       .map(([path]) => path)
       .sort();
 

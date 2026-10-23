@@ -1,4 +1,4 @@
-// Owner: R2.11 fills these bodies; R1.12 copied the signatures from api.ts, which R1.14 splits onto them.
+// Owner: R2.11 fills these bodies; R1.12 copied the signatures from api.ts.
 import type { OpsSummary } from '../types.js';
 import { req } from './http.js';
 

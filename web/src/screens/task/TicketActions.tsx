@@ -18,7 +18,7 @@
  * new code, which proves nothing.
  */
 import { useState } from 'react';
-import { api } from '../../api.js';
+import * as lifecycleApi from '../../api/lifecycle.js';
 import { AgentSelect } from '../../AgentSelect.js';
 import { Button, Cluster, Panel, Stack } from '../../ui.js';
 import { Icon } from '../../icons.js';
@@ -102,7 +102,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               <Button
                 variant="primary"
                 onClick={() =>
-                  void run(api.claimTask(projectId, taskId), (r) => {
+                  void run(lifecycleApi.claimTask(projectId, taskId), (r) => {
                     if (r) setLease(r.leaseId);
                   })
                 }
@@ -115,10 +115,10 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
           )}
           {myLease && (
             <Cluster gap={4} wrap>
-              <Button variant="primary" onClick={() => void run(api.completeTask(projectId, taskId, myLease), () => setLease(null))}><><Icon name="check" />Mark complete</></Button>
-              <Button onClick={() => void run(api.blockTask(projectId, taskId, myLease, 'blocked from UI'), () => setLease(null))}>Block</Button>
+              <Button variant="primary" onClick={() => void run(lifecycleApi.completeTask(projectId, taskId, myLease), () => setLease(null))}><><Icon name="check" />Mark complete</></Button>
+              <Button onClick={() => void run(lifecycleApi.blockTask(projectId, taskId, myLease, 'blocked from UI'), () => setLease(null))}>Block</Button>
               <Button onClick={() => setHandoff({ to: '', note: '' })}>Hand off…</Button>
-              <Button onClick={() => void run(api.releaseTask(projectId, taskId, myLease), () => setLease(null))}>Release claim</Button>
+              <Button onClick={() => void run(lifecycleApi.releaseTask(projectId, taskId, myLease), () => setLease(null))}>Release claim</Button>
             </Cluster>
           )}
           {heldByOther && (
@@ -141,7 +141,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               variant="primary"
               disabled={!handoff.to}
               onClick={() =>
-                void run(api.handoffTask(projectId, taskId, myLease, handoff.to, handoff.note), () => {
+                void run(lifecycleApi.handoffTask(projectId, taskId, myLease, handoff.to, handoff.note), () => {
                   setHandoff(null);
                   setLease(null);
                 })
