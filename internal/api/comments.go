@@ -1,9 +1,11 @@
 package api
 
-// Owner: R2.1 replaces these stubs (app.ts:2808-2820).
+// commentRoutes are app.ts's comment routes (2808-2820), each one service.Comments call.
 func commentRoutes(o *Options) []route {
+	c := o.Services.Comments
+	list := in{path: byTask.path, query: []string{"limit", "cursor"}}
 	return []route{
-		{Method: "GET", Path: ppt + "/comments", h: stub(o, "list_comments", "R2.1")},
-		{Method: "POST", Path: ppt + "/comments", h: stub(o, "add_comment", "R2.1")},
+		{Method: "GET", Path: ppt + "/comments", h: call(o, c.ListComments, list)},
+		{Method: "POST", Path: ppt + "/comments", h: call(o, c.AddComment, byTask)},
 	}
 }
