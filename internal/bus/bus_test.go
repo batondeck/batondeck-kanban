@@ -461,9 +461,15 @@ func TestReplayProjectsPagesPastOtherProjects(t *testing.T) {
 // Bus.Close ends every form: a tap's and a project subscription's channels close with a recipient's.
 func TestCloseEndsEveryForm(t *testing.T) {
 	b := memBackend(t)
-	bus, _ := newBus(t, b, Options{})
+	bus := New(b.store, Options{}) // no Cleanup Close: a Close that hangs is the failure reported here
 	subs := []*Subscription{subscribe(t, bus, 0, "bob"), tap(t, bus, 0), subscribeProjects(t, bus, 0, "P-1")}
-	bus.Close()
+	closed := make(chan struct{})
+	go func() { bus.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Bus.Close did not return: a subscription it did not close holds the tail")
+	}
 	for i, s := range subs {
 		select {
 		case _, ok := <-s.C():
