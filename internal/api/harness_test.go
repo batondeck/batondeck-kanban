@@ -72,6 +72,9 @@ func mountHarness(t *testing.T, a *auth.Service, o Options) *harness {
 	}
 	h.userID = u.ID
 	o.Auth = h.auth
+	if o.Users == nil {
+		o.Users = h.auth.Accounts
+	}
 	if o.Logger == nil {
 		o.Logger = log.New(io.Discard, "", 0)
 	}

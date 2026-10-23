@@ -111,6 +111,13 @@ func (s *Store) GetSession(ctx context.Context, idHash string) (store.Session, e
 	})
 }
 
+func (s *Store) DeleteSession(ctx context.Context, idHash string) error {
+	return s.do(ctx, func(st *state) error {
+		delete(st.sessions, idHash)
+		return nil
+	})
+}
+
 func (s *Store) CreateToken(ctx context.Context, t store.Token) error {
 	return s.do(ctx, func(st *state) error {
 		if _, ok := st.tokens[t.ID]; ok {
