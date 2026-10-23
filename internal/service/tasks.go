@@ -274,6 +274,10 @@ func (s tasksSvc) Get(ctx context.Context, caller domain.Caller, req GetTaskReq)
 	if err != nil {
 		return GetTaskResp{}, s.c.mapErr("get_task", err)
 	}
+	// The drawer's evidence list reads task.artifacts (R2.1): one more statement.
+	if out, err = withArtifacts(ctx, s.c.store, out); err != nil {
+		return GetTaskResp{}, s.c.mapErr("get_task", err)
+	}
 	return GetTaskResp{Task: out}, nil
 }
 
@@ -614,7 +618,8 @@ func (t *txn) unblockOne(depID, clearedID string) error {
 
 // List is list_tasks: one statement, the board's page under status, assignee and label (the store's
 // filter), then conductor's taskPostFilter over that page (store.ts:218-238) for unblockedOnly,
-// missingArtifacts, sprintId and updatedSince, as FirestoreStore re-checks an already-narrowed page:
+// missingArtifacts (one more statement, store.Artifacts.LiveArtifactTasks), sprintId and
+// updatedSince, as FirestoreStore re-checks an already-narrowed page:
 // a post-filtered page can be short and still carry nextCursor. contextSummary is "" on each (no batch
 // summary read, P-118).
 // ponytail: post-filter over a page, not a store-side filter; widening store.TaskFilter makes pages full.
@@ -658,6 +663,18 @@ func (s tasksSvc) List(ctx context.Context, caller domain.Caller, req ListTasksR
 	if err != nil {
 		return ListTasksResp{}, s.c.mapErr("list_tasks", err)
 	}
+	// missingArtifacts: the page's tasks with a live artifact, in one statement, only when asked
+	// (conductor's !hasArtifact: a task whose every entry is a tombstone is missing them).
+	var evidenced map[string]bool
+	if req.MissingArtifacts {
+		ids := make([]string, 0, len(page.Tasks))
+		for _, task := range page.Tasks {
+			ids = append(ids, task.ID)
+		}
+		if evidenced, err = s.c.store.LiveArtifactTasks(ctx, req.ProjectID, ids); err != nil {
+			return ListTasksResp{}, s.c.mapErr("list_tasks", err)
+		}
+	}
 	out := ListTasksResp{Tasks: make([]Task, 0, len(page.Tasks)), NextCursor: page.NextCursor}
 	for _, task := range page.Tasks {
 		switch {
@@ -667,9 +684,9 @@ func (s tasksSvc) List(ctx context.Context, caller domain.Caller, req ListTasksR
 			continue
 		case since != nil && task.UpdatedAt < *since:
 			continue
+		case req.MissingArtifacts && evidenced[task.ID]:
+			continue
 		}
-		// missingArtifacts: artifacts have no store yet, so no task carries one and every task is
-		// missing them (conductor's !hasArtifact). TODO(spec): filter on them once they are stored.
 		dto, err := taskOut(task, "")
 		if err != nil {
 			return ListTasksResp{}, s.c.mapErr("list_tasks", err)

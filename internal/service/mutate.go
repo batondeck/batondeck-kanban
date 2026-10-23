@@ -82,6 +82,10 @@ type mutation struct {
 	// set it: under Postgres READ COMMITTED two of them on disjoint pairs could each pass
 	// domain.CheckCycle and together close a cycle (P-110).
 	LockProject bool
+	// KeepVersion loads and checks the task but leaves its version where it was when fn wrote nothing
+	// to it: a write beside the task (a comment, a follow-up, an ack) is not a change of the task,
+	// as conductor's addComment, addFollowUp and ackFollowUp never move it.
+	KeepVersion bool
 }
 
 // txn is what a mutation's fn works with: the transaction's store, the task as loaded (nil when the
@@ -258,7 +262,7 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 
 // finish writes what fn did not: the bump, the events, the audit row and the change-log rows.
 func (t *txn) finish(c *Core, m mutation) error {
-	if t.Task != nil && !t.deleted {
+	if t.Task != nil && !t.deleted && !(m.KeepVersion && t.after == nil) {
 		switch {
 		case t.after == nil || t.after.Version == t.Task.Version:
 			if _, err := t.Bump(); err != nil {
