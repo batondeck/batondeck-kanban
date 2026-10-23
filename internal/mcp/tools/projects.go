@@ -14,13 +14,13 @@ func RegisterProjects(s *mcp.Server, svc service.Services) {
 		"Create a project. The caller becomes its admin.",
 		p.Create)
 	mcp.Tool(s, "projects", "get_project",
-		"Get a project with its members and settings. `memberDisplay` maps each member id to a name a human recognises (the user's display name, else their login), derived at read; a member absent from it has no better label than its id.",
+		"Get a project with its members and settings. `memberDisplay` maps each member id to the user's display name, else their login; a member absent from it has no better label than its id.",
 		p.Get)
 	mcp.Tool(s, "projects", "list_projects",
-		"List the projects the caller is a member of, with the caller's role in each. `all: true` is refused: for a workspace admin with VALIDATION (this deployment has no read of every project), for anyone else with FORBIDDEN.",
+		"List the projects the caller is a member of, with the caller's role in each. `all: true` is refused: VALIDATION for a workspace admin (no read of every project), FORBIDDEN for anyone else.",
 		p.List)
 	mcp.Tool(s, "projects", "update_settings",
-		"Update project settings (project admin): the review toggle, the work-selection weights and aging ceiling, `capabilityAliases`, the artifact, checkpoint, self-approval and token policies (off|warn|enforce), `defaultReviewer`, the retry policy, the anomaly thresholds, the run and ticket-token limits and the colour. `quotaEnabled` and `txnCap` are refused: this deployment enforces no quota.",
+		"Update project settings (project admin): review, selection weights, aging ceiling, capability aliases, policies, default reviewer, retry, anomaly thresholds, limits, colour. Quota fields are refused.",
 		p.UpdateSettings)
 	mcp.Tool(s, "projects", "delete_project",
 		"Delete a project and everything in it (boards, tasks, events, memory). Irreversible. Requires the project's admin role, or workspace admin.",
