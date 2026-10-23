@@ -8,7 +8,74 @@ package sqlitedb
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
+
+const countTasks = `-- name: CountTasks :one
+SELECT
+  CAST(EXISTS (SELECT 1 FROM boards b WHERE b.project_id = ?1 AND b.id = ?2) AS INTEGER) AS board_found,
+  CAST((SELECT COUNT(*) FROM tasks t
+   WHERE t.project_id = ?1 AND t.board_id = ?2
+     AND (CAST(?3 AS TEXT) IS NULL OR t.status = CAST(?3 AS TEXT))
+     AND (CAST(?4 AS TEXT) = '' OR t.column_id = CAST(?4 AS TEXT))
+     AND (CAST(?5 AS INTEGER) = 0
+          OR (CAST(?5 AS INTEGER) = 1 AND t.assignee = ?6)
+          OR (CAST(?5 AS INTEGER) = 2 AND t.assignee IS NULL))
+     AND (CAST(?7 AS TEXT) = '' OR EXISTS (SELECT 1 FROM json_each(t.labels) l WHERE l.value = CAST(?7 AS TEXT)))
+     AND (CAST(?8 AS TEXT) IS NULL OR t.run_of = CAST(?8 AS TEXT))) AS INTEGER) AS task_count
+`
+
+type CountTasksParams struct {
+	ProjectID    string
+	BoardID      string
+	Status       sql.NullString
+	ColumnID     string
+	AssigneeMode int64
+	Assignee     sql.NullString
+	Label        string
+	RunOf        sql.NullString
+}
+
+type CountTasksRow struct {
+	BoardFound int64
+	TaskCount  int64
+}
+
+// How many of the board's tasks match, and whether the board is the project's, in one statement.
+func (q *Queries) CountTasks(ctx context.Context, arg CountTasksParams) (CountTasksRow, error) {
+	row := q.db.QueryRowContext(ctx, countTasks,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Status,
+		arg.ColumnID,
+		arg.AssigneeMode,
+		arg.Assignee,
+		arg.Label,
+		arg.RunOf,
+	)
+	var i CountTasksRow
+	err := row.Scan(&i.BoardFound, &i.TaskCount)
+	return i, err
+}
+
+const deleteTask = `-- name: DeleteTask :execrows
+DELETE FROM tasks WHERE project_id = ? AND id = ? AND version = ?
+`
+
+type DeleteTaskParams struct {
+	ProjectID string
+	ID        string
+	Version   int64
+}
+
+// The delete at a version: no row is a missing task or another version, which the caller tells apart.
+func (q *Queries) DeleteTask(ctx context.Context, arg DeleteTaskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTask, arg.ProjectID, arg.ID, arg.Version)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const getTask = `-- name: GetTask :one
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at FROM tasks WHERE project_id = ? AND id = ?
@@ -65,9 +132,861 @@ type GetTaskRow struct {
 	UpdatedAt            int64
 }
 
+// Every query that returns a task selects exactly these columns, in this order, so each one's row
+// converts to GetTaskRow and is mapped once.
 func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, error) {
 	row := q.db.QueryRowContext(ctx, getTask, arg.ProjectID, arg.ID)
 	var i GetTaskRow
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.BlockedReason,
+		&i.Priority,
+		&i.Assignee,
+		&i.Labels,
+		&i.RequiredCapabilities,
+		&i.Estimate,
+		&i.DueAt,
+		&i.ParentTaskID,
+		&i.OrderKey,
+		&i.CustomFields,
+		&i.BlockedBy,
+		&i.Blocks,
+		&i.Deliverable,
+		&i.Reviewer,
+		&i.Review,
+		&i.Chars,
+		&i.ModelHint,
+		&i.RunOf,
+		&i.SprintIds,
+		&i.Racing,
+		&i.RaceOpenedAt,
+		&i.ClaimAttempts,
+		&i.NextEligibleAt,
+		&i.Score,
+		&i.SearchTokens,
+		&i.ClaimOwner,
+		&i.ClaimAgent,
+		&i.ClaimAgentID,
+		&i.LeaseID,
+		&i.LeaseExpiresAt,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertTask = `-- name: InsertTask :one
+INSERT INTO tasks (project_id, id, board_id, column_id, title, description, status, priority, assignee, labels, required_capabilities, parent_task_id, order_key, custom_fields, model_hint, run_of, sprint_ids, version, created_by, created_by_agent, created_at, updated_by, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+`
+
+type InsertTaskParams struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+type InsertTaskRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (InsertTaskRow, error) {
+	row := q.db.QueryRowContext(ctx, insertTask,
+		arg.ProjectID,
+		arg.ID,
+		arg.BoardID,
+		arg.ColumnID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.Assignee,
+		arg.Labels,
+		arg.RequiredCapabilities,
+		arg.ParentTaskID,
+		arg.OrderKey,
+		arg.CustomFields,
+		arg.ModelHint,
+		arg.RunOf,
+		arg.SprintIds,
+		arg.CreatedBy,
+		arg.CreatedByAgent,
+		arg.CreatedAt,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
+	var i InsertTaskRow
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.BlockedReason,
+		&i.Priority,
+		&i.Assignee,
+		&i.Labels,
+		&i.RequiredCapabilities,
+		&i.Estimate,
+		&i.DueAt,
+		&i.ParentTaskID,
+		&i.OrderKey,
+		&i.CustomFields,
+		&i.BlockedBy,
+		&i.Blocks,
+		&i.Deliverable,
+		&i.Reviewer,
+		&i.Review,
+		&i.Chars,
+		&i.ModelHint,
+		&i.RunOf,
+		&i.SprintIds,
+		&i.Racing,
+		&i.RaceOpenedAt,
+		&i.ClaimAttempts,
+		&i.NextEligibleAt,
+		&i.Score,
+		&i.SearchTokens,
+		&i.ClaimOwner,
+		&i.ClaimAgent,
+		&i.ClaimAgentID,
+		&i.LeaseID,
+		&i.LeaseExpiresAt,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listTasks = `-- name: ListTasks :many
+SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+FROM tasks t
+WHERE t.project_id = ?1 AND t.board_id = ?2
+  AND (CAST(?3 AS TEXT) IS NULL OR t.status = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = '' OR t.column_id = CAST(?4 AS TEXT))
+  AND (CAST(?5 AS INTEGER) = 0
+       OR (CAST(?5 AS INTEGER) = 1 AND t.assignee = ?6)
+       OR (CAST(?5 AS INTEGER) = 2 AND t.assignee IS NULL))
+  AND (CAST(?7 AS TEXT) = '' OR EXISTS (SELECT 1 FROM json_each(t.labels) l WHERE l.value = CAST(?7 AS TEXT)))
+  AND (CAST(?8 AS TEXT) IS NULL OR t.run_of = CAST(?8 AS TEXT))
+  AND (CAST(?9 AS TEXT) = '' OR t.order_key > CAST(?10 AS TEXT) OR (t.order_key = CAST(?10 AS TEXT) AND t.id > CAST(?9 AS TEXT)))
+ORDER BY t.order_key, t.id
+LIMIT ?11
+`
+
+type ListTasksParams struct {
+	ProjectID    string
+	BoardID      string
+	Status       sql.NullString
+	ColumnID     string
+	AssigneeMode int64
+	Assignee     sql.NullString
+	Label        string
+	RunOf        sql.NullString
+	AfterID      string
+	AfterOrder   string
+	PageLimit    int64
+}
+
+type ListTasksRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// One page of a board's tasks: (order key, id) ascending, as bytes (SQLite's BINARY collation),
+// strictly after the cursor's (after_order, after_id); after_id ” is the first page. A NULL
+// filter matches every task; assignee_mode 0 is any, 1 exactly assignee, 2 unassigned.
+func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTasks,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Status,
+		arg.ColumnID,
+		arg.AssigneeMode,
+		arg.Assignee,
+		arg.Label,
+		arg.RunOf,
+		arg.AfterID,
+		arg.AfterOrder,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksRow
+	for rows.Next() {
+		var i ListTasksRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.ColumnID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.BlockedReason,
+			&i.Priority,
+			&i.Assignee,
+			&i.Labels,
+			&i.RequiredCapabilities,
+			&i.Estimate,
+			&i.DueAt,
+			&i.ParentTaskID,
+			&i.OrderKey,
+			&i.CustomFields,
+			&i.BlockedBy,
+			&i.Blocks,
+			&i.Deliverable,
+			&i.Reviewer,
+			&i.Review,
+			&i.Chars,
+			&i.ModelHint,
+			&i.RunOf,
+			&i.SprintIds,
+			&i.Racing,
+			&i.RaceOpenedAt,
+			&i.ClaimAttempts,
+			&i.NextEligibleAt,
+			&i.Score,
+			&i.SearchTokens,
+			&i.ClaimOwner,
+			&i.ClaimAgent,
+			&i.ClaimAgentID,
+			&i.LeaseID,
+			&i.LeaseExpiresAt,
+			&i.Version,
+			&i.CreatedBy,
+			&i.CreatedByAgent,
+			&i.CreatedAt,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTasksByIDs = `-- name: ListTasksByIDs :many
+SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+FROM tasks WHERE project_id = ?1 AND id IN (/*SLICE:ids*/?)
+`
+
+type ListTasksByIDsParams struct {
+	ProjectID string
+	Ids       []string
+}
+
+type ListTasksByIDsRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+func (q *Queries) ListTasksByIDs(ctx context.Context, arg ListTasksByIDsParams) ([]ListTasksByIDsRow, error) {
+	query := listTasksByIDs
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.ProjectID)
+	if len(arg.Ids) > 0 {
+		for _, v := range arg.Ids {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:ids*/?", strings.Repeat(",?", len(arg.Ids))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksByIDsRow
+	for rows.Next() {
+		var i ListTasksByIDsRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.ColumnID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.BlockedReason,
+			&i.Priority,
+			&i.Assignee,
+			&i.Labels,
+			&i.RequiredCapabilities,
+			&i.Estimate,
+			&i.DueAt,
+			&i.ParentTaskID,
+			&i.OrderKey,
+			&i.CustomFields,
+			&i.BlockedBy,
+			&i.Blocks,
+			&i.Deliverable,
+			&i.Reviewer,
+			&i.Review,
+			&i.Chars,
+			&i.ModelHint,
+			&i.RunOf,
+			&i.SprintIds,
+			&i.Racing,
+			&i.RaceOpenedAt,
+			&i.ClaimAttempts,
+			&i.NextEligibleAt,
+			&i.Score,
+			&i.SearchTokens,
+			&i.ClaimOwner,
+			&i.ClaimAgent,
+			&i.ClaimAgentID,
+			&i.LeaseID,
+			&i.LeaseExpiresAt,
+			&i.Version,
+			&i.CreatedBy,
+			&i.CreatedByAgent,
+			&i.CreatedAt,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockTask = `-- name: LockTask :one
+SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at FROM tasks WHERE project_id = ? AND id = ?
+`
+
+type LockTaskParams struct {
+	ProjectID string
+	ID        string
+}
+
+type LockTaskRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// The read a versioned write starts from: on Postgres the row is locked to the transaction, so two
+// writers of one task take turns; SQLite's transaction holds the write lock from BEGIN.
+func (q *Queries) LockTask(ctx context.Context, arg LockTaskParams) (LockTaskRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTask, arg.ProjectID, arg.ID)
+	var i LockTaskRow
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.BlockedReason,
+		&i.Priority,
+		&i.Assignee,
+		&i.Labels,
+		&i.RequiredCapabilities,
+		&i.Estimate,
+		&i.DueAt,
+		&i.ParentTaskID,
+		&i.OrderKey,
+		&i.CustomFields,
+		&i.BlockedBy,
+		&i.Blocks,
+		&i.Deliverable,
+		&i.Reviewer,
+		&i.Review,
+		&i.Chars,
+		&i.ModelHint,
+		&i.RunOf,
+		&i.SprintIds,
+		&i.Racing,
+		&i.RaceOpenedAt,
+		&i.ClaimAttempts,
+		&i.NextEligibleAt,
+		&i.Score,
+		&i.SearchTokens,
+		&i.ClaimOwner,
+		&i.ClaimAgent,
+		&i.ClaimAgentID,
+		&i.LeaseID,
+		&i.LeaseExpiresAt,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const writeTaskFields = `-- name: WriteTaskFields :one
+UPDATE tasks SET title = ?, description = ?, priority = ?, assignee = ?, labels = ?, required_capabilities = ?, estimate = ?, due_at = ?, custom_fields = ?, deliverable = ?, reviewer = ?, review = ?, chars = ?, model_hint = ?, sprint_ids = ?, racing = ?, race_opened_at = ?, score = ?, search_tokens = ?, version = ?, updated_by = ?, updated_at = ?
+WHERE project_id = ? AND id = ?
+RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+`
+
+type WriteTaskFieldsParams struct {
+	Title                string
+	Description          string
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	CustomFields         string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	Version              int64
+	UpdatedBy            string
+	UpdatedAt            int64
+	ProjectID            string
+	ID                   string
+}
+
+type WriteTaskFieldsRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// UpdateTask's write: the patchable fields. The only task write that names title, description or
+// search_tokens, the columns the FTS trigger watches.
+func (q *Queries) WriteTaskFields(ctx context.Context, arg WriteTaskFieldsParams) (WriteTaskFieldsRow, error) {
+	row := q.db.QueryRowContext(ctx, writeTaskFields,
+		arg.Title,
+		arg.Description,
+		arg.Priority,
+		arg.Assignee,
+		arg.Labels,
+		arg.RequiredCapabilities,
+		arg.Estimate,
+		arg.DueAt,
+		arg.CustomFields,
+		arg.Deliverable,
+		arg.Reviewer,
+		arg.Review,
+		arg.Chars,
+		arg.ModelHint,
+		arg.SprintIds,
+		arg.Racing,
+		arg.RaceOpenedAt,
+		arg.Score,
+		arg.SearchTokens,
+		arg.Version,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+	)
+	var i WriteTaskFieldsRow
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.BlockedReason,
+		&i.Priority,
+		&i.Assignee,
+		&i.Labels,
+		&i.RequiredCapabilities,
+		&i.Estimate,
+		&i.DueAt,
+		&i.ParentTaskID,
+		&i.OrderKey,
+		&i.CustomFields,
+		&i.BlockedBy,
+		&i.Blocks,
+		&i.Deliverable,
+		&i.Reviewer,
+		&i.Review,
+		&i.Chars,
+		&i.ModelHint,
+		&i.RunOf,
+		&i.SprintIds,
+		&i.Racing,
+		&i.RaceOpenedAt,
+		&i.ClaimAttempts,
+		&i.NextEligibleAt,
+		&i.Score,
+		&i.SearchTokens,
+		&i.ClaimOwner,
+		&i.ClaimAgent,
+		&i.ClaimAgentID,
+		&i.LeaseID,
+		&i.LeaseExpiresAt,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const writeTaskState = `-- name: WriteTaskState :one
+UPDATE tasks SET status = ?, column_id = ?, order_key = ?, blocked_reason = ?, labels = ?, claim_attempts = ?, next_eligible_at = ?, claim_owner = ?, claim_agent = ?, claim_agent_id = ?, lease_id = ?, lease_expires_at = ?, version = ?, updated_by = ?, updated_at = ?
+WHERE project_id = ? AND id = ?
+RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+`
+
+type WriteTaskStateParams struct {
+	Status         string
+	ColumnID       string
+	OrderKey       string
+	BlockedReason  sql.NullString
+	Labels         string
+	ClaimAttempts  int64
+	NextEligibleAt sql.NullInt64
+	ClaimOwner     sql.NullString
+	ClaimAgent     sql.NullString
+	ClaimAgentID   sql.NullString
+	LeaseID        sql.NullString
+	LeaseExpiresAt sql.NullInt64
+	Version        int64
+	UpdatedBy      string
+	UpdatedAt      int64
+	ProjectID      string
+	ID             string
+}
+
+type WriteTaskStateRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state and lease.
+func (q *Queries) WriteTaskState(ctx context.Context, arg WriteTaskStateParams) (WriteTaskStateRow, error) {
+	row := q.db.QueryRowContext(ctx, writeTaskState,
+		arg.Status,
+		arg.ColumnID,
+		arg.OrderKey,
+		arg.BlockedReason,
+		arg.Labels,
+		arg.ClaimAttempts,
+		arg.NextEligibleAt,
+		arg.ClaimOwner,
+		arg.ClaimAgent,
+		arg.ClaimAgentID,
+		arg.LeaseID,
+		arg.LeaseExpiresAt,
+		arg.Version,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+	)
+	var i WriteTaskStateRow
 	err := row.Scan(
 		&i.ProjectID,
 		&i.ID,

@@ -4,7 +4,7 @@ import "github.com/batondeck/batondeck-kanban/internal/domain"
 
 // An engine method whose contract exists before its statements do returns unbuilt's error, and the
 // conformance batteries skip on it (UnbuiltTask) rather than fail the engine for a lane not merged
-// yet. The engines' stubs (stubs_contract_i.go, stubs_contract_ii.go) call unbuilt; memstore's call
+// yet. The engines' stubs (stubs_contract_ii.go) call unbuilt; memstore's call
 // Unbuilt.
 
 // unbuiltDetail is the detail an unbuilt method's error names its task under.
