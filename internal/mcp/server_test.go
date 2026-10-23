@@ -395,12 +395,9 @@ func TestSessionsCollectedWhenIdle(t *testing.T) {
 func TestSessionCountBounded(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver(), func(o *Options) { o.MaxSessions = 1 })
-	first, err := h.dial(tokenAda)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := h.connect(t, tokenAda)
 	if cs, err := h.dial(tokenAda); err == nil {
-		go cs.Close()
+		t.Cleanup(func() { _ = cs.Close() }) // before the listener's Close, which waits for its stream
 		t.Fatal("a second session past MaxSessions 1 was admitted")
 	}
 	_ = first.Close() // DELETE: the session ends and frees its slot
