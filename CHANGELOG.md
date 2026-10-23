@@ -62,15 +62,19 @@ Notable changes to batondeck-kanban. The format follows
   "$BATONDECK_AGENT"` when set) and `session unregister`, stdout sent to stderr, always exit 0. The
   `batondeck-worker` and `batondeck-chronicle` skills and the `worker`, `master`, `work`,
   `work-assigned`, `runs` and `chronicle` commands are rewritten for the five states, the fixed table
-  and the socket doorbell; `scripts/mcp.sh` makes one tool call from a shell. `plugin/TRIM.md` has a
+  and the socket doorbell; `scripts/mcp.sh` makes one tool call from a shell, the bearer passed to
+  curl on stdin, never in its argv. `plugin/TRIM.md` has a
   keep / drop / rewrite row for each of conductor's 51 plugin files.
-- `make skill-lint` (`scripts/skill-lint.py`, in `make check`): every tool a plugin skill or command
-  names is in `contract/expected.json`, every script it names is in `plugin/`, no plugin file but
-  `TRIM.md` names a dropped conductor tool or a retired state, and `hooks.json` registers SessionStart
-  and SessionEnd only.
+- `make skill-lint` (`scripts/skill-lint.py`, in `make check`): every lowercase snake_case word a plugin
+  skill or command writes, in any form, is a tool in `contract/expected.json` (or a contract enum value,
+  or one of the server's four prompts), every script it or `hooks.json` names is in `plugin/`, no plugin
+  file but `TRIM.md` names a dropped conductor tool or a retired state, and `hooks.json` registers
+  SessionStart and SessionEnd only. It also warns, without failing, about the named tools the server does
+  not register yet (read from the `mcp.Tool` calls in `internal/mcp/tools/`).
 - `make hook-check` (`scripts/hook-check.py`, in `make check`): runs the real binary's `session register`
-  and `unregister`, and `plugin/hooks/session.sh`, as subprocesses against a scratch server on a Unix
-  socket, and fails on any byte written to stdout or a hook exit other than 0.
+  and `unregister`, and every command `plugin/hooks/hooks.json` declares (as Claude Code runs it, under
+  each scenario of its event), as subprocesses against a scratch server on a Unix socket, and fails on a
+  declared script that does not exist, any byte written to stdout, or a hook exit other than 0.
 - The join (R1.18, ADR-0003 B3): the transports' tests run on the real service. The new
   `internal/service/servicetest` opens the real service, its store and a bus over one engine;
   `BATONDECK_TEST_ENGINE=memstore|sqlite|postgres` picks one, unset runs all three (Postgres skips
