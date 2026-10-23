@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/web"
 )
@@ -187,7 +188,7 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	log.Printf("serve: store %s: %s", cfg.Engine(), line)
-	sealer, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
+	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
@@ -197,9 +198,18 @@ func serve(args []string, version string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
+	media, err := mediaOptions(cfg, keys, lns, log)
+	if err != nil {
+		fmt.Fprintln(stderr, "serve:", err)
+		return 1
+	}
+	var sealer service.Sealer
+	if keys != nil {
+		sealer = keys
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer); err != nil {
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}

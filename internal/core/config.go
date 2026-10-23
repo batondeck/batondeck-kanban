@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -17,6 +18,7 @@ const (
 	RuleEnum        = "invalid_enum_value"
 	RuleRetention   = "retention_days_are_positive_integers"
 	RuleListen      = "listen_entries_are_tcp_or_unix_urls"
+	RuleBlob        = "blob_max_bytes_is_a_positive_integer"
 )
 
 // The engines database.url selects between.
@@ -47,6 +49,18 @@ type Retention struct {
 	ToolCallsDays int `json:"tool_calls_days"`
 }
 
+// DefaultBlobMaxBytes is blob.max_bytes unset: conductor's ATTACHMENT_MAX_BYTES, 50 MiB.
+const DefaultBlobMaxBytes = 50 << 20
+
+// Blob is the `blob` object of the config file: the local blob store of attachments.
+type Blob struct {
+	// Dir is the blob directory; "" is "blobs" beside the SQLite file (BlobDir).
+	Dir string `json:"dir"`
+	// MaxBytes is the largest attachment, in bytes: attach_file refuses a larger one and an upload's
+	// body is cut off past it (413).
+	MaxBytes int64 `json:"max_bytes"`
+}
+
 // Config is the resolved configuration. Highest precedence first: the BATONDECK_* environment,
 // the JSON file, the defaults. Load reads all three.
 type Config struct {
@@ -60,6 +74,8 @@ type Config struct {
 	PublicURL string `json:"public_url"`
 	// Retention is the retention sweep's windows.
 	Retention Retention `json:"retention"`
+	// Blob is the blob store. Environment: BATONDECK_BLOB_DIR, BATONDECK_BLOB_MAX_BYTES.
+	Blob Blob `json:"blob"`
 }
 
 // Load reads path (optional, "" = no file) and environment via lookup (injectable for
@@ -69,6 +85,7 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 		Database:  Database{Synchronous: "FULL"},
 		Listen:    []string{"tcp://127.0.0.1:8080"},
 		Retention: Retention{ChangeLogDays: 7, ToolCallsDays: 45},
+		Blob:      Blob{MaxBytes: DefaultBlobMaxBytes},
 	}
 
 	// file layer
@@ -119,6 +136,14 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	if err := envDays("BATONDECK_RETENTION_TOOL_CALLS_DAYS", &c.Retention.ToolCallsDays); err != nil {
 		return nil, err
 	}
+	envStr("BATONDECK_BLOB_DIR", &c.Blob.Dir)
+	if v, ok := lookup("BATONDECK_BLOB_MAX_BYTES"); ok {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%s: BATONDECK_BLOB_MAX_BYTES %q is not an integer", RuleBlob, v)
+		}
+		c.Blob.MaxBytes = n
+	}
 
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -134,6 +159,9 @@ func (c *Config) validate() error {
 	}
 	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 {
 		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d (each must be at least 1)", RuleRetention, c.Retention.ChangeLogDays, c.Retention.ToolCallsDays)
+	}
+	if c.Blob.MaxBytes <= 0 {
+		return fmt.Errorf("%s: blob.max_bytes %d (must be at least 1)", RuleBlob, c.Blob.MaxBytes)
 	}
 	if len(c.Listen) == 0 {
 		return fmt.Errorf("%s: listen is empty (want at least one tcp://host:port or unix:///path)", RuleListen)
@@ -166,4 +194,17 @@ func (c *Config) SQLitePath() string {
 		return DefaultSQLitePath
 	}
 	return c.Database.URL
+}
+
+// BlobDir is the blob directory: blob.dir, else "blobs" beside the SQLite file (on Postgres,
+// beside DefaultSQLitePath).
+func (c *Config) BlobDir() string {
+	if c.Blob.Dir != "" {
+		return c.Blob.Dir
+	}
+	db := c.SQLitePath()
+	if c.Engine() != EngineSQLite {
+		db = DefaultSQLitePath
+	}
+	return filepath.Join(filepath.Dir(db), "blobs")
 }

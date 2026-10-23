@@ -69,6 +69,7 @@ type state struct {
 	agents       map[[2]string]store.AgentSession   // by (identity, agent)
 	wake         map[string]store.WakeSession       // by id
 	attachments  map[[3]string]store.Attachment     // by (project, task, attachment)
+	blobs        map[string]store.Blob              // by sha256
 
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
@@ -106,6 +107,7 @@ func newState() *state {
 		agents:       map[[2]string]store.AgentSession{},
 		wake:         map[string]store.WakeSession{},
 		attachments:  map[[3]string]store.Attachment{},
+		blobs:        map[string]store.Blob{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -293,6 +295,7 @@ func (st *state) clone() *state {
 		c.wake[k] = cloneWakeSession(v)
 	}
 	maps.Copy(c.attachments, st.attachments)
+	maps.Copy(c.blobs, st.blobs)
 	for k, v := range st.oauthClients {
 		c.oauthClients[k] = cloneOAuthClient(v)
 	}

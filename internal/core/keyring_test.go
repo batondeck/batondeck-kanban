@@ -118,3 +118,35 @@ func testKeyring(t *testing.T) *Keyring {
 	}
 	return kr
 }
+
+// TestKeyringDeriveKey: one label under one master key is one key, read back after a reopen; another
+// label, or another master key, is another key.
+func TestKeyringDeriveKey(t *testing.T) {
+	open := func(b byte) *Keyring {
+		t.Helper()
+		env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{b}, 32))
+		kr, err := OpenKeyring("", func(string) (string, bool) { return env, true })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return kr
+	}
+	derive := func(kr *Keyring, label string) []byte {
+		t.Helper()
+		k, err := kr.DeriveKey(label)
+		if err != nil || len(k) != 32 {
+			t.Fatalf("DeriveKey(%q) = %x, %v; want 32 bytes", label, k, err)
+		}
+		return k
+	}
+	a := derive(open(7), "blob-signing")
+	if !bytes.Equal(a, derive(open(7), "blob-signing")) {
+		t.Error("one label under one master key derived two keys")
+	}
+	if bytes.Equal(a, derive(open(7), "other")) || bytes.Equal(a, derive(open(8), "blob-signing")) {
+		t.Error("another label or another master key derived the same key")
+	}
+	if bytes.Equal(a, bytes.Repeat([]byte{7}, 32)) {
+		t.Error("the derived key is the master key")
+	}
+}

@@ -273,8 +273,9 @@ func TestDeleteRefusals(t *testing.T) {
 	})
 }
 
-// The blob hook (requirement 7): called once per committed delete, with no files while attachments
-// hold no blobs (R1.8); never on a refused delete. The deleted task's pending attachment goes with it.
+// The blob hook (requirement 7): called once per committed delete, with no hash for a pending
+// attachment, which holds no blob; never on a refused delete. The deleted task's pending attachment
+// goes with it.
 func TestDeleteCallsTheBlobHook(t *testing.T) {
 	var mu sync.Mutex
 	var calls [][]string
