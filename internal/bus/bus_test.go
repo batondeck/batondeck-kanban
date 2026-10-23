@@ -378,10 +378,15 @@ func TestChurn(t *testing.T) {
 	b := sqliteBackend(t)
 	bus, _ := newBus(t, b, Options{PollInterval: 5 * time.Millisecond})
 	var wg sync.WaitGroup
+	errs := make(chan error, 200)
 	for i := range 20 {
 		wg.Go(func() {
 			for range 10 {
-				s := subscribe(t, bus, 1, "project:P-1", fmt.Sprintf("agent:%d", i))
+				s, err := bus.Subscribe(context.Background(), []string{"project:P-1", fmt.Sprintf("agent:%d", i)}, 1)
+				if err != nil {
+					errs <- err
+					return
+				}
 				time.Sleep(time.Millisecond)
 				s.Close()
 			}
@@ -391,4 +396,8 @@ func TestChurn(t *testing.T) {
 		write(t, b.store, change("project:P-1", i))
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
 }

@@ -13,8 +13,8 @@ import (
 
 // The change log of contract_changelog.go, on both engines: change_log.id is SQLite's AUTOINCREMENT
 // (never reused, a rolled-back id included) and Postgres's bigserial (taken at the INSERT, so ids
-// follow appends, not commits). Every call is one statement, but Postgres's AppendChange, which
-// sends the bus its NOTIFY as a second (watch.go).
+// follow appends, not commits). Every call is one statement, except Postgres's AppendChange:
+// it sends the bus its NOTIFY as a second (watch.go).
 
 type changeQueries interface {
 	AppendChange(ctx context.Context, arg sqlitedb.AppendChangeParams) (int64, error)
