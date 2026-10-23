@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/batondeck/batondeck-kanban/internal/auth/oauth"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/web"
@@ -118,12 +118,13 @@ func migratedLine(m store.Migrated) string {
 // healthBody is /healthz's whole answer: liveness only, naming the binary and its version.
 func healthBody(version string) string { return "batondeck-kanban " + version + " ok\n" }
 
-// handler is everything serve answers: /healthz, the MCP server at /mcp, the OAuth server's routes
-// when as is not nil, and the embedded SPA for every other path.
-func handler(version string, mcp http.Handler, as *oauth.Server) http.Handler {
+// handler is everything serve answers: /healthz, the MCP server at /mcp, the routes mounts add
+// (compose's OAuth server when public_url is set, /wake and /internal/wake-session), and the
+// embedded SPA for every other path.
+func handler(version string, mcp http.Handler, mounts ...func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
-	if as != nil {
-		as.Mount(mux)
+	for _, m := range mounts {
+		m(mux)
 	}
 	// One pattern per method the transport answers: a bare "/mcp" conflicts with the SPA's "GET /".
 	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
@@ -186,19 +187,44 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	log.Printf("serve: store %s: %s", cfg.Engine(), line)
-	ln, err := net.Listen("tcp", cfg.Listen)
+	sealer, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
+	if err != nil {
+		fmt.Fprintln(stderr, "serve:", err)
+		return 1
+	}
+	lns, err := listenAll(cfg.Listen, log)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, ln, st, version, cfg.PublicURL, log); err != nil {
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
 	log.Printf("serve: stopped")
 	return 0
+}
+
+// listenAll binds every listen entry, closing the ones bound when one fails.
+func listenAll(entries []string, logger *log.Logger) ([]net.Listener, error) {
+	var lns []net.Listener
+	for _, e := range entries {
+		a, err := core.ParseListen(e)
+		if err == nil {
+			var ln net.Listener
+			if ln, err = core.Listen(a, logger); err == nil {
+				lns = append(lns, ln)
+				continue
+			}
+		}
+		for _, ln := range lns {
+			ln.Close()
+		}
+		return nil, err
+	}
+	return lns, nil
 }
 
 // healthcheck probes /healthz on the configured listen address; the container HEALTHCHECK runs
@@ -214,12 +240,22 @@ func healthcheck(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "healthcheck:", err)
 		return 1
 	}
-	addr, err := dialAddr(cfg.Listen)
+	// The first listen entry is probed: a TCP address on loopback, a Unix socket by its path.
+	a, err := core.ParseListen(cfg.Listen[0])
 	if err != nil {
 		fmt.Fprintln(stderr, "healthcheck:", err)
 		return 1
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
+	addr := "x"
+	if a.Network == core.NetworkUnix {
+		client.Transport = &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, core.NetworkUnix, a.Address)
+		}}
+	} else if addr, err = dialAddr(a.Address); err != nil {
+		fmt.Fprintln(stderr, "healthcheck:", err)
+		return 1
+	}
 	resp, err := client.Get("http://" + addr + "/healthz")
 	if err != nil {
 		fmt.Fprintln(stderr, "healthcheck:", err)
