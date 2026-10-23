@@ -256,6 +256,11 @@ func (c *client) none(t *testing.T, d time.Duration) {
 	select {
 	case b := <-c.got:
 		t.Fatalf("pid %d: an unexpected doorbell %q", c.pid, b)
+	default:
+	}
+	select {
+	case b := <-c.got:
+		t.Fatalf("pid %d: an unexpected doorbell %q", c.pid, b)
 	case <-time.After(d):
 	}
 }
