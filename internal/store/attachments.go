@@ -105,6 +105,10 @@ func setAttachmentReady(ctx context.Context, e engine, projectID, taskID, attach
 			return domain.NotFound("Blob", blobSHA256)
 		}
 		r, err := q.SetAttachmentReady(ctx, sqlitedb.SetAttachmentReadyParams{BlobSha256: nullText(blobSHA256), ProjectID: projectID, TaskID: taskID, ID: attachmentID})
+		if isNoRows(err) {
+			// A concurrent SetAttachmentReady committed between the read and this update.
+			return domain.Validation("the attachment is not pending", map[string]any{"attachmentId": attachmentID})
+		}
 		if err != nil {
 			return fmt.Errorf("store: set attachment ready: %w", err)
 		}

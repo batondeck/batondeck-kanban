@@ -183,6 +183,9 @@ func (c *Core) CompleteUpload(ctx context.Context, ref blob.Ref, st *blob.Staged
 			return struct{}{}, err
 		}
 		if _, err := t.Tx.SetAttachmentReady(ctx, ref.ProjectID, ref.TaskID, ref.AttachmentID, st.SHA256); err != nil {
+			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeValidation {
+				return struct{}{}, uploadedAlready(ref.AttachmentID, store.AttachmentReady)
+			}
 			return struct{}{}, err
 		}
 		data, err := json.Marshal(map[string]any{"attachmentId": ref.AttachmentID, "status": store.AttachmentReady, "sha256": st.SHA256})
@@ -210,13 +213,17 @@ func (c *Core) pendingAttachment(ctx context.Context, s store.Store, ref blob.Re
 	}
 	a := atts[i]
 	if a.Status != store.AttachmentPending {
-		return store.Attachment{}, domain.NewError(domain.CodeInvalidTransition, "the attachment is "+string(a.Status)+", not pending: it was uploaded already",
-			map[string]any{"attachmentId": a.ID, "status": a.Status})
+		return store.Attachment{}, uploadedAlready(a.ID, a.Status)
 	}
 	if st.Bytes != a.Bytes {
 		return store.Attachment{}, domain.Validation("the body is not the size attach_file declared", map[string]any{"bytes": st.Bytes, "declared": a.Bytes})
 	}
 	return a, nil
+}
+
+func uploadedAlready(id string, status store.AttachmentStatus) *domain.BatonDeckError {
+	return domain.NewError(domain.CodeInvalidTransition, "the attachment is "+string(status)+", not pending: it was uploaded already",
+		map[string]any{"attachmentId": id, "status": status})
 }
 
 // unlinkUnreferenced removes sha's file when no blob row names it (an upload refused after its file
@@ -240,14 +247,14 @@ func (c *Core) CollectBlobs(ctx context.Context, sha256s []string) {
 		func() {
 			defer c.media.Files.Lock(sha)()
 			err := c.store.DeleteBlob(ctx, sha)
-			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeValidation {
-				return
+			e, _ := domain.AsBatonDeckError(err)
+			switch {
+			case err == nil, e != nil && e.Code == domain.CodeNotFound:
+				err = c.media.Files.Remove(sha)
+			case e != nil && e.Code == domain.CodeValidation: // still referenced
+				err = nil
 			}
-			if e, ok := domain.AsBatonDeckError(err); err != nil && (!ok || e.Code != domain.CodeNotFound) {
-				c.log.Printf("service: blob gc %s: %+v", sha, err)
-				return
-			}
-			if err := c.media.Files.Remove(sha); err != nil {
+			if err != nil {
 				c.log.Printf("service: blob gc %s: %+v", sha, err)
 			}
 		}()

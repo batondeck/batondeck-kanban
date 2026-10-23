@@ -344,3 +344,38 @@ func TestDeleteTaskCollectsItsBlobsOverTheEngines(t *testing.T) {
 	})
 }
 
+// Two uploads of one attachment at once, different bytes: one wins, the other is INVALID_TRANSITION,
+// and the loser's file is not left on disk.
+func TestConcurrentUploadsOneWinnerOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		r := m.attach(t, task.ID, 3)
+		bodies := [][]byte{[]byte("one"), []byte("two")}
+		errs := make(chan error, 2)
+		for _, b := range bodies {
+			go func() { errs <- m.upload(t, r.UploadURL, b) }()
+		}
+		var won, lost int
+		for range bodies {
+			err := <-errs
+			if err == nil {
+				won++
+				continue
+			}
+			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeInvalidTransition {
+				lost++
+				continue
+			}
+			t.Errorf("an upload: %v", err)
+		}
+		if won != 1 || lost != 1 {
+			t.Fatalf("%d won, %d refused, want one of each", won, lost)
+		}
+		list := m.list(t, task.ID)
+		for _, b := range bodies {
+			if sha := hashOf(b); m.onDisk(sha) != (*list[0].SHA256 == sha) {
+				t.Errorf("%q on disk %v, the winner %s", b, m.onDisk(sha), *list[0].SHA256)
+			}
+		}
+	})
+}

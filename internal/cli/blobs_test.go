@@ -189,11 +189,12 @@ func TestBlobRoutesOverTheEngines(t *testing.T) {
 			signer := s.media.Signer
 			expired := signer.URL(s.base, id, blob.Upload, time.Now().Add(-time.Second))
 			wrongPurpose := signer.URL(s.base, id, blob.Download, time.Now().Add(time.Minute))
-			for name, c := range map[string]struct{ url, reason string }{
-				"expired":       {expired, "expired"},
-				"wrong purpose": {wrongPurpose, "bad signature"},
-				"tampered":      {tamper(t, upload), "bad signature"},
+			for _, c := range []struct{ name, url, reason string }{
+				{"tampered", tamper(t, upload), "bad signature"},
+				{"wrong purpose", wrongPurpose, "bad signature"},
+				{"expired", expired, "expired"},
 			} {
+				name := c.name
 				if code, got := do(t, http.MethodPut, c.url, bytes.NewReader(body), int64(len(body))); code != http.StatusForbidden {
 					t.Errorf("%s: %d %s, want 403", name, code, got)
 				}

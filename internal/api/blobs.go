@@ -44,12 +44,12 @@ func (b BlobRoutes) verify(w http.ResponseWriter, r *http.Request, p blob.Purpos
 	if err == nil {
 		return id, true
 	}
-	reason := "bad signature"
+	reason, message := "bad signature", "the URL's signature does not match it"
 	if errors.Is(err, blob.ErrExpired) {
-		reason = "expired"
+		reason, message = "expired", "the URL has expired"
 	}
 	b.Logger.Printf("api: blob %s %s refused: %s", r.Method, id, reason)
-	auth.WriteError(w, http.StatusForbidden, domain.CodeForbidden, "the URL's signature is "+reason)
+	auth.WriteError(w, http.StatusForbidden, domain.CodeForbidden, message)
 	return "", false
 }
 

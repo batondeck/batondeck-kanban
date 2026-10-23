@@ -8,6 +8,26 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Attachments on local disk behind HMAC-signed URLs (R1.8). `attach_file` creates a pending
+  attachment (`attachment.created`, the task's version +1) and answers an `uploadUrl`,
+  `PUT /blobs/{projectId.taskId.attachmentId}?exp=…&sig=…`, valid 15 minutes; the PUT's body is read
+  to `blob.dir/tmp` while hashed, moved to `blob.dir/<2 hex>/<sha256>`, and the blob row, the
+  attachment `ready` and `attachment.updated` written in one mutation (version +1 again).
+  `list_attachments` answers each ready row with a `downloadUrl`, `GET /blobs/{sha256}?exp=…&sig=…`,
+  served as `application/octet-stream`, `Content-Disposition: attachment`, `nosniff`. The signature
+  is HMAC-SHA256 over (purpose, expiry, id) under a key `core.Keyring.DeriveKey` derives (HKDF) from
+  the master key; an upload signature does not download and a download signature does not upload.
+  The routes sit outside every bearer, session and CSRF check; an expired, wrong-purpose or tampered
+  signature is 403 with a log line naming the reason, a body over `blob.max_bytes` 413 (by
+  Content-Length and by bytes read, nothing left on disk), a second upload 409, a body not the
+  declared size 400. New config: `blob.dir` (`BATONDECK_BLOB_DIR`, default `blobs` beside the SQLite
+  file) and `blob.max_bytes` (`BATONDECK_BLOB_MAX_BYTES`, default 50 MiB). Without a keyring
+  `attach_file` is INTERNAL and `downloadUrl` null, said once at boot. Both engines and memstore build
+  the `Attachments` and `Blobs` store areas; delete_task's blob hook now removes each freed blob's row
+  and file unless another attachment or memory entry holds it, and the retention sweep gains a step
+  handing the blobs unreferenced for an hour to the same collector (the sweep is not yet run by
+  `serve`).
+
 - The R3.1 socket-wake spike findings (`docs/release/socket-wake-spike-2026-10.md`) and its scratch
   writer (`docs/release/spikes/socket-wake/doorbell.py`), measured on Claude Code 2.1.309: a
   newline-delimited `{"type":"user",…}` frame written to a session's `CLAUDE_CODE_MESSAGING_SOCKET`
