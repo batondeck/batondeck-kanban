@@ -302,20 +302,7 @@ func TestPostgresDeliversChangesCommittedOutOfIDOrder(t *testing.T) {
 	bus, _ := newBus(t, b, Options{})
 	sub := subscribe(t, bus, 0, "project:P-1")
 	ctx := context.Background()
-	appended, release := make(chan int64), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- b.store.Atomically(ctx, func(tx store.Store) error {
-			id, err := tx.AppendChange(ctx, change("project:P-1", 1))
-			if err != nil {
-				return err
-			}
-			appended <- id
-			<-release
-			return nil
-		})
-	}()
-	idA := <-appended
+	idA, release, done := hold(t, b.store, change("project:P-1", 1))
 	idB, err := b.store.AppendChange(ctx, change("project:P-1", 2)) // its own transaction, committed now
 	if err != nil {
 		t.Fatal(err)
@@ -326,7 +313,7 @@ func TestPostgresDeliversChangesCommittedOutOfIDOrder(t *testing.T) {
 	if c := next(t, sub, 2*time.Second); c.ID != idB {
 		t.Fatalf("first delivered %d, want B (%d), committed first", c.ID, idB)
 	}
-	close(release)
+	release()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -391,31 +378,17 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 // before the first subscriber's tail started, and commits after Subscribe returned, is delivered.
 func TestPostgresDeliversAChangeInFlightWhenTheTailStarts(t *testing.T) {
 	b := postgresBackend(t)
-	ctx := context.Background()
 	old := change("project:P-1", 0) // older than GapTimeout: the seed's frontier stops at it, not below B
 	old.Ts = time.Now().Add(-time.Hour).UnixMilli()
 	idOld := write(t, b.store, old)[0]
-	appended, release := make(chan int64), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- b.store.Atomically(ctx, func(tx store.Store) error {
-			id, err := tx.AppendChange(ctx, change("project:P-1", 1))
-			if err != nil {
-				return err
-			}
-			appended <- id
-			<-release
-			return nil
-		})
-	}()
-	idA := <-appended
+	idA, release, done := hold(t, b.store, change("project:P-1", 1))
 	idB := write(t, b.store, change("project:P-1", 2))[0] // visible above A before the tail starts
 	bus, _ := newBus(t, b, Options{})
 	sub := subscribe(t, bus, 0, "project:P-1")
 	if f := bus.frontier.Load(); f != idOld {
 		t.Fatalf("seed frontier %d, want %d (the old row; %d is in flight)", f, idOld, idA)
 	}
-	close(release)
+	release()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -571,10 +544,13 @@ func TestEachHoleGetsItsOwnStallClock(t *testing.T) {
 	}
 }
 
-// hold appends in inside an Atomically that commits only when release is closed: an in-flight id.
-func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, chan struct{}, chan error) {
+// hold appends in inside an Atomically that commits when release is called: an in-flight id. A test
+// that fails first still releases it (Cleanup), so closing the store does not wait on it forever.
+func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, func(), chan error) {
 	t.Helper()
-	appended, release, done := make(chan int64), make(chan struct{}), make(chan error, 1)
+	appended, ch, done := make(chan int64), make(chan struct{}), make(chan error, 1)
+	release := sync.OnceFunc(func() { close(ch) })
+	t.Cleanup(release)
 	go func() {
 		done <- s.Atomically(context.Background(), func(tx store.Store) error {
 			id, err := tx.AppendChange(context.Background(), in)
@@ -582,7 +558,7 @@ func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, chan struct
 				return err
 			}
 			appended <- id
-			<-release
+			<-ch
 			return nil
 		})
 	}()
@@ -607,7 +583,7 @@ func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 	time.Sleep(600 * time.Millisecond)
 	idC, relC, doneC := hold(t, b.store, change("project:P-1", 3)) // 4 in flight
 	idD := write(t, b.store, change("project:P-1", 4))[0]          // 5
-	close(relA)
+	relA()
 	if err := <-doneA; err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +594,7 @@ func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 		}
 	}
 	time.Sleep(gap - 200*time.Millisecond - time.Since(taken))
-	close(relC)
+	relC()
 	if err := <-doneC; err != nil {
 		t.Fatal(err)
 	}
