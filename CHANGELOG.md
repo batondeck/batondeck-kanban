@@ -25,7 +25,19 @@ Notable changes to batondeck-kanban. The format follows
   flag) and memoised per audience; `mcp.AddTool` registers a tool with its visibility. `serve` mounts
   `/mcp` over the store's API tokens. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
   its linked dependencies (THIRD_PARTY_NOTICES: 21 to 28 linked modules).
-
+- Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
+  over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
+  (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
+  SQLite and Postgres. `ClaimNext` is one statement: on Postgres `UPDATE … WHERE id = (SELECT …
+  FOR UPDATE OF f SKIP LOCKED LIMIT 1)`, on SQLite the same UPDATE over the frontier, whose own
+  write lock serialises callers. A versioned write reads the task inside `Atomically` (`FOR UPDATE`
+  on Postgres) and answers `STALE {expected, actual}` from that read; a heartbeat, a release, a
+  delete and an event append are one statement each and read again only to name a refusal. Order
+  keys and ids sort and compare `COLLATE "C"` on Postgres. Measured per call: `GetTask` 1 statement,
+  a `ListTasks` page holding tasks 1 (an empty page 2), a winning `ClaimNext` 1
+  (`TestStatementsPerCall`). `TestClaimRace` (50 callers, 50 READY tasks, 50 distinct winners, 0
+  errors; SQLite over five stores on one file) and `TestListTasksPagesThreeBySeven` run on both
+  engines.
 - Store contract I (ADR-0003 B2): the `store.Tasks`, `Claims`, `Events` and `ChangeLog` roles in
   `internal/store/contract_{tasks,claims,events,changelog}.go`, embedded in `Store`, with doc
   comments pinning keys `(project_id, task_id)`, `domain.Stale(expected, actual)` on a versioned
@@ -53,6 +65,30 @@ Notable changes to batondeck-kanban. The format follows
   `contract/dto_test.go` (`TestDTOCanonical`) infers each tool's DTO pair with jsonschema-go v0.4.3
   (a test-only dependency) and holds it to `contract/expected.json` exactly, for 44 tools: the 42
   CORE tools, `cancel_task` and `list_agent_sessions`. No implementation yet.
+- The service core (`internal/service`, ADR-0003 layer 2): `service.New(store, Options)` returns
+  a `*service.Core` holding the one transaction shape and the one access check every service
+  method runs through. `mutate` (unexported, for the service lanes) runs inside `store.Atomically`
+  (or `WithIdempotency` under a key): the replay, load, STALE with `expected`/`actual` before any
+  write, the pending grant check, fn, exactly one version bump, the `task_events` rows, the audit
+  row when `domain.DescribeAudit` names the tool, and the change-log rows; a panic is INTERNAL with
+  its stack logged, a domain code passes unchanged, any other error is INTERNAL. Every mutation
+  writes at least one change-log row: one per doorbell (`assigned`, scoped to the assignee's
+  identity when it is a project member, else to `service.AgentScope(label)` = `agent:<label>`, since
+  an assignee may be a free-text agent label; `broadcast`, scoped to
+  `service.BroadcastScope(projectID)` = `project:<id>`), else one `changed` row in the project's
+  scope naming the task it wrote. An idempotency key is kept per tool (`<tool>:<key>`), and a
+  supplied expected version 0 is STALE; only the lease-guarded paths pass no version. `authorize` checks the tool's posture (an unclassified
+  tool is FORBIDDEN), workspace admin for AdminOnly "only", membership (a non-member or a missing
+  project is FORBIDDEN), the tier against the member's role capped by the token's, and the
+  capability grant through `domain.CheckGrant`, finishing a task-attribute grant inside `mutate`
+  against the loaded task; membership and grant are cached per (project, identity) for 60 s
+  (`Options.AccessTTL`), dropped at once by `Core.InvalidateAccess`. The grant reader is
+  `Options.Grants` until the store has one. `Core.ToolCalls()` buffers `tool_calls` rows and writes
+  them in batches (100 rows or 1 s), never failing the call it records; `Core.FlushToolCalls` and
+  `Core.Close` drain it. `Core.Sessions()` is `service.Sessions` over the agent- and wake-session
+  areas, with `service.SessionKey` and `service.AgentID`. memstore now implements `store.Audit`,
+  `ToolCalls`, `AgentSessions` and `WakeSessions` and passes their batteries
+  (`TestMemstoreConformance`).
 - The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
   and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
   history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with

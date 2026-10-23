@@ -7,7 +7,106 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const appendBoardEvent = `-- name: AppendBoardEvent :one
+INSERT INTO task_events (project_id, id, board_id, task_id, actor, agent, type, data, ts)
+SELECT b.project_id, $1::text, b.id, NULL, $2::text, $3::text,
+  $4::text, $5::text, $6::bigint
+FROM boards b
+WHERE b.project_id = $7 AND b.id = $8
+RETURNING project_id, id, board_id, task_id, actor, agent, type, data, ts
+`
+
+type AppendBoardEventParams struct {
+	ID        string
+	Actor     string
+	Agent     sql.NullString
+	Type      string
+	Data      string
+	Ts        int64
+	ProjectID string
+	BoardID   string
+}
+
+// A board's event with no task, in one statement: no row is a board that is not the project's.
+func (q *Queries) AppendBoardEvent(ctx context.Context, arg AppendBoardEventParams) (TaskEvent, error) {
+	row := q.db.QueryRow(ctx, appendBoardEvent,
+		arg.ID,
+		arg.Actor,
+		arg.Agent,
+		arg.Type,
+		arg.Data,
+		arg.Ts,
+		arg.ProjectID,
+		arg.BoardID,
+	)
+	var i TaskEvent
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.TaskID,
+		&i.Actor,
+		&i.Agent,
+		&i.Type,
+		&i.Data,
+		&i.Ts,
+	)
+	return i, err
+}
+
+const appendTaskEvent = `-- name: AppendTaskEvent :one
+INSERT INTO task_events (project_id, id, board_id, task_id, actor, agent, type, data, ts)
+SELECT t.project_id, $1::text, t.board_id, t.id, $2::text, $3::text,
+  $4::text, $5::text, $6::bigint
+FROM tasks t
+WHERE t.project_id = $7 AND t.id = $8
+  AND ($9::text = '' OR t.board_id = $9::text)
+RETURNING project_id, id, board_id, task_id, actor, agent, type, data, ts
+`
+
+type AppendTaskEventParams struct {
+	ID        string
+	Actor     string
+	Agent     sql.NullString
+	Type      string
+	Data      string
+	Ts        int64
+	ProjectID string
+	TaskID    string
+	BoardID   string
+}
+
+// A task's event, on the task's board, in one statement: no row is a missing task or another board
+// (board_id ” takes the task's), which the caller tells apart.
+func (q *Queries) AppendTaskEvent(ctx context.Context, arg AppendTaskEventParams) (TaskEvent, error) {
+	row := q.db.QueryRow(ctx, appendTaskEvent,
+		arg.ID,
+		arg.Actor,
+		arg.Agent,
+		arg.Type,
+		arg.Data,
+		arg.Ts,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.BoardID,
+	)
+	var i TaskEvent
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.TaskID,
+		&i.Actor,
+		&i.Agent,
+		&i.Type,
+		&i.Data,
+		&i.Ts,
+	)
+	return i, err
+}
 
 const getChangeLog = `-- name: GetChangeLog :one
 SELECT id, token_scope, project_id, kind, payload, ts FROM change_log WHERE id = $1
@@ -51,4 +150,115 @@ func (q *Queries) GetTaskEvent(ctx context.Context, arg GetTaskEventParams) (Tas
 		&i.Ts,
 	)
 	return i, err
+}
+
+const listBoardFeed = `-- name: ListBoardFeed :many
+SELECT project_id, id, board_id, task_id, actor, agent, type, data, ts FROM task_events
+WHERE board_id = $1 AND project_id = $2
+  AND ($3::text = '' OR ts < $4::bigint
+       OR (ts = $4::bigint AND id < $3::text))
+ORDER BY ts DESC, id DESC
+LIMIT $5::bigint
+`
+
+type ListBoardFeedParams struct {
+	BoardID   sql.NullString
+	ProjectID string
+	AfterID   string
+	AfterTs   int64
+	PageLimit int64
+}
+
+// One page of the board's feed, its tasks' events and its own, over task_events_feed
+// (board_id, ts, id), newest first, after the cursor as ListTaskEvents.
+func (q *Queries) ListBoardFeed(ctx context.Context, arg ListBoardFeedParams) ([]TaskEvent, error) {
+	rows, err := q.db.Query(ctx, listBoardFeed,
+		arg.BoardID,
+		arg.ProjectID,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskEvent
+	for rows.Next() {
+		var i TaskEvent
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.TaskID,
+			&i.Actor,
+			&i.Agent,
+			&i.Type,
+			&i.Data,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTaskEvents = `-- name: ListTaskEvents :many
+SELECT project_id, id, board_id, task_id, actor, agent, type, data, ts FROM task_events
+WHERE project_id = $1 AND task_id = $2
+  AND ($3::text = '' OR ts < $4::bigint
+       OR (ts = $4::bigint AND id < $3::text))
+ORDER BY ts DESC, id DESC
+LIMIT $5::bigint
+`
+
+type ListTaskEventsParams struct {
+	ProjectID string
+	TaskID    sql.NullString
+	AfterID   string
+	AfterTs   int64
+	PageLimit int64
+}
+
+// One page of a task's events, newest first ((ts, id) descending), strictly after the cursor's
+// (after_ts, after_id); after_id ” is the first page. Event ids are fixed-length lowercase hex,
+// so they order the same under every collation; the ORDER BY and the cursor share one.
+func (q *Queries) ListTaskEvents(ctx context.Context, arg ListTaskEventsParams) ([]TaskEvent, error) {
+	rows, err := q.db.Query(ctx, listTaskEvents,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskEvent
+	for rows.Next() {
+		var i TaskEvent
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.TaskID,
+			&i.Actor,
+			&i.Agent,
+			&i.Type,
+			&i.Data,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

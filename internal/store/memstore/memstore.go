@@ -57,6 +57,12 @@ type state struct {
 	events   map[[2]string]store.Event  // by (project, event)
 	changes  []store.Change             // id ascending
 	lastChg  int64                      // the last change id handed out
+
+	audit     []store.AuditRow                 // id ascending
+	lastAudit int64                            // the last audit id handed out
+	toolCalls []store.ToolCall                 // insertion order
+	agents    map[[2]string]store.AgentSession // by (identity, agent)
+	wake      map[string]store.WakeSession     // by id
 }
 
 type idemEntry struct {
@@ -81,6 +87,8 @@ func newState() *state {
 		tokens:   map[string]store.Token{},
 		tasks:    map[[2]string]store.Task{},
 		events:   map[[2]string]store.Event{},
+		agents:   map[[2]string]store.AgentSession{},
+		wake:     map[string]store.WakeSession{},
 	}
 }
 
@@ -244,6 +252,18 @@ func (st *state) clone() *state {
 		c.changes[i] = cloneChange(ch)
 	}
 	c.lastChg = st.lastChg
+	c.audit = make([]store.AuditRow, len(st.audit))
+	for i, r := range st.audit {
+		c.audit[i] = cloneAudit(r)
+	}
+	c.lastAudit = st.lastAudit
+	c.toolCalls = append([]store.ToolCall(nil), st.toolCalls...)
+	for k, v := range st.agents {
+		c.agents[k] = cloneAgentSession(v)
+	}
+	for k, v := range st.wake {
+		c.wake[k] = cloneWakeSession(v)
+	}
 	return c
 }
 
