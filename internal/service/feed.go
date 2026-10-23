@@ -74,8 +74,9 @@ func (f feed) BoardSnapshot(ctx context.Context, caller domain.Caller, req Board
 }
 
 // boardSnapshot is the board and its counts, from the cache when no change for the board has been
-// seen since it was composed, else one store.GetBoard (two statements). Until the bus has delivered
-// a change (ObserveChange), nothing is cached: no row would ever drop the entry.
+// seen since it was composed, else one store.GetBoard (two statements). Until the bus is attached
+// (ResetSnapshots(true), or a first ObserveChange), nothing is cached: no row would ever drop the
+// entry.
 func (c *Core) boardSnapshot(ctx context.Context, projectID, boardID string) (BoardSnapshotResp, error) {
 	if boardID == "" {
 		return BoardSnapshotResp{}, domain.Validation("boardId is required", map[string]any{"field": "boardId"})
@@ -113,14 +114,21 @@ func (c *Core) ObserveChange(ch store.Change) {
 	c.boards.observe(ch.ID, p.ProjectID, p.BoardID)
 }
 
+// ResetSnapshots drops every board snapshot. live true says the bus feeds ObserveChange from now
+// on (its tap is subscribed, or it dropped a change whose board is unknown), so the cache serves;
+// false says it no longer does (the tap closed), so nothing is cached again until it does.
+func (c *Core) ResetSnapshots(live bool) {
+	c.boards.reset(live)
+}
+
 // dropSnapshots drops a board's snapshot (every board of the project when boardID is "") after a
 // mutation of this process commits, so a writer reads its own write before the bus delivers the row.
 func (c *Core) dropSnapshots(projectID, boardID string) {
 	c.boards.drop(projectID, boardID)
 }
 
-// snapshotCache holds one BoardSnapshotResp per (project, board) once live (the bus has delivered a
-// change). gen counts drops: a composition that began before one does not store what it read, so a
+// snapshotCache holds one BoardSnapshotResp per (project, board) once live (the bus feeds
+// ObserveChange). gen counts drops: a composition that began before one does not store what it read, so a
 // drop is never undone by a read in flight.
 // ponytail: one entry per board read, never evicted; bound it if boards per process grow large.
 type snapshotCache struct {
@@ -170,6 +178,14 @@ func (s *snapshotCache) drop(projectID, boardID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropLocked(projectID, boardID)
+}
+
+func (s *snapshotCache) reset(live bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.live = live
+	s.gen++
+	clear(s.entries)
 }
 
 func (s *snapshotCache) dropLocked(projectID, boardID string) {

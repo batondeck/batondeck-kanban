@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
 
@@ -73,7 +75,8 @@ func TestRouteTable(t *testing.T) {
 			continue // the stream stays open (stream_test.go); login is the harness's own sign-in
 		}
 		path := strings.NewReplacer("{projectId}", "P-1", "{boardId}", "B-1", "{taskId}", "T-1", "{columnId}", "C-1",
-			"{identityId}", "U-2", "{edgeId}", "E-1").Replace(r.Path)
+			"{identityId}", "U-2", "{edgeId}", "E-1", "{sprintId}", "S-1", "{followUpId}", "F-1", "{integrationId}", "I-1",
+			"{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
 		body := ""
 		if r.Method == "POST" || r.Method == "PATCH" {
 			body = "{}"
@@ -252,37 +255,35 @@ func TestSessionAndPublicConfig(t *testing.T) {
 	}
 }
 
-// AC4: GET /api/projects/:p/boards/:b over the real service answers the keys conductor's get_board
+// AC4: GET /api/projects/:p/boards/:b over the real service, on every engine, answers the keys conductor's get_board
 // answered (testdata/get_board.conductor.json, recorded from conductor's test harness at 5e2baafa),
 // with board.transitions as the one addition: an optional key of conductor's BoardSchema
 // (src/tools/schemas.ts:257) that this server always fills (the fixed table).
 func TestGetBoardShapeMatchesConductor(t *testing.T) {
-	var core *service.Core
-	h := newHarness(t, func(st *memstore.Store) Options {
-		core = service.New(st, service.Options{ToolCallFlush: -1})
-		return Options{Services: servicesOf(core)}
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		pid, bid := seedBoard(t, h, s.Core, "Shape")
+		code, body := h.do("GET", "/api/projects/"+pid+"/boards/"+bid, "", nil)
+		if code != 200 {
+			t.Fatalf("get board: %d %s", code, body)
+		}
+		fixture, err := os.ReadFile("testdata/get_board.conductor.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want, got any
+		if err := json.Unmarshal(fixture, &want); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatal(err)
+		}
+		// taskCounts is keyed by column id, which differs per run: its values are compared by type.
+		diffs := shapeDiff("", want, got, map[string]bool{".board.transitions": true}, map[string]bool{".taskCounts": true})
+		if len(diffs) > 0 {
+			t.Fatalf("GET board differs in shape from conductor's get_board:\n%s\ngot %s", strings.Join(diffs, "\n"), body)
+		}
 	})
-	pid, bid := seedBoard(t, h, core, "Shape")
-	code, body := h.do("GET", "/api/projects/"+pid+"/boards/"+bid, "", nil)
-	if code != 200 {
-		t.Fatalf("get board: %d %s", code, body)
-	}
-	fixture, err := os.ReadFile("testdata/get_board.conductor.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want, got any
-	if err := json.Unmarshal(fixture, &want); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal([]byte(body), &got); err != nil {
-		t.Fatal(err)
-	}
-	// taskCounts is keyed by column id, which differs per run: its values are compared by type.
-	diffs := shapeDiff("", want, got, map[string]bool{".board.transitions": true}, map[string]bool{".taskCounts": true})
-	if len(diffs) > 0 {
-		t.Fatalf("GET board differs in shape from conductor's get_board:\n%s\ngot %s", strings.Join(diffs, "\n"), body)
-	}
 }
 
 // shapeDiff lists where got's keys and JSON types differ from want's: a key of want missing from got,
@@ -351,4 +352,79 @@ func typeName(v any) string {
 		return "object"
 	}
 	return "?"
+}
+
+// outOfScope is what the table must never hold: the groups the owner dropped (plan "Dropped as the
+// owner ordered") by prefix, and the in-scope-group routes left out by decision, by method and path.
+var outOfScope = struct {
+	prefixes []string
+	routes   map[string]string
+}{
+	prefixes: []string{"/api/studio", "/api/admin", "/api/tenants", "/api/billing", "/api/onboarding"},
+	routes: map[string]string{
+		"GET " + ppb + "/transitions":         "the transition table is fixed",
+		"PUT " + ppb + "/transitions":         "the transition table is fixed",
+		"GET /api/me/marketplace-key":         "the plan dropped the marketplace key",
+		"POST /api/me/marketplace-key":        "the plan dropped the marketplace key",
+		"POST /api/me/marketplace-key/rotate": "the plan dropped the marketplace key",
+	},
+}
+
+// AC1 (R1.12): no out-of-scope route is mounted or listed in routes.json, by name.
+func TestOutOfScopeRoutesAreRefused(t *testing.T) {
+	f := servicefake.New()
+	h := newHarness(t, fakeServices(f))
+	o := Options{Services: f.Services(), Auth: h.auth}
+	check := func(where, method, path string) {
+		for _, p := range outOfScope.prefixes {
+			if path == p || strings.HasPrefix(path, p+"/") {
+				t.Errorf("%s holds %s %s: the %s group is out of scope", where, method, path, p)
+			}
+		}
+		if why, ok := outOfScope.routes[method+" "+path]; ok {
+			t.Errorf("%s holds %s %s: out of scope, %s", where, method, path, why)
+		}
+	}
+	for _, r := range table(&o) {
+		check("the router", r.Method, r.Path)
+	}
+	for _, r := range loadRoutes(t) {
+		check("routes.json", r.Method, r.Path)
+	}
+}
+
+// Requirement 1 (R1.12): every stub answers 404 {code: NOT_FOUND, message: "<what> lands in <lane>"}
+// through the mounted mux, and reaches no service.
+func TestStubsNameTheirLane(t *testing.T) {
+	f := servicefake.New()
+	h := newHarness(t, fakeServices(f))
+	o := Options{Services: f.Services(), Auth: h.auth}
+	lane := regexp.MustCompile(`^\S.* lands in R\d+\.\d+$`)
+	n := 0
+	for _, r := range table(&o) {
+		s, ok := r.h.(stubHandler)
+		if !ok {
+			continue
+		}
+		n++
+		path := strings.NewReplacer("{projectId}", "P-1", "{taskId}", "T-1", "{sprintId}", "S-1", "{followUpId}", "F-1",
+			"{integrationId}", "I-1", "{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
+		body := ""
+		if r.Method == "POST" || r.Method == "PATCH" {
+			body = "{}"
+		}
+		code, got := h.do(r.Method, path, body, nil)
+		var e struct {
+			Code    domain.Code `json:"code"`
+			Message string      `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(got), &e); err != nil || code != http.StatusNotFound || e.Code != domain.CodeNotFound ||
+			e.Message != s.msg || !lane.MatchString(e.Message) {
+			t.Errorf("%s %s: %d %s, want 404 NOT_FOUND %q naming a lane", r.Method, r.Path, code, got, s.msg)
+		}
+	}
+	if len(f.Calls()) != 0 {
+		t.Fatalf("a stub reached the service: %+v", f.Calls())
+	}
+	t.Logf("%d stub routes", n)
 }

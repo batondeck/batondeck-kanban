@@ -288,7 +288,6 @@ func (p projects) Delete(ctx context.Context, caller domain.Caller, req DeletePr
 		return DeleteProjectResp{}, err
 	}
 	p.c.InvalidateAccess(req.ProjectID, "")
-	p.c.dropSnapshots(req.ProjectID, "")
 	return resp, nil
 }
 
