@@ -16,7 +16,9 @@ Notable changes to batondeck-kanban. The format follows
   `sprintId` and `updatedSince` post-filtered over the page as conductor's `taskPostFilter`).
   `Update` is version-checked with tri-state `assignee`, `dueAt`, `reviewer`, `estimate` and
   `modelHint`. `Move` runs `domain.DecideMove` (the fixed table, 17 legal of 36; promote-with-
-  dependencies to BLOCKED; WIP counted by status in the transaction), refuses a racing task and
+  dependencies to BLOCKED; WIP counted by status in the transaction under the project lock, which
+  a move into IN_PROGRESS or onto DONE takes first: without it two concurrent moves both took a
+  wipLimit-1 slot in 40 of 40 Postgres runs, P-146), refuses a racing task and
   another identity's live lease (CONFLICT_LOCKED), un-poisons through `SetStatus(Unpoison)` when
   it leaves a poisoned BLOCKED (master: `move_task`'s tier), and on DONE unblocks the dependents
   through `txn.unblockDependentsOf`. `Delete` (master) runs `txn.deleteCascade` under the project
