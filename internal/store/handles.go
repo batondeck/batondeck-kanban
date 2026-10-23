@@ -43,6 +43,13 @@ type sqlQueries interface {
 	changeQueries
 	auditQueries
 	toolCallQueries
+	contextQueries
+	memoryQueries
+	summaryQueries
+	dependencyQueries
+	subtaskQueries
+	agentSessionQueries
+	wakeSessionQueries
 }
 
 // pgQueries is the Postgres sqlc queries behind sqlQueries; its methods are in the area files.
