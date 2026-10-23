@@ -105,6 +105,21 @@ type Delivery struct {
 	ExpiresAt       int64
 }
 
+// AlertState is a fingerprint's correlation to its incident ticket (an alert_states row): the
+// ticket TaskID may since have been deleted (autoclose) or moved to DONE, so a reader checks it.
+// AlertStatus is firing or resolved. Times are Unix milliseconds; ExpiresAt 0 is none.
+type AlertState struct {
+	ProjectID     string
+	IntegrationID string
+	Fingerprint   string
+	TaskID        string
+	Occurrences   int64
+	FirstAt       int64
+	LastAt        int64
+	AlertStatus   string
+	ExpiresAt     int64
+}
+
 // DeliveryFilter narrows ListDeliveries: Kind "" is every kind.
 type DeliveryFilter struct {
 	Kind DeliveryKind
@@ -120,7 +135,8 @@ type DeliveryPage struct {
 // diagnosis. Keys: integrations (project_id, id), deliveries (project_id, integration_id,
 // sha256(delivery_id)), raw bodies (project_id, integration_id, sha256(delivery_id)). Errors: a
 // missing project is domain.NotFound("Project", id); a missing or tombstoned integration
-// domain.NotFound("Integration", id); a missing delivery domain.NotFound("Delivery", id); a missing
+// domain.NotFound("Integration", id); a missing alert state domain.NotFound("AlertState",
+// fingerprint); a missing delivery domain.NotFound("Delivery", id); a missing
 // raw body domain.NotFound("DeliveryRawBody", id); an expected version that is not the row's
 // domain.Stale; an unknown lifecycle, kind or result, an empty name, board, creator or id,
 // a field that is not a JSON object, a malformed cursor and a non-positive sweep limit
@@ -131,6 +147,9 @@ type Oncall interface {
 	CreateIntegration(ctx context.Context, in CreateIntegrationInput) (Integration, error)
 	// GetIntegration is the live integration (not a tombstone).
 	GetIntegration(ctx context.Context, projectID, integrationID string) (Integration, error)
+	// GetIntegrationByID is the live integration by its id alone: the one lookup not scoped by
+	// project, for POST /hooks/{id}, whose id is unguessable and unique on its own.
+	GetIntegrationByID(ctx context.Context, integrationID string) (Integration, error)
 	// ListIntegrations is the project's integrations newest first (created_at, then id), tombstones
 	// only when includeDeleted. limit <= 0 is 100 and a limit above 200 is 200.
 	ListIntegrations(ctx context.Context, projectID string, limit int, includeDeleted bool) ([]Integration, error)
@@ -140,6 +159,13 @@ type Oncall interface {
 	// DeleteIntegration tombstones the live integration at expectedVersion (deleted_at = at, the
 	// version bumped) and returns it after; its deliveries stay. A second delete is NotFound.
 	DeleteIntegration(ctx context.Context, projectID, integrationID string, expectedVersion, at int64) (Integration, error)
+
+	// GetAlertState is the fingerprint's correlation row (keyed by its sha256, DeliveryKey).
+	GetAlertState(ctx context.Context, projectID, integrationID, fingerprint string) (AlertState, error)
+	// PutAlertState writes a's row whole, inserting or replacing it. The integration must exist (a
+	// tombstone counts); an empty fingerprint or task, a status that is not firing or resolved and a
+	// non-positive time are VALIDATION.
+	PutAlertState(ctx context.Context, a AlertState) error
 
 	// InsertDelivery records d; inserted is false, and the row the one already recorded, when its
 	// delivery id was recorded before (a replayed delivery changes nothing). The integration must

@@ -73,6 +73,7 @@ type state struct {
 	integrations map[[2]string]store.Integration    // by (project, integration)
 	deliveries   map[[3]string]store.Delivery       // by (project, integration, delivery key)
 	rawBodies    map[[3]string]rawBody              // by (project, integration, delivery key)
+	alertStates  map[[3]string]store.AlertState     // by (project, integration, fingerprint key)
 
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
@@ -114,6 +115,7 @@ func newState() *state {
 		integrations: map[[2]string]store.Integration{},
 		deliveries:   map[[3]string]store.Delivery{},
 		rawBodies:    map[[3]string]rawBody{},
+		alertStates:  map[[3]string]store.AlertState{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -310,6 +312,9 @@ func (st *state) clone() *state {
 	}
 	for k, v := range st.rawBodies {
 		c.rawBodies[k] = rawBody{body: append([]byte(nil), v.body...), expiresAt: v.expiresAt}
+	}
+	for k, v := range st.alertStates {
+		c.alertStates[k] = v
 	}
 	for k, v := range st.oauthClients {
 		c.oauthClients[k] = cloneOAuthClient(v)

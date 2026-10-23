@@ -109,6 +109,45 @@ func (s *Store) GetIntegration(ctx context.Context, projectID, integrationID str
 	})
 }
 
+func (s *Store) GetIntegrationByID(ctx context.Context, integrationID string) (store.Integration, error) {
+	return get(ctx, s, func(st *state) (store.Integration, error) {
+		for k, i := range st.integrations {
+			if k[1] == integrationID && i.DeletedAt == nil {
+				return cloneIntegration(i), nil
+			}
+		}
+		return store.Integration{}, domain.NotFound("Integration", integrationID)
+	})
+}
+
+func (s *Store) GetAlertState(ctx context.Context, projectID, integrationID, fingerprint string) (store.AlertState, error) {
+	return get(ctx, s, func(st *state) (store.AlertState, error) {
+		a, ok := st.alertStates[[3]string{projectID, integrationID, store.DeliveryKey(fingerprint)}]
+		if !ok {
+			return store.AlertState{}, domain.NotFound("AlertState", fingerprint)
+		}
+		return a, nil
+	})
+}
+
+func (s *Store) PutAlertState(ctx context.Context, a store.AlertState) error {
+	switch {
+	case a.Fingerprint == "" || a.TaskID == "" || a.IntegrationID == "":
+		return domain.Validation("an alert state needs an integration, a fingerprint and a task", nil)
+	case a.AlertStatus != "firing" && a.AlertStatus != "resolved":
+		return domain.Validation("unknown alert status: "+a.AlertStatus, map[string]any{"alertStatus": a.AlertStatus})
+	case a.FirstAt <= 0 || a.LastAt <= 0 || a.Occurrences <= 0:
+		return domain.Validation("an alert state needs its times and a positive occurrence count", nil)
+	}
+	return s.do(ctx, func(st *state) error {
+		if _, ok := st.integrations[[2]string{a.ProjectID, a.IntegrationID}]; !ok {
+			return domain.NotFound("Integration", a.IntegrationID)
+		}
+		st.alertStates[[3]string{a.ProjectID, a.IntegrationID, store.DeliveryKey(a.Fingerprint)}] = a
+		return nil
+	})
+}
+
 func (s *Store) ListIntegrations(ctx context.Context, projectID string, limit int, includeDeleted bool) ([]store.Integration, error) {
 	limit = clamp(limit, 100, 200)
 	return get(ctx, s, func(st *state) ([]store.Integration, error) {
@@ -340,10 +379,11 @@ func (s *Store) DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, l
 	})
 }
 
-// deleteProjectOncall is a project delete's cascade: its integrations, their deliveries and raw
-// bodies (the engines' ON DELETE CASCADE).
+// deleteProjectOncall is a project delete's cascade: its integrations, their deliveries, raw
+// bodies and alert states (the engines' ON DELETE CASCADE).
 func deleteProjectOncall(st *state, projectID string) {
 	maps.DeleteFunc(st.integrations, func(k [2]string, _ store.Integration) bool { return k[0] == projectID })
 	maps.DeleteFunc(st.deliveries, func(k [3]string, _ store.Delivery) bool { return k[0] == projectID })
 	maps.DeleteFunc(st.rawBodies, func(k [3]string, _ rawBody) bool { return k[0] == projectID })
+	maps.DeleteFunc(st.alertStates, func(k [3]string, _ store.AlertState) bool { return k[0] == projectID })
 }
