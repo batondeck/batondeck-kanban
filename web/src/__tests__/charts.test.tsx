@@ -17,7 +17,7 @@ import { render, screen, cleanup, within } from '@testing-library/react';
 import { AreaLine, ChartFrame, Donut, RankedBars, StackedBars, describeQueryError } from '../charts.js';
 
 const slices = [
-  { key: 'READY', label: 'Ready', value: 3, color: 'var(--ready)' },
+  { key: 'TODO', label: 'Ready', value: 3, color: 'var(--ready)' },
   { key: 'DONE', label: 'Done', value: 1, color: 'var(--done)' },
   { key: 'BLOCKED', label: 'Blocked', value: 0, color: 'var(--blocked)' },
 ];
@@ -60,7 +60,7 @@ describe('Donut', () => {
 describe('StackedBars', () => {
   const days = ['2026-08-01', '2026-08-02', '2026-08-03'];
   const series = [
-    { key: 'READY', label: 'Ready', color: 'var(--ready)', values: [1, 0, 2] },
+    { key: 'TODO', label: 'Ready', color: 'var(--ready)', values: [1, 0, 2] },
     { key: 'DONE', label: 'Done', color: 'var(--done)', values: [0, 3, 1] },
   ];
 
@@ -83,7 +83,7 @@ describe('StackedBars', () => {
     // FOUND ON STAGING, not in jsdom: a board created today rendered `created per day` as a 640px
     // block. A band scale hands one item the entire range, which stops looking like a bar chart.
     const { container } = render(
-      <StackedBars days={['2026-08-28']} series={[{ key: 'READY', label: 'R', color: 'var(--ready)', values: [5] }]} title="t" desc="d" />,
+      <StackedBars days={['2026-08-28']} series={[{ key: 'TODO', label: 'R', color: 'var(--ready)', values: [5] }]} title="t" desc="d" />,
     );
     const w = Number(container.querySelector('rect')!.getAttribute('width'));
     expect(w).toBeGreaterThan(0);

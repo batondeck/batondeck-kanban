@@ -34,7 +34,7 @@ vi.mock('../projectContext.js', () => ({
 const mkTask = (i: number): Task =>
   ({
     id: `T-${i}`, projectId: 'p1', boardId: 'b1', columnId: 'c1',
-    title: `task ${i}`, description: '', status: 'READY', priority: 'normal',
+    title: `task ${i}`, description: '', status: 'TODO', priority: 'normal',
     assignee: null, labels: [], requiredCapabilities: [], estimate: null, dueAt: null,
     customFields: {}, parentTaskId: null, order: 'a0', blockedBy: [], blocks: [],
     contextSummary: '', version: 1, claim: null, createdBy: 'u',

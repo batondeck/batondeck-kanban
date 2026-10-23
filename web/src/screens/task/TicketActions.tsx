@@ -18,7 +18,7 @@
  * new code, which proves nothing.
  */
 import { useState } from 'react';
-import { api } from '../../api.js';
+import * as lifecycleApi from '../../api/lifecycle.js';
 import { AgentSelect } from '../../AgentSelect.js';
 import { Button, Cluster, Panel, Stack } from '../../ui.js';
 import { Icon } from '../../icons.js';
@@ -38,7 +38,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
   const { task, projectId, taskId, run, move, myLease, heldByOther, setLease, colFor, moveTargets, agentList } = d;
   const [handoff, setHandoff] = useState<{ to: string; note: string } | null>(null);
   const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
-  const readyName = colFor('READY')?.name ?? 'Ready';
+  const readyName = colFor('TODO')?.name ?? 'To do';
   const stuck = moveTargets.length === 0;
 
   return (
@@ -97,12 +97,12 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
 
         <div>
           <span style={{ ...label, display: 'block', marginBottom: 7 }}>Work the task</span>
-          {task.status === 'READY' && !task.claim && (
+          {task.status === 'TODO' && !task.claim && (
             <Cluster gap={8} wrap>
               <Button
                 variant="primary"
                 onClick={() =>
-                  void run(api.claimTask(projectId, taskId), (r) => {
+                  void run(lifecycleApi.claimTask(projectId, taskId), (r) => {
                     if (r) setLease(r.leaseId);
                   })
                 }
@@ -115,10 +115,10 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
           )}
           {myLease && (
             <Cluster gap={4} wrap>
-              <Button variant="primary" onClick={() => void run(api.completeTask(projectId, taskId, myLease), () => setLease(null))}><><Icon name="check" />Mark complete</></Button>
-              <Button onClick={() => void run(api.blockTask(projectId, taskId, myLease, 'blocked from UI'), () => setLease(null))}>Block</Button>
+              <Button variant="primary" onClick={() => void run(lifecycleApi.completeTask(projectId, taskId, myLease), () => setLease(null))}><><Icon name="check" />Mark complete</></Button>
+              <Button onClick={() => void run(lifecycleApi.blockTask(projectId, taskId, myLease, 'blocked from UI'), () => setLease(null))}>Block</Button>
               <Button onClick={() => setHandoff({ to: '', note: '' })}>Hand off…</Button>
-              <Button onClick={() => void run(api.releaseTask(projectId, taskId, myLease), () => setLease(null))}>Release claim</Button>
+              <Button onClick={() => void run(lifecycleApi.releaseTask(projectId, taskId, myLease), () => setLease(null))}>Release claim</Button>
             </Cluster>
           )}
           {heldByOther && (
@@ -126,7 +126,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               Held by <strong style={{ color: 'var(--text-2)' }}>{task.claim?.agent || task.claim?.owner}</strong> — wait for release to claim it.
             </span>
           )}
-          {task.status !== 'READY' && !task.claim && (
+          {task.status !== 'TODO' && !task.claim && (
             <span className="muted" style={{ fontSize: 12 }}>
               Move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong> to claim it.
             </span>
@@ -141,7 +141,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               variant="primary"
               disabled={!handoff.to}
               onClick={() =>
-                void run(api.handoffTask(projectId, taskId, myLease, handoff.to, handoff.note), () => {
+                void run(lifecycleApi.handoffTask(projectId, taskId, myLease, handoff.to, handoff.note), () => {
                   setHandoff(null);
                   setLease(null);
                 })

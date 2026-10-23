@@ -1,6 +1,38 @@
-// The area files' request helper (R1.12): a copy of api.ts's req, P and ON, the CSRF token read from
-// R0.12's bk_csrf cookie instead of api.ts's module state. R1.14 moves req here and drops api.ts's.
-import { ApiError, markLocalEdit } from '../api.js';
+// The request helper every area file shares: req, P and ON, the error type, and the local-edit marks
+// (R1.14 moved them here from api.ts, which is gone). The CSRF token is read from R0.12's bk_csrf
+// cookie on every write.
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Tasks THIS tab just wrote to. The board flashes a ring on a card whose `version` moves under you
+ * (T-51) — but your own edit bumps the version too, so without this the board would flash your own
+ * work back at you and the signal would stop meaning "someone else touched this" (CONTRIBUTING §9).
+ *
+ * Marked HERE rather than at each mutation site because this is the choke point every write already
+ * goes through — the drawer's `run()`, the optimistic hooks in mutations.ts, comments, follow-ups and
+ * runs alike. A per-caller mark is a list that the next caller forgets to join.
+ */
+const localEdits = new Map<string, number>();
+const LOCAL_EDIT_MS = 5000;
+export function markLocalEdit(taskId: string): void {
+  localEdits.set(taskId, Date.now());
+  // ponytail: KNOWN CEILING — prune on write, so an entry outlives its TTL until the NEXT write. Fine:
+  // the map only ever holds tasks touched in the last few seconds. Upgrade path: if a session can go
+  // idle holding many stale entries (bulk edit then walk away), sweep on read too.
+  for (const [id, t] of localEdits) if (Date.now() - t > LOCAL_EDIT_MS) localEdits.delete(id);
+}
+export function isLocalEdit(taskId: string): boolean {
+  const t = localEdits.get(taskId);
+  return t !== undefined && Date.now() - t < LOCAL_EDIT_MS;
+}
 
 const csrfToken = (): string | null => {
   const m = /(?:^|;\s*)bk_csrf=([^;]*)/.exec(document.cookie);

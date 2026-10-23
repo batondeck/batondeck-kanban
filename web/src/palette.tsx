@@ -7,7 +7,10 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Command } from 'cmdk';
-import { api, defaultBoardName } from './api.js';
+import * as boardsApi from './api/boards.js';
+import * as mediaApi from './api/media.js';
+import * as projectsApi from './api/projects.js';
+import { defaultBoardName } from './api/boards.js';
 import { fire } from './toast.js';
 import { useProject } from './projectContext.js';
 import { useShortcuts } from './shortcuts.js';
@@ -106,7 +109,7 @@ export function CommandPalette() {
     return () => void subs.delete(onPing);
   }, []);
 
-  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => api.listProjects(), enabled: open });
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects(), enabled: open });
 
   // Ticket search: global project selection (works on any screen), query debounced ~250ms.
   const { projectId } = useProject();
@@ -117,7 +120,7 @@ export function CommandPalette() {
   }, [query]);
   const searchQ = useQuery({
     queryKey: ['palette-search', projectId, debounced],
-    queryFn: () => api.search(projectId, debounced, 8),
+    queryFn: () => mediaApi.search(projectId, debounced, 8),
     enabled: open && !page && !!projectId && debounced.trim().length > 0,
   });
 
@@ -244,7 +247,7 @@ export function CommandPalette() {
 }
 
 async function openProject(projectId: string, nav: (to: string) => void, projectName?: string): Promise<void> {
-  const { boards } = await api.listBoards(projectId);
-  const board = boards[0] ?? (await api.createBoard(projectId, defaultBoardName(projectName))).board;
+  const { boards } = await boardsApi.listBoards(projectId);
+  const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
   nav(`/projects/${projectId}/boards/${board.id}`);
 }

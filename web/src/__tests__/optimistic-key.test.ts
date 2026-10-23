@@ -22,7 +22,7 @@ const P = 'P-1';
 const B = 'B-1';
 
 const task = (id: string, over: Partial<Task> = {}): Task =>
-  ({ id, title: id, status: 'READY', columnId: 'C-ready', order: 'a0', version: 1, assignee: null, ...over }) as Task;
+  ({ id, title: id, status: 'TODO', columnId: 'C-ready', order: 'a0', version: 1, assignee: null, ...over }) as Task;
 
 type Page = { tasks: Task[] };
 const pageAt = (qc: QueryClient, key: readonly unknown[]): Task[] => qc.getQueryData<Page>(key)!.tasks;
@@ -103,7 +103,7 @@ describe('mergeSnapshotPreservingLocalEdits — a snapshot must not undo your ow
 
   it('THE RACE: a snapshot carrying the PRE-MOVE task does not drag the card back', () => {
     const optimistic = page([task('T-1', { columnId: 'C-review', status: 'REVIEW' }), task('T-2')]);
-    const stale = page([task('T-1', { columnId: 'C-ready', status: 'READY' }), task('T-2')]);
+    const stale = page([task('T-1', { columnId: 'C-ready', status: 'TODO' }), task('T-2')]);
     const out = mergeSnapshotPreservingLocalEdits(optimistic, stale, (id) => id === 'T-1');
     expect(out.tasks.find((t) => t.id === 'T-1')!.columnId, 'your in-flight move must survive').toBe('C-review');
   });

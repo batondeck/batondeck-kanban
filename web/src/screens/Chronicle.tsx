@@ -21,7 +21,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { api } from '../api.js';
+import * as chronicleApi from '../api/chronicle.js';
+import * as projectsApi from '../api/projects.js';
 import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
 import { displayAgentName } from '../agentStatus.js';
 import { Button, Chip, Chips, Cluster, Empty, Note, Panel, Section, Stack, Tag } from '../ui.js';
@@ -213,7 +214,7 @@ export function Chronicle() {
     queryKey: ['chronicle', projectId],
     enabled: !!projectId,
     initialPageParam: '',
-    queryFn: ({ pageParam }) => api.listChroniclePages(projectId, pageParam || undefined),
+    queryFn: ({ pageParam }) => chronicleApi.listChroniclePages(projectId, pageParam || undefined),
     // Absent `nextCursor` means the list is complete — that is the contract, so `null` (stop) is the
     // default and only an explicit cursor continues.
     getNextPageParam: (last) => last.nextCursor ?? null,
@@ -225,7 +226,7 @@ export function Chronicle() {
     queries: projects.map((p) => ({
       queryKey: ['chronicle-all', p.projectId],
       enabled: !projectId,
-      queryFn: () => api.listChroniclePages(p.projectId),
+      queryFn: () => chronicleApi.listChroniclePages(p.projectId),
     })),
   });
 
@@ -504,7 +505,7 @@ export function ChronicleNew() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.createChroniclePage(projectId, {
+      chronicleApi.createChroniclePage(projectId, {
         kind,
         slug: effectiveSlug,
         title: title.trim(),
@@ -645,7 +646,7 @@ export function ChroniclePageView() {
   const q = useQuery({
     queryKey: ['chronicle-page', projectId, pageId],
     enabled: !!projectId && !!pageId,
-    queryFn: () => api.getChroniclePage(projectId, pageId),
+    queryFn: () => chronicleApi.getChroniclePage(projectId, pageId),
   });
 
   // T-430: the byline shows NAMES, and names live in the project's memberDisplay (T-319). Shared
@@ -653,7 +654,7 @@ export function ChroniclePageView() {
   const proj = useQuery({
     queryKey: ['project', projectId],
     enabled: !!projectId,
-    queryFn: () => api.getProject(projectId),
+    queryFn: () => projectsApi.getProject(projectId),
   });
   const names = proj.data?.memberDisplay;
 
@@ -665,7 +666,7 @@ export function ChroniclePageView() {
   const slugs = useQuery({
     queryKey: ['chronicle-slugs', projectId],
     enabled: !!projectId,
-    queryFn: () => api.listChroniclePages(projectId),
+    queryFn: () => chronicleApi.listChroniclePages(projectId),
   });
   const slugMap = useMemo(
     () => new Map((slugs.data?.pages ?? []).map((p) => [p.slug, p.id])),
@@ -683,7 +684,7 @@ export function ChroniclePageView() {
    */
   const save = useMutation({
     mutationFn: ({ parent, blocks }: { parent: string; blocks: ChronicleBlockInput[] }) =>
-      api.editChroniclePage(projectId, pageId, parent, blocks),
+      chronicleApi.editChroniclePage(projectId, pageId, parent, blocks),
     onSuccess: async () => {
       setEditing(false);
       setEditingFrom(null);
@@ -732,7 +733,7 @@ export function ChroniclePageView() {
    */
   const land = useMutation({
     mutationFn: ({ parent, blocks }: { parent: string; blocks: ChronicleBlockInput[] }) =>
-      api.editChroniclePage(projectId, pageId, parent, blocks),
+      chronicleApi.editChroniclePage(projectId, pageId, parent, blocks),
     onSuccess: async () => {
       setResolution({});
       setNote(null);
@@ -756,7 +757,7 @@ export function ChroniclePageView() {
   const destroy = useMutation({
     // The head the confirmation DISPLAYED pins the delete: a version landed mid-confirm answers
     // STALE instead of destroying work the confirmer never saw.
-    mutationFn: () => api.deleteChroniclePage(projectId, pageId, q.data?.head?.id),
+    mutationFn: () => chronicleApi.deleteChroniclePage(projectId, pageId, q.data?.head?.id),
     onSuccess: async () => {
       qc.removeQueries({ queryKey: ['chronicle-page', projectId, pageId] });
       await qc.invalidateQueries({ queryKey: ['chronicle', projectId] });
@@ -1162,7 +1163,7 @@ export function ChronicleHistory() {
   const proj = useQuery({
     queryKey: ['project', projectId],
     enabled: !!projectId,
-    queryFn: () => api.getProject(projectId),
+    queryFn: () => projectsApi.getProject(projectId),
   });
   const names = proj.data?.memberDisplay;
   const [params, setParams] = useSearchParams();
@@ -1180,7 +1181,7 @@ export function ChronicleHistory() {
     queryKey: ['chronicle-history', projectId, pageId],
     enabled: !!projectId && !!pageId,
     initialPageParam: '',
-    queryFn: ({ pageParam }) => api.listChronicleVersions(projectId, pageId, pageParam || undefined),
+    queryFn: ({ pageParam }) => chronicleApi.listChronicleVersions(projectId, pageId, pageParam || undefined),
     getNextPageParam: (last) => last.nextCursor ?? null,
   });
 
@@ -1194,15 +1195,15 @@ export function ChronicleHistory() {
     enabled: !!projectId && !!a && !!b,
     queryFn: async () => {
       const [l, r] = await Promise.all([
-        api.getChronicleVersion(projectId, pageId, a!),
-        api.getChronicleVersion(projectId, pageId, b!),
+        chronicleApi.getChronicleVersion(projectId, pageId, a!),
+        chronicleApi.getChronicleVersion(projectId, pageId, b!),
       ]);
       return { left: l.version, right: r.version };
     },
   });
 
   const revert = useMutation({
-    mutationFn: (versionId: string) => api.revertChroniclePage(projectId, pageId, versionId),
+    mutationFn: (versionId: string) => chronicleApi.revertChroniclePage(projectId, pageId, versionId),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['chronicle-history', projectId, pageId] });
       await qc.invalidateQueries({ queryKey: ['chronicle-page', projectId, pageId] });

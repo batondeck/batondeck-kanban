@@ -39,7 +39,7 @@ vi.mock('../projectContext.js', () => ({
 const mkTask = (i: number, over: Partial<Task> = {}): Task =>
   ({
     id: `T-${i}`, projectId: 'p1', boardId: 'b1', columnId: 'c1',
-    title: `task ${i}`, description: '', status: 'READY', priority: 'normal',
+    title: `task ${i}`, description: '', status: 'TODO', priority: 'normal',
     assignee: null, labels: [], requiredCapabilities: [], estimate: null, dueAt: null,
     customFields: {}, parentTaskId: null, order: 'a0', blockedBy: [], blocks: [],
     contextSummary: '', version: 1, claim: null, createdBy: 'u',
@@ -210,36 +210,7 @@ describe('the charts render from the census', () => {
       );
       expect(donut, 'the status donut should total the census').toBeTruthy();
       // The <desc> carries the full breakdown — the same numbers the visible legend shows.
-      expect(donut!.querySelector('desc')?.textContent).toBe('Ready 2 (67%), Done 1 (33%)');
-    });
-  });
-});
-
-/**
- * PALETTE — the two status colours that must not collide.
- *
- * Found on staging, in BOTH themes: every status map in the app paints CANCELLED with
- * `--text-muted`, which sits within a few points of `--backlog` (light #646b78 vs #5f6673, dark
- * #8f97a5 vs #9aa2b1). Harmless where they are text or a dot; in a donut they are adjacent filled
- * arcs and the reader cannot tell the slices apart.
- *
- * jsdom resolves no custom properties, so this cannot check contrast — it checks the weaker thing
- * that still catches the regression: the two statuses do not carry the SAME fill expression.
- */
-describe('chart status colours', () => {
-  it('CANCELLED and BACKLOG do not share a fill', async () => {
-    stub({
-      pages: [{ tasks: [mkTask(1, { status: 'BACKLOG' }), mkTask(2, { status: 'CANCELLED' })] }],
-    });
-    renderReports();
-    await screen.findByText('By status');
-    await waitFor(() => {
-      const donut = [...document.querySelectorAll('svg')].find((s2) =>
-        s2.querySelector('title')?.textContent?.includes('tasks: 2'),
-      );
-      const fills = [...donut!.querySelectorAll('path')].map((p) => p.getAttribute('fill'));
-      expect(fills).toHaveLength(2);
-      expect(new Set(fills).size, 'two adjacent slices must be distinguishable').toBe(2);
+      expect(donut!.querySelector('desc')?.textContent).toBe('Todo 2 (67%), Done 1 (33%)');
     });
   });
 });

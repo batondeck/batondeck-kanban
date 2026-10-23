@@ -14,9 +14,9 @@ import { boardTasksKey, useTaskCreate } from '../mutations.js';
 import { fire, ToastHost } from '../toast.js';
 import type { Task } from '../types.js';
 
-vi.mock('../api.js', () => ({ api: { createTask: vi.fn() } }));
-const { api } = await import('../api.js');
-const createTask = api.createTask as unknown as ReturnType<typeof vi.fn>;
+vi.mock('../api/boards.js', () => ({ createTask: vi.fn() }));
+const boardsApi = await import('../api/boards.js');
+const createTask = boardsApi.createTask as unknown as ReturnType<typeof vi.fn>;
 
 afterEach(() => vi.restoreAllMocks());
 

@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router';
-import { api } from '../api.js';
+import * as boardsApi from '../api/boards.js';
 import { Icon } from '../icons.js';
 import { pushToast } from '../toast.js';
 import { PageHeader, timeAgo } from '../components.js';
@@ -71,7 +71,7 @@ function useTopbarOffset(): void {
 function TicketRef({ projectId, boardId, taskId }: { projectId: string; boardId: string; taskId: string }) {
   const boardsQ = useQuery({
     queryKey: ['boards', projectId],
-    queryFn: () => api.listBoards(projectId),
+    queryFn: () => boardsApi.listBoards(projectId),
     enabled: !!projectId,
     staleTime: 300_000,
   });

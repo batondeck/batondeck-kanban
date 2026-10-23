@@ -14,17 +14,14 @@ export interface TicketQuery {
 }
 
 const STATUS_ALIAS: Record<string, Status> = {
-  backlog: 'BACKLOG',
-  ready: 'READY',
-  todo: 'READY',
+  todo: 'TODO',
+  ready: 'TODO',
   in_progress: 'IN_PROGRESS',
   inprogress: 'IN_PROGRESS',
   wip: 'IN_PROGRESS',
   blocked: 'BLOCKED',
   review: 'REVIEW',
   done: 'DONE',
-  cancelled: 'CANCELLED',
-  canceled: 'CANCELLED',
 };
 
 export function parseTicketQuery(raw: string, identity?: string | null): TicketQuery {

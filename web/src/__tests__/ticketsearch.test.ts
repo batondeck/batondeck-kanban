@@ -46,8 +46,10 @@ describe('parseTicketQuery', () => {
 
   it('normalizes status aliases; an unknown status is KEPT so it matches nothing (not select-all)', () => {
     expect(parseTicketQuery('status:wip').status).toEqual(['IN_PROGRESS']);
-    expect(parseTicketQuery('status:todo').status).toEqual(['READY']);
-    expect(parseTicketQuery('status:canceled').status).toEqual(['CANCELLED']);
+    expect(parseTicketQuery('status:todo').status).toEqual(['TODO']);
+    // No cancelled state (ADR-0001: a cancelled task is DONE with the `cancelled` label), so the old
+    // alias is an unknown status now, kept as typed so it matches nothing.
+    expect(parseTicketQuery('status:canceled').status).toEqual(['CANCELED']);
     expect(parseTicketQuery('status:bogus').status).toEqual(['BOGUS']);
     expect(matchesFilters(task(), parseTicketQuery('status:bogus'))).toBe(false);
   });

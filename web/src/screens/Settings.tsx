@@ -2,23 +2,25 @@ import { useEffect, useRef, useState } from 'react';
 import { toolKey } from '../ToolLogo.js';
 import { Icon } from '../icons.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as boardsApi from '../api/boards.js';
+import * as meApi from '../api/me.js';
+import * as projectsApi from '../api/projects.js';
+import * as tenantsApi from '../api/tenants.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar, ConfirmButton, timeAgo } from '../components.js';
 import type { Status } from '../types.js';
+import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can } from '../permissions.js';
 import { useAuth } from '../auth.js';
 
-const STATUSES: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 
 /** A small bordered card used as a settings panel. */
@@ -80,7 +82,7 @@ const HUMAN_ROLES = ['viewer', 'member', 'admin'] as const;
  */
 function MyTokenBudget() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['my-settings'], queryFn: () => api.getMySettings() });
+  const q = useQuery({ queryKey: ['my-settings'], queryFn: () => meApi.getMySettings() });
   const [draft, setDraft] = useState('');
   const [saveErr, setSaveErr] = useState<string | null>(null);
 
@@ -89,7 +91,7 @@ function MyTokenBudget() {
   }, [q.data]);
 
   const save = useMutation({
-    mutationFn: (patch: Parameters<typeof api.setMySettings>[0]) => api.setMySettings(patch),
+    mutationFn: (patch: Parameters<typeof meApi.setMySettings>[0]) => meApi.setMySettings(patch),
     onSuccess: (next) => { setSaveErr(null); qc.setQueryData(['my-settings'], next); },
     onError: (e: Error) => setSaveErr(e.message),
   });
@@ -197,9 +199,9 @@ function InviteTeammate({ permissions }: { permissions: readonly string[] | unde
    * 403 — a courtesy, NOT the control: the gate is the server's live membership read, and `can()` here
    * is up to 8h stale.
    */
-  const pending = useQuery({ queryKey: ['tenant-invitations'], queryFn: () => api.listInvitations(), enabled: admin });
+  const pending = useQuery({ queryKey: ['tenant-invitations'], queryFn: () => tenantsApi.listInvitations(), enabled: admin });
   const invite = useMutation({
-    mutationFn: (e: string) => api.inviteTeammate(e),
+    mutationFn: (e: string) => tenantsApi.inviteTeammate(e),
     onSuccess: (_r, e) => {
       setSent(e);
       setEmail('');
@@ -210,7 +212,7 @@ function InviteTeammate({ permissions }: { permissions: readonly string[] | unde
   });
   const act = useMutation({
     mutationFn: ({ id, action }: { id: string; action: 'resend' | 'revoke' }) =>
-      action === 'resend' ? api.resendInvitation(id) : api.revokeInvitation(id),
+      action === 'resend' ? tenantsApi.resendInvitation(id) : tenantsApi.revokeInvitation(id),
     // Refetch on failure too: a 404 here means the invitation was accepted or revoked out from under
     // this tab, and the list is the thing that is wrong. Leaving a stale row would invite a retry loop.
     onSettled: () => qc.invalidateQueries({ queryKey: ['tenant-invitations'] }),
@@ -351,9 +353,9 @@ function MarketplaceAccess() {
   const invalidate = (): void => void qc.invalidateQueries({ queryKey: ['marketplaceKey'] });
   // The key is contractually STABLE, so refetch-on-focus buys nothing and costs the full usage
   // read every alt-tab: fetch once, refresh only through the mutations and the explicit button.
-  const q = useQuery({ queryKey: ['marketplaceKey'], queryFn: () => api.getMarketplaceKey(), staleTime: Infinity });
-  const create = useMutation({ mutationFn: () => api.createMarketplaceKey(), onSuccess: invalidate });
-  const rotate = useMutation({ mutationFn: () => api.rotateMarketplaceKey(), onSuccess: invalidate });
+  const q = useQuery({ queryKey: ['marketplaceKey'], queryFn: () => meApi.getMarketplaceKey(), staleTime: Infinity });
+  const create = useMutation({ mutationFn: () => meApi.createMarketplaceKey(), onSuccess: invalidate });
+  const rotate = useMutation({ mutationFn: () => meApi.rotateMarketplaceKey(), onSuccess: invalidate });
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copyTimer = useRef<number | null>(null);
   useEffect(() => () => { if (copyTimer.current !== null) window.clearTimeout(copyTimer.current); }, []);
@@ -444,7 +446,7 @@ function MarketplaceAccess() {
 
 function CliTokens() {
   const qc = useQueryClient();
-  const tokensQ = useQuery({ queryKey: ['cliTokens'], queryFn: () => api.listCliTokens() });
+  const tokensQ = useQuery({ queryKey: ['cliTokens'], queryFn: () => meApi.listCliTokens() });
   const [label, setLabel] = useState('');
   const [minted, setMinted] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -453,12 +455,12 @@ function CliTokens() {
 
   const refresh = (): void => void qc.invalidateQueries({ queryKey: ['cliTokens'] });
   const mint = useMutation({
-    mutationFn: () => api.createCliToken({ label: label.trim() }),
+    mutationFn: () => meApi.createCliToken({ label: label.trim() }),
     onSuccess: (r) => { setMinted(r.token); setLabel(''); setErr(null); setCopied(false); refresh(); },
     onError: (e) => setErr(String(e instanceof Error ? e.message : e)),
   });
   const revoke = useMutation({
-    mutationFn: (id: string) => api.revokeCliToken(id),
+    mutationFn: (id: string) => meApi.revokeCliToken(id),
     onSuccess: () => { setErr(null); refresh(); },
     onError: (e) => setErr(String(e instanceof Error ? e.message : e)),
   });
@@ -611,12 +613,12 @@ function CliTokens() {
 export function Settings() {
   const { permissions } = useAuth();
   const qc = useQueryClient();
-  const projects = useQuery({ queryKey: ['projects'], queryFn: () => api.listProjects() });
+  const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
   const [selected, setSelected] = useState('');
   const projectId = selected || projects.data?.projects[0]?.projectId || '';
 
-  const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => api.getProject(projectId), enabled: !!projectId });
-  const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => api.listBoards(projectId), enabled: !!projectId });
+  const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId), enabled: !!projectId });
+  const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
   const project = projQ.data?.project;
   // T-319: account id -> person. This roster carries role and Remove controls, so the id stays on
   // screen beneath the name — two accounts may legitimately render the same name.
@@ -681,11 +683,11 @@ export function Settings() {
     return () => clearTimeout(t);
   }, []);
 
-  const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => api.agentSessions(100) });
+  const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => agentsApi.agentSessions(100) });
   const mySessions = sessionsQ.data?.sessions ?? [];
   const [endErr, setEndErr] = useState<string | null>(null);
   const endSession = useMutation({
-    mutationFn: (v: { identityId: string; agentId: string }) => api.disconnectOwnSession(v.identityId, v.agentId),
+    mutationFn: (v: { identityId: string; agentId: string }) => agentsApi.disconnectOwnSession(v.identityId, v.agentId),
     onSuccess: () => {
       setEndErr(null);
       void qc.invalidateQueries({ queryKey: ['agentSessions'] });
@@ -696,7 +698,7 @@ export function Settings() {
 
   const [member, setMember] = useState('');
   const [role, setRole] = useState('member');
-  const [col, setCol] = useState({ name: '', status: 'READY' as Status, wip: '' });
+  const [col, setCol] = useState({ name: '', status: 'TODO' as Status, wip: '' });
   const [drafts, setDrafts] = useState<Record<string, { name: string; wip: string }>>({});
   const [err, setErr] = useState<string | null>(null);
 
@@ -709,11 +711,11 @@ export function Settings() {
     return p.then((r) => { refresh(); return r; }).catch((e) => setErr(String(e instanceof Error ? e.message : e)));
   };
 
-  const addMember = useMutation({ mutationFn: () => api.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
-  const removeMember = useMutation({ mutationFn: (id: string) => api.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
+  const addMember = useMutation({ mutationFn: () => projectsApi.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
+  const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
-    mutationFn: () => api.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
-    onSuccess: () => { setCol({ name: '', status: 'READY', wip: '' }); refresh(); },
+    mutationFn: () => boardsApi.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
+    onSuccess: () => { setCol({ name: '', status: 'TODO', wip: '' }); refresh(); },
     onError: (e) => setErr(String(e)),
   });
 
@@ -819,7 +821,7 @@ export function Settings() {
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
                         onClick={() => void guard(
-                          api.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: d.wip ? Number(d.wip) : null })
+                          boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: d.wip ? Number(d.wip) : null })
                             .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
                         )}
                       >
@@ -829,7 +831,7 @@ export function Settings() {
                         className="btn secondary"
                         style={{ padding: '5px 9px', color: 'var(--text-muted)' }}
                         title="Delete column"
-                        onClick={() => void guard(api.removeColumn(projectId, board.id, c.id))}
+                        onClick={() => void guard(boardsApi.removeColumn(projectId, board.id, c.id))}
                       >
                         <Icon name="close" size={12} />
                       </button>
@@ -882,7 +884,7 @@ export function Settings() {
                       When off, completing a task sends it straight to Done instead of Review. Useful for simple pipelines.
                     </p>
                   </div>
-                  <Toggle checked={settings.reviewEnabled} onChange={(v) => void guard(api.updateSettings(projectId, { reviewEnabled: v }))} />
+                  <Toggle checked={settings.reviewEnabled} onChange={(v) => void guard(projectsApi.updateSettings(projectId, { reviewEnabled: v }))} />
                 </Cluster>
               </Panel>
               {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's

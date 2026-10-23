@@ -10,7 +10,7 @@ import type { Task } from '../types.js';
 
 const task: Task = {
   id: 'T-1', projectId: 'p1', boardId: 'b1', columnId: 'c1',
-  title: 'Ship it', description: '', status: 'READY', priority: 'normal',
+  title: 'Ship it', description: '', status: 'TODO', priority: 'normal',
   assignee: null, labels: [], requiredCapabilities: [], estimate: null, dueAt: null,
   customFields: {}, parentTaskId: null, order: 'a0', blockedBy: [], blocks: [],
   contextSummary: '', version: 1, claim: null, createdBy: 'me', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: new Date().toISOString(),

@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMayReadIntegrations } from '../../displayNames.js';
 import { Icon } from '../../icons.js';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../api.js';
+import * as oncallApi from '../../api/oncall.js';
 import type { Delivery, Integration, OncallSource } from '../../types.js';
 import { Cluster, Empty, Note, Panel, Pill, Stack } from '../../ui.js';
 import { ConfirmButton, timeAgo } from '../../components.js';
@@ -81,7 +81,7 @@ function RawPayloadDialog({
 }) {
   const q = useQuery({
     queryKey: ['oncall-raw', projectId, integrationId, deliveryId],
-    queryFn: () => api.readDeliveryRaw(projectId, integrationId, deliveryId),
+    queryFn: () => oncallApi.readDeliveryRaw(projectId, integrationId, deliveryId),
     retry: false,
   });
   // Escape closes, and focus starts on the dialog, so a keyboard user is not stranded behind it.
@@ -139,14 +139,14 @@ function DeliveryLog({ projectId, integration }: { projectId: string; integratio
     queryKey: ['oncall-deliveries', projectId, integration.id],
     initialPageParam: '',
     queryFn: ({ pageParam }) =>
-      api.listDeliveries(projectId, integration.id, (pageParam as string) || undefined),
+      oncallApi.listDeliveries(projectId, integration.id, (pageParam as string) || undefined),
     getNextPageParam: (last) => last.nextCursor ?? null,
     refetchInterval: 20_000,
     retry: false,
   });
   const rows: Delivery[] = q.data?.pages.flatMap((p) => (Array.isArray(p.deliveries) ? p.deliveries : [])) ?? [];
   const replay = useMutation({
-    mutationFn: (deliveryId: string) => api.replayDelivery(projectId, integration.id, deliveryId),
+    mutationFn: (deliveryId: string) => oncallApi.replayDelivery(projectId, integration.id, deliveryId),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ['oncall-deliveries', projectId, integration.id] }),
   });
@@ -432,14 +432,14 @@ export function OncallSetup({
   const [rotating, setRotating] = useState(false);
   const [rotateSecret, setRotateSecret] = useState('');
 
-  const sourcesQ = useQuery({ queryKey: ['oncall-sources'], queryFn: () => api.oncallSources(), staleTime: 300_000 });
+  const sourcesQ = useQuery({ queryKey: ['oncall-sources'], queryFn: () => oncallApi.oncallSources(), staleTime: 300_000 });
   const sources = useMemo(() => sourcesQ.data?.sources ?? [], [sourcesQ.data]);
   const sourceOf = (id: string): OncallSource | undefined => sources.find((s) => s.id === id);
 
   const mayReadIntegrations = useMayReadIntegrations(projectId);
   const deletedQ = useQuery({
     queryKey: ['oncall-integrations-all', projectId],
-    queryFn: () => api.listIntegrations(projectId, true),
+    queryFn: () => oncallApi.listIntegrations(projectId, true),
     // Same master-tier gate as every other list_integrations read — see useMayReadIntegrations.
     enabled: showDeleted && mayReadIntegrations,
   });
@@ -470,8 +470,8 @@ export function OncallSetup({
   };
 
   const create = useMutation({
-    mutationFn: (body: Parameters<typeof api.createIntegration>[1]) =>
-      api.createIntegration(projectId, body),
+    mutationFn: (body: Parameters<typeof oncallApi.createIntegration>[1]) =>
+      oncallApi.createIntegration(projectId, body),
     onSuccess: (res) => {
       setError(null);
       setCreating(null);
@@ -495,8 +495,8 @@ export function OncallSetup({
     onError: (e: Error) => setError(e.message),
   });
   const save = useMutation({
-    mutationFn: ({ i, patch }: { i: Integration; patch: Parameters<typeof api.updateIntegration>[3] }) =>
-      api.updateIntegration(projectId, i.id, i.version, patch),
+    mutationFn: ({ i, patch }: { i: Integration; patch: Parameters<typeof oncallApi.updateIntegration>[3] }) =>
+      oncallApi.updateIntegration(projectId, i.id, i.version, patch),
     onSuccess: (res) => {
       setError(null);
       setEditing(false);
@@ -509,7 +509,7 @@ export function OncallSetup({
   });
   const rotate = useMutation({
     mutationFn: ({ i, externalSecret }: { i: Integration; externalSecret?: string }) =>
-      api.rotateIntegrationSecret(projectId, i.id, i.version, {
+      oncallApi.rotateIntegrationSecret(projectId, i.id, i.version, {
         ...(externalSecret ? { externalSecret } : {}),
       }),
     onSuccess: (res) => {
@@ -526,12 +526,12 @@ export function OncallSetup({
   });
   const toggle = useMutation({
     mutationFn: (i: Integration) =>
-      api.updateIntegration(projectId, i.id, i.version, { enabled: !i.enabled }),
+      oncallApi.updateIntegration(projectId, i.id, i.version, { enabled: !i.enabled }),
     onSuccess: invalidate,
     onError: (e: Error) => setError(e.message),
   });
   const remove = useMutation({
-    mutationFn: (i: Integration) => api.deleteIntegration(projectId, i.id, i.version),
+    mutationFn: (i: Integration) => oncallApi.deleteIntegration(projectId, i.id, i.version),
     onSuccess: () => {
       setError(null);
       setSelected(null);
@@ -541,7 +541,7 @@ export function OncallSetup({
     onError: (e: Error) => setError(e.message),
   });
   const test = useMutation({
-    mutationFn: (i: Integration) => api.sendTestEvent(projectId, i.id, 'Wiring check'),
+    mutationFn: (i: Integration) => oncallApi.sendTestEvent(projectId, i.id, 'Wiring check'),
     onSuccess: () => {
       setError(null);
       void qc.invalidateQueries({ queryKey: ['oncall-deliveries', projectId] });
