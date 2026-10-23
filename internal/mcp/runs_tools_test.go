@@ -272,7 +272,7 @@ func TestRunToolErrors(t *testing.T) {
 			if tool != "pick_run" {
 				delete(args, "runTaskId")
 			}
-			if tool != "open_run" && tool != "list_runs" {
+			if tool != "list_runs" {
 				r.wantCode(r.grace, tool, args, "FORBIDDEN") // a worker, below the master tier
 			}
 			cross := map[string]any{}
