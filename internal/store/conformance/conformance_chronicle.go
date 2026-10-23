@@ -3,7 +3,9 @@ package conformance
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -190,6 +192,39 @@ func chronicle(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			if len(page1.Versions) != 2 || page1.NextCursor == "" || len(page2.Versions) != 1 || page2.Versions[0].ID != u.Page.HeadVersionID || page2.NextCursor != "" {
 				t.Fatalf("paging by 2 = %+v / %+v", page1, page2)
+			}
+		})
+
+		t.Run("RacingAppendsFromOneHeadLandOne", func(t *testing.T) {
+			s, _, p, _ := seeded(t, newStore)
+			u := upsert(t, s, p, "adr/0001-race", domain.SourceHuman, cblock("a", "v1"))
+			const n = 8
+			errs := make(chan error, n)
+			var wg sync.WaitGroup
+			for i := range n {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := appendV(s, p, u.Page.ID, u.Page.HeadVersionID, cblock("a", "racer "+strconv.Itoa(i)))
+					errs <- err
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			won := 0
+			for err := range errs {
+				if err == nil {
+					won++
+					continue
+				}
+				if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeStale {
+					t.Fatalf("a racer lost with %v, want STALE", err)
+				}
+			}
+			list, err := s.ListChronicleVersions(ctx, p, u.Page.ID, "", 0)
+			noErr(t, err)
+			if won != 1 || len(list.Versions) != 2 {
+				t.Fatalf("%d of %d racers from one head landed, %d versions: want 1 winner and 2 versions", won, n, len(list.Versions))
 			}
 		})
 
