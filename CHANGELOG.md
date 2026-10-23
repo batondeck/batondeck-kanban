@@ -8,6 +8,27 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The context service (R1.17): `Core.Context()` implements `service.Context` over the store in
+  `internal/service/{context,memory,dependencies,subtasks}.go`, every mutation through
+  `service.mutate`. `GetTaskContext` composes the task, its items, the caller's task memory, the
+  summary, both sides' edges, the fields and `workflow.allowedMoves` (the fixed table's row) with no
+  `id`, `title` or `description`: 6 statements once the membership and the board snapshot are
+  cached, 8 with a cold snapshot (`store.GetBoard`'s 2 for the lanes)
+  (`TestGetTaskContextCostsAtMostSixStatements`); the snapshot cache serves only once the bus feeds
+  `ObserveChange` (P-100), so until then every call is 8. `RecallMemory` is an exact key or the newest `k`,
+  the expired dropped; naming a project needs membership in it on every branch, and `agent_global`
+  is the caller's. `WriteMemory`'s `ttl` is the expiry instant (RFC 3339), refused as VALIDATION
+  when it does not parse. `AddDependency` writes the edge and both caches and bumps each task once,
+  never a status; `RemoveDependency` runs `domain.DecideUnblock` and moves a non-poisoned dependent
+  whose last blocker went to READY with one `task.dependency_cleared` (a poisoned one stays BLOCKED);
+  `txn.unblockDependent` is the auto-unblock entry R1.5 and R1.3 call. `AddSubtask` creates the
+  child in the first column with `parentTaskId` and leaves the parent untouched; it lands at the
+  column's head until the store has a last-key read (P-69). A new store primitive,
+  `store.Locks.LockProject` (a transaction-scoped Postgres advisory lock; a no-op inside SQLite's and
+  memstore's transactions, INTERNAL outside one), is taken first in `mutate` when
+  `mutation.LockProject` is set, which add_dependency and remove_dependency set: two concurrent
+  calls on disjoint pairs closed a 4-edge cycle on Postgres without it (the R0.10 review's P-110,
+  `TestConcurrentAddDependencyOnDisjointPairsClosesNoCycle` on memstore, SQLite and Postgres).
 - The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
   `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
   `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token
