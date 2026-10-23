@@ -123,6 +123,12 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 	}
 	var out DependencyEdge
 	err := e.Atomically(ctx, func(tx Store) error {
+		// The project lock first, before either task row is locked (Locks: project then tasks), so a
+		// caller that forgot mutation.LockProject still cannot reopen P-110. It is re-entrant: free
+		// when the caller already holds it.
+		if err := tx.LockProject(ctx, in.ProjectID); err != nil {
+			return err
+		}
 		q := on(tx).queries(true)
 		from, to, err := lockPair(ctx, q, in.ProjectID, in.FromTaskID, in.ToTaskID)
 		if err != nil {
