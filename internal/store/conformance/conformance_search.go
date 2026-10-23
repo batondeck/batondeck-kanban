@@ -52,8 +52,8 @@ var searchQueries = []struct {
 
 func init() { register("search", search) }
 
-// search is lexical task search: the ten pinned queries, the count, paging, no hit, and the
-// refusals.
+// search is lexical task search: the ten pinned queries, the count, paging, no hit, the index
+// following an update and a delete, and the refusals.
 func search(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -160,6 +160,36 @@ func search(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			if len(missing.Hits) != 0 {
 				t.Fatalf("a missing project matched %v", ids(missing.Hits))
+			}
+		})
+
+		// The index follows the task inside its own write: a title change drops the old word and
+		// finds the new one, search tokens are searched, and a deleted task is never a hit.
+		t.Run("TheIndexFollowsTheTask", func(t *testing.T) {
+			s, p, _ := corpus(t)
+			hit := func(q string) []string {
+				t.Helper()
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				return ids(page.Hits)
+			}
+			tk, err := s.GetTask(ctx, p, "T-7")
+			noErr(t, err)
+			tk, err = s.UpdateTask(ctx, p, "T-7", tk.Version, store.TaskPatch{Title: ptr("verify webhook calls"), SearchTokens: ptr("zorblat"), UpdatedBy: seedIdentity, UpdatedAt: 2})
+			noErr(t, err)
+			if got := hit("authorize"); len(got) != 0 {
+				t.Fatalf("the old title word still finds %v", got)
+			}
+			for _, q := range []string{"verify", "zorblat"} {
+				if got := hit(q); !slices.Equal(got, []string{"T-7"}) {
+					t.Fatalf("%q found %v, want [T-7]", q, got)
+				}
+			}
+			noErr(t, s.DeleteTask(ctx, p, "T-7", tk.Version))
+			for _, q := range []string{"verify", "zorblat", "webhook"} {
+				if got := hit(q); len(got) != 0 {
+					t.Fatalf("%q still finds %v after the delete", q, got)
+				}
 			}
 		})
 
