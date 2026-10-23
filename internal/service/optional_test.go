@@ -41,14 +41,20 @@ func TestOptionalRoundTrip(t *testing.T) {
 		}
 		t.Logf("%s -> %+v -> %s", c.in, got, out)
 	}
-	// The DTOs themselves, required fields and all.
+	// Every migrated field, in its DTO, carrying false, 0 or null: a field left a value drops it on
+	// the way back out, and one made a pointer again drops its null.
 	for _, c := range []struct {
 		in  string
 		dst any
 	}{
 		{`{"projectId":"P-1","reviewEnabled":false}`, &UpdateSettingsReq{}},
-		{`{"projectId":"P-1","color":null,"txnCap":null}`, &UpdateSettingsReq{}},
+		{`{"projectId":"P-1","color":null,"defaultReviewer":null,"quotaEnabled":false,"reviewEnabled":false,"txnCap":null}`, &UpdateSettingsReq{}},
 		{`{"boardId":"B-1","columnId":"C-1","projectId":"P-1","order":0,"wipLimit":null}`, &UpdateColumnReq{}},
+		{`{"boardId":"B-1","name":"N","projectId":"P-1","status":"READY","order":0}`, &AddColumnReq{}},
+		{`{"patch":{"assignee":null,"dueAt":null,"estimate":null,"reviewer":null},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
+		{`{"patch":{"estimate":0},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
+		{`{"leaseId":"L-1","projectId":"P-1","reason":"r","taskId":"T-1","retryable":false}`, &FailTaskReq{}},
+		{`{"boardId":"B-1","projectId":"P-1","assignee":null}`, &ListTasksReq{}},
 	} {
 		if err := json.Unmarshal([]byte(c.in), c.dst); err != nil {
 			t.Fatalf("%s: %v", c.in, err)
@@ -157,4 +163,15 @@ func TestTriStateOverMemstore(t *testing.T) {
 	}
 	_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col, WIPLimit: Value(int64(0))})
 	wantCode(t, err, domain.CodeValidation)
+
+	// order:0 is a position, not an absent order the store appends at the end.
+	add := AddColumnReq{}
+	if err := json.Unmarshal([]byte(`{"name":"First","status":"READY","order":0}`), &add); err != nil {
+		t.Fatal(err)
+	}
+	add.ProjectID, add.BoardID = f.project.ID, f.board.ID
+	made, err := f.c.Boards().AddColumn(f.ctx, f.alice, add)
+	if err != nil || made.Column.Order != 0 {
+		t.Fatalf("add_column order:0 -> order %v (err %v), want 0", made.Column.Order, err)
+	}
 }
