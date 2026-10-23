@@ -76,20 +76,22 @@ describe('TaskDrawer — ticket details', () => {
   });
 
   it('moves the task via the header status select (board-gated targets)', async () => {
-    const fetchMock = routeFetch();
+    // IN_PROGRESS → REVIEW, BLOCKED, TODO; the fixture board has To do and Building columns only.
+    const fetchMock = routeFetch({ '/tasks/T-1$': { json: { task: { ...task, status: 'IN_PROGRESS', columnId: 'c2' } } } });
     vi.stubGlobal('fetch', fetchMock);
     renderDrawer();
     await screen.findByText('Ship the parser');
     const sel = screen.getByLabelText('Status');
-    expect(sel).toHaveValue('READY');
-    // once the board loads, only statuses with a column remain (READY→BACKLOG/CANCELLED drop out)
-    await within(sel).findByRole('option', { name: 'IN PROGRESS' });
-    await waitFor(() => expect(within(sel).queryByRole('option', { name: 'BACKLOG' })).not.toBeInTheDocument());
-    fireEvent.change(sel, { target: { value: 'IN_PROGRESS' } });
+    expect(sel).toHaveValue('IN_PROGRESS');
+    // once the board loads, only statuses with a column remain (REVIEW and BLOCKED drop out)
+    await waitFor(() => expect(within(sel).queryByRole('option', { name: 'REVIEW' })).not.toBeInTheDocument());
+    expect(within(sel).queryByRole('option', { name: 'BLOCKED' })).not.toBeInTheDocument();
+    await within(sel).findByRole('option', { name: 'TODO' });
+    fireEvent.change(sel, { target: { value: 'TODO' } });
     await waitFor(() => {
       const call = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find(([u]) => String(u).endsWith('/tasks/T-1/move'));
       expect(call).toBeTruthy();
-      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ version: 3, toStatus: 'IN_PROGRESS' });
+      expect(JSON.parse((call![1] as RequestInit).body as string)).toMatchObject({ version: 3, toStatus: 'TODO' });
     });
   });
 
@@ -137,7 +139,7 @@ describe('TaskDrawer — ticket details', () => {
   it('navigates to a subtask from its title and shows its status pill', async () => {
     const { onOpenTask } = renderDrawer();
     const sub = await screen.findByRole('button', { name: 'Write tests' });
-    // IN_PROGRESS subtasks surface a status pill (DONE/BACKLOG stay quiet) — scoped to the row
+    // IN_PROGRESS subtasks surface a status pill (DONE/TODO stay quiet) — scoped to the row
     const row = sub.closest('div')!; // button → span → row div
     expect(within(row).getByText('IN PROGRESS')).toBeInTheDocument();
     // the checkbox is separately labeled (no row-wide <label> that would toggle on any click)

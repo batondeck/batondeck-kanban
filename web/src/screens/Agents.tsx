@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { api } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as boardsApi from '../api/boards.js';
+import * as projectsApi from '../api/projects.js';
+import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { Avatar, EmptyState, PageHeader, leaseLeft, timeAgo } from '../components.js';
@@ -13,7 +16,7 @@ import { isAgent } from '../types.js';
 import { ConnectMcp } from '../connect-mcp.js';
 import { Cluster, Panel, Stack, Tile, Tiles } from '../ui.js';
 import type { ActivityEvent, AgentSession, Task } from '../types.js';
-import { mergePresence } from '../presenceMerge.js';
+import { replaceDevicePresence } from '../presenceMerge.js';
 
 export function Agents() {
   const { ui } = useAuth();
@@ -21,14 +24,14 @@ export function Agents() {
   const [connectOpen, setConnectOpen] = useState(false);
 
   const qc = useQueryClient();
-  const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => api.listBoards(projectId), enabled: !!projectId });
+  const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
 
   const data = useQuery({
     queryKey: ['agentsdata', projectId],
     enabled: !!projectId,
     queryFn: async () => {
       // One aggregate round-trip (the ui-backend composes project+boards+tasks+feeds server-side).
-      const o = await api.overview(projectId);
+      const o = await projectsApi.overview(projectId);
       return {
         project: o.project,
         memberDisplay: o.memberDisplay ?? {},
@@ -46,17 +49,17 @@ export function Agents() {
   // initial fetch stays so the table renders before the first snapshot arrives.
   const sessionsQ = useQuery({
     queryKey: ['agentSessions'],
-    queryFn: () => api.agentSessions(ui.sessionsLimit),
+    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit),
   });
   // Presence + notifications for a screen with no board open. Snapshots land straight in the cache, so
   // they cost zero HTTP.
   useEffect(
     () =>
-      api.userStream({
+      streamApi.userStream({
         onPresence: (sessions) => {
-          // A frame is the newest rows for this identity, not the whole list: upsert (presenceMerge.ts).
+          // A frame is this device's whole live list for the viewer: its rows are replaced (presenceMerge.ts).
           const upsert = (old: { sessions: AgentSession[] } | undefined) => ({
-            sessions: mergePresence(old?.sessions, sessions),
+            sessions: replaceDevicePresence(old?.sessions, sessions),
           });
           qc.setQueryData<{ sessions: AgentSession[] }>(['agentSessions'], upsert);
           // Board.tsx keys the same data lowercase — a pre-existing split. Write both so the two screens
@@ -80,7 +83,7 @@ export function Agents() {
   useEffect(() => {
     if (!projectId) return;
     const unsubs = (boardsQ.data?.boards ?? []).map((b) =>
-      api.stream(projectId, b.id, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] })),
+      streamApi.stream(projectId, b.id, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] })),
     );
     return () => { for (const u of unsubs) u(); };
   }, [projectId, boardsQ.data, qc]);

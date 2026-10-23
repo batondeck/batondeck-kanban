@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { eventActor } from '../components.js';
-import { defaultBoardName } from '../api.js';
+import { defaultBoardName } from '../api/boards.js';
 
 const SOURCES = import.meta.glob('../**/*.{tsx,ts,css}', {
   query: '?raw',
@@ -38,7 +38,7 @@ const BEHAVIOURAL = import.meta.glob('./{oncall-role-gate,display-names}.test.ts
  * ONE `{` inside a `queryKey` string was enough to unbalance `useQueryBlocks`, so the block ran to
  * EOF and inherited the NEXT query's `enabled:` — a review shipped a fully ungated call that way
  * with the suite green. Contents are replaced rather than removed so nothing else shifts meaning:
- * the block only gets tested for `api.listIntegrations(` and `enabled:`, neither of which lives in
+ * the block only gets tested for `oncallApi.listIntegrations(` and `enabled:`, neither of which lives in
  * a string. A brace inside a REGEX literal still defeats this; see the docblock.
  */
 const stripStrings = (s: string): string =>
@@ -411,8 +411,8 @@ describe('useDisplayNames never provokes an escalation signal', () => {
    * KNOWN BLIND SPOTS — the list is the docblock's whole value, so it names every mechanism PROVEN
    * to get past this test, not a representative sample:
    *
-   *  - ANY spelling other than the literal `api.listIntegrations(`: `?.(`, `['listIntegrations']`,
-   *    `.call`, destructuring, or `const li = api.listIntegrations.bind(api)`. One `?.` defeats both
+   *  - ANY spelling other than the literal `oncallApi.listIntegrations(`: `?.(`, `['listIntegrations']`,
+   *    `.call`, destructuring, or `const li = oncallApi.listIntegrations.bind(oncallApi)`. One `?.` defeats both
    *    the per-call gate AND the completeness sweep, which share this regex.
    *  - `SOURCES` globs only `.ts`/`.tsx`.
    *  - A brace inside a REGEX literal — `stripStrings` handles string and template literals only.
@@ -453,7 +453,7 @@ describe('useDisplayNames never provokes an escalation signal', () => {
     // call must sit in a useQuery block whose `enabled:` conjoins the role gate.
     for (const f of callers) {
       const s = stripStrings(src(f));
-      const calls = (s.match(/api\.listIntegrations\(/g) ?? []).length;
+      const calls = (s.match(/oncallApi\.listIntegrations\(/g) ?? []).length;
       // A POPULATION CONTROL, not a skip (rule 18). `if (calls === 0) continue` was the inherited
       // shape and it is unreachable in the healthy state — all three callers carry the call in raw
       // source — so its ONLY reachable behaviour was swallowing a corrupted scan. And the scan is
@@ -466,7 +466,7 @@ describe('useDisplayNames never provokes an escalation signal', () => {
         `${f}: the scan found no listIntegrations call — the source was corrupted before matching, ` +
           `so this file was about to be checked against nothing`,
       ).toBeGreaterThan(0);
-      const blocks = useQueryBlocks(s).filter((b) => /api\.listIntegrations\(/.test(b));
+      const blocks = useQueryBlocks(s).filter((b) => /oncallApi\.listIntegrations\(/.test(b));
       expect(
         blocks.length,
         `${f}: ${calls} listIntegrations call(s) but ${blocks.length} useQuery block(s) — ` +
@@ -489,7 +489,7 @@ describe('useDisplayNames never provokes an escalation signal', () => {
 
     // And the enumeration itself must be complete: no OTHER file may call it.
     const all = Object.entries(SOURCES).filter(
-      ([k, v]) => /\.tsx?$/.test(k) && !k.includes('__tests__') && /api\.listIntegrations\(/.test(v),
+      ([k, v]) => /\.tsx?$/.test(k) && !k.includes('__tests__') && /oncallApi\.listIntegrations\(/.test(v),
     );
     const unknown = all.map(([k]) => k).filter((k) => !callers.some((c) => k.endsWith(`/${c}`)));
     expect(unknown, `a new listIntegrations caller appeared — gate it and add it here`).toEqual([]);

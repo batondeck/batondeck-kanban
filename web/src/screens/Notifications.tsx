@@ -8,7 +8,8 @@ import { Icon } from '../icons.js';
 import { useNavigate } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
-import { api } from '../api.js';
+import * as notificationsApi from '../api/notifications.js';
+import * as streamApi from '../api/stream.js';
 import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
 import { fire } from '../toast.js';
 import type { Notification } from '../types.js';
@@ -31,12 +32,12 @@ export function Notifications() {
   // or its own poll. The initial fetch stays so it renders before the first snapshot arrives.
   const q = useQuery({
     queryKey: NOTIF_KEY,
-    queryFn: () => api.getNotifications(),
+    queryFn: () => notificationsApi.getNotifications(),
   });
   const notifications = q.data?.notifications ?? [];
 
   const markRead = async (ids?: string[]): Promise<void> => {
-    await api.markNotificationsRead(ids ? { ids } : { all: true });
+    await notificationsApi.markNotificationsRead(ids ? { ids } : { all: true });
     await qc.invalidateQueries({ queryKey: NOTIF_KEY });
   };
   const open = (n: Notification): void => {
@@ -119,10 +120,10 @@ export function NotificationsNavLink() {
   // stays so the badge renders before the first snapshot arrives.
   const q = useQuery({
     queryKey: NOTIF_KEY,
-    queryFn: () => api.getNotifications(),
+    queryFn: () => notificationsApi.getNotifications(),
   });
   useEffect(
-    () => api.userStream({ onNotifications: (d) => qc.setQueryData(NOTIF_KEY, d) }),
+    () => streamApi.userStream({ onNotifications: (d) => qc.setQueryData(NOTIF_KEY, d) }),
     [qc],
   );
   const unread = q.data?.unread ?? 0;

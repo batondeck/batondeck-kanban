@@ -19,7 +19,8 @@
  */
 import { useEffect, useMemo } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { api } from '../api.js';
+import * as analyticsApi from '../api/analytics.js';
+import * as boardsApi from '../api/boards.js';
 import { PageHeader } from '../components.js';
 import { AreaLine, ChartFrame, Donut, RankedBars, StackedBars, describeQueryError, type Slice } from '../charts.js';
 import { useProject } from '../projectContext.js';
@@ -34,33 +35,19 @@ import {
   statusCounts,
 } from '../reports.js';
 import type { Priority, Status, Task } from '../types.js';
+import { STATUSES } from '../types.js';
 
 /** `list_tasks` max (src/tools/tasks.ts) — asking for more is a VALIDATION error, not a bigger page. */
 const PAGE = 200;
 /** 2,000 tasks. A bound, not a silence: hitting it renders a footnote naming the number. */
 const MAX_PAGES = 10;
 
-/**
- * CANCELLED is NOT `--text-muted` here, and that is a chart-specific correction.
- *
- * Every status map in the app (`components.tsx`, `Analytics.tsx`, `Settings.tsx`) paints CANCELLED
- * with `--text-muted`, which is within a few points of `--backlog` in BOTH palettes — measured on
- * staging: light `#646b78` vs `#5f6673`, dark `#8f97a5` vs `#9aa2b1`. Everywhere else that is
- * harmless, because the two are text or a small dot and never adjacent. In a donut they are
- * neighbouring filled arcs, and the reader cannot tell which slice is which.
- *
- * Dropping its opacity keeps CANCELLED reading as "inert" — the meaning `--text-muted` was chosen
- * for — while separating it from BACKLOG by lightness rather than hue. No new token, so nothing to
- * synchronize across the three palette blocks and no contrast-guard exposure.
- */
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'color-mix(in srgb, var(--text-muted) 45%, transparent)',
 };
 const PRIORITY_COLOR: Record<Priority, string> = {
   low: 'var(--text-muted)',
@@ -68,7 +55,7 @@ const PRIORITY_COLOR: Record<Priority, string> = {
   high: 'var(--progress)',
   urgent: 'var(--blocked)',
 };
-const STATUS_ORDER: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
+const STATUS_ORDER: Status[] = [...STATUSES];
 const PRIORITY_ORDER: Priority[] = ['urgent', 'high', 'normal', 'low'];
 
 const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
@@ -79,7 +66,7 @@ export function Reports() {
 
   const boardsQ = useQuery({
     queryKey: ['boards', projectId],
-    queryFn: () => api.listBoards(projectId),
+    queryFn: () => boardsApi.listBoards(projectId),
     enabled: !!projectId,
   });
   const board = boardsQ.data?.boards[0];
@@ -91,7 +78,7 @@ export function Reports() {
     queryKey: ['task-census', projectId, boardId],
     initialPageParam: '',
     queryFn: ({ pageParam }) =>
-      api.listTasks(projectId, boardId!, {
+      boardsApi.listTasks(projectId, boardId!, {
         limit: String(PAGE),
         ...((pageParam as string) ? { cursor: pageParam as string } : {}),
       }),
@@ -108,7 +95,7 @@ export function Reports() {
 
   const opsQ = useQuery({
     queryKey: ['analytics-ops', projectId],
-    queryFn: () => api.analyticsOperations(projectId, 30),
+    queryFn: () => analyticsApi.analyticsOperations(projectId, 30),
     enabled: !!projectId,
     retry: false,
   });

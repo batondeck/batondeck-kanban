@@ -18,7 +18,7 @@ export const task: Task = {
   columnId: 'c1',
   title: 'Ship the parser',
   description: 'Fix the **tokenizer** first — see [the spec](https://example.com/spec)',
-  status: 'READY',
+  status: 'TODO',
   priority: 'high',
   assignee: null,
   labels: ['backend'],
@@ -58,7 +58,7 @@ export function routeFetch(overrides: Record<string, unknown> = {}): typeof fetc
     [/\/tasks\/T-1\/runs$/, { runs: [] }],
     [/\/boards\/b1\/feed$/, { events: [] }],
     [/\/boards\/b1\/tasks\?/, { tasks: [task, blocker, subtask] }],
-    [/\/boards\/b1$/, { board: { id: 'b1', projectId: 'p1', name: 'Board', columns: [{ id: 'c1', name: 'Ready', order: 1, status: 'READY', wipLimit: null }, { id: 'c2', name: 'Building', order: 2, status: 'IN_PROGRESS', wipLimit: null }] }, taskCounts: {} }],
+    [/\/boards\/b1$/, { board: { id: 'b1', projectId: 'p1', name: 'Board', columns: [{ id: 'c1', name: 'To do', order: 1, status: 'TODO', wipLimit: null }, { id: 'c2', name: 'Building', order: 2, status: 'IN_PROGRESS', wipLimit: null }] }, taskCounts: {} }],
     [/\/projects\/p1$/, { project: { id: 'p1', name: 'P1', members: { 'alice@example.com': 'admin' }, settings: { reviewEnabled: true, quotaEnabled: false, txnCap: null } } }],
     [/\/agents\/sessions/, { sessions: [] }],
   ];

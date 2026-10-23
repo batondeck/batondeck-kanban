@@ -10,7 +10,7 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { pushToast } from '../toast.js';
-import { Avatar, Marquee, PriorityDot, StatusPill, timeAgo } from '../components.js';
+import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, timeAgo } from '../components.js';
 import { LIMITS } from '../types.js';
 import { Cluster } from '../ui.js';
 import { Icon } from '../icons.js';
@@ -33,7 +33,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   onOpenTask?: (taskId: string) => void;
 }) {
   const d = useTaskDetail(projectId, taskId);
-  const { task, taskQ, err, editing, draft, setDraft, startEdit, setEditing, taskById } = d;
+  const { task, taskQ, err, editing, draft, setDraft, startEdit, setEditing, taskById, canRequeue, move } = d;
 
   // Section-nav anchors (Details / Discussion / Context / Files / Activity).
   const { refs, scrollTo } = useSectionNav();
@@ -174,6 +174,22 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
                 share. Two controls with the accessible name "Status" in one dialog would also make
                 `getByLabelText('Status')` ambiguous — a real a11y defect, not just a test problem. */}
             <StatusPill status={task.status} />
+            {isPoisoned(task) && (
+              <>
+                <PoisonBadge task={task} />
+                {/* Un-poison is master-only (plan §Fold 1): a worker sees the control, disabled, so the
+                    closed door reads as a rule rather than a missing feature. */}
+                <button
+                  type="button"
+                  className="btn secondary"
+                  disabled={!canRequeue || move.isPending}
+                  title={canRequeue ? 'Move back to To do: clears the attempts and the poisoned label' : 'Only a master can requeue a poisoned task'}
+                  onClick={() => move.mutate({ vars: 'TODO', task })}
+                >
+                  Requeue to To do
+                </button>
+              </>
+            )}
             {task.racing && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px', borderRadius: 'var(--r-1)', color: 'var(--progress)', background: 'color-mix(in srgb, var(--progress) 15%, transparent)', border: '1px solid color-mix(in srgb, var(--progress) 25%, transparent)' }}>
                 <span className="dot" style={{ width: 6, height: 6, background: 'var(--progress)' }} />
@@ -193,7 +209,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
               if (Number.isNaN(due.getTime())) return null; // core doesn't validate dueAt format
               const dueDay = due.toISOString().slice(0, 10);
               const today = new Date().toISOString().slice(0, 10);
-              const overdue = dueDay < today && task.status !== 'DONE' && task.status !== 'CANCELLED';
+              const overdue = dueDay < today && task.status !== 'DONE';
               const c = overdue ? 'var(--blocked)' : 'var(--text-2)';
               return (
                 <span title={due.toLocaleString()} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 8px', borderRadius: 'var(--r-1)', border: `1px solid ${overdue ? 'var(--blocked)' : 'var(--border)'}`, fontSize: 12, color: c }}>

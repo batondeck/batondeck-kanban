@@ -159,8 +159,7 @@ export function Pill({ tone = 'neutral', children }: { tone?: PillTone; children
 export type Role =
   | 'intake' | 'ready' | 'doing' | 'handover' | 'parked' | 'verifying' | 'accepted' | 'rejected';
 const ROLE_OF: Record<Status, Role> = {
-  BACKLOG: 'intake', READY: 'ready', IN_PROGRESS: 'doing', REVIEW: 'handover',
-  BLOCKED: 'parked', DONE: 'accepted', CANCELLED: 'rejected',
+  TODO: 'ready', IN_PROGRESS: 'doing', REVIEW: 'handover', BLOCKED: 'parked', DONE: 'accepted',
 };
 /** Derive the role from a status. Keeps callers off column identity (P-3). */
 export function roleOf(status: Status): Role {

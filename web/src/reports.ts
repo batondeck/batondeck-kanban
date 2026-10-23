@@ -78,8 +78,8 @@ export function topN(
   return { rows, otherValue: rest.reduce((s, [, v]) => s + v, 0), otherKeys: rest.length };
 }
 
-const OPEN: ReadonlySet<Status> = new Set(['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW']);
-const TERMINAL: ReadonlySet<Status> = new Set(['DONE', 'CANCELLED']);
+const OPEN: ReadonlySet<Status> = new Set(['TODO', 'IN_PROGRESS', 'BLOCKED', 'REVIEW']);
+const TERMINAL: ReadonlySet<Status> = new Set(['DONE']);
 
 export interface CensusCounts {
   total: number;

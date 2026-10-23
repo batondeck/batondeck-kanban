@@ -24,7 +24,7 @@ const task = (customFields: Record<string, string | number | boolean>): LoadedTa
       columnId: 'c1',
       title: 'CheckoutLatencyHigh',
       description: '',
-      status: 'READY',
+      status: 'TODO',
       priority: 'urgent',
       assignee: null,
       labels: ['incident'],
