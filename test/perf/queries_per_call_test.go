@@ -24,10 +24,14 @@ import (
 // cache, a working session's steady state) and the board snapshot in the state its comment names.
 // A pin is raised only with a reason in the PR that raises it.
 const (
-	// get_task: the task and its summary.
-	pinGetTask = 2
+	// get_task: the task, its summary and its artifacts. Raised from 2 by R2.1 for the artifacts
+	// statement: the drawer's evidence list reads task.artifacts from get_task.
+	pinGetTask = 3
 	// list_tasks: one page (no count statement is issued).
 	pinListTasks = 2
+	// list_tasks with missingArtifacts: the page and one statement for its tasks' live artifacts
+	// (R2.1), never one per task.
+	pinListTasksMissingArtifacts = 2
 	// get_board, snapshot dropped: the board and one GROUP BY status count. A cached snapshot
 	// answers with none, which would pin nothing.
 	pinGetBoard = 2
@@ -144,6 +148,8 @@ func (cl call) pin(engine string) int64 {
 		return pinGetTask
 	case "list_tasks":
 		return pinListTasks
+	case "list_tasks missingArtifacts":
+		return pinListTasksMissingArtifacts
 	case "get_board":
 		return pinGetBoard
 	case "claim_next":
@@ -168,6 +174,10 @@ var calls = []call{
 	}},
 	{"list_tasks", cached, func(ctx context.Context, c *service.Core, f *fixture) error {
 		_, err := c.Tasks().List(ctx, f.alice, service.ListTasksReq{ProjectID: f.project, BoardID: f.board})
+		return err
+	}},
+	{"list_tasks missingArtifacts", cached, func(ctx context.Context, c *service.Core, f *fixture) error {
+		_, err := c.Tasks().List(ctx, f.alice, service.ListTasksReq{ProjectID: f.project, BoardID: f.board, MissingArtifacts: true})
 		return err
 	}},
 	{"get_board", dropped, func(ctx context.Context, c *service.Core, f *fixture) error {
