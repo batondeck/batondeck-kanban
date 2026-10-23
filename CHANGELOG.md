@@ -29,6 +29,28 @@ Notable changes to batondeck-kanban. The format follows
   `StatusChange` gains `Assignee`, `Deliverable` and `Review` (the `WriteTaskState` statement writes
   them; no migration), and `AddEdge` takes the project lock itself, so block_task cannot reopen
   P-110 (`TestConcurrentBlockClosesNoCycle` on Postgres).
+- The tasks service and the `delete_task` cascade (R1.3): `Core.Tasks()` implements `service.Tasks`
+  in `internal/service/{tasks,delete}.go`, every mutation through `service.mutate`. `Create` lands
+  in `columnId` or the board's first column with its status, takes the project's next `T-n`,
+  replays on `idempotencyKey` and rings `broadcast` on a READY landing; `Get` is 2 statements,
+  `List` 1 (status, assignee and label in the store's filter; `unblockedOnly`, `missingArtifacts`,
+  `sprintId` and `updatedSince` post-filtered over the page as conductor's `taskPostFilter`).
+  `Update` is version-checked with tri-state `assignee`, `dueAt`, `reviewer`, `estimate` and
+  `modelHint`. `Move` runs `domain.DecideMove` (the fixed table, 17 legal of 36; promote-with-
+  dependencies to BLOCKED; WIP counted by status in the transaction under the project lock, which
+  a move into IN_PROGRESS or onto DONE takes first: without it two concurrent moves both took a
+  wipLimit-1 slot in 40 of 40 Postgres runs, P-146), refuses a racing task and
+  another identity's live lease (CONFLICT_LOCKED), un-poisons through `SetStatus(Unpoison)` when
+  it leaves a poisoned BLOCKED (master: `move_task`'s tier), and on DONE unblocks the dependents
+  through `txn.unblockDependentsOf`. `Delete` (master) runs `txn.deleteCascade` under the project
+  lock: the subtasks and runs recursively, each dependent's `blockedBy` stripped and unblocked
+  before the store drops the edges (poison-aware), each blocker's `blocks` stripped, the parent's
+  `blockedBy`, a racing parent whose last run went back to READY with `racing:false`, task memory
+  and attachments, then one board-level `task.deleted {id, title, status}`, an audit row and a
+  change-log row per deleted task; `Options.BlobGC` is called after the commit with the freed blob
+  hashes (none until R1.8). memstore gains the attachments area (R0.19's battery: 3 pass, 1 skip
+  on `PutBlob`, unbuilt).
+
 - The `/wake` doorbell, the Unix socket listener and `/internal/wake-session` (R0.15).
   `GET /wake[?since=<cursor>]` (bearer required; 401 with `WWW-Authenticate: Bearer` without one, 400
   for a cursor that is not one non-negative integer) is an SSE stream of the caller's doorbells:

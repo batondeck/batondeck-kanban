@@ -33,12 +33,9 @@ const (
 	// TODO(spec): no core config carries it yet (P-81).
 	DefaultLeaseSeconds = 300
 	maxLeaseSeconds     = 86_400
-	// Conductor's argument bounds (src/config/constants.ts): MAX_REASON_CHARS, MAX_LABEL_CHARS,
-	// MAX_LABELS, and complete_task's reviewer (z.string().min(1).max(320)).
-	maxReasonChars   = 4_000
-	maxLabelChars    = 64
-	maxLabels        = 32
-	maxReviewerChars = 320
+	// Conductor's MAX_REASON_CHARS (src/config/constants.ts); the label and reviewer bounds are
+	// tasks.go's.
+	maxReasonChars = 4_000
 	// staleAttempts bounds retryStale.
 	staleAttempts = 3
 	// next_task's inboxLimit (default 20, max 100).
@@ -83,25 +80,6 @@ func reasonArg(field, v string, min bool) error {
 		}
 	}
 	return maxChars(field, v, maxReasonChars)
-}
-
-func labelArg(field, v string) error {
-	if v == "" || jsLen(v) > maxLabelChars {
-		return domain.Validation(field+" must be 1 to 64 characters", map[string]any{"field": field})
-	}
-	return nil
-}
-
-func labelListArg(field string, vs []string) error {
-	if len(vs) > maxLabels {
-		return domain.Validation(field+" has more than 32 entries", map[string]any{"field": field})
-	}
-	for _, v := range vs {
-		if err := labelArg(field, v); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // unsupported refuses an input the store cannot serve yet, naming it, rather than ignoring it.
@@ -420,12 +398,12 @@ func storeBoard(b Board) store.Board {
 func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
 	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Capabilities: caps}
 	if assignee != "" {
-		if err := labelArg("assignee", assignee); err != nil {
+		if err := checkLabel("assignee", assignee); err != nil {
 			return q, err
 		}
 		q.Assignee = &assignee
 	}
-	if err := labelListArg("capabilities", caps); err != nil {
+	if err := checkLabelList("capabilities", caps); err != nil {
 		return q, err
 	}
 	if sprintID != "" {
@@ -1061,7 +1039,7 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 	if err != nil {
 		return HandoffTaskResp{}, err
 	}
-	if err := labelArg("toAgent", req.ToAgent); err != nil {
+	if err := checkLabel("toAgent", req.ToAgent); err != nil {
 		return HandoffTaskResp{}, err
 	}
 	if err := reasonArg("memoryNote", req.MemoryNote, false); err != nil {
@@ -1168,50 +1146,4 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 		out, err := withSummary(ctx, t.Tx, after)
 		return CancelTaskResp{Task: out}, err
 	})
-}
-
-// The three helpers below are byte-identical copies of R1.3's (internal/service/tasks.go on
-// feat/service-tasks at e55b64a): whichever branch merges second deletes its copy.
-
-// unblockDependentsOf clears clearedID (a blocker that reached DONE, or is being deleted) from each of
-// its dependents through unblockDependent, the auto-unblock entry: every task whose blockedBy names it,
-// re-read inside the transaction. skip leaves out the dependents the caller is deleting too (nil: none).
-func (t *txn) unblockDependentsOf(clearedID string, skip map[string]bool) error {
-	edges, err := t.Tx.ListDependents(t.ctx, t.ProjectID, clearedID)
-	if err != nil {
-		return err
-	}
-	seen := map[string]bool{}
-	for _, e := range edges {
-		if e.Type != store.DependencyBlocks || seen[e.ToTaskID] || skip[e.ToTaskID] {
-			continue
-		}
-		seen[e.ToTaskID] = true
-		if err := t.unblockOne(e.ToTaskID, clearedID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent).
-func (t *txn) unblockOne(depID, clearedID string) error {
-	dep, err := t.Tx.GetTask(t.ctx, t.ProjectID, depID)
-	if err != nil {
-		return err
-	}
-	d := domain.DecideUnblock(dep.BlockedBy, dep.Status, reasonOf(dep), clearedID)
-	if !d.Cleared {
-		return nil
-	}
-	_, err = t.unblockDependent(dep, clearedID, d)
-	return err
-}
-
-func callerAgent(c domain.Caller) *string {
-	if c.Agent == "" {
-		return nil
-	}
-	a := c.Agent
-	return &a
 }
