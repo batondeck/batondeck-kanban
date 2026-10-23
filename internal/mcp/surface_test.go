@@ -144,15 +144,8 @@ func TestPromptsRender(t *testing.T) {
 // The resource templates conductor serves (contract/tools.json) that this server does not, and the
 // ones it adds, each with its reason. Everything else is equal by name and URI template.
 var (
-	templatesDropped = map[string]string{
-		"chronicle":                "chronicle is R2.6's area",
-		"chronicle-cursor":         "chronicle is R2.6's area",
-		"chronicle-page":           "chronicle is R2.6's area",
-		"chronicle-history":        "chronicle is R2.6's area",
-		"chronicle-history-cursor": "chronicle is R2.6's area",
-		"chronicle-version":        "chronicle is R2.6's area",
-	}
-	templatesAdded = map[string]string{
+	templatesDropped = map[string]string{}
+	templatesAdded   = map[string]string{
 		"board-feed-cursor": "batondeck://{projectId}/board/{boardId}/feed{?cursor}", // plan §Target surface: board-feed + -cursor
 	}
 )
