@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -34,12 +35,27 @@ var hookID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // Handler is the route, capped.
 func (h HookRoutes) Handler() http.Handler {
-	return CapBody(http.HandlerFunc(h.serve), HookBodyMax)
+	return CapBody(http.HandlerFunc(h.serve), HookBodyMax, func(r *http.Request, declared int64) {
+		h.refused(r.PathValue("integrationId"), "too_large", fmt.Sprintf("over the route's %d-byte cap (declared length %d)", HookBodyMax, declared))
+	})
+}
+
+// refused is a refusal's stderr line, as the service writes its own: the id as presented (quoted
+// and cut, since it is the sender's), the reason; never the body.
+func (h HookRoutes) refused(id, why, detail string) {
+	if h.Logger == nil {
+		return
+	}
+	if r := []rune(id); len(r) > 80 {
+		id = string(r[:80]) + "…"
+	}
+	h.Logger.Printf("ingest: refused a delivery to integration %q: %s: %s", id, why, detail)
 }
 
 func (h HookRoutes) serve(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("integrationId")
 	if !hookID.MatchString(id) {
+		h.refused(id, "not_found", "the id is not an integration id's shape")
 		writeJSON(w, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
 		return
 	}
@@ -78,14 +94,18 @@ func (h HookRoutes) serve(w http.ResponseWriter, r *http.Request) {
 
 // CapBody refuses a request body past maxBytes, counted by the bytes that arrive rather than the
 // length the request declares, with 413 before anything parses it; a body within the cap is handed
-// on whole (ported from hdtp-gateway internal/public/bounds.go, Apache-2.0).
-func CapBody(next http.Handler, maxBytes int64) http.Handler {
+// on whole (ported from hdtp-gateway internal/public/bounds.go, Apache-2.0). refused, when set, hears
+// each 413 with the length the request declared (-1 unknown).
+func CapBody(next http.Handler, maxBytes int64, refused func(r *http.Request, declared int64)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body == nil || r.Body == http.NoBody {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if r.ContentLength > maxBytes {
+			if refused != nil {
+				refused(r, r.ContentLength)
+			}
 			tooLarge(w)
 			return
 		}
@@ -95,6 +115,9 @@ func CapBody(next http.Handler, maxBytes int64) http.Handler {
 			return
 		}
 		if int64(len(b)) > maxBytes {
+			if refused != nil {
+				refused(r, r.ContentLength)
+			}
 			tooLarge(w)
 			return
 		}

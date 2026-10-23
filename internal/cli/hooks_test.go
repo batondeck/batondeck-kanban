@@ -113,6 +113,26 @@ func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 			t.Fatalf("%s over the outer cap: %d %s", id, code, got)
 		}
 	}
+	// Review B2 of #56: both route-level refusals are a stderr line naming the presented id.
+	for _, want := range []string{
+		`ingest: refused a delivery to integration "bad.id": not_found: the id is not an integration id's shape`,
+		`ingest: refused a delivery to integration "I-00000000000000000000000000000000": too_large: over the route's 524288-byte cap (declared length 524289)`,
+		`ingest: refused a delivery to integration "` + in.Integration.ID + `": too_large: over the route's 524288-byte cap (declared length 524289)`,
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("no refusal line %q", want)
+		}
+	}
+	// A chunked body declares no length: still refused at the cap, and logged.
+	chunked, _ := http.NewRequest(http.MethodPost, srv.URL+"/hooks/"+in.Integration.ID, io.MultiReader(bytes.NewReader(bytes.Repeat([]byte("z"), 512<<10+1))))
+	resp, err := http.DefaultClient.Do(chunked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if want := `integration "` + in.Integration.ID + `": too_large: over the route's 524288-byte cap (declared length -1)`; resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(logs.String(), want) {
+		t.Errorf("a chunked body over the cap: %d, line %q in the log: %v", resp.StatusCode, want, strings.Contains(logs.String(), want))
+	}
 	if code, _, _ := post(in.Integration.ID, append(body[:len(body)-1], []byte(`,"description":"`+strings.Repeat("y", 2048)+`"}`)...), true); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over the integration's 2 KiB cap: %d", code)
 	}

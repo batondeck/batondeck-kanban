@@ -901,6 +901,14 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			}
 		}
 		untouched := open != nil && oncall.Untouched(string(open.Status), open.Claim != nil, open.ClaimAttempts, open.Version, ingestStamp(*open))
+		if untouched && ev.Status == oncall.StatusResolved && integration.Lifecycle == "autoclose" {
+			// The delete would take more than the ticket: what hangs off it is someone's write.
+			kept, err := t.incidentKeeps(*open, actor)
+			if err != nil {
+				return Ingested{}, err
+			}
+			untouched = kept == ""
+		}
 		out := Ingested{Result: store.ResultRecorded, Doorbell: "none"}
 		var eventTask *string // the task the incident.delivery event hangs on; nil is the board
 		switch oncall.Decide(integration.Lifecycle, ev.Status, open != nil, untouched) {
@@ -984,6 +992,60 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 	}
 	c.blobGC(ctx, blobs)
 	return out, nil
+}
+
+// incidentKeeps names what deleteCascade would take with task beyond the ticket and the ingest's
+// own writes, "" for nothing: a subtask or run (its deletion set), a dependency edge of any type to
+// or from it, an attachment, a task- or shared-scope memory entry, or a context item by anyone but
+// actor (an agent-scope entry is private to its author and not read here; writing one bumps the
+// ticket). Autoclose deletes only a ticket that keeps none of them, whether or not the write that put
+// it there bumped the ticket's version (add_subtask, create_task with a parent and a relates edge do
+// not). A project-scope memory entry naming the ticket as provenance is not here: the cascade keeps
+// it. The context items read are the newest 50; the ingest writes one (the snapshot) to a ticket it
+// may still delete.
+func (t *txn) incidentKeeps(task store.Task, actor string) (string, error) {
+	set, err := t.deletionSet(task)
+	if err != nil {
+		return "", err
+	}
+	if len(set) > 1 {
+		return "subtasks", nil
+	}
+	for _, list := range []func(context.Context, string, string) ([]store.DependencyEdge, error){t.Tx.ListBlockers, t.Tx.ListDependents} {
+		edges, err := list(t.ctx, task.ProjectID, task.ID)
+		if err != nil {
+			return "", err
+		}
+		if len(edges) > 0 {
+			return "dependencies", nil
+		}
+	}
+	atts, err := t.Tx.ListAttachments(t.ctx, task.ProjectID, task.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(atts) > 0 {
+		return "attachments", nil
+	}
+	for _, scope := range []store.MemoryScope{store.MemoryTask, store.MemoryShared} {
+		mem, err := t.Tx.ReadMemory(t.ctx, task.ProjectID, task.ID, store.ReadMemoryQuery{Scope: scope, Limit: 1})
+		if err != nil {
+			return "", err
+		}
+		if len(mem) > 0 {
+			return "memory", nil
+		}
+	}
+	items, err := t.Tx.ListContextItems(t.ctx, task.ProjectID, task.ID, store.ContextItemsQuery{Limit: 50})
+	if err != nil {
+		return "", err
+	}
+	for _, it := range items.Items {
+		if it.Author != actor {
+			return "context items", nil
+		}
+	}
+	return "", nil
 }
 
 // ingestVersionField is the custom field holding the version the ingest last left an incident
