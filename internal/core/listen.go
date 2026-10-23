@@ -145,32 +145,58 @@ func (l *peerListener) Accept() (net.Conn, error) {
 			c.Close()
 			return nil, errors.New("unix socket: accepted a connection that is not a Unix one")
 		}
-		uid, err := peerUID(uc)
+		p, err := peerCred(uc)
 		switch {
 		case err != nil:
 			l.log.Printf("listen: refused a connection on %s: reading the peer uid: %v", l.path, err)
-		case uid != l.uid:
-			l.log.Printf("listen: refused a connection on %s from uid %d (admits uid %d)", l.path, uid, l.uid)
+		case p.UID != l.uid:
+			l.log.Printf("listen: refused a connection on %s from uid %d (admits uid %d), peer pid %d", l.path, p.UID, l.uid, p.PID)
 		default:
-			return uc, nil
+			return &peerConn{UnixConn: uc, peer: p}, nil
 		}
 		uc.Close()
 	}
 }
 
+// Peer is a Unix connection's peer process, read from the kernel when the connection was accepted.
+type Peer struct {
+	UID int
+	PID int
+}
+
+// peerConn is a connection peerListener admitted, carrying its peer's credentials.
+type peerConn struct {
+	*net.UnixConn
+	peer Peer
+}
+
 type unixConnKey struct{}
 
 // ConnContext is http.Server.ConnContext for the listeners Listen makes: a connection accepted on a
-// Unix socket marks its requests' context, which ViaUnixSocket reads.
+// Unix socket marks its requests' context, which ViaUnixSocket reads, and one peerListener admitted
+// carries its peer's credentials, which PeerOf reads.
 func ConnContext(ctx context.Context, c net.Conn) context.Context {
-	if _, ok := c.(*net.UnixConn); ok {
-		return context.WithValue(ctx, unixConnKey{}, true)
+	switch c := c.(type) {
+	case *peerConn:
+		return context.WithValue(ctx, unixConnKey{}, &c.peer)
+	case *net.UnixConn:
+		return context.WithValue(ctx, unixConnKey{}, (*Peer)(nil))
 	}
 	return ctx
 }
 
 // ViaUnixSocket reports whether the request ctx belongs to arrived on a Unix socket (ConnContext).
 func ViaUnixSocket(ctx context.Context) bool {
-	v, _ := ctx.Value(unixConnKey{}).(bool)
-	return v
+	_, ok := ctx.Value(unixConnKey{}).(*Peer)
+	return ok
+}
+
+// PeerOf is the credentials of the peer the request ctx belongs to, ok false when it did not arrive
+// on a socket Listen made.
+func PeerOf(ctx context.Context) (Peer, bool) {
+	p, _ := ctx.Value(unixConnKey{}).(*Peer)
+	if p == nil {
+		return Peer{}, false
+	}
+	return *p, true
 }

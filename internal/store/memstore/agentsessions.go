@@ -25,6 +25,7 @@ func cloneAgentSession(a store.AgentSession) store.AgentSession {
 
 func cloneWakeSession(w store.WakeSession) store.WakeSession {
 	w.SocketTokenSealed = cloneBytes(w.SocketTokenSealed)
+	w.BearerSealed = cloneBytes(w.BearerSealed)
 	return w
 }
 
@@ -129,10 +130,15 @@ func (s *Store) DeleteIdleAgentSessions(ctx context.Context, before int64) (int6
 }
 
 func (s *Store) PutWakeSession(ctx context.Context, w store.WakeSession) error {
-	if w.ID == "" || w.IdentityID == "" || w.AgentID == "" || w.ExpiresAt == 0 {
-		return domain.Validation("a wake session needs an id, an identity, an agent and an expiry", nil)
+	if err := store.ValidWakeSession(w); err != nil {
+		return err
 	}
 	return s.do(ctx, func(st *state) error {
+		for id, o := range st.wake {
+			if w.PID != 0 && o.PID == w.PID && id != w.ID {
+				return store.ErrWakePIDTaken(w.PID)
+			}
+		}
 		if old, ok := st.wake[w.ID]; ok {
 			w.CreatedAt = old.CreatedAt
 		}
@@ -148,6 +154,31 @@ func (s *Store) GetWakeSession(ctx context.Context, id string) (store.WakeSessio
 			return store.WakeSession{}, domain.NotFound("WakeSession", id)
 		}
 		return cloneWakeSession(w), nil
+	})
+}
+
+func (s *Store) ListWakeSessions(ctx context.Context) ([]store.WakeSession, error) {
+	return get(ctx, s, func(st *state) ([]store.WakeSession, error) {
+		out := make([]store.WakeSession, 0, len(st.wake))
+		for _, w := range st.wake {
+			out = append(out, cloneWakeSession(w))
+		}
+		slices.SortFunc(out, func(a, b store.WakeSession) int {
+			return cmp.Or(cmp.Compare(a.CreatedAt, b.CreatedAt), strings.Compare(a.ID, b.ID))
+		})
+		return out, nil
+	})
+}
+
+func (s *Store) SetWakeSessionCursor(ctx context.Context, id string, cursor, lastSeenAt int64) error {
+	return s.do(ctx, func(st *state) error {
+		w, ok := st.wake[id]
+		if !ok {
+			return domain.NotFound("WakeSession", id)
+		}
+		w.LastCursor, w.LastSeenAt = cursor, lastSeenAt
+		st.wake[id] = w
+		return nil
 	})
 }
 

@@ -420,3 +420,41 @@ func TestStreamPresenceFollowsTheDirectory(t *testing.T) {
 	t.Logf("unregister: event: %s data: %s", f.event, f.data)
 	c.quiet(t, 200*time.Millisecond)
 }
+
+// A member removed while their stream is open has it closed at the next board frame, which
+// re-authorizes as them; nothing of the board reaches them after the removal (the reviewer's probe
+// of PR #43). remove_member writes a change-log row of the project, so that frame is due at once.
+func TestStreamClosesWhenTheMemberIsRemoved(t *testing.T) {
+	l := newLive(t, Options{Ping: 200 * time.Millisecond})
+	pid, bid := seedBoard(t, l.harness, l.core, "P")
+	bob := l.as("bob")
+	if _, err := l.core.Projects().AddMember(context.Background(), l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+		t.Fatal(err)
+	}
+	c := bob.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+	if c.status != http.StatusOK {
+		t.Fatalf("bob's stream: %d %s", c.status, c.body)
+	}
+	if f := c.next(t, time.Second); f.event != "ready" {
+		t.Fatalf("%+v, want ready", f)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := l.core.Projects().RemoveMember(context.Background(), l.caller(), service.RemoveMemberReq{ProjectID: pid, IdentityID: bob.userID}); err != nil {
+		t.Fatal(err)
+	}
+	l.addTask(t, l.caller(), pid, bid, "after the removal")
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case f, ok := <-c.frames:
+			if !ok {
+				return
+			}
+			if f.event != "ping" {
+				t.Fatalf("a %s frame after the removal: %s", f.event, f.data)
+			}
+		case <-deadline:
+			t.Fatal("the stream is still open 1s after the member was removed")
+		}
+	}
+}

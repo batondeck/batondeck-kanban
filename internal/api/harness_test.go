@@ -69,6 +69,18 @@ func newHarness(t *testing.T, build func(st *memstore.Store) Options) *harness {
 	return h
 }
 
+// as is a second user on the same server: login is added and signed in.
+func (h *harness) as(login string) *harness {
+	h.t.Helper()
+	u, err := h.auth.Accounts.Add(context.Background(), login, login, testPassword, false)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	o := &harness{t: h.t, st: h.st, auth: h.auth, srv: h.srv, userID: u.ID}
+	o.login(login, testPassword)
+	return o
+}
+
 func (h *harness) login(login, password string) {
 	h.t.Helper()
 	form := url.Values{"login": {login}, "password": {password}}

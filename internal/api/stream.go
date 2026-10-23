@@ -34,22 +34,11 @@ const (
 )
 
 // Presence is the device session directory as the stream's presence frames read it (R0.25's
-// directory; R1.18 wires the real one): its live entries, and a channel closed on the next
-// register or unregister.
-type Presence interface {
-	Entries() []PresenceEntry
-	Changed() <-chan struct{}
-}
+// *wake.Directory): its live entries, and a channel closed on the next register or unregister.
+type Presence = service.DeviceSessions
 
-// PresenceEntry is one live CLI client process on this device, as R0.25's directory lists it.
-type PresenceEntry struct {
-	PID          int64  `json:"pid"`
-	Role         string `json:"role"`
-	IdentityID   string `json:"identityId"`
-	AgentID      string `json:"agentId"`
-	Adapter      string `json:"adapter,omitzero"`
-	RegisteredAt string `json:"registeredAt"`
-}
+// PresenceEntry is one live CLI client process on this device.
+type PresenceEntry = service.DeviceSession
 
 // boardFrame is ui-backend's board frame (board-hub's composition): get_board's answer, a page of
 // the board's tasks and its feed, which the SPA writes straight into its three caches.

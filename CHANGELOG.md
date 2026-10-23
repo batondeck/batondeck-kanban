@@ -54,13 +54,42 @@ Notable changes to batondeck-kanban. The format follows
 - `GET /api/stream?projectId&boardId` (ADR-0004's web transport): `ready`, `ping` every 20 s, and per
   100 ms of a board's changes a `board` frame (ui-backend's `{board, tasks, feed}`, the board from
   `service.Feed.BoardSnapshot`) and an `updated {uri, count}` frame, fed by the bus's project
-  subscription; `presence` frames from the device session directory (a narrow `api.Presence`
-  interface until R1.18 wires R0.25's). The board is authorized as the caller before the stream opens
+  subscription; `presence` frames from R0.25's device session directory (`service.DeviceSessions`, wired in
+  `serve`), listing the caller's own live processes. The board is authorized as the caller before the stream opens
   (403 for a non-member) and at every frame. A board frame's SSE id is its change-log cursor; a
   reconnect with it (`Last-Event-ID` or `?cursor=`) replays the missed changes as one frame, and past
   5,000 change-log rows answers `resync`, so a reconnect never scans the whole retained log.
 - `/healthz` names the store's engine: `batondeck-kanban <version> ok sqlite` (or `postgres`).
 
+- The device session directory and its socket dispatcher (R0.25, ADR-0004 Transport 1), `internal/wake`.
+  A CLI client process registers with `POST /internal/wake-session {pid, role, agent, socket, token,
+  sessionId, procStart, cursor}` over the server's 0600 Unix socket only (TCP 404): the pid must be
+  alive and owned by the peer's uid (`LOCAL_PEERPID`/`LOCAL_PEERCRED` on darwin, `SO_PEERCRED` on
+  Linux, `core.PeerOf`), and a socket must be the one the pid's Claude Code registry entry
+  (`~/.claude/sessions/<pid>.json`, `$CLAUDE_CONFIG_DIR/sessions`) names. `DELETE
+  /internal/wake-session/{pid}` unregisters. An entry is dropped the moment its process exits
+  (`core.ExitWatcher`: kqueue `EVFILT_PROC NOTE_EXIT` on darwin, `pidfd_open` + poll on Linux), on a
+  delivery that finds the socket gone (ENOENT, ECONNREFUSED), the registry entry gone or its
+  procStart moved, and on a revoked bearer or disabled account at a delivery or the 60 s sweep (3
+  statements per entry); a membership change updates the entry's scopes in place at the sweep (owner
+  ruling 2026-10-23). The dispatcher is one `bus.Tap`: workers ring `assigned` on their identity or
+  agent label and `broadcast` on their projects; masters ring `changed` on their projects' rows except
+  claims, heartbeats, context writes and their own (the change payload gains an internal `actor`).
+  Coalesced per entry and kind, `assigned` at 300 ms quiet with a 1 s cap, `broadcast` and `changed`
+  at 5 s. The doorbell is R3.1's frame, one connection per doorbell: an optional
+  `{"type":"auth","token":<peer token from the registry's key file>}` line, then
+  `{"type":"user","session_id":<registry sessionId>,"message":{"role":"user","content":"<one plain
+  line>\n{\"kind\",\"cursor\",\"projectId\"}"}}`; the cursor is the lower of the row's id and the
+  bus's frontier (`Bus.Frontier`), recorded as `last_cursor`. At start-up every row is re-validated
+  (pid, uid, registry, bearer) and caught up from its last delivered cursor, or dropped. The directory
+  is exposed to the service as `service.DeviceSessions` (`Core.DeviceSessions`, entries plus a change
+  signal) for R1.11's presence frames.
+- Migration `0005_wake_session_directory` on both engines (zone Z2, owner-approved 2026-10-23):
+  `wake_sessions` gains `pid`, `role` (CHECK master|worker), `client_session_id`, `proc_start` and
+  `bearer_sealed` (the keyring, AAD `wake_sessions.bearer:<id>`; without a keyring registration is
+  refused), and a partial unique index on `pid`. No row is deleted. The store's wake-session area adds
+  `ListWakeSessions` and `SetWakeSessionCursor`, with conformance cases on every backend;
+  `internal/store/wake_directory_migration_test.go` runs up, down and up on both engines.
 - The ten context MCP tools (R1.6): `add_context_item`, `get_task_context`, `set_summary`,
   `write_memory`, `read_memory`, `recall_memory`, `add_dependency`, `remove_dependency`,
   `add_subtask` and `list_subtasks`, registered in `internal/mcp/tools/context.go`, each one
@@ -569,6 +598,11 @@ Notable changes to batondeck-kanban. The format follows
   `check` workflow runs `make check` on pull requests against a `postgres:16` service.
 
 ### Removed
+
+- `GET /wake` (R0.15's SSE doorbell) and its TCP mount (ADR-0004; plan open question 2, default
+  removed): it answers 404 over TCP and the Unix socket, rather than the SPA shell. Its catch-up and
+  coalescer are the dispatcher's parts. `service.Sessions.RegisterWakeSession` now registers a
+  directory entry, and `internal/api`'s `WakeSessionHandler` moved to `internal/wake`.
 
 - The contract trim (R0.23, ADR-0004; the owner, 2026-10-23: "go with trimmed version"):
   `contract/expected.json` goes from 93 tools to 86. `deltas.json` `removedTools` gains the router
