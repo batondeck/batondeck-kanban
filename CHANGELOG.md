@@ -41,6 +41,26 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
+  check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
+  (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
+  MCP tool's own input schema. 39 routes, listed with their `app.ts` lines in
+  `internal/api/routes.json`, which `TestRouteTable` compares with the mounted table: the session,
+  the public config and a new `POST /api/login` (R0.12's form sign-in), projects and members, boards
+  and columns, tasks, the UI's lifecycle (claim, release, complete, block, handoff), context items,
+  summary, memory, subtasks, dependencies, attachments, search, the board feed and `/api/stream`.
+  Errors carry ui-backend's status per code (409 for the conflicts, 429 for quota and rate) and
+  `{code, message, details}`.
+- `GET /api/stream?projectId&boardId` (ADR-0004's web transport): `ready`, `ping` every 20 s, and per
+  100 ms of a board's changes a `board` frame (ui-backend's `{board, tasks, feed}`, the board from
+  `service.Feed.BoardSnapshot`) and an `updated {uri, count}` frame, fed by the bus's project
+  subscription; `presence` frames from the device session directory (a narrow `api.Presence`
+  interface until R1.18 wires R0.25's). The board is authorized as the caller before the stream opens
+  (403 for a non-member) and at every frame. A board frame's SSE id is its change-log cursor; a
+  reconnect with it (`Last-Event-ID` or `?cursor=`) replays the missed changes as one frame, and past
+  5,000 change-log rows answers `resync`, so a reconnect never scans the whole retained log.
+- `/healthz` names the store's engine: `batondeck-kanban <version> ok sqlite` (or `postgres`).
+
 - The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
   `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
   `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
