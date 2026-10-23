@@ -31,15 +31,17 @@ type publicConfigResp struct {
 	WorkosLogin bool `json:"workosLogin"`
 }
 
-// sessionRoutes are the session, the public config and the local sign-in. POST /api/login is the
-// one route ui-backend does not have: its sign-in was WorkOS's, and here it is R0.12's form login
-// (fields login and password; 204 and the session and CSRF cookies).
+// sessionRoutes are the session, the public config, the local sign-in and the sign-out. POST
+// /api/login and POST /api/logout are the routes ui-backend does not have: its sign-in and sign-out
+// were WorkOS's, and here they are R0.12's form login (fields login and password; 204 and the
+// session and CSRF cookies) and the logout that deletes the session row (R1.15).
 func sessionRoutes(o *Options) []route {
 	return []route{
 		{Method: "GET", Path: "/api/public-config", public: true, h: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, publicConfigResp{})
 		})},
 		{Method: "POST", Path: "/api/login", public: true, h: o.Auth.LoginHandler()},
+		{Method: "POST", Path: "/api/logout", h: o.Auth.LogoutHandler()},
 		{Method: "GET", Path: "/api/session", h: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			c, ok := auth.CallerFrom(r.Context())
 			if !ok {

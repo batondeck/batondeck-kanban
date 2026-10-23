@@ -53,6 +53,7 @@ type sqlQueries interface {
 	attachmentQueries
 	blobQueries
 	searchQueries
+	chronicleQueries
 	oncallQueries
 }
 

@@ -176,8 +176,9 @@ var (
 	snapshotTools = []string{
 		"add_column", "add_context_item", "add_dependency", "add_member", "add_subtask", "attach_file",
 		"block_task", "cancel_task", "claim_next", "claim_task", "complete_task", "create_board",
-		"create_project", "create_task", "delete_project", "delete_task", "fail_task", "get_board",
-		"get_project", "get_task", "get_task_context", "handoff_task", "heartbeat_task",
+		"create_chronicle_page", "create_project", "create_task", "delete_chronicle_page", "delete_project",
+		"delete_task", "edit_chronicle_page", "fail_task", "get_board",
+		"get_project", "get_task", "get_task_context", "handoff_task", "heartbeat_task", "ingest_chronicle_page",
 		"list_attachments", "list_boards", "list_projects", "list_subtasks", "list_tasks", "move_task",
 		"next_task", "read_memory", "reap_stale_leases", "recall_memory", "release_task",
 		"remove_column", "remove_dependency", "remove_member", "search_tasks", "set_summary",
@@ -189,7 +190,10 @@ var (
 		"replay_delivery", "rotate_integration_secret", "send_test_event", "update_integration",
 	}
 	snapshotPrompts   = []string{"decompose_into_subtasks", "pick_up_next_task", "summarize_for_handoff", "triage_inbox"}
-	snapshotTemplates = []string{"board", "board-feed", "board-feed-cursor", "task", "task-context"}
+	snapshotTemplates = []string{
+		"board", "board-feed", "board-feed-cursor", "chronicle", "chronicle-cursor", "chronicle-history",
+		"chronicle-history-cursor", "chronicle-page", "chronicle-version", "task", "task-context",
+	}
 )
 
 // TestSurfaceSnapshot: a workspace admin's and a member's tools/list, prompts/list and

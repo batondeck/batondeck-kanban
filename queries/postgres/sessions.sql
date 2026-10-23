@@ -7,3 +7,6 @@ VALUES ($1, $2, $3, $4, $5, $6);
 -- name: GetSession :one
 SELECT id_hash, user_id, csrf_token, created_at, last_seen_at, expires_at
 FROM sessions WHERE id_hash = $1;
+
+-- name: DeleteSession :exec
+DELETE FROM sessions WHERE id_hash = $1;

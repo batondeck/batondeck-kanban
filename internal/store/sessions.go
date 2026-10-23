@@ -34,6 +34,13 @@ func (s *SQLite) GetSession(ctx context.Context, idHash string) (Session, error)
 	return sessionFromRow(r), nil
 }
 
+func (s *SQLite) DeleteSession(ctx context.Context, idHash string) error {
+	if err := s.authWrite().DeleteSession(ctx, idHash); err != nil {
+		return authErr("delete session", err)
+	}
+	return nil
+}
+
 // --- Postgres ---
 
 func (s *Postgres) CreateSession(ctx context.Context, sess Session) error {
@@ -49,4 +56,11 @@ func (s *Postgres) GetSession(ctx context.Context, idHash string) (Session, erro
 		return Session{}, authErr("get session", err)
 	}
 	return sessionFromRow(sqlitedb.Session(r)), nil
+}
+
+func (s *Postgres) DeleteSession(ctx context.Context, idHash string) error {
+	if err := s.authQ().DeleteSession(ctx, idHash); err != nil {
+		return authErr("delete session", err)
+	}
+	return nil
 }

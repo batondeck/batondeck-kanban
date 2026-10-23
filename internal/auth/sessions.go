@@ -90,7 +90,7 @@ func requestIsTLS(r *http.Request) bool {
 }
 
 // LoginHandler answers POST with the form fields `login` and `password`: 204 and the two cookies
-// on success, 401 otherwise. With a `next` field that is a path on this server (the OAuth
+// on success, 401 {code, message} otherwise (the BFF's error body, which the SPA's form shows). With a `next` field that is a path on this server (the OAuth
 // server's sign-in page sends one), success is instead 303 to next, and failure 303 to next with
 // `login=failed` added, so a plain HTML form lands back where it started. Any other next is 400.
 // Wrap it in CSRF, so a page of another site cannot sign a browser in.
@@ -118,10 +118,10 @@ func (s *Service) LoginHandler() http.Handler {
 					http.Redirect(w, r, withQuery(next, "login", "failed"), http.StatusSeeOther)
 					return
 				}
-				http.Error(w, "invalid credentials", http.StatusUnauthorized)
+				WriteError(w, http.StatusUnauthorized, domain.CodeUnauthenticated, LoginRefused)
 				return
 			}
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "internal error")
 			return
 		}
 		expires := time.UnixMilli(sess.ExpiresAt)
@@ -133,6 +133,31 @@ func (s *Service) LoginHandler() http.Handler {
 		if next != "" {
 			http.Redirect(w, r, next, http.StatusSeeOther)
 			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// LoginRefused is the login's one refusal: an unknown login, a wrong password and a disabled user
+// read the same, so the answer says nothing about which.
+const LoginRefused = "The login or password is wrong, or the account is disabled."
+
+// LogoutHandler ends the request's browser session: it deletes the session row, so the cookie no
+// longer resolves anywhere, and expires both cookies; 204. A bearer request has no session to end
+// and gets the same 204. Mount it inside Authenticate and CSRF, so another site cannot sign a
+// browser out.
+func (s *Service) LogoutHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if sess, ok := SessionFrom(r.Context()); ok {
+			if err := s.Sessions.DeleteSession(r.Context(), sess.IDHash); err != nil {
+				WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "internal error")
+				return
+			}
+		}
+		secure := requestIsTLS(r)
+		for _, name := range []string{SessionCookie, CSRFCookie} {
+			http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1,
+				HttpOnly: name == SessionCookie, Secure: secure, SameSite: http.SameSiteLaxMode})
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

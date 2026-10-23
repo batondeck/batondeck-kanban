@@ -6,13 +6,13 @@ import * as agentsApi from '../api/agents.js';
 import * as boardsApi from '../api/boards.js';
 import * as meApi from '../api/me.js';
 import * as projectsApi from '../api/projects.js';
-import * as tenantsApi from '../api/tenants.js';
+import * as usersApi from '../api/users.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar, ConfirmButton, timeAgo } from '../components.js';
 import type { Status } from '../types.js';
 import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
-import { can } from '../permissions.js';
+import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
 
 const STATUS_COLOR: Record<Status, string> = {
@@ -178,140 +178,119 @@ function MyTokenBudget() {
 }
 
 /**
- * INVITE A TEAMMATE (T-389) — the first thing in the product that reads `batondeck:admin`.
- *
- * *** THE VISIBILITY CHECK HERE IS NOT THE SECURITY CONTROL. *** `can()` reads the session's
- * permissions, which come from the `cr` cookie and can be up to `ROLE_MAX_AGE_SEC` stale — and are
- * empty for any session minted before roles reached it. The real gate re-reads the caller's LIVE
- * membership role at the server on every call. This block only decides whether to show the form; the
- * failure mode of getting it wrong is a hidden control, never an unauthorized invite.
- *
- * It renders nothing rather than a disabled control for non-admins: an ordinary member has no action
- * to take here and a greyed-out box would just raise a question they cannot answer.
+ * Settings → Users (R1.15): the workspace admin lists the local accounts and adds one, whose
+ * generated password this panel shows once. Hidden from everyone else, and the BFF refuses them
+ * regardless (403): hiding is not the control. Disable, password reset and role changes are the
+ * host's `batondeck-kanban user disable|passwd`, so there is no control for them here.
  */
-function InviteTeammate({ permissions }: { permissions: readonly string[] | undefined }) {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState<string | null>(null);
+export function UsersSection() {
+  const { permissions } = useAuth();
+  const admin = can(permissions, SUPERADMIN);
   const qc = useQueryClient();
-  const admin = can(permissions, 'batondeck:admin');
-  /**
-   * Who has been invited and has not accepted (T-396). `enabled: admin` spares a member a guaranteed
-   * 403 — a courtesy, NOT the control: the gate is the server's live membership read, and `can()` here
-   * is up to 8h stale.
-   */
-  const pending = useQuery({ queryKey: ['tenant-invitations'], queryFn: () => tenantsApi.listInvitations(), enabled: admin });
-  const invite = useMutation({
-    mutationFn: (e: string) => tenantsApi.inviteTeammate(e),
-    onSuccess: (_r, e) => {
-      setSent(e);
-      setEmail('');
-      // The new invitation must appear in the list below without a reload — the reported bug was
-      // precisely that a successful send left no trace anywhere in the product.
-      void qc.invalidateQueries({ queryKey: ['tenant-invitations'] });
+  const users = useQuery({ queryKey: ['local-users'], queryFn: () => usersApi.listUsers(), enabled: admin });
+  const [login, setLogin] = useState('');
+  const [name, setName] = useState('');
+  // The one copy of the initial password: from the add answer, cleared by Done, never fetched.
+  const [shown, setShown] = useState<{ login: string; password: string } | null>(null);
+  const add = useMutation({
+    mutationFn: () => usersApi.addUser(login.trim(), name.trim()),
+    onSuccess: (r) => {
+      setShown({ login: r.user.login, password: r.password });
+      setLogin('');
+      setName('');
+      void qc.invalidateQueries({ queryKey: ['local-users'] });
     },
-  });
-  const act = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: 'resend' | 'revoke' }) =>
-      action === 'resend' ? tenantsApi.resendInvitation(id) : tenantsApi.revokeInvitation(id),
-    // Refetch on failure too: a 404 here means the invitation was accepted or revoked out from under
-    // this tab, and the list is the thing that is wrong. Leaving a stale row would invite a retry loop.
-    onSettled: () => qc.invalidateQueries({ queryKey: ['tenant-invitations'] }),
   });
   if (!admin) return null;
   return (
-    // `pad` is REQUIRED here and its absence is what produced the reported glitch: `Panel`'s own
-    // docblock says a body of prose or controls without it "sit[s] flush against the 1.5px rule, which
-    // reads as a rendering fault rather than a design choice". That is precisely what shipped — the
-    // input and button ran into the panel border and the confirmation line sat outside it.
-    <Panel title="Invite a teammate" pad>
-      <Stack gap={12}>
-        <p className="muted" style={{ fontSize: 14, margin: 0 }}>
-          They receive an email from WorkOS and join this organization as a member. Give them project
-          access separately, from the project&rsquo;s Members list.
-        </p>
-        <Cluster gap={8}>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="teammate@example.com"
-            aria-label="Teammate email"
-            // `minWidth: 0` — a flex child's default `min-width: auto` refuses to shrink below its
-            // intrinsic width, which is how an input in a `Cluster` pushes the button past the edge.
-            style={{ flex: 1, minWidth: 0, padding: '8px 10px', fontSize: 14 }}
-          />
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!email.includes('@') || invite.isPending}
-            onClick={() => invite.mutate(email.trim())}
-          >
-            {invite.isPending ? 'Sending…' : 'Send invite'}
-          </button>
-        </Cluster>
-        {invite.isError && (
-          <p className="error" style={{ fontSize: 12, margin: 0 }}>
-            {invite.error instanceof Error ? invite.error.message : 'Could not send the invitation.'}
+    <section id="users" style={{ marginBottom: 36 }}>
+      <Panel title="Users" pad>
+        <Stack gap={12}>
+          <p className="muted" style={{ fontSize: 14, margin: 0 }}>
+            The local accounts on this server. To disable one or reset a password, run{' '}
+            <code>batondeck-kanban user disable|passwd LOGIN</code> on the host. Give a new user project
+            access from the project&rsquo;s Members list.
           </p>
-        )}
-        {sent && !invite.isError && (
-          <p className="muted" style={{ fontSize: 12, margin: 0 }}>Invitation sent to {sent}.</p>
-        )}
-
-        {/*
-          THE PENDING LIST (T-396). An EMPTY list renders its own line rather than nothing: "no
-          outstanding invitations" and "this panel is broken" look identical when the answer is blank,
-          and telling them apart is the whole point of the ticket.
-        */}
-        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-          <h4 style={{ margin: '0 0 8px', fontSize: 14 }}>Pending invitations</h4>
-          {pending.isPending && <WaitLoader />}
-          {pending.isError && (
+          {users.isPending && <WaitLoader />}
+          {users.isError && (
             <p className="error" style={{ fontSize: 12, margin: 0 }}>
-              {pending.error instanceof Error ? pending.error.message : 'Could not read the pending invitations.'}
+              {users.error instanceof Error ? users.error.message : 'Could not read the users.'}
             </p>
           )}
-          {pending.data?.invitations.length === 0 && (
-            <p className="muted" style={{ fontSize: 12, margin: 0 }}>Nobody is waiting to accept an invitation.</p>
+          {users.data && (
+            <table aria-label="Users" style={{ width: '100%', fontSize: 14, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr className="muted" style={{ textAlign: 'left', fontSize: 11, textTransform: 'uppercase' }}>
+                  <th style={{ padding: '4px 8px 4px 0' }}>Login</th>
+                  <th style={{ padding: '4px 8px' }}>Name</th>
+                  <th style={{ padding: '4px 8px' }}>Role</th>
+                  <th style={{ padding: '4px 0 4px 8px' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.data.users.map((u) => (
+                  <tr key={u.id} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '6px 8px 6px 0', overflowWrap: 'anywhere' }}>{u.login}</td>
+                    <td style={{ padding: '6px 8px' }}>{u.displayName}</td>
+                    <td style={{ padding: '6px 8px' }}>{u.role}</td>
+                    <td style={{ padding: '6px 0 6px 8px' }}>{u.disabled ? 'Disabled' : 'Active'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
-          <Stack gap={8}>
-            {pending.data?.invitations.map((i) => (
-              <Cluster key={i.id} gap={8}>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 14, overflowWrap: 'anywhere' }}>{i.email}</span>
-                <span className="muted" style={{ fontSize: 12 }}>
-                  {/* `createdAt` is an ISO 8601 string from WorkOS; the browser's locale formats it. */}
-                  Invited {new Date(i.createdAt).toLocaleDateString()}
-                </span>
-                <button
-                  type="button"
-                  className="btn secondary"
-                  disabled={act.isPending}
-                  onClick={() => act.mutate({ id: i.id, action: 'resend' })}
-                >
-                  Resend
-                </button>
-                <button
-                  type="button"
-                  className="btn secondary"
-                  disabled={act.isPending}
-                  onClick={() => act.mutate({ id: i.id, action: 'revoke' })}
-                >
-                  Revoke
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              add.mutate();
+            }}
+          >
+            <Cluster gap={8}>
+              <input
+                className="input"
+                value={login}
+                onChange={(e) => setLogin(e.target.value)}
+                placeholder="login, e.g. bob@example.com"
+                aria-label="New user login"
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <input
+                className="input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Display name (optional)"
+                aria-label="New user display name"
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button type="submit" className="btn primary" disabled={add.isPending}>
+                {add.isPending ? 'Adding…' : 'Add user'}
+              </button>
+            </Cluster>
+          </form>
+          {add.isError && (
+            <p className="error" style={{ fontSize: 12, margin: 0 }}>
+              {add.error instanceof Error ? add.error.message : 'Could not add the user.'}
+            </p>
+          )}
+          {shown && (
+            <div role="status" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <p style={{ fontSize: 14, margin: '0 0 8px' }}>
+                Initial password for {shown.login}, shown once. Pass it on now:
+              </p>
+              <Cluster gap={8}>
+                <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{shown.password}</code>
+                <button type="button" className="btn secondary" onClick={() => setShown(null)}>
+                  Done
                 </button>
               </Cluster>
-            ))}
-          </Stack>
-          {act.isError && (
-            <p className="error" style={{ fontSize: 12, margin: '8px 0 0' }}>
-              {act.error instanceof Error ? act.error.message : 'That invitation could not be updated.'}
-            </p>
+            </div>
           )}
-        </div>
-      </Stack>
-    </Panel>
+        </Stack>
+      </Panel>
+    </section>
   );
 }
-
 
 /**
  * CLI tokens (T-457) — mint a `bd_…` credential for a terminal, list what you hold, revoke one.
@@ -611,7 +590,6 @@ function CliTokens() {
 }
 
 export function Settings() {
-  const { permissions } = useAuth();
   const qc = useQueryClient();
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
   const [selected, setSelected] = useState('');
@@ -756,9 +734,9 @@ export function Settings() {
         </select>
       </div>
       <div className="page" style={{ maxWidth: 820 }}>
-        {/* T-389 — ABOVE the board configuration because it is ORGANIZATION scope, not project scope.
-            It renders nothing for anyone who is not a tenant admin. */}
-        <InviteTeammate permissions={permissions} />
+        {/* ABOVE the board configuration: it is workspace scope, not project scope. It renders
+            nothing for anyone but the workspace admin. */}
+        <UsersSection />
         <header style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: 20, margin: '0 0 4px', letterSpacing: '-0.01em' }}>Board Configuration</h1>
           <p className="muted" style={{ margin: 0, fontSize: 14 }}>

@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { StatusPill, Avatar, PriorityDot } from '../components.js';
-import { SignIn } from '../screens/SignIn.js';
 import {
   Chip, Chips, Cluster, Cols, Dot, Empty, KV, LineRow, Note, Panel, Pill, Prov, RoleBadge,
   Section, Spacer, Tag, Tile, roleColor, roleOf,
@@ -33,133 +32,79 @@ describe('design-system components', () => {
   });
 });
 
-describe('SignIn screen', () => {
-  /**
-   * Google sign-in was removed on 2026-07-29 — WorkOS is the only front door, and it brokers Google
-   * itself. This used to assert a "Continue with Google" button; that assertion is now the exact
-   * thing that must NOT be true, so it is inverted rather than deleted.
-   *
-   * jsdom gives `window.location.replace` no navigation, so the auto-redirect path renders the
-   * fallback markup here. That is what makes the "no provider buttons" assertion below meaningful:
-   * it inspects the branch a real browser would only reach on an error / access message / demo build.
-   */
-  it('renders the brand and tagline, and offers exactly ONE way in', () => {
-    render(<SignIn />);
-    // The brand is the LOCKUP now, not a text node — so this asserts the ACCESSIBLE NAME, which is
-    // what a screen reader announces and the only thing that was ever worth checking here. A
-    // `getByText` would have gone green again the moment someone dropped a stray "BatonDeck" string
-    // anywhere on the page, and red for a purely visual change that broke nothing.
+describe('SignIn screen (the local login form, R1.15)', () => {
+  const REFUSED = 'The login or password is wrong, or the account is disabled.';
+
+  /** The real AuthProvider and App at `path`, signed out, with `/api/login` answering `login`. */
+  async function mountSignedOut(path: string, login: (body: URLSearchParams) => Response): Promise<ReturnType<typeof vi.fn>> {
+    let signedIn = false;
+    const spy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const p = String(input).split('?')[0];
+      if (p === '/api/login') {
+        const r = login(new URLSearchParams(String(init?.body)));
+        signedIn = r.status === 204;
+        return r;
+      }
+      if (p === '/api/session') {
+        return signedIn
+          ? ({ ok: true, status: 200, json: async () => ({ identity: 'bob', csrfToken: 'c', isAdmin: false, permissions: [], subscriptionsEnabled: false, uiSettings: {} }) } as Response)
+          : ({ ok: false, status: 401, json: async () => ({ code: 'UNAUTHENTICATED', message: 'unauthenticated' }) } as Response);
+      }
+      return { ok: true, status: 200, json: async () => ({ notifications: [], unread: 0, sessions: [], boards: [], projects: [] }) } as Response;
+    });
+    vi.stubGlobal('fetch', spy);
+    const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+    const { AuthProvider } = await import('../auth.js');
+    const { App } = await import('../App.js');
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[path]}>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByRole('button', { name: 'Sign in' });
+    return spy;
+  }
+
+  function submit(login: string, password: string): void {
+    fireEvent.change(screen.getByLabelText('Login'), { target: { value: login } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  }
+
+  it('renders the brand and a login form, and none of the hosted ways in', async () => {
+    await mountSignedOut('/projects', () => new Response(null, { status: 204 }));
     expect(screen.getByRole('img', { name: 'BatonDeck' })).toBeInTheDocument();
     expect(screen.getByText(/task board your agents/i)).toBeInTheDocument();
-
-    // REFUSAL: no provider chooser, and no direct-Google path back.
-    expect(screen.queryByRole('button', { name: /continue with google/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /continue with workos/i })).toBeNull();
-    expect(document.body.innerHTML).not.toContain('/auth/google');
-
-    // POSITIVE CONTROL: there IS still a way in, and it goes to WorkOS. Without this the refusal
-    // above would pass just as happily on a screen that renders no sign-in at all.
-    expect(screen.getByRole('button', { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Login')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toHaveAttribute('type', 'password');
+    // REFUSAL: no WorkOS, Google or demo door is left, and nothing links to a hosted /auth/ route.
+    expect(screen.queryByRole('button', { name: /workos|google|demo/i })).toBeNull();
+    expect(document.body.innerHTML).not.toMatch(/\/auth\//);
   });
 
-  /**
-   * T-270: the human tenant gate's refusal has to be READABLE. The gateway redirects a tenant-less
-   * sign-in to `/login?error=no_tenant`, and this screen is the whole user-visible half of that — a
-   * refusal that renders a blank page, or that bounces straight back to the IdP that just refused,
-   * is the failure mode the `error` branch exists to prevent.
-   *
-   * `window.location` is stubbed because both halves are read off it: `search` decides the copy, and
-   * `replace` is the auto-redirect that must NOT fire. jsdom's own `location` is not assignable.
-   */
-  it('REFUSAL rendered: ?error=no_tenant names the remedy and does NOT bounce back to the IdP', () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', { search: '?error=no_tenant', replace, href: '' });
-    render(<SignIn />);
-
-    // T-387 NARROWED WHO REACHES `no_tenant`, so the copy this asserts moved with it. A user with NO
-    // membership is now onboarded; the only people left here HOLD a membership that is not usable —
-    // overwhelmingly an unaccepted invitation. The old copy ("not a member of any organization") would
-    // be false for them and would send them to ask for access they have already been granted.
-    expect(screen.getByText(/membership is not active yet/i)).toBeInTheDocument();
-    // The actionable half — still the point of the message, but now naming the remedy that applies.
-    expect(screen.getByText(/accept the invitation/i)).toBeInTheDocument();
-    expect(replace, 'a refused sign-in must not be redirected back to the IdP').not.toHaveBeenCalled();
+  it('ERROR STATE: a refused login shows the BFF message in the form and stays signed out', async () => {
+    const spy = await mountSignedOut('/projects', () =>
+      ({ ok: false, status: 401, json: async () => ({ code: 'UNAUTHENTICATED', message: REFUSED }) }) as Response,
+    );
+    submit('bob', 'wrong');
+    expect(await screen.findByRole('alert')).toHaveTextContent(REFUSED);
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+    const login = spy.mock.calls.find(([p]) => String(p) === '/api/login');
+    expect(new URLSearchParams(String((login?.[1] as RequestInit).body)).get('password')).toBe('wrong');
   });
 
-  /**
-   * T-388: the OTHER cause of a tenant-less sign-in, where the message above would be actively harmful.
-   *
-   * The gateway can now tell "WorkOS says you belong to nothing" from "WorkOS could not be reached", and
-   * sends `?error=tenant_unavailable` for the second. An existing customer hitting a WorkOS incident
-   * must not be told they belong to no organization — that is false — nor sent to ask an administrator
-   * for membership they already hold. Retrying is the correct remedy here and the WRONG one above,
-   * which is why the two messages must not converge.
-   */
-  it('REFUSAL rendered: ?error=tenant_unavailable says RETRY, not "ask an administrator"', () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', { search: '?error=tenant_unavailable', replace, href: '' });
-    render(<SignIn />);
-
-    expect(screen.getByText(/could not verify your organization/i)).toBeInTheDocument();
-    expect(screen.getByText(/try signing in again/i)).toBeInTheDocument();
-    // T-393's two codes must not be mistaken for this one: all three say "try again", and a screen that
-    // rendered one copy for every retryable code would pass the assertion above.
-    expect(screen.queryByText(/had already been used/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/slow first request/i)).not.toBeInTheDocument();
-    // The discriminating assertions: neither of `no_tenant`'s two claims may appear. Without these the
-    // test passes against a screen that renders the un-onboarded copy for both codes — which is exactly
-    // the pre-T-388 behaviour and the thing being fixed.
-    expect(screen.queryByText(/membership is not active yet/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/accept the invitation/i)).not.toBeInTheDocument();
-    // It is still a refusal: no bounce back to the IdP that just failed.
-    expect(replace).not.toHaveBeenCalled();
-  });
-
-  /**
-   * T-393: the two failures a cold start produces. The load-bearing behaviour is not the wording but the
-   * BUTTON — `?error=` keeps `autoRedirect` off, so the user mints a FRESH code, the only thing that
-   * works once one is spent. An auto-redirect here would replay the dead code forever.
-   */
-  it('REFUSAL rendered: ?error=signin_expired blames the LINK, not the account, and offers a fresh one', () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', { search: '?error=signin_expired', replace, href: '' });
-    render(<SignIn />);
-
-    expect(screen.getByText(/had already been used/i)).toBeInTheDocument();
-    expect(screen.getByText(/sign in again to get a fresh one/i)).toBeInTheDocument();
-    // The discriminating half: the old 401 read like a broken account, so the copy must NOT suggest the
-    // account is the problem, and must not be the un-onboarded message either.
-    expect(screen.queryByText(/membership is not active yet/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/not permitted to sign in/i)).not.toBeInTheDocument();
-    // The whole fix: a manual button, so the next attempt carries a NEW code.
-    expect(replace, 'auto-redirecting here would replay the spent code').not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
-  });
-
-  it('REFUSAL rendered: ?error=access_unavailable says it is us, not them, and does not bounce', () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', { search: '?error=access_unavailable', replace, href: '' });
-    render(<SignIn />);
-
-    expect(screen.getByText(/slow first request/i)).toBeInTheDocument();
-    expect(screen.getByText(/not a problem with your account/i)).toBeInTheDocument();
-    // Must not converge with `signin_expired`: nothing has been "used" here — the first attempt never
-    // got far enough to spend anything, and telling the user otherwise sends them looking for a link.
-    expect(screen.queryByText(/had already been used/i)).not.toBeInTheDocument();
-    expect(replace).not.toHaveBeenCalled();
-  });
-
-  /**
-   * A clean sign-in does NOT redirect. This binary has no `/auth/workos`, so it answers that path
-   * with the SPA itself; a redirect there renders this screen again and reloads the page forever.
-   * The manual button is the way on.
-   */
-  it('REFUSAL: a clean sign-in renders the card and does not redirect', () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', { search: '', replace, href: '' });
-    render(<SignIn />);
-    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
-    expect(replace).not.toHaveBeenCalled();
+  it('a correct login renders the route asked for before it, with no navigation', async () => {
+    await mountSignedOut('/notifications', (body) =>
+      body.get('password') === 'right' ? new Response(null, { status: 204 }) : ({ ok: false, status: 401, json: async () => ({ code: 'UNAUTHENTICATED', message: REFUSED }) }) as Response,
+    );
+    submit('bob', 'right');
+    expect(await screen.findByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
   });
 });
 

@@ -7,7 +7,113 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const appendChronicleEvent = `-- name: AppendChronicleEvent :exec
+INSERT INTO task_events (project_id, id, board_id, task_id, actor, agent, type, data, ts)
+VALUES (?1, ?2, NULL, NULL, ?3, ?4, ?5, ?6, ?7)
+`
+
+type AppendChronicleEventParams struct {
+	ProjectID string
+	ID        string
+	Actor     string
+	Agent     sql.NullString
+	Type      string
+	Data      string
+	Ts        int64
+}
+
+// A chronicle event names no board and no task.
+func (q *Queries) AppendChronicleEvent(ctx context.Context, arg AppendChronicleEventParams) error {
+	_, err := q.db.ExecContext(ctx, appendChronicleEvent,
+		arg.ProjectID,
+		arg.ID,
+		arg.Actor,
+		arg.Agent,
+		arg.Type,
+		arg.Data,
+		arg.Ts,
+	)
+	return err
+}
+
+const countChronicleVersionsNaming = `-- name: CountChronicleVersionsNaming :one
+SELECT COUNT(*) FROM chronicle_versions WHERE project_id = ? AND page_id = ? AND blocks_object = ?
+`
+
+type CountChronicleVersionsNamingParams struct {
+	ProjectID    string
+	PageID       string
+	BlocksObject string
+}
+
+// A body a pointer stopped naming (an old merge base or conflict copy) goes when no version names
+// it either: the count, then the delete, both under the page row's lock the pointer move took.
+func (q *Queries) CountChronicleVersionsNaming(ctx context.Context, arg CountChronicleVersionsNamingParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countChronicleVersionsNaming, arg.ProjectID, arg.PageID, arg.BlocksObject)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteChronicleBlob = `-- name: DeleteChronicleBlob :execrows
+DELETE FROM chronicle_blobs WHERE project_id = ? AND object_key = ?
+`
+
+type DeleteChronicleBlobParams struct {
+	ProjectID string
+	ObjectKey string
+}
+
+func (q *Queries) DeleteChronicleBlob(ctx context.Context, arg DeleteChronicleBlobParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteChronicleBlob, arg.ProjectID, arg.ObjectKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteChronicleBlobsByPage = `-- name: DeleteChronicleBlobsByPage :execrows
+DELETE FROM chronicle_blobs
+WHERE project_id = ?1 AND object_key >= ?2 AND object_key < ?3
+`
+
+type DeleteChronicleBlobsByPageParams struct {
+	ProjectID string
+	KeyFrom   string
+	KeyTo     string
+}
+
+// A page's bodies are the key range ["<pageId>/", "<pageId>0"): '0' is the byte after '/'.
+func (q *Queries) DeleteChronicleBlobsByPage(ctx context.Context, arg DeleteChronicleBlobsByPageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteChronicleBlobsByPage, arg.ProjectID, arg.KeyFrom, arg.KeyTo)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteChroniclePage = `-- name: DeleteChroniclePage :execrows
+DELETE FROM chronicle_pages WHERE project_id = ?1 AND id = ?2
+  AND (CAST(?3 AS TEXT) = '' OR head_version_id = CAST(?3 AS TEXT))
+`
+
+type DeleteChroniclePageParams struct {
+	ProjectID             string
+	ID                    string
+	ExpectedHeadVersionID string
+}
+
+// expected_head_version_id ” deletes whatever the head; else only from that head.
+func (q *Queries) DeleteChroniclePage(ctx context.Context, arg DeleteChroniclePageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteChroniclePage, arg.ProjectID, arg.ID, arg.ExpectedHeadVersionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const getChronicleBlob = `-- name: GetChronicleBlob :one
 SELECT project_id, object_key, body, created_at FROM chronicle_blobs WHERE project_id = ? AND object_key = ?
@@ -31,6 +137,7 @@ func (q *Queries) GetChronicleBlob(ctx context.Context, arg GetChronicleBlobPara
 }
 
 const getChroniclePage = `-- name: GetChroniclePage :one
+
 SELECT project_id, id, kind, slug, title, head_version_id, source_path, last_derived_object, "conflict", topics, coverage, superseded_by, updated_by, deleting, created_at, updated_at FROM chronicle_pages WHERE project_id = ? AND id = ?
 `
 
@@ -39,6 +146,10 @@ type GetChroniclePageParams struct {
 	ID        string
 }
 
+// The Chronicle: pages, their immutable versions, and the bodies those point at. A body is a
+// chronicle_blobs row keyed "<pageId>/<sha256 of the body>": content-addressed within its page, so a
+// page's bodies are one key range and leave with the page. Every key carries project_id first: a page
+// id is a hash of the slug, so two projects recording one slug share it.
 func (q *Queries) GetChroniclePage(ctx context.Context, arg GetChroniclePageParams) (ChroniclePage, error) {
 	row := q.db.QueryRowContext(ctx, getChroniclePage, arg.ProjectID, arg.ID)
 	var i ChroniclePage
@@ -89,4 +200,355 @@ func (q *Queries) GetChronicleVersion(ctx context.Context, arg GetChronicleVersi
 		&i.BlockCount,
 	)
 	return i, err
+}
+
+const insertChronicleBlob = `-- name: InsertChronicleBlob :exec
+INSERT INTO chronicle_blobs (project_id, object_key, body, created_at) VALUES (?, ?, ?, ?)
+ON CONFLICT (project_id, object_key) DO NOTHING
+`
+
+type InsertChronicleBlobParams struct {
+	ProjectID string
+	ObjectKey string
+	Body      []byte
+	CreatedAt int64
+}
+
+func (q *Queries) InsertChronicleBlob(ctx context.Context, arg InsertChronicleBlobParams) error {
+	_, err := q.db.ExecContext(ctx, insertChronicleBlob,
+		arg.ProjectID,
+		arg.ObjectKey,
+		arg.Body,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertChroniclePage = `-- name: InsertChroniclePage :execrows
+INSERT INTO chronicle_pages (project_id, id, kind, slug, title, head_version_id, source_path, last_derived_object,
+  conflict, topics, coverage, superseded_by, updated_by, deleting, created_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+  ?7, ?8, NULL, ?9, ?10,
+  ?11, ?12, 0, ?13, ?13)
+ON CONFLICT (project_id, id) DO NOTHING
+`
+
+type InsertChroniclePageParams struct {
+	ProjectID         string
+	ID                string
+	Kind              string
+	Slug              string
+	Title             string
+	HeadVersionID     string
+	SourcePath        sql.NullString
+	LastDerivedObject sql.NullString
+	Topics            string
+	Coverage          sql.NullString
+	SupersededBy      string
+	UpdatedBy         sql.NullString
+	CreatedAt         int64
+}
+
+// The page id is the slug's hash, so a second writer of one slug inserts nothing: the caller reads
+// the row it lost to.
+func (q *Queries) InsertChroniclePage(ctx context.Context, arg InsertChroniclePageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertChroniclePage,
+		arg.ProjectID,
+		arg.ID,
+		arg.Kind,
+		arg.Slug,
+		arg.Title,
+		arg.HeadVersionID,
+		arg.SourcePath,
+		arg.LastDerivedObject,
+		arg.Topics,
+		arg.Coverage,
+		arg.SupersededBy,
+		arg.UpdatedBy,
+		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertChronicleVersion = `-- name: InsertChronicleVersion :exec
+INSERT INTO chronicle_versions (project_id, page_id, id, parent_version_id, source, author, agent, ts, blocks_object, block_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertChronicleVersionParams struct {
+	ProjectID       string
+	PageID          string
+	ID              string
+	ParentVersionID sql.NullString
+	Source          string
+	Author          string
+	Agent           sql.NullString
+	Ts              int64
+	BlocksObject    string
+	BlockCount      int64
+}
+
+func (q *Queries) InsertChronicleVersion(ctx context.Context, arg InsertChronicleVersionParams) error {
+	_, err := q.db.ExecContext(ctx, insertChronicleVersion,
+		arg.ProjectID,
+		arg.PageID,
+		arg.ID,
+		arg.ParentVersionID,
+		arg.Source,
+		arg.Author,
+		arg.Agent,
+		arg.Ts,
+		arg.BlocksObject,
+		arg.BlockCount,
+	)
+	return err
+}
+
+const listChronicleObjects = `-- name: ListChronicleObjects :many
+SELECT object_key FROM chronicle_blobs WHERE project_id = ? ORDER BY object_key
+`
+
+func (q *Queries) ListChronicleObjects(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listChronicleObjects, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChroniclePages = `-- name: ListChroniclePages :many
+SELECT project_id, id, kind, slug, title, head_version_id, source_path, last_derived_object, "conflict", topics, coverage, superseded_by, updated_by, deleting, created_at, updated_at FROM chronicle_pages
+WHERE project_id = ?1
+  AND (CAST(?2 AS TEXT) = '' OR kind = CAST(?2 AS TEXT))
+  AND slug > CAST(?3 AS TEXT)
+ORDER BY slug
+LIMIT ?4
+`
+
+type ListChroniclePagesParams struct {
+	ProjectID string
+	Kind      string
+	AfterSlug string
+	PageLimit int64
+}
+
+// One page of a project's pages, by slug, after the cursor's slug; kind ” is every kind.
+func (q *Queries) ListChroniclePages(ctx context.Context, arg ListChroniclePagesParams) ([]ChroniclePage, error) {
+	rows, err := q.db.QueryContext(ctx, listChroniclePages,
+		arg.ProjectID,
+		arg.Kind,
+		arg.AfterSlug,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChroniclePage
+	for rows.Next() {
+		var i ChroniclePage
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.Kind,
+			&i.Slug,
+			&i.Title,
+			&i.HeadVersionID,
+			&i.SourcePath,
+			&i.LastDerivedObject,
+			&i.Conflict,
+			&i.Topics,
+			&i.Coverage,
+			&i.SupersededBy,
+			&i.UpdatedBy,
+			&i.Deleting,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChronicleVersions = `-- name: ListChronicleVersions :many
+SELECT project_id, page_id, id, parent_version_id, source, author, agent, ts, blocks_object, block_count FROM chronicle_versions
+WHERE project_id = ?1 AND page_id = ?2
+  AND (CAST(?3 AS TEXT) = '' OR ts < CAST(?4 AS INTEGER)
+       OR (ts = CAST(?4 AS INTEGER) AND id < CAST(?3 AS TEXT)))
+ORDER BY ts DESC, id DESC
+LIMIT ?5
+`
+
+type ListChronicleVersionsParams struct {
+	ProjectID string
+	PageID    string
+	AfterID   string
+	AfterTs   int64
+	PageLimit int64
+}
+
+// One page of a page's versions, newest first ((ts, id) descending), strictly after the cursor's
+// (after_ts, after_id); after_id ” is the first page.
+func (q *Queries) ListChronicleVersions(ctx context.Context, arg ListChronicleVersionsParams) ([]ChronicleVersion, error) {
+	rows, err := q.db.QueryContext(ctx, listChronicleVersions,
+		arg.ProjectID,
+		arg.PageID,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChronicleVersion
+	for rows.Next() {
+		var i ChronicleVersion
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.PageID,
+			&i.ID,
+			&i.ParentVersionID,
+			&i.Source,
+			&i.Author,
+			&i.Agent,
+			&i.Ts,
+			&i.BlocksObject,
+			&i.BlockCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const moveChronicleHead = `-- name: MoveChronicleHead :execrows
+UPDATE chronicle_pages SET head_version_id = ?1, last_derived_object = ?2,
+  conflict = ?3, updated_by = ?4, updated_at = ?5
+WHERE project_id = ?6 AND id = ?7 AND head_version_id = ?8
+`
+
+type MoveChronicleHeadParams struct {
+	HeadVersionID         string
+	LastDerivedObject     sql.NullString
+	Conflict              sql.NullString
+	UpdatedBy             sql.NullString
+	UpdatedAt             int64
+	ProjectID             string
+	ID                    string
+	ExpectedHeadVersionID string
+}
+
+// The head moves only from the version the writer read: no row is a stale or missing page.
+func (q *Queries) MoveChronicleHead(ctx context.Context, arg MoveChronicleHeadParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, moveChronicleHead,
+		arg.HeadVersionID,
+		arg.LastDerivedObject,
+		arg.Conflict,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+		arg.ExpectedHeadVersionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const refreshChroniclePage = `-- name: RefreshChroniclePage :execrows
+UPDATE chronicle_pages SET kind = ?1, title = ?2, source_path = ?3,
+  topics = ?4, coverage = ?5, superseded_by = ?6, updated_at = ?7
+WHERE project_id = ?8 AND id = ?9
+`
+
+type RefreshChroniclePageParams struct {
+	Kind         string
+	Title        string
+	SourcePath   sql.NullString
+	Topics       string
+	Coverage     sql.NullString
+	SupersededBy string
+	UpdatedAt    int64
+	ProjectID    string
+	ID           string
+}
+
+func (q *Queries) RefreshChroniclePage(ctx context.Context, arg RefreshChroniclePageParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, refreshChroniclePage,
+		arg.Kind,
+		arg.Title,
+		arg.SourcePath,
+		arg.Topics,
+		arg.Coverage,
+		arg.SupersededBy,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setChronicleConflict = `-- name: SetChronicleConflict :execrows
+UPDATE chronicle_pages SET conflict = ?1, updated_at = ?2
+WHERE project_id = ?3 AND id = ?4 AND head_version_id = ?5
+`
+
+type SetChronicleConflictParams struct {
+	Conflict              sql.NullString
+	UpdatedAt             int64
+	ProjectID             string
+	ID                    string
+	ExpectedHeadVersionID string
+}
+
+func (q *Queries) SetChronicleConflict(ctx context.Context, arg SetChronicleConflictParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setChronicleConflict,
+		arg.Conflict,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+		arg.ExpectedHeadVersionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

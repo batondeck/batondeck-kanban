@@ -43,6 +43,7 @@ type Store interface {
 	Attachments
 	Blobs
 	Search
+	Chronicle
 	Tasks
 	Claims
 	Events

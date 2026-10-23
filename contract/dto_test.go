@@ -14,8 +14,8 @@ import (
 
 // dtoTools maps each tool to the service method whose request and response types are its input and
 // output schemas: the 42 CORE tools of plan §Target surface, cancel_task (ADR-0001, after the 42
-// was counted), list_agent_sessions (service.Sessions.ListAgentSessions) and the nine on-call tools
-// (service.Oncall, R2.8).
+// was counted), list_agent_sessions (service.Sessions.ListAgentSessions), the 4 chronicle tools
+// (R2.6) and the nine on-call tools (service.Oncall, R2.8).
 var dtoTools = []struct {
 	tool   string
 	iface  reflect.Type
@@ -65,6 +65,10 @@ var dtoTools = []struct {
 	{"list_attachments", reflect.TypeFor[service.Media](), "ListAttachments"},
 	{"search_tasks", reflect.TypeFor[service.Media](), "SearchTasks"},
 	{"list_agent_sessions", reflect.TypeFor[service.Sessions](), "ListAgentSessions"},
+	{"create_chronicle_page", reflect.TypeFor[service.Chronicle](), "CreatePage"},
+	{"ingest_chronicle_page", reflect.TypeFor[service.Chronicle](), "IngestPage"},
+	{"edit_chronicle_page", reflect.TypeFor[service.Chronicle](), "EditPage"},
+	{"delete_chronicle_page", reflect.TypeFor[service.Chronicle](), "DeletePage"},
 	{"create_integration", reflect.TypeFor[service.Oncall](), "CreateIntegration"},
 	{"update_integration", reflect.TypeFor[service.Oncall](), "UpdateIntegration"},
 	{"delete_integration", reflect.TypeFor[service.Oncall](), "DeleteIntegration"},
@@ -151,8 +155,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 53 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions and the 9 on-call tools (53)", len(names))
+	if len(names) != 57 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 4 chronicle tools and the 9 on-call tools (57)", len(names))
 	}
 }
 
@@ -162,6 +166,9 @@ var requestPointers = map[string]bool{
 	"AddColumnReq.WIPLimit":      true, // add_column: wipLimit ?? null
 	"ColumnSpec.WIPLimit":        true, // create_board columns[]: wipLimit ?? null
 	"CreateTaskReq.ParentTaskID": true, // create_task: parentTaskId ?? null
+	// The chronicle's: origin .default(null) and sourcePath .default(null), so null is absent.
+	"ChronicleBlockInput.Origin":        true,
+	"IngestChroniclePageReq.SourcePath": true,
 }
 
 // TestRequestPointersAreDeliberate: a pointer and a service.Nullable infer one schema, so

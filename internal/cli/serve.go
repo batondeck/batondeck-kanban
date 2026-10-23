@@ -67,7 +67,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
-		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall()},
+		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall()},
 		Logger:   logger,
 	}
 	if as != nil {
@@ -84,7 +84,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	srv := mcp.New(opts)
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
-	bff := api.Options{Services: opts.Services, Auth: resolver, Bus: b, Presence: dir, Logger: logger}
+	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Bus: b, Presence: dir, Logger: logger}
 	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
