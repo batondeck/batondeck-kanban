@@ -189,7 +189,17 @@ func (s *snapshotCache) dropLocked(projectID, boardID string) {
 // cloneSnapshot copies what a caller could change in place, so a cached entry is never mutated.
 func cloneSnapshot(s BoardSnapshotResp) BoardSnapshotResp {
 	s.Board.Columns = slices.Clone(s.Board.Columns)
-	s.Board.Transitions = maps.Clone(s.Board.Transitions)
+	for i, c := range s.Board.Columns {
+		if c.WIPLimit != nil {
+			w := *c.WIPLimit
+			s.Board.Columns[i].WIPLimit = &w
+		}
+	}
+	transitions := make(map[string][]domain.Status, len(s.Board.Transitions))
+	for k, v := range s.Board.Transitions {
+		transitions[k] = slices.Clone(v)
+	}
+	s.Board.Transitions = transitions
 	s.TaskCounts = maps.Clone(s.TaskCounts)
 	return s
 }

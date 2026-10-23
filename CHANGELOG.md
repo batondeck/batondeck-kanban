@@ -25,7 +25,8 @@ Notable changes to batondeck-kanban. The format follows
   mutations drop directly after commit; a miss costs one `store.GetBoard` (two statements). Board
   mutations ring a `changed` row naming their board. `Feed.BoardFeed` pages `ListBoardFeed`. Tests
   over memstore: one event, audit row and change row per mutation as each contract names them, 0
-  then 1 `GetBoard` around a change row, and 18 mutations each killed by its test.
+  then 1 `GetBoard` around a change row, and 21 mutations each killed by its test. The cache
+  serves nothing until the bus has delivered a change: before that every read composes.
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
   (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on

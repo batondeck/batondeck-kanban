@@ -169,15 +169,20 @@ func TestSnapshotCacheDropBeatsAFillInFlight(t *testing.T) {
 // What a caller does to a snapshot it got does not reach the cache.
 func TestBoardSnapshotIsACopy(t *testing.T) {
 	f := newFixture(t, Options{})
+	if _, err := f.st.UpdateColumn(f.ctx, f.project.ID, f.board.ID, f.board.Columns[0].ID, store.ColumnPatch{SetWIPLimit: true, WIPLimit: ptr(int64(3))}); err != nil {
+		t.Fatal(err)
+	}
 	f.wire()
 	for i := range 2 { // the miss's answer, then a hit's
 		got := f.snapshot(t)
 		got.TaskCounts["x"] = 9
 		got.Board.Columns[0].Name = "changed"
+		*got.Board.Columns[0].WIPLimit = 999
+		got.Board.Transitions["READY"][0] = domain.Done
 		got.Board.Transitions["BACKLOG"] = nil
 		again := f.snapshot(t)
-		if _, ok := again.TaskCounts["x"]; ok || again.Board.Columns[0].Name == "changed" || !reflect.DeepEqual(again.Board.Transitions, fixedTable) {
-			t.Fatalf("read %d: the cached snapshot was changed through a returned copy: %+v", i, again)
+		if _, ok := again.TaskCounts["x"]; ok || again.Board.Columns[0].Name == "changed" || *again.Board.Columns[0].WIPLimit != 3 || !reflect.DeepEqual(again.Board.Transitions, fixedTable) {
+			t.Fatalf("read %d: the cached snapshot was changed through a returned copy: wipLimit %v, transitions %v", i, *again.Board.Columns[0].WIPLimit, again.Board.Transitions)
 		}
 	}
 }
@@ -197,6 +202,26 @@ func TestBoardFeed(t *testing.T) {
 		t.Fatalf("events %+v", page.Events)
 	}
 	e := page.Events[0]
+	// Newest first, the store's order (P-99): a later event leads, and the cursor pages older.
+	later, err := f.st.AppendBoardEvent(f.ctx, store.EventInput{ProjectID: f.project.ID, BoardID: got.Board.ID, Actor: "alice", Type: domain.EventTaskDeleted, Ts: f.clock.now().UnixMilli() + 60_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := f.c.Feed().BoardFeed(f.ctx, f.alice, BoardFeedReq{ProjectID: f.project.ID, BoardID: got.Board.ID})
+	if err != nil || len(both.Events) != 2 || both.Events[0].ID != later.ID || both.Events[1].ID != e.ID {
+		t.Fatalf("one page %+v (err %v), want %s then %s", both.Events, err, later.ID, e.ID)
+	}
+	first, err := f.c.Feed().BoardFeed(f.ctx, f.alice, BoardFeedReq{ProjectID: f.project.ID, BoardID: got.Board.ID, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := f.c.Feed().BoardFeed(f.ctx, f.alice, BoardFeedReq{ProjectID: f.project.ID, BoardID: got.Board.ID, Limit: 1, Cursor: first.NextCursor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Events) != 1 || first.Events[0].ID != later.ID || first.NextCursor == "" || len(next.Events) != 1 || next.Events[0].ID != e.ID || next.NextCursor != "" {
+		t.Fatalf("pages %+v then %+v, want %s then %s", first, next, later.ID, e.ID)
+	}
 	if e.Type != domain.EventBoardCreated || e.BoardID != got.Board.ID || e.Actor != "alice" || e.Agent != "claude" || e.Data["name"] != "Feed" || e.Ts == "" || e.TaskID != "" || page.NextCursor != "" {
 		t.Fatalf("event %+v", e)
 	}
