@@ -285,7 +285,9 @@ func TestRunServerBoundedByAParkedTool(t *testing.T) {
 	shrink(t, &shutdownBudget, 300*time.Millisecond)
 	entered, release := make(chan struct{}), make(chan struct{})
 	cs, stop, done, _ := served(t, memstore.New(), func(context.Context) { close(entered); <-release })
-	defer close(release)
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	defer free()
 	go func() {
 		_, _ = cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "probe", Arguments: map[string]any{"projectId": "P-1"}})
 	}()
@@ -301,6 +303,8 @@ func TestRunServerBoundedByAParkedTool(t *testing.T) {
 			t.Errorf("runServer took %s with a %s budget", took, shutdownBudget)
 		}
 	case <-time.After(5 * time.Second):
+		free()
+		<-done // before the budget is restored under it
 		t.Fatalf("runServer still stopping 5s after the stop, budget %s, behind a parked tool", shutdownBudget)
 	}
 }
