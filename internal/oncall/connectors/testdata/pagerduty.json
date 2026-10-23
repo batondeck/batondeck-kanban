@@ -1,0 +1,8 @@
+{"event":{"id":"01DEN1HNLBC1VITYLBI7MKHAYW","event_type":"incident.triggered","resource_type":"incident","occurred_at":"2026-10-24T12:00:00.000Z",
+ "agent":{"html_url":"https://acme.pagerduty.com/users/PLH1HKV","id":"PLH1HKV","self":"https://api.pagerduty.com/users/PLH1HKV","summary":"Tenex Engineer","type":"user_reference"},
+ "client":null,"data":{"id":"PGR0VU2","type":"incident","self":"https://api.pagerduty.com/incidents/PGR0VU2","html_url":"https://acme.pagerduty.com/incidents/PGR0VU2",
+  "number":2,"status":"triggered","incident_key":"d3640fbd41094207a1c11e58e46b1662","created_at":"2026-10-24T12:00:00Z","title":"A little bump in the road",
+  "service":{"html_url":"https://acme.pagerduty.com/services/PF9KMXH","id":"PF9KMXH","self":"https://api.pagerduty.com/services/PF9KMXH","summary":"API Service","type":"service_reference"},
+  "assignees":[{"html_url":"https://acme.pagerduty.com/users/PTUXL6G","id":"PTUXL6G","self":"https://api.pagerduty.com/users/PTUXL6G","summary":"User 123","type":"user_reference"}],
+  "escalation_policy":{"id":"PUS0KTE","type":"escalation_policy_reference","summary":"Default"},"teams":[],"priority":{"id":"PSO75BM","type":"priority_reference","summary":"P1"},
+  "urgency":"high","conference_bridge":null,"resolve_reason":null}}}
