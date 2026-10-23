@@ -50,6 +50,8 @@ type Options struct {
 	// (the caller flushes with FlushToolCalls).
 	ToolCallFlush  time.Duration
 	ToolCallBuffer int
+	// BlobGC is delete_task's blob hook (delete.go); nil is a no-op.
+	BlobGC BlobGC
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -66,6 +68,7 @@ type Core struct {
 	access  *accessCache
 	calls   *toolCalls
 	boards  *snapshotCache
+	blobGC  BlobGC
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.
@@ -80,6 +83,10 @@ func New(st store.Store, o Options) *Core {
 		idemTTL: orDefault(o.IdempotencyTTL, DefaultIdempotencyTTL),
 		wakeTTL: orDefault(o.WakeSessionTTL, DefaultWakeSessionTTL),
 		grants:  o.Grants,
+		blobGC:  o.BlobGC,
+	}
+	if c.blobGC == nil {
+		c.blobGC = func(context.Context, []string) {}
 	}
 	if c.log == nil {
 		c.log = core.NewLogger(os.Stderr)
