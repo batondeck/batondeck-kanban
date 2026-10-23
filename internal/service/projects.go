@@ -151,9 +151,11 @@ func (p projects) UpdateSettings(ctx context.Context, caller domain.Caller, req 
 }
 
 // settingsPatch validates the request as conductor's update_settings schema does and turns each
-// present field into the store's patch. reviewEnabled, color and defaultReviewer are tri-state
-// (Optional, Nullable): false and null are sent, and a null removes the setting. The other fields
-// are present when not their zero value (the DTO's omitzero), which conductor's bounds make invalid.
+// present field into the store's patch. reviewEnabled, anomalyPolicy, color and defaultReviewer
+// are tri-state (Optional, Nullable): false, {} and null are sent, a null removes the setting, and
+// an empty anomalyPolicy resets every threshold. capabilityAliases is present when sent, {} too.
+// The other fields are present when not their zero value (omitzero), which conductor's bounds make
+// invalid.
 func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsPatch, error) {
 	bad := func(field, msg string) error {
 		return domain.Validation(field+" "+msg, map[string]any{"field": field})
@@ -188,7 +190,7 @@ func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsP
 	if dr := req.DefaultReviewer; dr.Set && !dr.Null && (dr.V == "" || len(dr.V) > 320) {
 		return nil, bad("defaultReviewer", "must be 1 to 320 characters")
 	}
-	ap := req.AnomalyPolicy
+	ap := req.AnomalyPolicy.V
 	if ap.ClaimThrashCount < 0 || ap.ReworkLoopCount < 0 || ap.StaleInProgressMs < 0 || ap.StarvedUrgentMs < 0 || ap.WindowSec < 0 || ap.WIPJamMinTasks < 0 {
 		return nil, bad("anomalyPolicy", "thresholds must be positive integers")
 	}
@@ -226,9 +228,9 @@ func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsP
 	}
 	add(req.ReviewEnabled.Set, "reviewEnabled", req.ReviewEnabled.V)
 	add(req.AgingCeilingMs != 0, "agingCeilingMs", req.AgingCeilingMs)
-	add(ap != (AnomalyPolicyPatch{}), "anomalyPolicy", ap)
+	add(req.AnomalyPolicy.Set, "anomalyPolicy", ap)
 	add(req.ArtifactPolicy != "", "artifactPolicy", req.ArtifactPolicy)
-	add(len(req.CapabilityAliases) > 0, "capabilityAliases", req.CapabilityAliases)
+	add(req.CapabilityAliases != nil, "capabilityAliases", req.CapabilityAliases)
 	add(req.CheckpointPolicy != "", "checkpointPolicy", req.CheckpointPolicy)
 	add(req.Color.Set, "color", req.Color)
 	add(req.DefaultReviewer.Set, "defaultReviewer", req.DefaultReviewer)

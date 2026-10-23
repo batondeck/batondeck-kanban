@@ -56,6 +56,10 @@ func TestOptionalRoundTrip(t *testing.T) {
 		{`{"patch":{"estimate":0},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
 		{`{"leaseId":"L-1","projectId":"P-1","reason":"r","taskId":"T-1","retryable":false}`, &FailTaskReq{}},
 		{`{"boardId":"B-1","projectId":"P-1","assignee":null}`, &ListTasksReq{}},
+		{`{"patch":{"description":""},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
+		{`{"patch":{"modelHint":null},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
+		{`{"patch":{"modelHint":{"model":"m"}},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
+		{`{"projectId":"P-1","anomalyPolicy":{},"capabilityAliases":{}}`, &UpdateSettingsReq{}},
 	} {
 		if err := json.Unmarshal([]byte(c.in), c.dst); err != nil {
 			t.Fatalf("%s: %v", c.in, err)
@@ -132,6 +136,30 @@ func TestTriStateOverMemstore(t *testing.T) {
 	if s := settings(`{"reviewEnabled":true}`); !s.ReviewEnabled {
 		t.Fatalf("reviewEnabled:true: review %v", s.ReviewEnabled)
 	}
+	// defaultReviewer, capabilityAliases and anomalyPolicy: set, kept by a patch omitting them, then
+	// cleared by null, {} and {} (an empty anomalyPolicy resets every threshold to its default).
+	s := settings(`{"defaultReviewer":"bob","capabilityAliases":{"go":"golang"},"anomalyPolicy":{"claimThrashCount":5}}`)
+	if s.DefaultReviewer == nil || *s.DefaultReviewer != "bob" || s.CapabilityAliases["go"] != "golang" || s.AnomalyPolicy.ClaimThrashCount != 5 {
+		t.Fatalf("set: %+v", s)
+	}
+	if s := settings(`{"maxRunsPerTask":4}`); s.DefaultReviewer == nil || len(s.CapabilityAliases) != 1 || s.AnomalyPolicy.ClaimThrashCount != 5 {
+		t.Fatalf("a patch omitting them: %+v", s)
+	}
+	s = settings(`{"defaultReviewer":null}`)
+	t.Logf("defaultReviewer:null -> %v", s.DefaultReviewer)
+	if s.DefaultReviewer != nil || len(s.CapabilityAliases) != 1 {
+		t.Fatalf("defaultReviewer:null: reviewer %v, aliases %v", s.DefaultReviewer, s.CapabilityAliases)
+	}
+	s = settings(`{"capabilityAliases":{}}`)
+	t.Logf("capabilityAliases:{} -> %v", s.CapabilityAliases)
+	if len(s.CapabilityAliases) != 0 || s.AnomalyPolicy.ClaimThrashCount != 5 {
+		t.Fatalf("capabilityAliases:{}: aliases %v, anomaly %+v", s.CapabilityAliases, s.AnomalyPolicy)
+	}
+	s = settings(`{"anomalyPolicy":{}}`)
+	t.Logf("anomalyPolicy:{} -> %+v", s.AnomalyPolicy)
+	if s.AnomalyPolicy != (AnomalyPolicy{}) {
+		t.Fatalf("anomalyPolicy:{}: %+v, want every threshold back to its default", s.AnomalyPolicy)
+	}
 
 	col := f.board.Columns[0].ID
 	limit := func(body string) *float64 {
@@ -177,5 +205,28 @@ func TestTriStateOverMemstore(t *testing.T) {
 	made, err := f.c.Boards().AddColumn(f.ctx, f.alice, add)
 	if err != nil || made.Column.Order != 0 {
 		t.Fatalf("add_column order:0 -> order %v (err %v), want 0", made.Column.Order, err)
+	}
+}
+
+// Deviation 3 (R1.16 ruling 7): quotaEnabled and txnCap are refused in every state, false and null
+// included, so a sent false is never silently dropped.
+func TestQuotaRefusedInEveryState(t *testing.T) {
+	f := newFixture(t, Options{})
+	wsAdmin := domain.Caller{Identity: "alice", WorkspaceAdmin: true}
+	for _, body := range []string{`{"quotaEnabled":false}`, `{"quotaEnabled":true}`, `{"txnCap":null}`, `{"txnCap":5}`} {
+		req := UpdateSettingsReq{}
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatal(err)
+		}
+		req.ProjectID = f.project.ID
+		_, err := f.c.Projects().UpdateSettings(f.ctx, f.alice, req)
+		wantCode(t, err, domain.CodeForbidden)
+		_, err = f.c.Projects().UpdateSettings(f.ctx, wsAdmin, req)
+		wantCode(t, err, domain.CodeValidation)
+		t.Logf("%s: project admin FORBIDDEN, workspace admin %v", body, err)
+	}
+	// The control: the same workspace admin's patch without either key goes through.
+	if _, err := f.c.Projects().UpdateSettings(f.ctx, wsAdmin, UpdateSettingsReq{ProjectID: f.project.ID, MaxRunsPerTask: 2}); err != nil {
+		t.Fatalf("a workspace admin's patch without quota keys: %v", err)
 	}
 }

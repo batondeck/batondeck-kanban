@@ -73,23 +73,23 @@ type ListProjectsResp struct {
 
 // UpdateSettingsReq is update_settings's input.
 type UpdateSettingsReq struct {
-	ProjectID          string                `json:"projectId"`
-	AgingCeilingMs     int64                 `json:"agingCeilingMs,omitzero"`
-	AnomalyPolicy      AnomalyPolicyPatch    `json:"anomalyPolicy,omitzero"`
-	ArtifactPolicy     PolicyMode            `json:"artifactPolicy,omitzero"`
-	CapabilityAliases  map[string]string     `json:"capabilityAliases,omitzero"`
-	CheckpointPolicy   PolicyMode            `json:"checkpointPolicy,omitzero"`
-	Color              Nullable[string]      `json:"color,omitzero"`
-	DefaultReviewer    Nullable[string]      `json:"defaultReviewer,omitzero"`
-	MaxRunsPerTask     int64                 `json:"maxRunsPerTask,omitzero"`
-	MaxTicketTokens    int64                 `json:"maxTicketTokens,omitzero"`
-	QuotaEnabled       Optional[bool]        `json:"quotaEnabled,omitzero"`
-	RetryPolicy        RetryPolicyPatch      `json:"retryPolicy,omitzero"`
-	ReviewEnabled      Optional[bool]        `json:"reviewEnabled,omitzero"`
-	SelectionWeights   SelectionWeightsPatch `json:"selectionWeights,omitzero"`
-	SelfApprovalPolicy PolicyMode            `json:"selfApprovalPolicy,omitzero"`
-	TokenPolicy        PolicyMode            `json:"tokenPolicy,omitzero"`
-	TxnCap             Nullable[int64]       `json:"txnCap,omitzero"`
+	ProjectID          string                       `json:"projectId"`
+	AgingCeilingMs     int64                        `json:"agingCeilingMs,omitzero"`
+	AnomalyPolicy      Optional[AnomalyPolicyPatch] `json:"anomalyPolicy,omitzero"`
+	ArtifactPolicy     PolicyMode                   `json:"artifactPolicy,omitzero"`
+	CapabilityAliases  map[string]string            `json:"capabilityAliases,omitzero"`
+	CheckpointPolicy   PolicyMode                   `json:"checkpointPolicy,omitzero"`
+	Color              Nullable[string]             `json:"color,omitzero"`
+	DefaultReviewer    Nullable[string]             `json:"defaultReviewer,omitzero"`
+	MaxRunsPerTask     int64                        `json:"maxRunsPerTask,omitzero"`
+	MaxTicketTokens    int64                        `json:"maxTicketTokens,omitzero"`
+	QuotaEnabled       Optional[bool]               `json:"quotaEnabled,omitzero"`
+	RetryPolicy        RetryPolicyPatch             `json:"retryPolicy,omitzero"`
+	ReviewEnabled      Optional[bool]               `json:"reviewEnabled,omitzero"`
+	SelectionWeights   SelectionWeightsPatch        `json:"selectionWeights,omitzero"`
+	SelfApprovalPolicy PolicyMode                   `json:"selfApprovalPolicy,omitzero"`
+	TokenPolicy        PolicyMode                   `json:"tokenPolicy,omitzero"`
+	TxnCap             Nullable[int64]              `json:"txnCap,omitzero"`
 }
 
 // UpdateSettingsResp is update_settings's output.
