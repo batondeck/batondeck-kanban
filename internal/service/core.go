@@ -35,6 +35,11 @@ const (
 // member has a grant".
 type GrantLookup func(ctx context.Context, projectID, identityID string) (grant domain.CapabilityGrant, ok bool, err error)
 
+// Sealer seals a secret that must be read back later, bound to aad (core.Keyring is the one).
+type Sealer interface {
+	Encrypt(plaintext, aad []byte) ([]byte, error)
+}
+
 // Options configure a Core; every zero value takes its default.
 type Options struct {
 	// Logger receives internal errors with their stacks; nil is stderr.
@@ -50,6 +55,8 @@ type Options struct {
 	// (the caller flushes with FlushToolCalls).
 	ToolCallFlush  time.Duration
 	ToolCallBuffer int
+	// Sealer seals a wake session's inbox token; nil refuses a token (INTERNAL), never stores it.
+	Sealer Sealer
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -66,6 +73,7 @@ type Core struct {
 	access  *accessCache
 	calls   *toolCalls
 	boards  *snapshotCache
+	sealer  Sealer
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.
@@ -80,6 +88,7 @@ func New(st store.Store, o Options) *Core {
 		idemTTL: orDefault(o.IdempotencyTTL, DefaultIdempotencyTTL),
 		wakeTTL: orDefault(o.WakeSessionTTL, DefaultWakeSessionTTL),
 		grants:  o.Grants,
+		sealer:  o.Sealer,
 	}
 	if c.log == nil {
 		c.log = core.NewLogger(os.Stderr)

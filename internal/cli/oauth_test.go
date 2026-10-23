@@ -47,12 +47,13 @@ func TestServeOAuthToAnMCPSession(t *testing.T) {
 
 	srv := httptest.NewUnstartedServer(nil)
 	public := "http://" + srv.Listener.Addr().String()
-	mcpSrv, as, core, err := mcpServer(st, "x", public, log.New(io.Discard, "", 0))
-	if err != nil || as == nil {
-		t.Fatalf("mcpServer: %v %v", as, err)
+	a, err := compose(st, "x", public, log.New(io.Discard, "", 0), nil)
+	if err != nil || a.as == nil {
+		t.Fatalf("compose: %v %v", a, err)
 	}
-	defer core.Close(context.Background())
-	srv.Config.Handler = handler("x", mcpSrv.Handler(), as)
+	defer a.core.Close(context.Background())
+	defer a.bus.Close()
+	srv.Config.Handler = a.handler("x")
 	srv.Start()
 	defer srv.Close()
 
@@ -191,12 +192,12 @@ func TestServeWithoutPublicURLHasNoOAuth(t *testing.T) {
 	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	mcpSrv, as, core, err := mcpServer(st, "x", "", log.New(io.Discard, "", 0))
-	if err != nil || as != nil {
-		t.Fatalf("mcpServer: %v %v", as, err)
+	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil)
+	if err != nil || a.as != nil {
+		t.Fatalf("compose: %v %v", a, err)
 	}
-	defer core.Close(context.Background())
-	srv := httptest.NewServer(handler("x", mcpSrv.Handler(), nil))
+	defer a.core.Close(context.Background())
+	srv := httptest.NewServer(a.handler("x"))
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/token", "application/x-www-form-urlencoded", strings.NewReader("grant_type=refresh_token"))
 	if err != nil {
@@ -206,7 +207,7 @@ func TestServeWithoutPublicURLHasNoOAuth(t *testing.T) {
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest {
 		t.Fatalf("/token without public_url answered %d, as if mounted", resp.StatusCode)
 	}
-	if _, _, _, err := mcpServer(st, "x", "https://bk.example/base", log.New(io.Discard, "", 0)); err == nil || !strings.Contains(err.Error(), "public_url") {
+	if _, err := compose(st, "x", "https://bk.example/base", log.New(io.Discard, "", 0), nil); err == nil || !strings.Contains(err.Error(), "public_url") {
 		t.Fatalf("a public_url with a path: %v", err)
 	}
 }

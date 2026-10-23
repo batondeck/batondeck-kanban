@@ -117,11 +117,21 @@ func (s sessions) ListAgentSessions(ctx context.Context, caller domain.Caller, r
 	return resp, nil
 }
 
+// SocketTokenAAD binds a sealed inbox token to its wake session's row.
+func SocketTokenAAD(id string) []byte { return []byte("wake_sessions.socket_token:" + id) }
+
 // RegisterWakeSession records the caller's /wake attachment for the wake-session TTL, under a new id.
+// A socket token is stored sealed (Options.Sealer), never as given; with no sealer it is refused.
 func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller, req RegisterWakeSessionReq) (resp RegisterWakeSessionResp, err error) {
 	defer s.c.recovered("register_wake_session", &err)
 	if req.Cursor < 0 {
 		return resp, domain.Validation("cursor cannot be negative", map[string]any{"field": "cursor"})
+	}
+	if req.SocketToken != "" && req.SocketPath == "" {
+		return resp, domain.Validation("socketToken needs a socketPath", map[string]any{"field": "socketToken"})
+	}
+	if req.SocketToken != "" && s.c.sealer == nil {
+		return resp, domain.NewError(domain.CodeInternal, "No keyring to seal the socket token: set BATONDECK_MASTER_KEY", nil)
 	}
 	b := make([]byte, 12)
 	if _, err := rand.Read(b); err != nil {
@@ -132,8 +142,32 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 		ID: "W-" + hex.EncodeToString(b), IdentityID: caller.Identity, AgentID: AgentID(caller), SocketPath: req.SocketPath,
 		LastCursor: req.Cursor, CreatedAt: now.UnixMilli(), LastSeenAt: now.UnixMilli(), ExpiresAt: now.Add(s.c.wakeTTL).UnixMilli(),
 	}
+	if req.SocketToken != "" {
+		if w.SocketTokenSealed, err = s.c.sealer.Encrypt([]byte(req.SocketToken), SocketTokenAAD(w.ID)); err != nil {
+			return resp, s.c.mapErr("register_wake_session", err)
+		}
+	}
 	if err := s.c.store.PutWakeSession(ctx, w); err != nil {
 		return resp, s.c.mapErr("register_wake_session", err)
 	}
 	return RegisterWakeSessionResp{ID: w.ID, ExpiresAt: isoMs(w.ExpiresAt)}, nil
+}
+
+// WakeScopes is the token scopes a caller's doorbell listener subscribes to: its own (the assigned
+// doorbells naming it) and BroadcastScope of every project it is a member of, read once (one
+// ListProjects). A membership gained after the read is not heard until the listener reconnects.
+func (c *Core) WakeScopes(ctx context.Context, caller domain.Caller) ([]string, error) {
+	if caller.TokenScope == "" {
+		return nil, internalf("wake scopes: the caller has no token scope")
+	}
+	mine, err := c.store.ListProjects(ctx, caller.Identity)
+	if err != nil {
+		return nil, c.mapErr("wake_scopes", err)
+	}
+	out := make([]string, 0, 1+len(mine))
+	out = append(out, caller.TokenScope)
+	for _, pm := range mine {
+		out = append(out, BroadcastScope(pm.Project.ID))
+	}
+	return out, nil
 }
