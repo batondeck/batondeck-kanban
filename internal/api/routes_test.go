@@ -75,7 +75,7 @@ func TestRouteTable(t *testing.T) {
 		}
 		path := strings.NewReplacer("{projectId}", "P-1", "{boardId}", "B-1", "{taskId}", "T-1", "{columnId}", "C-1",
 			"{identityId}", "U-2", "{edgeId}", "E-1", "{sprintId}", "S-1", "{followUpId}", "F-1", "{integrationId}", "I-1",
-			"{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1").Replace(r.Path)
+			"{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
 		body := ""
 		if r.Method == "POST" || r.Method == "PATCH" {
 			body = "{}"
@@ -365,9 +365,6 @@ var outOfScope = struct {
 	routes: map[string]string{
 		"GET " + ppb + "/transitions":         "the transition table is fixed",
 		"PUT " + ppb + "/transitions":         "the transition table is fixed",
-		"GET /api/me/cli-tokens":              "ADR-0004 dropped the CLI-token tools",
-		"POST /api/me/cli-tokens":             "ADR-0004 dropped the CLI-token tools",
-		"POST /api/me/cli-tokens/{id}/revoke": "ADR-0004 dropped the CLI-token tools",
 		"GET /api/me/marketplace-key":         "the plan dropped the marketplace key",
 		"POST /api/me/marketplace-key":        "the plan dropped the marketplace key",
 		"POST /api/me/marketplace-key/rotate": "the plan dropped the marketplace key",
@@ -412,7 +409,7 @@ func TestStubsNameTheirLane(t *testing.T) {
 		}
 		n++
 		path := strings.NewReplacer("{projectId}", "P-1", "{taskId}", "T-1", "{sprintId}", "S-1", "{followUpId}", "F-1",
-			"{integrationId}", "I-1", "{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1").Replace(r.Path)
+			"{integrationId}", "I-1", "{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
 		body := ""
 		if r.Method == "POST" || r.Method == "PATCH" {
 			body = "{}"

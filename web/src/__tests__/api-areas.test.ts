@@ -35,6 +35,6 @@ describe('web/src/api/<area>.ts', () => {
         expect(Object.keys(api), `${area}.${name}`).toContain(name);
       }
     }
-    expect(Object.keys(all)).toHaveLength(38);
+    expect(Object.keys(all)).toHaveLength(41);
   });
 });

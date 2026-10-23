@@ -1,5 +1,5 @@
 {
-  "_comment": "The REST BFF's route table (R1.11, R1.12): every in-scope /api route of conductor gateway/ui-backend/src/app.ts at 5e2baafa, as Go ServeMux patterns, with the line each comes from; R1.12's rows answer NOT_FOUND '<tool> lands in <lane>' until their lane fills them. Out of this table by decision: the studio, admin, tenants, billing and onboarding groups (plan: dropped), the transitions pair (the table is fixed), me/cli-tokens and me/marketplace-key (no backing tool: ADR-0004, the plan), /api/healthz (the binary's /healthz), /api/client-error and /api/projects/{projectId}/overview (no plan lane owns them). internal/api/routes_test.go fails when the mounted table and this file differ, and when an out-of-scope route is mounted or listed.",
+  "_comment": "The REST BFF's route table (R1.11, R1.12): every in-scope /api route of conductor gateway/ui-backend/src/app.ts at 5e2baafa, as Go ServeMux patterns, with the line each comes from; R1.12's rows answer NOT_FOUND '<tool> lands in <lane>' until their lane fills them. Out of this table by decision: the studio, admin, tenants, billing and onboarding groups (plan: dropped), the transitions pair (the table is fixed), me/marketplace-key (the plan dropped it), /api/healthz (the binary's /healthz), /api/client-error and /api/projects/{projectId}/overview (no plan lane owns them). internal/api/routes_test.go fails when the mounted table and this file differ, and when an out-of-scope route is mounted or listed.",
   "routes": [
     {
       "method": "GET",
@@ -205,6 +205,21 @@
       "method": "PATCH",
       "path": "/api/me/settings",
       "source": "app.ts:2697"
+    },
+    {
+      "method": "GET",
+      "path": "/api/me/cli-tokens",
+      "source": "app.ts:2719"
+    },
+    {
+      "method": "POST",
+      "path": "/api/me/cli-tokens",
+      "source": "app.ts:2730"
+    },
+    {
+      "method": "POST",
+      "path": "/api/me/cli-tokens/{id}/revoke",
+      "source": "app.ts:2733"
     },
     {
       "method": "GET",
