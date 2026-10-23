@@ -41,10 +41,10 @@ Measured by `make bench` on Mac14,5: Apple M2 Max, 12 cores, 32 GiB, macOS 27.0.
 | Number | sqlite | postgres | Gate |
 |---|---:|---:|---|
 | claim race winners (of 50) | 50 | 50 | recorded |
-| claim race p50 | 24.1 ms | 63.4 ms | fails beyond +20 % |
-| claim race p95 | 35.4 ms | 73.0 ms | fails beyond +20 % |
-| claim race max | 36.5 ms | 73.4 ms | recorded |
-| claim race wall | 36.5 ms | 73.6 ms | recorded |
+| claim race p50 | 22.2 ms | 51.6 ms | fails beyond +20 % |
+| claim race p95 | 33.9 ms | 61.4 ms | fails beyond +20 % |
+| claim race max | 34.8 ms | 62.0 ms | recorded |
+| claim race wall | 35.1 ms | 62.4 ms | recorded |
 | idle: directory entries | 200 | 200 | recorded |
 | idle: /api/stream clients | 10 | 10 | recorded |
 | idle: hold | 60.0 s | 60.0 s | recorded |
@@ -75,7 +75,7 @@ Measured by `make bench` on Mac14,5: Apple M2 Max, 12 cores, 32 GiB, macOS 27.0.
 | claim_next: fresh core | 7 | 8 | fails on any rise |
 | claim_next: pin | 4 | 5 | recorded |
 
-The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (35.4 ms).
+The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (33.9 ms).
 <!-- bench:end -->
 
 License: Apache-2.0 (`LICENSE`, `NOTICE`).
