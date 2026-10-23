@@ -72,7 +72,8 @@ func Mount(mux *http.ServeMux, o Options) {
 // table is every route, in routes.json's order.
 func table(o *Options) []route {
 	var rs []route
-	for _, area := range []func(*Options) []route{sessionRoutes, projectRoutes, boardRoutes, taskRoutes, lifecycleRoutes, contextRoutes, mediaRoutes, feedRoutes} {
+	for _, area := range []func(*Options) []route{sessionRoutes, projectRoutes, boardRoutes, taskRoutes, lifecycleRoutes, contextRoutes, mediaRoutes, feedRoutes,
+		meRoutes, agentRoutes, notificationRoutes, commentRoutes, followUpRoutes, sprintRoutes, runRoutes, oncallRoutes, chronicleRoutes, analyticsRoutes} {
 		rs = append(rs, area(o)...)
 	}
 	return rs

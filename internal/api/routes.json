@@ -1,5 +1,5 @@
 {
-  "_comment": "The REST BFF's route table (R1.11): conductor gateway/ui-backend/src/app.ts's in-scope board-area routes at 5e2baafa, as Go ServeMux patterns, with the line each comes from. Out of this table by decision: the transitions pair (the table is fixed, plan Ticket states), the cli-token and me routes (ADR-0004), and comments, follow-ups, sprints, runs, notifications and the overview (R1.12). internal/api/routes_test.go fails when the mounted table and this file differ.",
+  "_comment": "The REST BFF's route table (R1.11, R1.12): every in-scope /api route of conductor gateway/ui-backend/src/app.ts at 5e2baafa, as Go ServeMux patterns, with the line each comes from; R1.12's rows answer NOT_FOUND '<tool> lands in <lane>' until their lane fills them. Out of this table by decision: the studio, admin, tenants, billing and onboarding groups (plan: dropped), the transitions pair (the table is fixed), me/cli-tokens and me/marketplace-key (no backing tool: ADR-0004, the plan), /api/healthz (the binary's /healthz), /api/client-error and /api/projects/{projectId}/overview (no plan lane owns them). internal/api/routes_test.go fails when the mounted table and this file differ, and when an out-of-scope route is mounted or listed.",
   "routes": [
     {
       "method": "GET",
@@ -195,6 +195,196 @@
       "method": "GET",
       "path": "/api/stream",
       "source": "app.ts:3540"
+    },
+    {
+      "method": "GET",
+      "path": "/api/me/settings",
+      "source": "app.ts:2696"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/me/settings",
+      "source": "app.ts:2697"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/sessions",
+      "source": "app.ts:2583"
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents/sessions/disconnect",
+      "source": "app.ts:2590"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications",
+      "source": "app.ts:2667"
+    },
+    {
+      "method": "POST",
+      "path": "/api/notifications/read",
+      "source": "app.ts:2670"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/comments",
+      "source": "app.ts:2808"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/comments",
+      "source": "app.ts:2820"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/follow-ups",
+      "source": "app.ts:2830"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/follow-ups",
+      "source": "app.ts:2839"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/follow-ups/{followUpId}/ack",
+      "source": "app.ts:2844"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/sprints",
+      "source": "app.ts:2868"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/sprints/{sprintId}",
+      "source": "app.ts:2874"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/sprints/{sprintId}",
+      "source": "app.ts:2877"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/runs",
+      "source": "app.ts:3171"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/runs",
+      "source": "app.ts:3174"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/runs/open",
+      "source": "app.ts:3177"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/runs/pick",
+      "source": "app.ts:3180"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/runs/cancel",
+      "source": "app.ts:3183"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oncall/sources",
+      "source": "app.ts:2906"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oncall/{projectId}/integrations",
+      "source": "app.ts:2912"
+    },
+    {
+      "method": "POST",
+      "path": "/api/oncall/{projectId}/integrations",
+      "source": "app.ts:2921"
+    },
+    {
+      "method": "POST",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}",
+      "source": "app.ts:2924"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}",
+      "source": "app.ts:2933"
+    },
+    {
+      "method": "POST",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}/rotate-secret",
+      "source": "app.ts:2945"
+    },
+    {
+      "method": "POST",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}/test",
+      "source": "app.ts:2954"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}/deliveries",
+      "source": "app.ts:2963"
+    },
+    {
+      "method": "POST",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}/deliveries/{deliveryId}/replay",
+      "source": "app.ts:2972"
+    },
+    {
+      "method": "GET",
+      "path": "/api/oncall/{projectId}/integrations/{integrationId}/deliveries/{deliveryId}/raw",
+      "source": "app.ts:2984"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/chronicle",
+      "source": "app.ts:3393"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}",
+      "source": "app.ts:3401"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/chronicle",
+      "source": "app.ts:3409"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}",
+      "source": "app.ts:3444"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}/versions",
+      "source": "app.ts:3459"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}/versions/{versionId}",
+      "source": "app.ts:3472"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}/edit",
+      "source": "app.ts:3482"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/chronicle/{pageId}/revert",
+      "source": "app.ts:3503"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/operations",
+      "source": "app.ts:2406"
     }
   ]
 }
