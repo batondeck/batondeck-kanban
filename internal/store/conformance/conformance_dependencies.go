@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -98,6 +99,9 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 			_, err = s.AddEdge(ctx, blocks(p, a, a))
 			wantErr(t, err, domain.CodeCycleDetected, "")
+			// The list is (ts, id): the second edge a millisecond later, as the context and memory
+			// batteries space their writes, so the order asserted below is not a tie on a random id.
+			time.Sleep(2 * time.Millisecond)
 			_, err = s.AddEdge(ctx, blocks(p, bb, c))
 			noErr(t, err)
 			_, err = s.AddEdge(ctx, blocks(p, c, a))
