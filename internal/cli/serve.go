@@ -67,7 +67,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
-		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall()},
+		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall()},
 		Logger:   logger,
 	}
 	if as != nil {

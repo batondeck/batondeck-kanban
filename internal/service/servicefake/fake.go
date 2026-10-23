@@ -56,6 +56,7 @@ func (f *Fake) Services() service.Services {
 		Lifecycle: lifecycleFake{f},
 		Context:   contextFake{f},
 		Media:     mediaFake{f},
+		Chronicle: chronicleFake{f},
 		Feed:      feedFake{f},
 		Sessions:  sessionsFake{f},
 		ToolCalls: toolCallsFake{f},

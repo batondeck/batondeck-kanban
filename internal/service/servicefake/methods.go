@@ -236,3 +236,37 @@ var (
 	_ service.Sessions  = sessionsFake{}
 	_ service.ToolCalls = toolCallsFake{}
 )
+
+type chronicleFake struct{ f *Fake }
+
+func (x chronicleFake) CreatePage(ctx context.Context, caller domain.Caller, req service.CreateChroniclePageReq) (service.CreateChroniclePageResp, error) {
+	return call[service.CreateChroniclePageResp](x.f, "Chronicle.CreatePage", caller, req)
+}
+
+func (x chronicleFake) IngestPage(ctx context.Context, caller domain.Caller, req service.IngestChroniclePageReq) (service.IngestChroniclePageResp, error) {
+	return call[service.IngestChroniclePageResp](x.f, "Chronicle.IngestPage", caller, req)
+}
+
+func (x chronicleFake) EditPage(ctx context.Context, caller domain.Caller, req service.EditChroniclePageReq) (service.EditChroniclePageResp, error) {
+	return call[service.EditChroniclePageResp](x.f, "Chronicle.EditPage", caller, req)
+}
+
+func (x chronicleFake) DeletePage(ctx context.Context, caller domain.Caller, req service.DeleteChroniclePageReq) (service.DeleteChroniclePageResp, error) {
+	return call[service.DeleteChroniclePageResp](x.f, "Chronicle.DeletePage", caller, req)
+}
+
+func (x chronicleFake) ListPages(ctx context.Context, caller domain.Caller, req service.ListChroniclePagesReq) (service.ChronicleIndex, error) {
+	return call[service.ChronicleIndex](x.f, "Chronicle.ListPages", caller, req)
+}
+
+func (x chronicleFake) GetPage(ctx context.Context, caller domain.Caller, req service.GetChroniclePageReq) (service.ChroniclePageView, error) {
+	return call[service.ChroniclePageView](x.f, "Chronicle.GetPage", caller, req)
+}
+
+func (x chronicleFake) ListVersions(ctx context.Context, caller domain.Caller, req service.ListChronicleVersionsReq) (service.ChronicleHistory, error) {
+	return call[service.ChronicleHistory](x.f, "Chronicle.ListVersions", caller, req)
+}
+
+func (x chronicleFake) GetVersion(ctx context.Context, caller domain.Caller, req service.GetChronicleVersionReq) (service.ChronicleVersionView, error) {
+	return call[service.ChronicleVersionView](x.f, "Chronicle.GetVersion", caller, req)
+}

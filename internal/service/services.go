@@ -29,6 +29,7 @@ type Services struct {
 	Lifecycle Lifecycle
 	Context   Context
 	Media     Media
+	Chronicle Chronicle
 	Feed      Feed
 	Sessions  Sessions
 	ToolCalls ToolCalls
