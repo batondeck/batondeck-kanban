@@ -16,7 +16,7 @@
 | 1 | Wire format | **Yes, known and stable.** Newline-delimited JSON over a Unix stream socket: an optional auth line, then one `user` frame per message. The inbox writes **no bytes back** on the connection. | Captured from Claude Code's own `SendMessage` (§2.2). The binary prints the same frame in its `--debug` log, and the docs describe the auth line. Every write returned `RESPONSE bytes=0`. |
 | 2 | Idle wake | **Yes.** A write to an idle session started a turn. | E1: write `08:37:13.122Z` → `Routed user message to queue` `13.145Z` → dequeue `13.227Z` → transcript user entry `13.318Z` → reply `ack` `15.571Z` (§3.1). |
 | 3 | Busy delivery | **Yes, queued and not lost.** Both messages written during a running `sleep 20` were enqueued within 17 ms, then injected into the **same turn** right after the tool returned. Neither interrupted the tool, including `priority:"now"`. | E4b (§3.3): enqueue `08:39:55.077Z` and `58.419Z`; `tool_result` `08:40:17.602Z`; both dequeued `17.716Z` and `17.717Z`; one `ack`, one `turn_duration`. |
-| 4 | `crossSessionInbound` | **`accept`** delivers. **`hold`** shows a notice and starts no turn. **`refuse`** drops silently. With no value set, delivery depends on the receiver's permission class. | P1 (auto, unset) delivered. P3 (`hold`) logged `held inbound peer message (1 held, cause=explicit-setting)`, with no assistant entry. P4 (`refuse`) logged `refused inbound peer message`, with no transcript (§3.4). |
+| 4 | `crossSessionInbound` | **`accept`** delivers. **`hold`** shows a notice and starts no turn. **`refuse`** drops silently. With no value set, delivery depends on the receiver's permission class. | P5 (`accept` via `--settings`) and P1 (auto, unset) delivered. P3 (`hold`) logged `held inbound peer message (1 held, cause=explicit-setting)`, with no assistant entry. P4 (`refuse`) logged `refused inbound peer message`, with no transcript (§3.4). |
 | 5a | Socket appears and disappears | **Appears at startup**, before the trust dialog is answered. **Removed** on `/exit` and on SIGTERM. **Left stale** on SIGKILL: connecting to it gives `ECONNREFUSED`. The registry entry is removed in all three cases. | §3.5. |
 | 5b | Fixed directory? | **No.** The path is `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`, else `$CLAUDE_CODE_TMPDIR/cc-socks/`, else `/tmp/cc-socks/`. The per-uid fallback is `/tmp/cc-socks-<uid>/`, and `--messaging-socket-path` overrides all of these. `TMPDIR` plays no part. | A session started with `XDG_RUNTIME_DIR=$TMPDIR/bk-r31` bound `…/bk-r31/cc-socks/21013.sock`. Resolver in the binary: `XDG_RUNTIME_DIR \|\| (CLAUDE_CODE_TMPDIR \|\| "/tmp")`. |
 | 5c | Role or identity from the socket alone? | **No.** The socket gives a pid (from the filename and peer credentials) and nothing else. Claude Code's own **registry**, `~/.claude/sessions/<pid>.json`, adds `sessionId`, `cwd`, `name`, `kind`, `entrypoint`, `status`, `procStart` and `messagingSocketPath`. Nothing in it names master or worker, so the register hook must supply the role. | §3.6. |
@@ -100,9 +100,10 @@ Clock: the writer's `time_ns()` and Claude Code's transcript and debug timestamp
 | E4-now (idle) | 08:38:56.697 | +3 ms | +19 ms | +40 ms | +1404 ms |
 | E4-later (idle) | 08:39:01.173 | +3 ms | +52 ms | +97 ms | +1455 ms |
 | P1 (R3, auto) | 08:41:39.448 | +8 ms | +34 ms | +103 ms | +2063 ms |
+| P5 (R6, `accept`, committed `doorbell.py`) | 08:51:45.003 | +2 ms | +8 ms | +15 ms | +2397 ms |
 
-- Write to turn start (dequeue): **19–105 ms**, median **34 ms**, n=7.
-- Write to the transcript's user entry: **40–196 ms**.
+- Write to turn start (dequeue): **8–105 ms**, median **34 ms**, n=8.
+- Write to the transcript's user entry: **15–196 ms**.
 - The rest of the time is the model.
 
 The transcript entry for E1 (`~/.claude/projects/<sanitised cwd>/f73a2587-….jsonl`):
@@ -119,6 +120,7 @@ because the frame carried none.
 ### 3.2 Auth
 
 - **Token sources.** The env var `CLAUDE_CODE_MESSAGING_TOKEN` holds the session's **child** token. The **peer** token is in `~/.claude/sessions/<pid>.<sha256(socketPath)>.key`, mode `0600`, JSON `{peerToken, procStart, pidDomain}`. The key file name was verified: `sha256("/tmp/cc-socks/90375.sock")` = `c3efab63…76df2`.
+- **The inbox does check the token, but only for display.** Its `Routed user message to queue` debug line printed the content for E1 (no auth line) and for E2 and P5 (the key file's peer token), but `(withheld)` for E3 (wrong token). That is inferred evidence that E2's peer token was recognised.
 - **A wrong token was delivered anyway (E3)**, because on macOS a bad auth frame is only fatal when `authRequired`. The real guard is the `0700` directory and `0600` socket.
 - **Content steers the receiver.** E3's text said it carried a wrong token, and the receiving model declined to run the command it asked for. The doorbell's text is a prompt to the model, so it must be terse and plain.
 
@@ -146,6 +148,7 @@ tool is never interrupted.
 | R3 `auto` | unset | spike writer | delivered, turn (P1) |
 | R4 `manual` | `hold` (via `--settings`) | spike writer | `held inbound peer message (1 held, cause=explicit-setting)`; system entry `Held peer message — from an unidentified session [verified pid 21399]`; **no turn** |
 | R4 `manual` | `hold` | Claude `SendMessage` (S1) | `held … (2 held)`; no turn; S1's tool result `success:true … in that session's inbox, not yet read` |
+| R6 `manual` | `accept` (via `--settings`) | committed `doorbell.py` (peer token + `session_id`) | delivered, turn (P5): `Routed … (priority=next)` `08:51:45.006Z`, user entry `45.019Z`, `ack` `47.401Z` |
 | R5 `manual` | `refuse` (via `--settings`) | spike writer | `refused inbound peer message`; no transcript at all; **no turn** |
 | bypass receiver | unset | — | **not run** (see §6). From the binary and the docs: **held** (`holdCause: no-mode-asserted`) unless the sender attests `from-mode="bypass"` |
 
@@ -229,13 +232,14 @@ cursor-agent -> ~/.local/bin/cursor-agent               2026.04.17-479fd04  (not
 
 ## 5. Spend
 
-**10 turns**, all on `haiku`:
+**11 turns**, all on `haiku`:
 
 | Session | Turns | What |
 |---|---|---|
 | R1 | 7 | E1, E2, E3, E4-next, E4-now, E4-later, E4b |
 | R3 | 2 | P1, plus P2, which was meant as a hold test but was delivered because `--settings` files do not hot-reload |
 | S1 | 1 | the `SendMessage` capture |
+| R6 | 1 | P5, explicit `accept`, written with the committed `doorbell.py` |
 | R4, R5 | 0 | held and refused |
 
 ## 6. Not verified
@@ -244,8 +248,8 @@ cursor-agent -> ~/.local/bin/cursor-agent               2026.04.17-479fd04  (not
 - The held-message approval dialog (approve or deny), and release of held messages when `accept` later applies.
 - `claude -p` workers, `--bg` background sessions, and Desktop or VS Code sessions. The owner's pid 12655 is the Desktop app's 2.1.308.
 - Linux and native Windows (`authRequired` is true only on Windows), and any version other than 2.1.309.
-- Which token `SendMessage` sent: it was redacted at capture. That it is the peer token from the key file is inferred from the code.
+- Which token `SendMessage` sent: it was redacted at capture. That it is the peer token from the key file is inferred from the code and from the `(withheld)` behaviour in §3.2.
 - The rate-limit, duplicate-drop and 50-message queue thresholds: taken from the docs, not exercised.
 - Receipts (`peer_message_status`) to a non-Claude sender that sets `from`. The one attempt failed because of the capture proxy.
 - What happens to a write made while the folder-trust dialog is still open.
-- **The committed writer has not been run.** `docs/release/spikes/socket-wake/doorbell.py` is a distillation of the scratch writer used here, and it has only been syntax-checked. The scratch writer additionally refused any socket whose pid was not one the spike had spawned.
+- The committed `docs/release/spikes/socket-wake/doorbell.py` was run once (P5). E1–E4 and P1–P4 used the scratch writer it was distilled from, which also refused any socket whose pid the spike had not spawned.
