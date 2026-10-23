@@ -1,14 +1,14 @@
 package mcp_test
 
 import (
-	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 
-	"github.com/batondeck/batondeck-kanban/internal/domain"
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	bk "github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // The runs and sprints tools on the real stack, every selected engine (BATONDECK_TEST_ENGINE): each
@@ -78,66 +78,63 @@ func (r *raceRig) submit(run, deliverable string) {
 	r.ada.call("complete_task", map[string]any{"projectId": r.p, "taskId": run, "leaseId": lease, "deliverable": deliverable})
 }
 
+// feed is the board's activity feed as a client reads it (the board-feed resource), every page.
+func (r *raceRig) feed() []map[string]any {
+	r.t.Helper()
+	var out []map[string]any
+	uri := bk.Scheme + "://" + r.p + "/board/" + r.b + "/feed"
+	for range 50 {
+		res, err := r.ada.cs.ReadResource(testCtx(r.t), &sdk.ReadResourceParams{URI: uri})
+		if err != nil || len(res.Contents) != 1 {
+			r.t.Fatalf("read %s: %+v, %v", uri, res, err)
+		}
+		var page struct {
+			Events     []map[string]any `json:"events"`
+			NextCursor string           `json:"nextCursor"`
+		}
+		if err := json.Unmarshal([]byte(res.Contents[0].Text), &page); err != nil {
+			r.t.Fatal(err)
+		}
+		out = append(out, page.Events...)
+		if page.NextCursor == "" {
+			return out
+		}
+		uri = bk.Scheme + "://" + r.p + "/board/" + r.b + "/feed?cursor=" + page.NextCursor
+	}
+	r.t.Fatal("the feed did not end in 50 pages")
+	return nil
+}
+
+// events counts the feed's events of type typ on task id.
 func (r *raceRig) events(id, typ string) int {
 	r.t.Helper()
-	page, err := r.s.Store.ListTaskEvents(context.Background(), r.p, id, "", 200)
-	if err != nil {
-		r.t.Fatal(err)
-	}
 	n := 0
-	for _, e := range page.Events {
-		if string(e.Type) == typ {
+	for _, e := range r.feed() {
+		if str(e["taskId"]) == id && str(e["type"]) == typ {
 			n++
 		}
 	}
 	return n
 }
 
-// gone fails unless every id has no row left in the store areas the cascade empties: the task, its
-// run row, events, context items, memory, summary and dependency edges.
+// gone fails unless every id is NOT_FOUND to get_task, get_task_context and read_memory, and no
+// event of the feed names it (the per-table row counts on the engines are internal/cli's).
 func (r *raceRig) gone(ids ...string) {
 	r.t.Helper()
-	ctx := context.Background()
-	st := r.s.Store
 	for _, id := range ids {
-		if _, err := st.GetTask(ctx, r.p, id); code(err) != "NOT_FOUND" {
-			r.t.Fatalf("task %s: %v, want NOT_FOUND", id, err)
-		}
-		if _, err := st.ListContextItems(ctx, r.p, id, store.ContextItemsQuery{}); code(err) != "NOT_FOUND" {
-			r.t.Fatalf("context items of %s: %v, want NOT_FOUND", id, err)
-		}
-		if n, err := st.DeleteMemoryByTask(ctx, r.p, id); err != nil || n != 0 {
-			r.t.Fatalf("memory of %s: %d rows (%v), want 0", id, n, err)
-		}
-		if _, err := st.GetSummary(ctx, r.p, id); code(err) != "NOT_FOUND" {
-			r.t.Fatalf("summary of %s: %v, want NOT_FOUND", id, err)
+		for _, tool := range []string{"get_task", "get_task_context", "read_memory", "list_subtasks"} {
+			args := map[string]any{"projectId": r.p, "taskId": id}
+			if tool == "list_subtasks" {
+				args = map[string]any{"projectId": r.p, "parentTaskId": id}
+			}
+			r.wantCode(r.ada, tool, args, "NOT_FOUND")
 		}
 	}
-	edges, err := st.ListEdges(ctx, r.p)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	for _, e := range edges {
-		if slices.Contains(ids, e.FromTaskID) || slices.Contains(ids, e.ToTaskID) {
-			r.t.Fatalf("edge %s %s→%s survived", e.ID, e.FromTaskID, e.ToTaskID)
+	for _, e := range r.feed() {
+		if slices.Contains(ids, str(e["taskId"])) {
+			r.t.Fatalf("the feed holds %s of deleted %s", e["type"], e["taskId"])
 		}
 	}
-	feed, err := st.ListBoardFeed(ctx, r.p, r.b, "", 200)
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	for _, e := range feed.Events {
-		if e.TaskID != nil && slices.Contains(ids, *e.TaskID) {
-			r.t.Fatalf("the feed holds %s of deleted %s", e.Type, *e.TaskID)
-		}
-	}
-}
-
-func code(err error) string {
-	if e, ok := domain.AsBatonDeckError(err); ok {
-		return string(e.Code)
-	}
-	return ""
 }
 
 // AC1: pick_run over three runs keeps the winner, deletes the two losers through the cascade (one
