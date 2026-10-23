@@ -8,6 +8,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
+  R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
+  message for an unknown login, a wrong password and a disabled account) and the form shows it; on
+  success the route asked for renders, with no navigation. The WorkOS button, the tenant and access
+  copy and the dead demo button are gone. New `POST /api/logout` (behind the session and CSRF)
+  deletes the session row (`Store.DeleteSession`, both engines) and expires both cookies: sign-out
+  called the unmounted `/auth/logout` before (P-198). New `GET` and `POST /api/users`, the workspace
+  admin's only (anyone else is 403 `FORBIDDEN`): list the local accounts (login, name, role,
+  disabled) and add a member, whose generated password the answer carries once; disable, password
+  reset and role changes stay with `batondeck-kanban user`. Settings shows the Users panel to the
+  workspace admin in place of the WorkOS invitation panel, and `web/src/api/tenants.ts` is gone. A
+  disabled user's open session is 401 within the 60 s account-cache window.
 - The SPA on five states (R1.14, ADR-0005): `Status` is `TODO · IN_PROGRESS · BLOCKED · REVIEW ·
   DONE`, derived from the exported `STATUSES`; every status map, filter, chart order, the move-button
   fallback table and the ticket-search aliases follow it (no `CANCELLED`, `BACKLOG`, `READY`, and the
