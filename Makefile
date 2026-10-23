@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract clean web-public-check kit-check skill-lint hook-check
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -92,10 +92,11 @@ image:
 # check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
 # THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
 # sources, web/dist against a fresh web build, the layering guard, the tests under the race
-# detector, the store conformance suite once per engine, the MCP contract, web/public against its
-# allow-list, the vendored brand kit against its lock, the plugin: its instructions against the
-# contract (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against the five.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract web-public-check kit-check skill-lint hook-check web-states-check
+# detector, the store conformance suite once per engine, the MCP contract (files and live server),
+# the per-call statement pins, web/public against its allow-list, the vendored brand kit against its
+# lock, the plugin: its instructions against the contract (skill-lint) and its hooks' stdout
+# (hook-check), and the SPA's states against the five.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -186,9 +187,18 @@ conformance:
 # runs the comparator's refusal controls (contract/contract_test.go). After a deliberate change to
 # deltas.json: `go test ./contract/ -run TestExpectedIsTheExactDerivation -update`. tools.json and
 # admin-tools.json come from conductor by `node scripts/contract-import.mjs <mcp.json> [--admin <dump>]`,
-# which the gate cannot run: conductor is a private sibling.
+# which the gate cannot run: conductor is a private sibling. Then the live half: serve's composition
+# on every engine, its tools/list equal to expected.json less contract/pending.json exactly, and the
+# served names equal to the snapshot (internal/cli/contract_live_test.go; it holds the MCP client
+# ADR-0003 row 7 keeps out of contract/).
 contract:
 	go test -race ./contract/
+	go test -race -count=1 -v -run '^(TestLiveContract|TestSurfaceSnapshot)$$' ./internal/cli/
+
+# perf holds the hot tool calls to their statement pins on SQLite and Postgres (test/perf). The
+# Postgres half needs BATONDECK_TEST_POSTGRES_DSN, as conformance does.
+perf:
+	go test -race -count=1 -v ./test/perf/
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:
