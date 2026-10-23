@@ -103,6 +103,9 @@ func TestOncallOnTheRealStack(t *testing.T) {
 				t.Errorf("AC6: a non-admin's %s by name = %v, want FORBIDDEN for workspace-admin", n, e)
 			}
 		}
+		if t.Failed() {
+			return
+		}
 		t.Logf("AC6 %s: the admin lists %d tools, the non-admin (the project's admin) %d; the 9 on-call tools are FORBIDDEN to the non-admin by name", s.Engine, len(adminNames), len(memberNames))
 	})
 }
