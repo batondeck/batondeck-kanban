@@ -35,8 +35,7 @@ var backends = []opener{
 const day = 24 * time.Hour
 
 // AC4: one sweep removes the change-log row older than 7 days, the tool_calls row past 45 days and
-// the memory entry past its TTL, and leaves the younger ones, on memstore and both engines. Memory
-// is R0.10's: where its Store methods are not built yet, that half is skipped and said so.
+// the memory entry past its TTL, and leaves the younger ones, on memstore and both engines.
 func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 	for _, b := range backends {
 		t.Run(b.name, func(t *testing.T) {
@@ -58,15 +57,8 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 			if err := s.InsertToolCalls(ctx, []store.ToolCall{call(46 * day), call(44 * day)}); err != nil {
 				t.Fatal(err)
 			}
-			memoryBuilt := true
 			for _, expires := range []int64{at(time.Minute), at(-time.Hour)} {
-				_, err := s.WriteMemory(ctx, store.WriteMemoryInput{Scope: "agent_global", Key: "k", Value: json.RawMessage(`1`), Author: "alice", ExpiresAt: expires})
-				if task, ok := store.UnbuiltTask(err); ok {
-					t.Logf("memory is not built on %s yet (%s): the memory half is skipped", b.name, task)
-					memoryBuilt = false
-					break
-				}
-				if err != nil {
+				if _, err := s.WriteMemory(ctx, store.WriteMemoryInput{Scope: "agent_global", Key: "k", Value: json.RawMessage(`1`), Author: "alice", ExpiresAt: expires}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -75,15 +67,8 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 				Now: func() time.Time { return now }, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
 			got := sw.Sweep(ctx)
 			t.Logf("swept %+v", got)
-			if got.ChangeLog != 1 || got.ToolCalls != 1 {
-				t.Fatalf("swept %+v, want one change-log row and one tool call", got)
-			}
-			if memoryBuilt {
-				if got.Memory != 1 || len(got.Unbuilt) != 0 {
-					t.Fatalf("swept %+v, want the one expired memory entry", got)
-				}
-			} else if !slices.Equal(got.Unbuilt, []string{"memory"}) {
-				t.Fatalf("unbuilt %v, want [memory]", got.Unbuilt)
+			if got != (Swept{Memory: 1, ChangeLog: 1, ToolCalls: 1}) {
+				t.Fatalf("swept %+v, want one memory entry, one change-log row and one tool call", got)
 			}
 			left, err := s.ReadChanges(ctx, 0, 0)
 			if err != nil {

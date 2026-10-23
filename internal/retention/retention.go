@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 const (
@@ -46,11 +45,9 @@ func WindowsOf(r core.Retention) Windows {
 
 func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
-// Swept is what one sweep deleted, per table. Unbuilt names the steps whose Store method is not
-// built on this engine yet (store.UnbuiltTask): skipped, not failed.
+// Swept is what one sweep deleted, per table.
 type Swept struct {
 	Memory, ChangeLog, ToolCalls int64
-	Unbuilt                      []string
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -76,9 +73,7 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 			n, err := del(int(min(Batch, MaxPerTick-total)))
 			total += n
 			if err != nil {
-				if _, unbuilt := store.UnbuiltTask(err); unbuilt {
-					out.Unbuilt = append(out.Unbuilt, name)
-				} else if s.Report != nil && ctx.Err() == nil {
+				if s.Report != nil && ctx.Err() == nil {
 					s.Report(name, err)
 				}
 				break
