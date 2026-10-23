@@ -8,6 +8,37 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The `/wake` doorbell, the Unix socket listener and `/internal/wake-session` (R0.15).
+  `GET /wake[?since=<cursor>]` (bearer required; 401 with `WWW-Authenticate: Bearer` without one, 400
+  for a cursor that is not one non-negative integer) is an SSE stream of the caller's doorbells:
+  `id: <cursor>` and `data: {"agent","kind":"assigned|broadcast","taskId","projectId","boardId","cursor"}`,
+  the cursor being the change-log id. Its scopes are the caller's token scope plus
+  `project:<id>` of every project it is a member of (`service.Core.WakeScopes`, one `ListProjects`
+  at connect); `changed` rows ring nothing. With `since`, every doorbell after the cursor is replayed
+  from the log through `bus.Replay`, oldest first and uncoalesced, before the stream goes live; live
+  doorbells of one kind are one frame carrying the highest cursor once that kind has been quiet for
+  300 ms (the bus's 250 ms read interval plus 50 ms), at most 1 s after the first, so five doorbells
+  in 4 ms are one frame. Comments: `: ok` when subscribed, `: keepalive` every 20 s, and `: dropped,
+  reconnect with since=<cursor>` before ending a stream whose subscription overflowed. Measured on
+  the real binary over Postgres: a row's frame 294 ms after its commit; an idle stream issued 0
+  statements in 45 s (`log_statement=all`).
+  `listen` is now a list of `tcp://host:port` and `unix:///abs/path` entries (default
+  `["tcp://127.0.0.1:8080"]`; `BATONDECK_LISTEN` comma-separated; anything else is refused by name,
+  `listen_entries_are_tcp_or_unix_urls`; the Dockerfile sets `tcp://:8080`), every entry serving the
+  same handler. A Unix socket is made mode 0600 in a 0700 directory, a stale socket file is replaced
+  and a live one or any other file refused, and every accepted connection's peer uid is checked
+  (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS via `golang.org/x/sys/unix`, now a direct
+  requirement at the version already linked): another uid is closed before HTTP reads it, and logged.
+  `healthcheck` probes the first entry, a socket by its path.
+  `POST /internal/wake-session {socket, token}` registers a Claude Code session inbox for the
+  bearer's identity (201 `{id, expiresAt}`); it is served only on a Unix socket and is 404 over TCP.
+  The inbox token is stored sealed with the keyring (`RegisterWakeSessionReq.SocketToken`,
+  `service.Options.Sealer`, AAD `wake_sessions.socket_token:<id>`), never as given. The key chain:
+  `BATONDECK_MASTER_KEY`, else `master.key` (generated 0600 on first run) beside the SQLite file,
+  or on Postgres beside the `-config` file; on Postgres with neither, serve starts without a keyring,
+  logs one WARN line, and refuses a token (500 INTERNAL naming `BATONDECK_MASTER_KEY`). Losing
+  `master.key` makes the sealed tokens unreadable. `serve` now starts the bus (closed before the HTTP
+  drain, so open streams do not hold the stop).
 - The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
   `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
   `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token

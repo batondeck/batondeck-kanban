@@ -465,3 +465,45 @@ func TestServeAnswersOnTheUnixSocket(t *testing.T) {
 		t.Fatalf("socket %v %v, want mode 0600", fi, err)
 	}
 }
+
+// The keyring chain: the environment's key, else master.key beside the SQLite file, else (Postgres)
+// beside the config file, else none and one WARN line.
+func TestOpenKeyringChain(t *testing.T) {
+	none := func(string) (string, bool) { return "", false }
+	dir := t.TempDir()
+	logs := &lockedLog{}
+	logger := log.New(logs, "", 0)
+	sqlite := &core.Config{Database: core.Database{URL: filepath.Join(dir, "db", "bk.db")}}
+	if err := os.MkdirAll(filepath.Join(dir, "db"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := openKeyring(sqlite, "", none, logger); err != nil || k == nil {
+		t.Fatalf("sqlite: %v %v", k, err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, "db", "master.key")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("sqlite master.key: %v %v", fi, err)
+	}
+	pg := &core.Config{Database: core.Database{URL: "postgres://u@h/db"}}
+	cfgPath := filepath.Join(dir, "etc", "bk.json")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := openKeyring(pg, cfgPath, none, logger); err != nil || k == nil {
+		t.Fatalf("postgres with a config file: %v %v", k, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "etc", "master.key")); err != nil {
+		t.Fatalf("postgres master.key beside the config: %v", err)
+	}
+	k, err := openKeyring(pg, "", none, logger)
+	if err != nil || k != nil {
+		t.Fatalf("postgres with neither: %v %v, want no sealer", k, err)
+	}
+	if !strings.Contains(logs.String(), "WARN no keyring: set "+core.MasterKeyEnv) {
+		t.Fatalf("log %q: want the WARN line", logs.String())
+	}
+	key := strings.Repeat("A", 43) + "="
+	env := func(n string) (string, bool) { return key, n == core.MasterKeyEnv }
+	if k, err := openKeyring(pg, "", env, logger); err != nil || k == nil {
+		t.Fatalf("postgres with %s: %v %v", core.MasterKeyEnv, k, err)
+	}
+}
