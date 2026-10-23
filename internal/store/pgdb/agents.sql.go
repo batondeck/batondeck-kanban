@@ -37,42 +37,6 @@ func (q *Queries) GetAgentProfile(ctx context.Context, arg GetAgentProfileParams
 	return i, err
 }
 
-const getAgentSession = `-- name: GetAgentSession :one
-SELECT identity_id, agent_id, agent_name, kind, client_name, client_version, oauth_client_id, first_seen_at, last_seen_at, live_at, wake_attached_at, wake_bound, session_count, request_count, tool_counts, last_tool, last_project_id, revoked_at, revoked_by FROM agent_sessions WHERE identity_id = $1 AND agent_id = $2
-`
-
-type GetAgentSessionParams struct {
-	IdentityID string
-	AgentID    string
-}
-
-func (q *Queries) GetAgentSession(ctx context.Context, arg GetAgentSessionParams) (AgentSession, error) {
-	row := q.db.QueryRow(ctx, getAgentSession, arg.IdentityID, arg.AgentID)
-	var i AgentSession
-	err := row.Scan(
-		&i.IdentityID,
-		&i.AgentID,
-		&i.AgentName,
-		&i.Kind,
-		&i.ClientName,
-		&i.ClientVersion,
-		&i.OauthClientID,
-		&i.FirstSeenAt,
-		&i.LastSeenAt,
-		&i.LiveAt,
-		&i.WakeAttachedAt,
-		&i.WakeBound,
-		&i.SessionCount,
-		&i.RequestCount,
-		&i.ToolCounts,
-		&i.LastTool,
-		&i.LastProjectID,
-		&i.RevokedAt,
-		&i.RevokedBy,
-	)
-	return i, err
-}
-
 const getIdentity = `-- name: GetIdentity :one
 SELECT id, kind, display, capabilities, max_ticket_tokens, token_policy, starred_assets FROM identities WHERE id = $1
 `

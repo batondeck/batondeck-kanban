@@ -32,13 +32,13 @@ every HDTP area removed.
 | events (`conformance_events.go`) | task and board events newest first, the board feed, cursors, keyed by project, gone with their task; each with its refusals |
 | changelog (`conformance_changelog.go`) | rising ids, reads after a cursor of every scope and of one, nothing kept by a rollback, the retention delete; each with its refusals |
 | context (`conformance_context.go`) | append, newest- and oldest-first paging by cursor, per-project task ids, per-task delete; NOT_FOUND task, VALIDATION kind/body/author/cursor |
-| memory (`conformance_memory.go`) | the three task scopes and agent privacy, recall by project and by identity, a 1 s TTL readable at once and absent after 2 s before any sweep, the bounded sweep, per-task delete; the routing refusals |
+| memory (`conformance_memory.go`) | the three task scopes and agent privacy, recall by project and by identity, a 1 s TTL readable at once and absent after 2 s before any sweep, the bounded sweep, per-task delete, a project entry keeping its task as provenance after the task is deleted (migration 0003); the routing refusals |
 | summaries (`conformance_summaries.go`) | empty until set, set under the task's version without bumping it, STALE with expected/actual writing nothing, NOT_FOUND task |
 | dependencies (`conformance_dependencies.go`) | an edge and both caches together, a refused cycle (two-, self- and three-task) leaving no partial edge or cache entry, rollback inside `Atomically`, relates edges, the repeated edge, removal, `SetCaches`, project isolation; NOT_FOUND and VALIDATION |
 | subtasks (`conformance_subtasks.go`) | children in task-number order (T-2..T-11), none, project isolation, NOT_FOUND parent |
 | audit (`conformance_audit.go`) | every field read back, newest first, five filters, paging by cursor; VALIDATION |
 | toolcalls (`conformance_toolcalls.go`) | a batch lands whole, a bad row refuses the batch, the bounded delete by age; VALIDATION |
-| agentsessions (`conformance_agentsessions.go`) | the connection upsert, the activity touch, listing, the idle delete, delete; NOT_FOUND and VALIDATION |
+| agentsessions (`conformance_agentsessions.go`) | the connection upsert, the activity touch, listing, the idle delete, a touched session outliving a 2 s idle sweep, delete; NOT_FOUND and VALIDATION |
 | wakesessions (`conformance_wakesessions.go`) | put, get, replace keeping created-at, delete, expiry at the read; NOT_FOUND and VALIDATION |
 | attachments (`conformance_attachments.go`) | pending then ready on an existing blob, oldest-first list, per-task delete, project isolation; NOT_FOUND task/attachment/blob, VALIDATION |
 | blobs (`conformance_blobs.go`) | put once, get, delete, a referenced blob kept, the unreferenced list by age and limit; VALIDATION |
@@ -54,11 +54,11 @@ store's methods are unbuilt: the engines' stubs (`internal/store/stubs_contract_
 under the detail `unbuilt` (`internal/store/unbuilt.go`), and `store.UnbuiltTask` is what `area`
 (`conformance_seed.go`) checks; `noErr` and `wantErr` skip on it too. Every other outcome of a built area fails, including a missing seeder: a battery standing
 on projects, boards and tasks takes them from the store's `seeder`, and a store that is built but offers
-none fails the battery rather than skipping it. The engine seeder adapter over `store.Projects`, `Boards`
-and `Tasks` is R0.10's; until it lands, the engines never reach a seeder, because every area skips as
-unbuilt first. Meanwhile
-`TestContractIIBatteriesOnAReference` (`reference_test.go`) runs all twelve against a map-backed
-reference that keeps the contract, which is where the batteries are proven to pass and to fail.
+none fails the battery rather than skipping it. `WithSeeder(store)` (`conformance_seed.go`) is that
+seeder, over the store's own `Projects`, `Boards` and `Tasks`; the three factories below return their
+store through it. `TestContractIIBatteriesOnAReference` (`reference_test.go`) runs all twelve against a
+map-backed reference that keeps the contract, which is where the batteries of the areas no store has
+built yet are proven to pass and to fail.
 
 ## Its callers
 

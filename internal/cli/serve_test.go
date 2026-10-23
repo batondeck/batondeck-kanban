@@ -79,8 +79,8 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 	}
 }
 
-// capturing is a memstore that keeps every tool_calls row it is handed. The engines' agent-session
-// and tool-call statements are unbuilt (R0.10, R0.11), so the service core is proved over memstore.
+// capturing is a memstore that keeps every tool_calls row it is handed. The engines' tool-call
+// statements are unbuilt until R0.11, so the service core is proved over memstore.
 type capturing struct {
 	*memstore.Store
 	rows []store.ToolCall

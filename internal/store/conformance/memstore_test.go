@@ -17,6 +17,6 @@ func TestMemstoreConformance(t *testing.T) {
 	conformance.Run(t, func(t *testing.T) conformance.Migratable {
 		s := memstore.New()
 		t.Cleanup(func() { s.Close() })
-		return s
+		return conformance.WithSeeder(s)
 	})
 }

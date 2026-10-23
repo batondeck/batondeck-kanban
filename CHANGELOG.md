@@ -37,6 +37,26 @@ Notable changes to batondeck-kanban. The format follows
   `/mcp` over the store's API tokens and the service core's Sessions and ToolCalls, flushed on
   shutdown. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
   its linked dependencies (THIRD_PARTY_NOTICES: 21 to 28 linked modules).
+- Store contract II in SQL on both engines for seven areas (R0.10): `internal/store/{context,memory,
+  summaries,dependencies,subtasks,agentsessions,wakesessions}.go` over
+  `queries/{sqlite,postgres}/{context,memory,summaries,dependencies,subtasks,agentsessions,wakesessions}.sql`
+  (`wake_sessions.sql` renamed, the unused placeholder queries replaced) replace their INTERNAL stubs,
+  and the seven batteries pass on SQLite and Postgres; memstore carries context, memory, summaries,
+  dependencies and subtasks and passes those five. `conformance.WithSeeder` is the seeder the batteries
+  stand on, over a store's own Projects, Boards and Tasks. `RecallMemory` is an exact key, or the newest
+  `k` with no key and then the expired dropped, no FTS (owner ruling 2026-10-23; plan §Clarifications 1
+  corrected). An edge write and its two caches land in one transaction and move no task's version
+  (`SetTaskCaches` writes the caches alone). The primitives `get_task_context` composes, `GetTask`,
+  `GetSummary`, `ListContextItems`, `ReadMemory`, `ListBlockers` and `ListDependents`, are one
+  statement each, six together on both engines, on a task holding rows and on a bare one
+  (`TestTaskContextStatements{SQLite,Postgres}`).
+- Migration `0003_memory_drop_task_fk` on both engines (P-65, owner-approved 2026-10-23): memory loses
+  its foreign key to tasks, so a project entry keeps its task as provenance after the task is deleted;
+  the task scopes are the service's cascade (`DeleteMemoryByTask`). SQLite rebuilds the table (it has no
+  index, trigger or view beyond its primary key's); the down migration restores the key, deleting the
+  task, agent and shared rows whose task is gone and clearing the task_id of the other orphaned rows.
+  `TestMemoryKeepsNoKeyToTasks{SQLite,Postgres}` pin the rebuilt table's columns, scope CHECK and the
+  remaining keys' ON DELETE actions.
 - The projects, boards and feed services (R1.16, ADR-0003 B3): `Core.Projects()`, `Core.Boards()`
   and `Core.Feed()` in `internal/service/{projects,members,boards,feed}.go` implement R0.20's
   contracts, every mutation through `mutate` and every check through `authorize`. `create_project`

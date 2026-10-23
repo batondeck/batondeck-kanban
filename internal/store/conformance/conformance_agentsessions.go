@@ -121,6 +121,22 @@ func agentSessions(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("ATouchedSessionOutlivesAnIdleSweepOfTwoSeconds", func(t *testing.T) {
+			s := migrated(t, newStore)
+			for _, agent := range []string{"idle", "busy"} {
+				_, err := s.UpsertAgentSession(ctx, start("alice", agent, 1_000))
+				noErr(t, err)
+			}
+			noErr(t, s.TouchAgentSession(ctx, store.AgentSessionTouch{IdentityID: "alice", AgentID: "busy", AgentName: "busy-name", Kind: "agent", Tool: "claim_next", At: 5_000}))
+			n, err := s.DeleteIdleAgentSessions(ctx, 5_000-2_000)
+			noErr(t, err)
+			rows, err := s.ListAgentSessions(ctx, "alice", 0)
+			noErr(t, err)
+			if n != 1 || len(rows) != 1 || rows[0].AgentID != "busy" {
+				t.Fatalf("a sweep of sessions idle 2 s at 5000 deleted %d and left %+v, want 1 and busy", n, rows)
+			}
+		})
+
 		t.Run("DeleteDeletesOneAndAMissingOneIsNotFound", func(t *testing.T) {
 			s := migrated(t, newStore)
 			_, err := s.UpsertAgentSession(ctx, start("alice", "a1", 100))
