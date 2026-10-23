@@ -1,27 +1,30 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
-	"github.com/batondeck/batondeck-kanban/internal/auth/authfake"
-	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
@@ -30,13 +33,14 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/wake"
 )
 
-// countedSQLite counts the change-log reads the bus and /wake make: each is one statement.
+// The device session directory and its dispatcher (R0.25) through the real serve composition: a
+// migrated SQLite store, the service core, the bus, the directory, and its routes on a real Unix
+// listener. A client is a `sleep` this test starts (the process the directory watches), a fake
+// Claude Code registry entry naming it, and a fake inbox socket that records every byte written.
+
+// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects.
 type countedSQLite struct {
 	*store.SQLite
-	reads atomic.Int64
-	// beforeReplay, when set, runs once before the first ReadChangesForScope (bus.Replay's read).
-	beforeReplay atomic.Pointer[func()]
-	// rechecks counts the reads a stream's recheck makes: GetToken, GetUser, ListProjects.
 	rechecks atomic.Int64
 }
 
@@ -55,334 +59,245 @@ func (c *countedSQLite) ListProjects(ctx context.Context, identityID string) ([]
 	return c.SQLite.ListProjects(ctx, identityID)
 }
 
-func (c *countedSQLite) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
-	c.reads.Add(1)
-	return c.SQLite.ReadChanges(ctx, since, limit)
+// person is a user with an API token.
+type person struct {
+	id, token, tokenID string
 }
 
-func (c *countedSQLite) ReadChangesForScope(ctx context.Context, scope string, since int64, limit int) ([]store.Change, error) {
-	c.reads.Add(1)
-	if f := c.beforeReplay.Swap(nil); f != nil {
-		(*f)()
-	}
-	return c.SQLite.ReadChangesForScope(ctx, scope, since, limit)
+func (p person) caller() domain.Caller { return domain.Caller{Identity: p.id, TokenScope: p.id} }
+
+// dirServer is one serve run over st.
+type dirServer struct {
+	st         *countedSQLite
+	a          *app
+	tcp, sock  string
+	reg        string
+	keys       *core.Keyring
+	logs       *lockedLog
+	stop       func()
+	alice, bob person // alice is P's admin; bob a master of P
+	carol      person // a member of nothing until a test adds her
+	project    string
+	board      string
+	columns    map[domain.Status]string
 }
 
-// wakeServer is the real serve composition on a TCP and a Unix listener over a migrated SQLite
-// store, with alice (a member of project P) holding a token.
-type wakeServer struct {
-	st      *countedSQLite
-	tcp     string // host:port
-	sock    string // socket path
-	token   string
-	alice   string // her identity, her token scope
-	project string
-	logs    *lockedLog
-}
-
-func startWake(t *testing.T, sealer service.Sealer) *wakeServer {
+func testKeys(t *testing.T) *core.Keyring {
 	t.Helper()
-	ctx := context.Background()
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
+	k, err := core.OpenKeyring(filepath.Join(t.TempDir(), "master.key"), func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := (&auth.TokenService{Store: st}).Create(ctx, user.ID, "", "test", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: user.ID}, store.WriteOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir, err := os.MkdirTemp("", "bkw")
+	return k
+}
+
+// shortDir is a directory short enough for a socket path under macOS's 104-byte limit.
+func shortDir(t *testing.T, prefix string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", prefix)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	logs := &lockedLog{}
-	logger := log.New(logs, "", 0)
-	lns, err := listenAll([]string{"tcp://127.0.0.1:0", "unix://" + filepath.Join(dir, "bk.sock")}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serveCtx, stop := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- runServer(serveCtx, lns, st, "x", "", logger, sealer, service.MediaOptions{}) }()
-	t.Cleanup(func() {
-		stop()
-		if err := <-done; err != nil {
-			t.Errorf("runServer: %v", err)
+	return dir
+}
+
+// seedDirectory makes the three people, project P and its board over a fresh store.
+func seedDirectory(t *testing.T) (*countedSQLite, person, person, person, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	mk := func(login string) person {
+		u, err := (&auth.Accounts{Store: st}).Add(ctx, login, login, "pw-"+login, false)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	return &wakeServer{st: st, tcp: lns[0].Addr().String(), sock: filepath.Join(dir, "bk.sock"), token: token, alice: user.ID, project: p.ID, logs: logs}
-}
-
-// ring appends a doorbell row as the service writes one (service.writeChanges) and returns its id.
-func (s *wakeServer) ring(t *testing.T, scope, kind, agent, taskID string) int64 {
-	t.Helper()
-	payload, _ := json.Marshal(map[string]string{"kind": kind, "agent": agent, "taskId": taskID, "projectId": s.project, "boardId": "B-1", "tool": "test"})
-	id, err := s.st.AppendChange(context.Background(), store.ChangeInput{Scope: scope, ProjectID: s.project, Kind: kind, Payload: payload, Ts: time.Now().UnixMilli()})
+		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "test", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return person{id: u.ID, token: tok, tokenID: info.ID}
+	}
+	alice, bob, carol := mk("alice"), mk("bob"), mk("carol")
+	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: alice.id}, store.WriteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return id
-}
-
-// event is one SSE event: a frame, or a comment.
-type event struct {
-	frame   *wake.Frame
-	id      string
-	comment string
-	at      time.Time
-}
-
-// sse is an open /wake stream.
-type sse struct {
-	resp   *http.Response
-	events chan event
-}
-
-func (s *wakeServer) open(t *testing.T, query string) *sse {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, "http://"+s.tcp+"/wake"+query, nil)
-	req.Header.Set("Authorization", "Bearer "+s.token)
-	resp, err := http.DefaultClient.Do(req)
+	if _, err := st.AddMember(ctx, p.ID, bob.id, domain.RoleMaster, alice.id); err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "B", CreatedBy: alice.id}, store.WriteOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /wake%s: %d %q", query, resp.StatusCode, b)
+	return st, alice, bob, carol, p.ID, b.ID
+}
+
+// startDirectory serves the app over st (nil: a freshly seeded store) until the test ends or stop.
+func startDirectory(t *testing.T, from *dirServer) *dirServer {
+	return startDirectoryWith(t, from, false)
+}
+
+// startDirectoryWith is startDirectory with the blob store, and with public_url set to the TCP
+// listener (the OAuth authorization server on) when oauth.
+func startDirectoryWith(t *testing.T, from *dirServer, oauth bool) *dirServer {
+	t.Helper()
+	s := &dirServer{logs: &lockedLog{}}
+	if from == nil {
+		s.st, s.alice, s.bob, s.carol, s.project, s.board = seedDirectory(t)
+		s.reg, s.keys = shortDir(t, "bkreg"), testKeys(t)
+	} else {
+		s.st, s.alice, s.bob, s.carol, s.project, s.board, s.reg, s.keys = from.st, from.alice, from.bob, from.carol, from.project, from.board, from.reg, from.keys
 	}
-	st := &sse{resp: resp, events: make(chan event, 64)}
+	oldReg := wakeRegistry
+	wakeRegistry = func() string { return s.reg }
+	t.Cleanup(func() { wakeRegistry = oldReg })
+	logger := log.New(s.logs, "", 0)
+	s.sock = filepath.Join(shortDir(t, "bks"), "bk.sock")
+	lns, err := listenAll([]string{"tcp://127.0.0.1:0", "unix://" + s.sock}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tcp = lns[0].Addr().String()
+	media, err := mediaOptions(&core.Config{Blob: core.Blob{Dir: t.TempDir(), MaxBytes: 1 << 20}}, s.keys, lns, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := ""
+	if oauth {
+		public = "http://" + s.tcp
+	}
+	a, err := compose(s.st, "x", public, logger, s.keys, media)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.a = a
+	board, _, err := s.st.GetBoard(context.Background(), s.project, s.board)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.columns = map[domain.Status]string{}
+	for _, c := range board.Columns {
+		if _, ok := s.columns[c.Status]; !ok {
+			s.columns[c.Status] = c.ID
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveUntil(ctx, lns, a, "x", logger) }()
+	// The directory starts before HTTP serves: one answered request means it is up.
+	if code, _ := httpDo(t, &http.Client{Timeout: 5 * time.Second}, http.MethodGet, "http://"+s.tcp+"/healthz", "", ""); code != http.StatusOK {
+		t.Fatalf("healthz %d", code)
+	}
+	var once sync.Once
+	s.stop = func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("serveUntil: %v", err)
+			}
+		})
+	}
+	t.Cleanup(s.stop)
+	return s
+}
+
+// client is a fake Claude Code session: a process, its registry entry and its inbox socket.
+type client struct {
+	cmd     *exec.Cmd
+	pid     int64
+	sock    string
+	session string
+	got     chan []byte // one per connection: every byte written on it
+	ln      net.Listener
+}
+
+func (s *dirServer) client(t *testing.T, session, peerTok string) *client {
+	t.Helper()
+	cmd := exec.Command("sleep", "120")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	c := &client{cmd: cmd, pid: int64(cmd.Process.Pid), session: session, got: make(chan []byte, 16)}
+	c.sock = filepath.Join(shortDir(t, "bkcc"), strconv.FormatInt(c.pid, 10)+".sock")
+	ln, err := net.Listen("unix", c.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ln = ln
+	t.Cleanup(func() { ln.Close() })
 	go func() {
-		defer close(st.events)
-		r := bufio.NewReader(resp.Body)
-		var ev event
 		for {
-			line, err := r.ReadString('\n')
+			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			line = strings.TrimRight(line, "\n")
-			switch {
-			case line == "":
-				ev.at = time.Now()
-				st.events <- ev
-				ev = event{}
-			case strings.HasPrefix(line, ": "):
-				ev.comment = strings.TrimPrefix(line, ": ")
-			case strings.HasPrefix(line, "id: "):
-				ev.id = strings.TrimPrefix(line, "id: ")
-			case strings.HasPrefix(line, "data: "):
-				var f wake.Frame
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f); err != nil {
-					panic(err)
-				}
-				ev.frame = &f
-			}
+			b, _ := io.ReadAll(conn)
+			conn.Close()
+			c.got <- b
 		}
 	}()
-	t.Cleanup(func() { resp.Body.Close() })
-	if ev := st.next(t, time.Second); ev.comment != "ok" {
-		t.Fatalf("first event %+v, want the ok comment", ev)
+	entry, _ := json.Marshal(map[string]any{"pid": c.pid, "sessionId": session, "cwd": "/x", "status": "idle", "procStart": "Fri Oct 23 12:00:00 2026",
+		"messagingSocketPath": c.sock, "peerProtocol": 1})
+	if err := os.WriteFile(filepath.Join(s.reg, strconv.FormatInt(c.pid, 10)+".json"), entry, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	return st
-}
-
-func (s *sse) next(t *testing.T, within time.Duration) event {
-	t.Helper()
-	select {
-	case ev, ok := <-s.events:
-		if !ok {
-			t.Fatal("the stream ended")
+	if peerTok != "" {
+		h := sha256.Sum256([]byte(c.sock))
+		key, _ := json.Marshal(map[string]string{"peerToken": peerTok, "procStart": "x", "pidDomain": "darwin"})
+		if err := os.WriteFile(filepath.Join(s.reg, fmt.Sprintf("%d.%s.key", c.pid, hex.EncodeToString(h[:]))), key, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		return ev
-	case <-time.After(within):
-		t.Fatalf("no event within %v", within)
 	}
-	return event{}
+	return c
 }
 
-// none asserts no event arrives for d.
-func (s *sse) none(t *testing.T, d time.Duration) {
+// frame waits for one doorbell write.
+func (c *client) frame(t *testing.T, within time.Duration) []byte {
 	t.Helper()
 	select {
-	case ev := <-s.events:
-		t.Fatalf("an event arrived: %+v (frame %+v)", ev, ev.frame)
+	case b := <-c.got:
+		return b
+	case <-time.After(within):
+		t.Fatalf("pid %d: no doorbell within %v", c.pid, within)
+		return nil
+	}
+}
+
+// none asserts no doorbell is written for d.
+func (c *client) none(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case b := <-c.got:
+		t.Fatalf("pid %d: an unexpected doorbell %q", c.pid, b)
+	default:
+	}
+	select {
+	case b := <-c.got:
+		t.Fatalf("pid %d: an unexpected doorbell %q", c.pid, b)
 	case <-time.After(d):
 	}
 }
 
-func (s *sse) frame(t *testing.T, within time.Duration) wake.Frame {
+// content is a doorbell's {kind, cursor, projectId}, read from its user frame's content.
+func content(t *testing.T, b []byte) wake.Frame {
 	t.Helper()
-	ev := s.next(t, within)
-	if ev.frame == nil {
-		t.Fatalf("event %+v, want a frame", ev)
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	var u struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
 	}
-	if ev.id != fmt.Sprint(ev.frame.Cursor) {
-		t.Fatalf("id line %q, frame cursor %d", ev.id, ev.frame.Cursor)
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &u); err != nil {
+		t.Fatalf("not a user frame %q: %v", b, err)
 	}
-	return *ev.frame
-}
-
-// AC1: a doorbell row for the caller's scope is one frame within 500 ms, carrying exactly the
-// zero-authority fields; an idle stream issues no statement.
-func TestWakeLiveFrameAndIdleCost(t *testing.T) {
-	s := startWake(t, nil)
-	w := s.open(t, "")
-	before := s.st.reads.Load()
-	w.none(t, 2*time.Second)
-	if idle := s.st.reads.Load() - before; idle != 0 {
-		t.Fatalf("an idle /wake stream cost %d change-log statements in 2 s, want 0", idle)
+	parts := strings.Split(u.Message.Content, "\n")
+	var f wake.Frame
+	if err := json.Unmarshal([]byte(parts[len(parts)-1]), &f); err != nil {
+		t.Fatalf("no frame in %q: %v", u.Message.Content, err)
 	}
-	at := time.Now()
-	id := s.ring(t, s.alice, "assigned", s.alice, "T-7")
-	f := w.frame(t, time.Second)
-	took := time.Since(at)
-	t.Logf("row %d -> frame in %v", id, took)
-	if took > 500*time.Millisecond {
-		t.Fatalf("frame after %v, want within 500 ms", took)
-	}
-	want := wake.Frame{Agent: s.alice, Kind: "assigned", TaskID: "T-7", ProjectID: s.project, BoardID: "B-1", Cursor: id}
-	if f != want {
-		t.Fatalf("frame %+v, want %+v", f, want)
-	}
-	// broadcast to the project the caller is a member of rings; a changed row does not.
-	s.ring(t, service.BroadcastScope(s.project), "changed", "", "T-8")
-	id = s.ring(t, service.BroadcastScope(s.project), "broadcast", "", "T-8")
-	if f = w.frame(t, time.Second); f.Kind != "broadcast" || f.Cursor != id || f.Agent != "" {
-		t.Fatalf("broadcast frame %+v, want cursor %d", f, id)
-	}
-}
-
-// Another identity's doorbells and another project's broadcasts never reach the stream; the
-// caller's own, written after them, does (the positive control).
-func TestWakeScopesIsolate(t *testing.T) {
-	s := startWake(t, nil)
-	w := s.open(t, "")
-	s.ring(t, "U-someone-else", "assigned", "U-someone-else", "T-1")
-	s.ring(t, service.BroadcastScope("P-not-hers"), "broadcast", "", "T-2")
-	w.none(t, 700*time.Millisecond)
-	id := s.ring(t, s.alice, "assigned", s.alice, "T-3")
-	if f := w.frame(t, time.Second); f.Cursor != id {
-		t.Fatalf("frame %+v, want her own at cursor %d", f, id)
-	}
-}
-
-// AC2: close the stream, write two doorbells, reopen with ?since=<last cursor>: both replay in order,
-// uncoalesced, before a new live one.
-func TestWakeCatchUpReplaysThenGoesLive(t *testing.T) {
-	s := startWake(t, nil)
-	w := s.open(t, "")
-	c0 := s.ring(t, s.alice, "assigned", s.alice, "T-1")
-	if f := w.frame(t, time.Second); f.Cursor != c0 {
-		t.Fatalf("live frame %+v, want cursor %d", f, c0)
-	}
-	w.resp.Body.Close()
-	c1 := s.ring(t, s.alice, "assigned", s.alice, "T-2")
-	s.ring(t, s.alice, "changed", "", "T-2")
-	c2 := s.ring(t, s.alice, "assigned", s.alice, "T-3")
-	w = s.open(t, fmt.Sprintf("?since=%d", c0))
-	for _, want := range []struct {
-		cursor int64
-		task   string
-	}{{c1, "T-2"}, {c2, "T-3"}} {
-		if f := w.frame(t, time.Second); f.Cursor != want.cursor || f.TaskID != want.task {
-			t.Fatalf("replayed %+v, want cursor %d %s", f, want.cursor, want.task)
-		}
-	}
-	c3 := s.ring(t, s.alice, "assigned", s.alice, "T-4")
-	if f := w.frame(t, time.Second); f.Cursor != c3 {
-		t.Fatalf("live after the replay %+v, want cursor %d", f, c3)
-	}
-	w.none(t, 500*time.Millisecond)
-}
-
-// AC3: five doorbells of one kind inside 100 ms are exactly one frame, carrying the last cursor.
-func TestWakeCoalescesABurst(t *testing.T) {
-	s := startWake(t, nil)
-	w := s.open(t, "")
-	start := time.Now()
-	var last int64
-	for i := range 5 {
-		last = s.ring(t, s.alice, "assigned", s.alice, fmt.Sprintf("T-%d", i))
-		time.Sleep(15 * time.Millisecond)
-	}
-	if took := time.Since(start); took > 100*time.Millisecond {
-		t.Fatalf("the five writes took %v, over the 100 ms the control needs", took)
-	}
-	f := w.frame(t, time.Second)
-	if f.Cursor != last || f.TaskID != "T-4" {
-		t.Fatalf("frame %+v, want one carrying the last cursor %d", f, last)
-	}
-	w.none(t, 700*time.Millisecond)
-}
-
-// The keepalive comment arrives every Keepalive on a stream with nothing to say, at no statement.
-func TestWakeKeepalive(t *testing.T) {
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}}, Logger: log.New(io.Discard, "", 0), Keepalive: 100 * time.Millisecond,
-		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
-	srv := &http.Server{Handler: h}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	s := &wakeServer{tcp: ln.Addr().String(), token: "t"}
-	w := s.open(t, "")
-	before := st.reads.Load()
-	var prev time.Time
-	for i := range 3 {
-		ev := w.next(t, time.Second)
-		if ev.comment != "keepalive" {
-			t.Fatalf("event %+v, want a keepalive", ev)
-		}
-		if i > 0 && ev.at.Sub(prev) < 80*time.Millisecond {
-			t.Fatalf("keepalives %v apart, want about 100 ms", ev.at.Sub(prev))
-		}
-		prev = ev.at
-	}
-	if n := st.reads.Load() - before; n != 0 {
-		t.Fatalf("%d statements while keeping alive, want 0", n)
-	}
-}
-
-// /wake refuses a missing or unknown bearer (401 with the challenge) and a malformed cursor (400).
-func TestWakeRefusals(t *testing.T) {
-	s := startWake(t, nil)
-	for _, tc := range []struct {
-		bearer, query string
-		status        int
-	}{
-		{"", "", http.StatusUnauthorized},
-		{"bd_nope", "", http.StatusUnauthorized},
-		{s.token, "?since=-1", http.StatusBadRequest},
-		{s.token, "?since=abc", http.StatusBadRequest},
-		{s.token, "?since=1&since=2", http.StatusBadRequest},
-	} {
-		req, _ := http.NewRequest(http.MethodGet, "http://"+s.tcp+"/wake"+tc.query, nil)
-		if tc.bearer != "" {
-			req.Header.Set("Authorization", "Bearer "+tc.bearer)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != tc.status {
-			t.Fatalf("%q %q: %d, want %d", tc.bearer, tc.query, resp.StatusCode, tc.status)
-		}
-		if tc.status == http.StatusUnauthorized && resp.Header.Get("WWW-Authenticate") != "Bearer" {
-			t.Fatalf("401 without the Bearer challenge: %v", resp.Header)
-		}
-	}
+	return f
 }
 
 func unixHTTP(path string) *http.Client {
@@ -391,9 +306,9 @@ func unixHTTP(path string) *http.Client {
 	}}}
 }
 
-func post(t *testing.T, c *http.Client, url, bearer, body string) (int, string) {
+func httpDo(t *testing.T, c *http.Client, method, url, bearer, body string) (int, string) {
 	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req, _ := http.NewRequest(method, url, strings.NewReader(body))
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -406,674 +321,641 @@ func post(t *testing.T, c *http.Client, url, bearer, body string) (int, string) 
 	return resp.StatusCode, string(b)
 }
 
-// AC5: POST /internal/wake-session over the socket is 201 and writes the row, its token sealed;
-// over TCP it is 404, as a route that does not exist is.
-func TestInternalWakeSessionOnlyOverTheSocket(t *testing.T) {
-	key, err := core.OpenKeyring(filepath.Join(t.TempDir(), "master.key"), func(string) (string, bool) { return "", false })
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := startWake(t, key)
-	body := `{"socket":"/tmp/claude-inbox.sock","token":"inbox-secret-1"}`
-	tcp := &http.Client{Timeout: 3 * time.Second}
-	code, got := post(t, tcp, "http://"+s.tcp+"/internal/wake-session", s.token, body)
-	if code != http.StatusNotFound {
-		t.Fatalf("over TCP: %d %q, want 404", code, got)
-	}
-	// Over TCP the path answers every method exactly as a path that does not exist.
-	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPatch, http.MethodGet} {
-		answer := func(path string) string {
-			req, _ := http.NewRequest(m, "http://"+s.tcp+path, strings.NewReader(body))
-			req.Header.Set("Authorization", "Bearer "+s.token)
-			resp, err := tcp.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			b, _ := io.ReadAll(resp.Body)
-			return fmt.Sprintf("%d Allow=%q %q", resp.StatusCode, resp.Header.Get("Allow"), b)
-		}
-		route, missing := answer("/internal/wake-session"), answer("/internal/no-such-route")
-		if route != missing {
-			t.Fatalf("%s over TCP: /internal/wake-session answers %s, a missing path %s", m, route, missing)
-		}
-	}
-	code, got = post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, body)
-	if code != http.StatusCreated {
-		t.Fatalf("over the socket: %d %q, want 201", code, got)
-	}
-	var resp service.RegisterWakeSessionResp
-	if err := json.Unmarshal([]byte(got), &resp); err != nil || !strings.HasPrefix(resp.ID, "W-") || resp.ExpiresAt == "" {
-		t.Fatalf("body %q: %+v %v", got, resp, err)
-	}
-	row, err := s.st.GetWakeSession(context.Background(), resp.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if row.IdentityID != s.alice || row.SocketPath != "/tmp/claude-inbox.sock" || bytes.Contains(row.SocketTokenSealed, []byte("inbox-secret-1")) {
-		t.Fatalf("row %+v", row)
-	}
-	if pt, err := key.Decrypt(row.SocketTokenSealed, service.SocketTokenAAD(row.ID)); err != nil || string(pt) != "inbox-secret-1" {
-		t.Fatalf("the sealed token opens to %q, %v", pt, err)
-	}
-	// Refusals over the socket.
-	for _, tc := range []struct {
-		bearer, body string
-		status       int
-	}{
-		{"", body, http.StatusUnauthorized},
-		{"bd_nope", body, http.StatusUnauthorized},
-		{s.token, `{"socket":"rel/inbox.sock"}`, http.StatusBadRequest},
-		{s.token, `{"socket":"/a","extra":1}`, http.StatusBadRequest},
-		{s.token, `{"socket":"/a"} {}`, http.StatusBadRequest},
-		{s.token, `not json`, http.StatusBadRequest},
-		{s.token, `{"socket":"/a","token":"` + strings.Repeat("x", 17<<10) + `"}`, http.StatusBadRequest},
-	} {
-		if code, got := post(t, unixHTTP(s.sock), "http://x/internal/wake-session", tc.bearer, tc.body); code != tc.status {
-			t.Fatalf("%q %.40q: %d %q, want %d", tc.bearer, tc.body, code, got, tc.status)
-		}
-	}
-}
-
-// With no keyring a token is refused 500 INTERNAL naming the setting, and a session without one
-// still registers.
-func TestInternalWakeSessionWithoutAKeyring(t *testing.T) {
-	s := startWake(t, nil)
-	code, got := post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, `{"socket":"/tmp/i.sock","token":"t"}`)
-	if code != http.StatusInternalServerError || !strings.Contains(got, core.MasterKeyEnv) || !strings.Contains(got, `"INTERNAL"`) {
-		t.Fatalf("a token with no keyring: %d %q", code, got)
-	}
-	if code, got = post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, `{"socket":"/tmp/i.sock"}`); code != http.StatusCreated {
-		t.Fatalf("no token, no keyring: %d %q, want 201", code, got)
-	}
-}
-
-// AC4 at the server: the same handler answers on the Unix socket as on TCP.
-func TestServeAnswersOnTheUnixSocket(t *testing.T) {
-	s := startWake(t, nil)
-	resp, err := unixHTTP(s.sock).Get("http://x/healthz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || string(b) != healthBody("x") {
-		t.Fatalf("healthz over the socket: %d %q", resp.StatusCode, b)
-	}
-	if fi, err := os.Stat(s.sock); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("socket %v %v, want mode 0600", fi, err)
-	}
-}
-
-// The keyring chain: the environment's key, else master.key beside the SQLite file, else (Postgres)
-// beside the config file, else none and one WARN line.
-func TestOpenKeyringChain(t *testing.T) {
-	none := func(string) (string, bool) { return "", false }
-	dir := t.TempDir()
-	logs := &lockedLog{}
-	logger := log.New(logs, "", 0)
-	sqlite := &core.Config{Database: core.Database{URL: filepath.Join(dir, "db", "bk.db")}}
-	if err := os.MkdirAll(filepath.Join(dir, "db"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if k, err := openKeyring(sqlite, "", none, logger); err != nil || k == nil {
-		t.Fatalf("sqlite: %v %v", k, err)
-	}
-	if fi, err := os.Stat(filepath.Join(dir, "db", "master.key")); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("sqlite master.key: %v %v", fi, err)
-	}
-	pg := &core.Config{Database: core.Database{URL: "postgres://u@h/db"}}
-	cfgPath := filepath.Join(dir, "etc", "bk.json")
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if k, err := openKeyring(pg, cfgPath, none, logger); err != nil || k == nil {
-		t.Fatalf("postgres with a config file: %v %v", k, err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "etc", "master.key")); err != nil {
-		t.Fatalf("postgres master.key beside the config: %v", err)
-	}
-	k, err := openKeyring(pg, "", none, logger)
-	if err != nil || k != nil {
-		t.Fatalf("postgres with neither: %v %v, want no sealer", k, err)
-	}
-	if !strings.Contains(logs.String(), "WARN no keyring: set "+core.MasterKeyEnv) {
-		t.Fatalf("log %q: want the WARN line", logs.String())
-	}
-	key := strings.Repeat("A", 43) + "="
-	env := func(n string) (string, bool) { return key, n == core.MasterKeyEnv }
-	if k, err := openKeyring(pg, "", env, logger); err != nil || k == nil {
-		t.Fatalf("postgres with %s: %v %v", core.MasterKeyEnv, k, err)
-	}
-}
-
-// serveHandler serves h on a fresh TCP listener and returns its host:port.
-func serveHandler(t *testing.T, h http.Handler) string {
+// register registers c as role for p over the Unix socket.
+func (s *dirServer) register(t *testing.T, p person, c *client, role string) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	body := fmt.Sprintf(`{"pid":%d,"role":%q,"socket":%q,"sessionId":%q}`, c.pid, role, c.sock, c.session)
+	if code, got := httpDo(t, unixHTTP(s.sock), http.MethodPost, "http://x/internal/wake-session", p.token, body); code != http.StatusCreated {
+		t.Fatalf("register pid %d: %d %s", c.pid, code, got)
+	}
+}
+
+// pids is the directory's live pids.
+func (s *dirServer) pids() []int64 {
+	var out []int64
+	for _, e := range s.a.dir.Entries() {
+		out = append(out, e.PID)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// task creates a task as p in TODO, assigned to assignee ("" for none).
+func (s *dirServer) task(t *testing.T, p person, assignee string) service.Task {
+	t.Helper()
+	ctx := context.Background()
+	got, err := s.a.core.Tasks().Create(ctx, p.caller(), service.CreateTaskReq{ProjectID: s.project, BoardID: s.board, Title: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: h}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	return ln.Addr().String()
+	if assignee == "" {
+		return got.Task
+	}
+	return s.assign(t, p, got.Task, assignee)
 }
 
-// A stream whose subscription overflows ends with ": dropped", naming a cursor from which a replay
-// recovers every doorbell it had not written; a stream with nothing written yet past its since names
-// that since.
-func TestWakeDroppedStreamNamesASafeCursor(t *testing.T) {
-	ctx := context.Background()
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
-		Logger: log.New(io.Discard, "", 0), Buffer: 1, Quiet: 20 * time.Millisecond,
-		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
-	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
-	w := s.open(t, "?since=0")
-	first := s.ring(t, "U-1", "assigned", "U-1", "T-0")
-	if f := w.frame(t, time.Second); f.Cursor != first {
-		t.Fatalf("frame %+v, want cursor %d", f, first)
-	}
-	time.Sleep(50 * time.Millisecond) // the stream's next turn records first as written
-	var ids []int64
-	if err := st.Atomically(ctx, func(tx store.Store) error {
-		for i := range 50 {
-			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": "U-1", "taskId": fmt.Sprintf("T-%d", i+1), "projectId": "P-1", "boardId": "B-1"})
-			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: "U-1", ProjectID: "P-1", Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
-			if err != nil {
-				return err
-			}
-			ids = append(ids, id)
-		}
-		return nil
-	}); err != nil {
+func (s *dirServer) assign(t *testing.T, p person, task service.Task, assignee string) service.Task {
+	t.Helper()
+	got, err := s.a.core.Tasks().Update(context.Background(), p.caller(), service.UpdateTaskReq{ProjectID: s.project, TaskID: task.ID, Version: int64(task.Version),
+		Patch: service.TaskPatch{Assignee: service.Value(assignee)}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var ev event
-	for ev = w.next(t, 2*time.Second); ev.frame != nil; ev = w.next(t, 2*time.Second) {
+	return got.Task
+}
+
+func (s *dirServer) move(t *testing.T, p person, task service.Task, to domain.Status) service.Task {
+	t.Helper()
+	got, err := s.a.core.Tasks().Move(context.Background(), p.caller(), service.MoveTaskReq{ProjectID: s.project, TaskID: task.ID, Version: int64(task.Version), ToStatus: to})
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := fmt.Sprintf("dropped, reconnect with since=%d", first)
-	if ev.comment != want {
-		t.Fatalf("last event %+v, want the comment %q", ev, want)
+	return got.Task
+}
+
+// waitLog waits until the log holds want at least n times.
+func (s *dirServer) waitLog(t *testing.T, want string, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); strings.Count(s.logs.String(), want) < n; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the log never held %q %d times:\n%s", want, n, s.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if _, open := <-w.events; open {
-		t.Fatal("the stream went on after the dropped comment")
+}
+
+// lastChange is the change log's highest id.
+func (s *dirServer) lastChange(t *testing.T) int64 {
+	t.Helper()
+	rows, err := s.st.ReadChanges(context.Background(), 0, 10000)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("the change log: %d rows, %v", len(rows), err)
 	}
-	w = s.open(t, fmt.Sprintf("?since=%d", first))
-	for _, id := range ids {
-		if f := w.frame(t, time.Second); f.Cursor != id {
-			t.Fatalf("replay after the drop: %+v, want cursor %d", f, id)
+	return rows[len(rows)-1].ID
+}
+
+// AC1/AC2 (tested): a worker is in the directory once registered, its presence signal fires, and an
+// assignment by someone else writes EXACTLY the R3.1 frame into its socket within 1 s of the commit:
+// the auth line from the key file, then one user frame naming the registry's sessionId, whose content
+// is one plain line and the contentless {kind, cursor, projectId}.
+func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "f73a2587-0000-4000-8000-000000000001", "peer-token-xyz")
+	changed := s.a.dir.Changed()
+	s.register(t, s.alice, c, "worker")
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("register did not signal the presence change")
+	}
+	if got := s.a.core.DeviceSessions().Entries(); len(got) != 1 || got[0].PID != c.pid || got[0].Role != "worker" || got[0].IdentityID != s.alice.id || got[0].Adapter != wake.AdapterClaudeCode {
+		t.Fatalf("entries %+v", got)
+	}
+	rows, _ := s.st.ListWakeSessions(context.Background())
+	if len(rows) != 1 || rows[0].PID != c.pid || rows[0].Role != "worker" || rows[0].ClientSessionID != c.session || len(rows[0].BearerSealed) == 0 || bytes.Contains(rows[0].BearerSealed, []byte(s.alice.token)) {
+		t.Fatalf("the row %+v", rows)
+	}
+	t.Logf("row: id=%s pid=%d role=%s identity=%s agent=%s socket=%s session=%s", rows[0].ID, rows[0].PID, rows[0].Role, rows[0].IdentityID, rows[0].AgentID, rows[0].SocketPath, rows[0].ClientSessionID)
+	committed := time.Now()
+	s.task(t, s.bob, s.alice.id)
+	cur := s.lastChange(t)
+	b := c.frame(t, time.Second)
+	t.Logf("written %v after the commit: %q", time.Since(committed), b)
+	if d := time.Since(committed); d > time.Second {
+		t.Fatalf("the doorbell came %v after the commit, want under 1s", d)
+	}
+	want := fmt.Sprintf(`{"type":"auth","token":"peer-token-xyz"}`+"\n"+
+		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\"}"}}`+"\n",
+		c.session, s.project, cur, cur, s.project)
+	if string(b) != want {
+		t.Fatalf("the doorbell bytes\n got %q\nwant %q", b, want)
+	}
+	c.none(t, 500*time.Millisecond)
+	if rows, _ = s.st.ListWakeSessions(context.Background()); rows[0].LastCursor != cur {
+		t.Fatalf("last_cursor %d, want %d", rows[0].LastCursor, cur)
+	}
+}
+
+// AC6 and the master skips (tested): a claim and a master's self-assignment write no doorbell at
+// all, to the worker or the master; a worker's self-assignment rings no worker. The positive
+// controls: bob assigning alice rings her, alice's move rings the master.
+func TestDirectoryNoSelfRing(t *testing.T) {
+	s := startDirectory(t, nil)
+	w, m := s.client(t, "s-worker", ""), s.client(t, "s-master", "")
+	s.register(t, s.alice, w, "worker")
+	s.register(t, s.bob, m, "master")
+	ctx := context.Background()
+	open, mine, hers := s.task(t, s.bob, ""), s.task(t, s.bob, ""), s.task(t, s.bob, "")
+	if f := content(t, w.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindBroadcast {
+		t.Fatalf("bob's creates rang the worker %+v, want one broadcast", f)
+	}
+	m.none(t, 0) // bob's own creates ring bob's master nothing (it has had the 5 s window above)
+	before := s.a.dir.Writes()
+	if _, err := s.a.core.Lifecycle().Claim(ctx, s.alice.caller(), service.ClaimTaskReq{ProjectID: s.project, TaskID: open.ID}); err != nil {
+		t.Fatal(err)
+	}
+	s.assign(t, s.bob, mine, s.bob.id) // the master assigns itself
+	w.none(t, wake.SlowWindow+500*time.Millisecond)
+	m.none(t, 0)
+	if n := s.a.dir.Writes() - before; n != 0 {
+		t.Fatalf("a claim and a self-assignment wrote %d doorbells, want 0", n)
+	}
+	t.Logf("dispatcher writes over claim_task and the master's self-assignment: 0 (total before %d)", before)
+	s.assign(t, s.alice, hers, s.alice.id) // the worker's identity assigns itself: no worker ring
+	if f := content(t, m.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindChanged {
+		t.Fatalf("alice's self-assignment rang the master %+v", f)
+	}
+	w.none(t, 0)
+	other := s.task(t, s.bob, s.alice.id) // the positive controls
+	if f := content(t, w.frame(t, time.Second)); f.Kind != wake.KindAssigned {
+		t.Fatalf("bob's assignment rang %+v, want assigned", f)
+	}
+	s.move(t, s.alice, other, domain.InProgress)
+	if f := content(t, m.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindChanged || f.ProjectID != s.project {
+		t.Fatalf("alice's move rang the master %+v, want changed on %s", f, s.project)
+	}
+}
+
+// AC3 (tested): three state changes inside 2 s ring a master once in its 5 s window, at the last
+// change's cursor.
+func TestDirectoryMasterCoalescesAt5s(t *testing.T) {
+	s := startDirectory(t, nil)
+	m := s.client(t, "s-master", "")
+	s.register(t, s.bob, m, "master")
+	task := s.task(t, s.alice, "")
+	start := time.Now()
+	task = s.move(t, s.alice, task, domain.InProgress)
+	task = s.move(t, s.alice, task, domain.Blocked)
+	s.move(t, s.alice, task, domain.InProgress)
+	cur := s.lastChange(t)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the three changes took %v", d)
+	}
+	f := content(t, m.frame(t, wake.SlowWindow+time.Second))
+	t.Logf("one frame %v after the first change: %+v", time.Since(start), f)
+	if f.Kind != wake.KindChanged || f.Cursor != cur {
+		t.Fatalf("frame %+v, want changed at cursor %d", f, cur)
+	}
+	m.none(t, wake.SlowWindow)
+}
+
+// AC4 (tested): kill -9 of a registered process drops its entry and its row within 1 s, with no
+// unregister call.
+func TestDirectoryDropsAKilledProcessWithin1s(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	changed := s.a.dir.Changed()
+	killed := time.Now()
+	if err := syscall.Kill(int(c.pid), syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatalf("the entry was still there 1s after kill -9: %v", s.pids())
+	}
+	t.Logf("entry gone %v after kill -9 (pids now %v)", time.Since(killed), s.pids())
+	if len(s.pids()) != 0 {
+		t.Fatalf("pids %v", s.pids())
+	}
+	deadline := time.Now().Add(time.Second)
+	for rows, _ := s.st.ListWakeSessions(context.Background()); len(rows) != 0; rows, _ = s.st.ListWakeSessions(context.Background()) {
+		if time.Now().After(deadline) {
+			t.Fatalf("rows %+v 1s after the exit", rows)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(s.logs.String(), "the process exited") {
+		t.Fatalf("the log does not name the exit:\n%s", s.logs.String())
+	}
+}
+
+// AC5 (tested), at delivery: a revoked token's entry is dropped by the next delivery, which writes
+// nothing; the recheck is 3 statements.
+func TestDirectoryDeliveryRechecksTheBearer(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	s.task(t, s.bob, s.alice.id)
+	_ = c.frame(t, time.Second) // the positive control: the bearer holds
+	if _, err := (&auth.TokenService{Store: s.st}).Revoke(context.Background(), s.alice.tokenID); err != nil {
+		t.Fatal(err)
+	}
+	s.task(t, s.bob, s.alice.id)
+	c.none(t, time.Second)
+	if len(s.pids()) != 0 {
+		t.Fatalf("the revoked entry is still live: %v", s.pids())
+	}
+	if !strings.Contains(s.logs.String(), "bearer no longer resolves") {
+		t.Fatalf("the drop's reason is not logged:\n%s", s.logs.String())
+	}
+}
+
+// AC5 (tested), by the sweep: with nothing to deliver, a disabled user's entry is dropped within
+// one sweep; an idle sweep costs 3 statements per entry.
+func TestDirectorySweepDropsADisabledUser(t *testing.T) {
+	old := wakeSweep
+	wakeSweep = 300 * time.Millisecond
+	t.Cleanup(func() { wakeSweep = old })
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	n0 := s.st.rechecks.Load()
+	for deadline := time.Now().Add(5 * wakeSweep); s.st.rechecks.Load()-n0 < 3 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // the sweep's reads are done; the next is wakeSweep away
+	per := s.st.rechecks.Load() - n0
+	t.Logf("one idle sweep of one entry: %d statements", per)
+	if per != 3 {
+		t.Fatalf("one idle sweep: %d statements, want 3", per)
+	}
+	if _, err := (&auth.Accounts{Store: s.st}).Disable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * wakeSweep)
+	for len(s.pids()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(s.pids()) != 0 {
+		t.Fatalf("a disabled user's entry outlived two sweeps: %v", s.pids())
+	}
+}
+
+// Owner ruling 2026-10-23 (tested): a scope change is applied in place at the sweep. Carol, added to
+// P, hears P's broadcasts without registering again; removed, she stops.
+func TestDirectoryScopesChangeInPlace(t *testing.T) {
+	old := wakeSweep
+	wakeSweep = 300 * time.Millisecond
+	t.Cleanup(func() { wakeSweep = old })
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-carol", "")
+	s.register(t, s.carol, c, "worker")
+	s.task(t, s.bob, "")
+	c.none(t, wake.SlowWindow+500*time.Millisecond) // not a member yet: P's broadcast is not hers
+	ctx := context.Background()
+	if _, err := s.a.core.Projects().AddMember(ctx, s.alice.caller(), service.AddMemberReq{ProjectID: s.project, IdentityID: s.carol.id, Role: domain.RoleWorker}); err != nil {
+		t.Fatal(err)
+	}
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
+	s.task(t, s.bob, "")
+	if f := content(t, c.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindBroadcast || f.ProjectID != s.project {
+		t.Fatalf("after the add %+v", f)
+	}
+	if _, err := s.a.core.Projects().RemoveMember(ctx, s.alice.caller(), service.RemoveMemberReq{ProjectID: s.project, IdentityID: s.carol.id}); err != nil {
+		t.Fatal(err)
+	}
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 2)
+	s.task(t, s.bob, "")
+	c.none(t, wake.SlowWindow+500*time.Millisecond)
+	if got := s.pids(); len(got) != 1 || got[0] != c.pid {
+		t.Fatalf("the scope change dropped the entry: %v", got)
+	}
+}
+
+// AC8's pid ownership refusal (tested): a pid another uid owns is 403 and a dead one 400, each
+// leaving no entry; the caller's own child is 201 (the positive control). A socket the registry
+// does not name is 400. Over TCP both routes are 404.
+func TestDirectoryRegisterRefusals(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	u := unixHTTP(s.sock)
+	reg := func(body string) (int, string) {
+		return httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", s.alice.token, body)
+	}
+	if uid, err := core.ProcessUID(1); err != nil || uid == os.Getuid() {
+		t.Skipf("pid 1 is uid %d (%v): no process of another uid to register", uid, err)
+	}
+	if code, got := reg(`{"pid":1,"role":"worker"}`); code != http.StatusForbidden || !strings.Contains(got, "not owned by the caller's uid") {
+		t.Fatalf("pid 1 (root's): %d %s, want 403", code, got)
+	}
+	dead := exec.Command("true")
+	_ = dead.Run()
+	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker"}`, dead.Process.Pid)); code != http.StatusBadRequest || !strings.Contains(got, "not a live process") {
+		t.Fatalf("a dead pid: %d %s, want 400", code, got)
+	}
+	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker","socket":"/tmp/elsewhere.sock"}`, c.pid)); code != http.StatusBadRequest {
+		t.Fatalf("a socket the registry does not name: %d %s, want 400", code, got)
+	}
+	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"admin"}`, c.pid)); code != http.StatusBadRequest {
+		t.Fatalf("role admin: %d %s, want 400", code, got)
+	}
+	if code, _ := httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", "", `{}`); code != http.StatusUnauthorized {
+		t.Fatalf("no bearer: %d, want 401", code)
+	}
+	if len(s.pids()) != 0 {
+		t.Fatalf("a refusal left entries %v", s.pids())
+	}
+	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q}`, c.pid, c.sock)); code != http.StatusCreated {
+		t.Fatalf("the caller's own child: %d %s, want 201", code, got)
+	}
+	tcp := &http.Client{Timeout: 3 * time.Second}
+	if code, _ := httpDo(t, tcp, http.MethodPost, "http://"+s.tcp+"/internal/wake-session", s.alice.token, `{}`); code != http.StatusNotFound {
+		t.Fatalf("register over TCP: %d, want 404", code)
+	}
+	if code, _ := httpDo(t, tcp, http.MethodDelete, fmt.Sprintf("http://%s/internal/wake-session/%d", s.tcp, c.pid), s.alice.token, ""); code != http.StatusNotFound {
+		t.Fatalf("unregister over TCP: %d, want 404", code)
+	}
+	// Unregister: another identity's pid is 404, the owner's is 204 and drops it.
+	if code, _ := httpDo(t, u, http.MethodDelete, fmt.Sprintf("http://x/internal/wake-session/%d", c.pid), s.bob.token, ""); code != http.StatusNotFound {
+		t.Fatalf("bob unregistering alice's pid: %d, want 404", code)
+	}
+	if code, _ := httpDo(t, u, http.MethodDelete, fmt.Sprintf("http://x/internal/wake-session/%d", c.pid), s.alice.token, ""); code != http.StatusNoContent || len(s.pids()) != 0 {
+		t.Fatalf("unregister: %d, pids %v", code, s.pids())
+	}
+}
+
+// AC7 (tested): GET /wake is gone, 404 over TCP and over the Unix socket.
+func TestWakeRouteIsGone(t *testing.T) {
+	s := startDirectory(t, nil)
+	for name, c := range map[string]*http.Client{"tcp": {Timeout: 3 * time.Second}, "unix": unixHTTP(s.sock)} {
+		host := s.tcp
+		if name == "unix" {
+			host = "x"
+		}
+		if code, _ := httpDo(t, c, http.MethodGet, "http://"+host+"/wake", s.alice.token, ""); code != http.StatusNotFound {
+			t.Fatalf("GET /wake over %s: %d, want 404", name, code)
 		}
 	}
 }
 
-// A change committed between the stream's Subscribe and its Replay arrives both ways (the live
-// subscription and the replay) and is written once.
-func TestWakeReplayAndLiveOverlapWritesOnce(t *testing.T) {
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
-		Logger: log.New(io.Discard, "", 0), Quiet: 20 * time.Millisecond,
-		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
-	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
-	before := s.ring(t, "U-1", "assigned", "U-1", "T-before")
-	var overlap atomic.Int64
-	hook := func() {
-		// Subscribed already: this commit reaches the subscription, and the replay reads it.
-		overlap.Store(s.ring(t, "U-1", "assigned", "U-1", "T-overlap"))
-		time.Sleep(100 * time.Millisecond) // the bus tail delivers it to the subscription meanwhile
+// A delivery whose socket nobody answers (ECONNREFUSED, as a SIGKILL leaves it) or that is gone
+// (ENOENT) drops the entry.
+func TestDirectoryDropsOnADeadSocket(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	c.ln.Close() // the file goes too: ENOENT
+	s.task(t, s.bob, s.alice.id)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(s.pids()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
 	}
-	st.beforeReplay.Store(&hook)
-	w := s.open(t, fmt.Sprintf("?since=%d", before-1))
-	got := []int64{w.frame(t, time.Second).Cursor, w.frame(t, time.Second).Cursor}
-	if got[0] != before || got[1] != overlap.Load() {
-		t.Fatalf("frames %v, want [%d %d]", got, before, overlap.Load())
+	if len(s.pids()) != 0 || !strings.Contains(s.logs.String(), "its socket is gone") {
+		t.Fatalf("pids %v after a delivery to a closed socket; log:\n%s", s.pids(), s.logs.String())
 	}
-	w.none(t, 300*time.Millisecond)
 }
 
-// /wake answers 503 while the bus is closed and 500 when the caller's scopes cannot be read.
-func TestWakeRefusesWhenItCannotSubscribe(t *testing.T) {
-	st := storetest.SQLite(t)
-	resolver := authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}}
-	closed := bus.New(st, bus.Options{})
-	closed.Close()
-	scopes := func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }
-	failing := func(context.Context, domain.Caller) ([]string, error) { return nil, fmt.Errorf("store down") }
-	open := bus.New(st, bus.Options{})
-	t.Cleanup(open.Close)
-	for _, tc := range []struct {
-		name   string
-		o      wake.Options
-		status int
-	}{
-		{"closed bus", wake.Options{Bus: closed, Scopes: scopes}, http.StatusServiceUnavailable},
-		{"scopes fail", wake.Options{Bus: open, Scopes: failing}, http.StatusInternalServerError},
-	} {
-		tc.o.Resolver, tc.o.Logger = resolver, log.New(io.Discard, "", 0)
-		addr := serveHandler(t, wake.Handler(tc.o))
-		req, _ := http.NewRequest(http.MethodGet, "http://"+addr+"/wake", nil)
-		req.Header.Set("Authorization", "Bearer t")
-		resp, err := http.DefaultClient.Do(req)
+// The start-up rebuild: a restarted server restores a live entry from its row, drops a dead one's,
+// and catches the live one up from its last delivered cursor (an assignment made while it was down).
+func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
+	s := startDirectory(t, nil)
+	live, dead := s.client(t, "s-live", ""), s.client(t, "s-dead", "")
+	s.register(t, s.alice, live, "worker")
+	s.register(t, s.alice, dead, "worker")
+	s.task(t, s.bob, s.alice.id)
+	_ = live.frame(t, time.Second)
+	_ = dead.frame(t, time.Second)
+	// The cursor is recorded just after the write the client saw: wait for it before stopping.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, _ := s.st.ListWakeSessions(context.Background())
+		if len(rows) == 2 && rows[0].LastCursor > 0 && rows[1].LastCursor > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the cursors were never recorded: %+v", rows)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.stop()
+	_ = dead.cmd.Process.Kill()
+	_ = dead.cmd.Wait()
+	// While the server is down, bob assigns alice through the store's service on the same store.
+	down := service.New(s.st, service.Options{Logger: log.New(io.Discard, "", 0), ToolCallFlush: -1})
+	got, err := down.Tasks().Create(context.Background(), s.bob.caller(), service.CreateTaskReq{ProjectID: s.project, BoardID: s.board, Title: "while down"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := down.Tasks().Update(context.Background(), s.bob.caller(), service.UpdateTaskReq{ProjectID: s.project, TaskID: got.Task.ID, Version: int64(got.Task.Version), Patch: service.TaskPatch{Assignee: service.Value(s.alice.id)}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = down.Close(context.Background())
+	cur := s.lastChange(t)
+	again := startDirectory(t, s)
+	if got := again.pids(); len(got) != 1 || got[0] != live.pid {
+		t.Fatalf("restored pids %v, want only %d", got, live.pid)
+	}
+	f := content(t, live.frame(t, 2*time.Second))
+	if f.Kind != wake.KindAssigned || f.Cursor != cur {
+		t.Fatalf("the catch-up rang %+v, want assigned at %d", f, cur)
+	}
+	if !strings.Contains(again.logs.String(), fmt.Sprintf("dropped the row of pid %d at start-up", dead.pid)) {
+		t.Fatalf("the dead row's drop is not logged:\n%s", again.logs.String())
+	}
+}
+
+// setProcStart rewrites c's registry entry with another procStart, as a reused pid's new process
+// would have.
+func (s *dirServer) setProcStart(t *testing.T, c *client, procStart string) {
+	t.Helper()
+	entry, _ := json.Marshal(map[string]any{"pid": c.pid, "sessionId": c.session, "cwd": "/x", "status": "idle", "procStart": procStart,
+		"messagingSocketPath": c.sock, "peerProtocol": 1})
+	if err := os.WriteFile(filepath.Join(s.reg, strconv.FormatInt(c.pid, 10)+".json"), entry, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review B1 (tested): another identity re-registering a live, registered pid is 403 and changes
+// nothing: alice keeps the entry and is still rung. A forged sessionId or procStart against the
+// registry is 400 and registers nothing. No bearer reaches the log.
+func TestDirectoryRefusesAnotherIdentityTakingAPid(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	u := unixHTTP(s.sock)
+	post := func(tok, body string) (int, string) {
+		return httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", tok, body)
+	}
+	if code, got := post(s.alice.token, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q,"sessionId":"forged"}`, c.pid, c.sock)); code != http.StatusBadRequest || !strings.Contains(got, "sessionId") {
+		t.Fatalf("a forged sessionId: %d %s, want 400", code, got)
+	}
+	if code, got := post(s.alice.token, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q,"procStart":"Thu Jan  1 00:00:00 1970"}`, c.pid, c.sock)); code != http.StatusBadRequest || !strings.Contains(got, "procStart") {
+		t.Fatalf("a forged procStart: %d %s, want 400", code, got)
+	}
+	if len(s.pids()) != 0 {
+		t.Fatalf("the refusals left %v", s.pids())
+	}
+	s.register(t, s.alice, c, "worker")
+	code, got := post(s.bob.token, fmt.Sprintf(`{"pid":%d,"role":"master","socket":%q,"sessionId":%q}`, c.pid, c.sock, c.session))
+	t.Logf("bob re-registering alice's pid: %d %s", code, got)
+	if code != http.StatusForbidden || !strings.Contains(got, "registered by another identity") {
+		t.Fatalf("bob takes over alice's pid: %d %s, want 403", code, got)
+	}
+	if e := s.a.dir.Entries(); len(e) != 1 || e[0].IdentityID != s.alice.id || e[0].Role != "worker" {
+		t.Fatalf("after the refusal the entry is %+v, want alice's worker", e)
+	}
+	if strings.Contains(s.logs.String(), s.alice.token) || strings.Contains(s.logs.String(), s.bob.token) {
+		t.Fatal("a bearer is in the log")
+	}
+	s.task(t, s.bob, s.alice.id)
+	if f := content(t, c.frame(t, 2*time.Second)); f.Kind != wake.KindAssigned {
+		t.Fatalf("alice after the refusal: %+v, want assigned", f)
+	}
+}
+
+// Review B2 (tested): a delivery whose registry entry names the pid with another procStart (the pid
+// now belongs to another process) drops the entry and writes nothing; the unchanged registry is
+// rung (the positive control).
+func TestDirectoryDropsAReusedPidAtDelivery(t *testing.T) {
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-1", "")
+	s.register(t, s.alice, c, "worker")
+	s.task(t, s.bob, s.alice.id)
+	_ = c.frame(t, 2*time.Second)
+	before := s.a.dir.Writes()
+	s.setProcStart(t, c, "Sat Oct 24 09:00:00 2026")
+	s.task(t, s.bob, s.alice.id)
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its pid now names another process", c.pid, s.alice.id), 1)
+	c.none(t, 500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 || len(s.pids()) != 0 {
+		t.Fatalf("after the procStart moved: %d writes, pids %v; want 0 and none", n, s.pids())
+	}
+}
+
+// Review A41-9 (tested): RingAssigned's self-skip. A handoff to oneself rings no one; a handoff to
+// bob rings bob's worker (the positive control).
+func TestDirectoryHandoffToSelfRingsNobody(t *testing.T) {
+	s := startDirectory(t, nil)
+	a, b := s.client(t, "s-alice", ""), s.client(t, "s-bob", "")
+	s.register(t, s.alice, a, "worker")
+	s.register(t, s.bob, b, "worker")
+	ctx := context.Background()
+	mine, theirs := s.task(t, s.alice, ""), s.task(t, s.alice, "")
+	_ = b.frame(t, wake.SlowWindow+time.Second) // the creates' broadcast to bob; alice's own is not rung
+	_ = a.frame(t, time.Second)
+	handoff := func(task service.Task, to string) {
+		t.Helper()
+		cl, err := s.a.core.Lifecycle().Claim(ctx, s.alice.caller(), service.ClaimTaskReq{ProjectID: s.project, TaskID: task.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
-		if resp.StatusCode != tc.status {
-			t.Fatalf("%s: %d, want %d", tc.name, resp.StatusCode, tc.status)
+		if _, err := s.a.core.Lifecycle().Handoff(ctx, s.alice.caller(), service.HandoffTaskReq{ProjectID: s.project, TaskID: task.ID, LeaseID: cl.LeaseID, ToAgent: to, MemoryNote: "n"}); err != nil {
+			t.Fatal(err)
 		}
+	}
+	before := s.a.dir.Writes()
+	handoff(mine, s.alice.id)
+	a.none(t, wake.SlowWindow+500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 {
+		t.Fatalf("a handoff to oneself wrote %d doorbells, want 0", n)
+	}
+	handoff(theirs, s.bob.id)
+	if f := content(t, b.frame(t, 2*time.Second)); f.Kind != wake.KindAssigned {
+		t.Fatalf("the handoff to bob rang %+v, want assigned", f)
 	}
 }
 
-// recheckServer is /wake over the real resolver and service core, with a short Recheck and account
-// cache, for the tests of what an open stream does when its bearer or memberships change.
-type recheckServer struct {
-	*wakeServer
-	accounts *auth.Accounts
-	tokens   *auth.TokenService
-	tokenID  string
-	resolver *auth.Service
-	bus      *bus.Bus
-}
-
-func startRecheck(t *testing.T, recheck, accountTTL time.Duration) *recheckServer {
-	t.Helper()
-	return startRecheckWith(t, wake.Options{Recheck: recheck}, accountTTL)
-}
-
-// startRecheckWith is startRecheck with the handler's tunables in o (Bus, Resolver, Scopes and
-// Logger are filled in here).
-func startRecheckWith(t *testing.T, o wake.Options, accountTTL time.Duration) *recheckServer {
-	t.Helper()
+// Review A41-3 (tested): each master-silent extra rings no master. A worker claims a task, then
+// heartbeats, adds a context item, sets the summary, writes memory and attaches a file: the
+// master hears nothing; the worker's move rings it (the positive control).
+func TestDirectoryMasterSilentTools(t *testing.T) {
+	s := startDirectory(t, nil)
+	w, m := s.client(t, "s-worker", ""), s.client(t, "s-master", "")
+	s.register(t, s.alice, w, "worker")
+	s.register(t, s.bob, m, "master")
 	ctx := context.Background()
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	accounts, tokens := &auth.Accounts{Store: st}, &auth.TokenService{Store: st}
-	user, err := accounts.Add(ctx, "alice", "Alice", "pw", false)
+	al := s.alice.caller()
+	task := s.task(t, s.bob, "")
+	_ = w.frame(t, wake.SlowWindow+time.Second)
+	cl, err := s.a.core.Lifecycle().Claim(ctx, al, service.ClaimTaskReq{ProjectID: s.project, TaskID: task.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, info, err := tokens.Create(ctx, user.ID, "", "test", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: user.ID}, store.WriteOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	quiet := log.New(io.Discard, "", 0)
-	resolver := &auth.Service{Accounts: accounts, Tokens: tokens, Sessions: st, AccountCacheTTL: accountTTL}
-	sc := service.New(st, service.Options{Logger: quiet})
-	t.Cleanup(func() { sc.Close(context.Background()) })
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	o.Bus, o.Resolver, o.Scopes, o.Logger = b, resolver, sc.WakeScopes, quiet
-	if o.Quiet == 0 {
-		o.Quiet = 20 * time.Millisecond
-	}
-	ws := &wakeServer{st: st, tcp: serveHandler(t, wake.Handler(o)), token: token, alice: user.ID, project: p.ID}
-	return &recheckServer{wakeServer: ws, accounts: accounts, tokens: tokens, tokenID: info.ID, resolver: resolver, bus: b}
-}
-
-// last waits for the stream's final comment and asserts the stream then ends.
-func (s *sse) last(t *testing.T, within time.Duration) string {
-	t.Helper()
-	deadline := time.After(within)
-	for {
-		select {
-		case ev, ok := <-s.events:
-			if !ok {
-				t.Fatal("the stream ended with no comment")
-			}
-			if ev.comment == "keepalive" || ev.frame != nil {
-				continue
-			}
-			if _, open := <-s.events; open {
-				t.Fatalf("the stream went on after %q", ev.comment)
-			}
-			return ev.comment
-		case <-deadline:
-			t.Fatalf("the stream did not end within %v", within)
-		}
-	}
-}
-
-// A revoked token ends its open stream within one recheck.
-func TestWakeRecheckEndsARevokedToken(t *testing.T) {
-	s := startRecheck(t, 200*time.Millisecond, time.Minute)
-	w := s.open(t, "")
-	if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate, reconnect" {
-		t.Fatalf("last comment %q, want reauthenticate", got)
-	}
-}
-
-// A disabled user's open stream ends within one recheck once the account cache has expired.
-func TestWakeRecheckEndsADisabledUser(t *testing.T) {
-	s := startRecheck(t, 200*time.Millisecond, 100*time.Millisecond)
-	w := s.open(t, "")
-	if _, err := s.accounts.Disable(context.Background(), "alice"); err != nil {
-		t.Fatal(err)
-	}
-	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate, reconnect" {
-		t.Fatalf("last comment %q, want reauthenticate", got)
-	}
-}
-
-// Removed from her project, alice's stream ends naming the cursor to reconnect from, and the
-// reconnected stream no longer hears the project's broadcasts while it hears her own doorbells.
-func TestWakeRecheckEndsAChangedMembership(t *testing.T) {
-	s := startRecheck(t, 200*time.Millisecond, time.Minute)
-	w := s.open(t, "?since=0")
-	first := s.ring(t, s.alice, "assigned", s.alice, "T-1")
-	if f := w.frame(t, time.Second); f.Cursor != first {
-		t.Fatalf("frame %+v", f)
-	}
-	if err := s.st.RemoveMember(context.Background(), s.project, s.alice); err != nil {
-		t.Fatal(err)
-	}
-	want := fmt.Sprintf("scopes changed, reconnect with since=%d", first)
-	if got := w.last(t, 500*time.Millisecond); got != want {
-		t.Fatalf("last comment %q, want %q", got, want)
-	}
-	w = s.open(t, fmt.Sprintf("?since=%d", first))
-	s.ring(t, service.BroadcastScope(s.project), "broadcast", "", "T-2")
-	own := s.ring(t, s.alice, "assigned", s.alice, "T-3")
-	if f := w.frame(t, time.Second); f.Cursor != own {
-		t.Fatalf("after the removal: frame %+v, want only her own at cursor %d", f, own)
-	}
-}
-
-// The positive control and the statement pin: a stream whose bearer and memberships hold stays open
-// across rechecks, still delivers, costs 3 statements per recheck (GetToken, GetUser, ListProjects;
-// GetUser is skipped while the account cache is fresher than the recheck, so 3 is the ceiling), and
-// none in between.
-func TestWakeRecheckKeepsAValidStreamAtThreeStatements(t *testing.T) {
-	const every = 300 * time.Millisecond
-	s := startRecheck(t, every, every/2) // the account cache always stale at a recheck
-	w := s.open(t, "")
-	reads := s.st.reads.Load() // after the bus tail's start
-	time.Sleep(every / 2)      // between the connect and the first recheck
-	base := s.st.rechecks.Load()
-	var deltas []int64
-	for range 3 {
-		time.Sleep(every)
-		n := s.st.rechecks.Load()
-		deltas = append(deltas, n-base)
-		base = n
-	}
-	for i, d := range deltas {
-		if d != 3 {
-			t.Fatalf("recheck %d cost %d statements, want 3 (all: %v)", i+1, d, deltas)
-		}
-	}
-	if n := s.st.reads.Load() - reads; n != 0 {
-		t.Fatalf("%d change-log reads while idle, want 0", n)
-	}
-	id := s.ring(t, s.alice, "assigned", s.alice, "T-9")
-	if f := w.frame(t, time.Second); f.Cursor != id {
-		t.Fatalf("after %d rechecks: frame %+v, want cursor %d", len(deltas), f, id)
-	}
-}
-
-// A catch-up longer than one Replay page reads the next page from where the last one ended:
-// 1,001 doorbells replay once each, in order.
-func TestWakeCatchUpPagesPastOneReplay(t *testing.T) {
-	ctx := context.Background()
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
-		Logger: log.New(io.Discard, "", 0), Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
-	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
-	const n = 1001
-	var ids []int64
-	if err := st.Atomically(ctx, func(tx store.Store) error {
-		for i := range n {
-			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": "U-1", "taskId": fmt.Sprintf("T-%d", i), "projectId": "P-1", "boardId": "B-1"})
-			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: "U-1", ProjectID: "P-1", Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
+	m.none(t, wake.SlowWindow+500*time.Millisecond) // the claim (ruled) is quiet before the extras start
+	before := s.a.dir.Writes()
+	steps := []struct {
+		tool string
+		run  func() error
+	}{
+		{"heartbeat_task", func() error {
+			_, err := s.a.core.Lifecycle().Heartbeat(ctx, al, service.HeartbeatTaskReq{ProjectID: s.project, TaskID: task.ID, LeaseID: cl.LeaseID})
+			return err
+		}},
+		{"add_context_item", func() error {
+			_, err := s.a.core.Context().AddItem(ctx, al, service.AddContextItemReq{ProjectID: s.project, TaskID: task.ID, Kind: "note", Body: "b"})
+			return err
+		}},
+		{"set_summary", func() error {
+			got, err := s.a.core.Tasks().Get(ctx, al, service.GetTaskReq{ProjectID: s.project, TaskID: task.ID})
 			if err != nil {
 				return err
 			}
-			ids = append(ids, id)
+			_, err = s.a.core.Context().SetSummary(ctx, al, service.SetSummaryReq{ProjectID: s.project, TaskID: task.ID, Summary: "s", Version: int64(got.Task.Version)})
+			return err
+		}},
+		{"write_memory", func() error {
+			_, err := s.a.core.Context().WriteMemory(ctx, al, service.WriteMemoryReq{ProjectID: s.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "k", Value: "v"})
+			return err
+		}},
+		{"attach_file", func() error {
+			_, err := s.a.core.Media().AttachFile(ctx, al, service.AttachFileReq{ProjectID: s.project, TaskID: task.ID, FileName: "a.txt", Kind: "file", MimeType: "text/plain", Bytes: 3})
+			return err
+		}},
+	}
+	for _, st := range steps {
+		if err := st.run(); err != nil {
+			t.Fatalf("%s: %v", st.tool, err)
 		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
-	w := s.open(t, "?since=0")
-	for i, id := range ids {
-		if f := w.frame(t, time.Second); f.Cursor != id {
-			t.Fatalf("replayed frame %d: cursor %d, want %d", i, f.Cursor, id)
+	for _, st := range steps { // each wrote its row: the silence is the dispatcher's, not a missing row
+		if !s.changeOf(t, st.tool) {
+			t.Fatalf("no change row from %s", st.tool)
 		}
 	}
-	w.none(t, 300*time.Millisecond)
-}
-
-// A recheck that cannot read the scopes ends the stream rather than trusting them, naming its cursor.
-func TestWakeRecheckEndsWhenItCannotConfirm(t *testing.T) {
-	st := &countedSQLite{SQLite: storetest.SQLite(t)}
-	b := bus.New(st, bus.Options{Watcher: st})
-	t.Cleanup(b.Close)
-	var calls atomic.Int64
-	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
-		Logger: log.New(io.Discard, "", 0), Recheck: 200 * time.Millisecond,
-		Scopes: func(context.Context, domain.Caller) ([]string, error) {
-			if calls.Add(1) > 1 {
-				return nil, fmt.Errorf("store down")
-			}
-			return []string{"U-1"}, nil
-		}})
-	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t"}
-	w := s.open(t, "?since=0")
-	if got := w.last(t, 500*time.Millisecond); got != "recheck failed, reconnect with since=0" {
-		t.Fatalf("last comment %q", got)
+	m.none(t, wake.SlowWindow+500*time.Millisecond)
+	if n := s.a.dir.Writes() - before; n != 0 {
+		t.Fatalf("the master-silent tools wrote %d doorbells, want 0", n)
 	}
-}
-
-// backlog commits n doorbells for alice in one transaction and returns the last id.
-func (s *recheckServer) backlog(t *testing.T, n int) int64 {
-	t.Helper()
-	ctx := context.Background()
-	var last int64
-	if err := s.st.Atomically(ctx, func(tx store.Store) error {
-		for i := range n {
-			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": s.alice, "taskId": fmt.Sprintf("T-%d", i), "projectId": s.project, "boardId": "B-1"})
-			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: s.alice, ProjectID: s.project, Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
-			if err != nil {
-				return err
-			}
-			last = id
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return last
-}
-
-// rawWake opens GET path on a raw TCP connection with a 4 KiB receive buffer, so the server's writes
-// block on the reader's pace.
-func rawWake(t *testing.T, addr, token, path string) (net.Conn, *bufio.Reader) {
-	t.Helper()
-	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
-		return c.Control(func(fd uintptr) { _ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 4096) })
-	}}
-	c, err := d.Dial("tcp", addr)
+	got, err := s.a.core.Tasks().Get(ctx, al, service.GetTaskReq{ProjectID: s.project, TaskID: task.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
-	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n\r\n", path, token)
-	return c, bufio.NewReaderSize(c, 512)
-}
-
-// A stream still in catch-up is rechecked like a live one: revoked while it replays a backlog to a
-// slow reader, no doorbell committed after the revocation reaches the reader later than one Recheck
-// after it (two allowed, for a loaded machine; the defect took 34), and the stream ends with ": reauthenticate" naming its cursor. The fast reader is the positive control (the reviewer's round-2 repro,
-// made a test). The slow reader still drains, after the end, frames written before it.
-func TestWakeCatchUpIsRechecked(t *testing.T) {
-	for _, slow := range []bool{true, false} {
-		t.Run(fmt.Sprintf("slow=%v", slow), func(t *testing.T) {
-			const every = 200 * time.Millisecond
-			s := startRecheck(t, every, every)
-			s.backlog(t, 8000)
-			_, r := rawWake(t, s.tcp, s.token, "/wake?since=0")
-			start := time.Now()
-			var revokedAt time.Time
-			var lastBefore int64 = -1
-			serverEnd := make(chan time.Duration, 1)
-			var end string
-			var late []string
-			for time.Since(start) < 30*time.Second {
-				line, err := r.ReadString('\n')
-				if err != nil {
-					t.Fatalf("the stream ended without a comment: %v", err)
-				}
-				if slow {
-					time.Sleep(150 * time.Microsecond)
-				}
-				if revokedAt.IsZero() && time.Since(start) > 500*time.Millisecond {
-					if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
-						t.Fatal(err)
-					}
-					revokedAt = time.Now()
-					lastBefore = s.backlog(t, 1) // every id above it commits after the revocation
-					s.backlog(t, 20)
-					go func() {
-						for s.bus.Running() && time.Since(revokedAt) < 10*time.Second {
-							time.Sleep(5 * time.Millisecond)
-						}
-						serverEnd <- time.Since(revokedAt)
-					}()
-				}
-				line = strings.TrimSpace(line)
-				if id, ok := strings.CutPrefix(line, "id: "); ok && lastBefore > 0 {
-					if n, _ := strconv.ParseInt(id, 10, 64); n > lastBefore && time.Since(revokedAt) > 2*every { // one Recheck, plus one for a loaded machine
-						late = append(late, fmt.Sprintf("id %d at +%v", n, time.Since(revokedAt).Round(time.Millisecond)))
-					}
-				}
-				if strings.HasPrefix(line, ": ") && line != ": ok" && line != ": keepalive" {
-					end = strings.TrimPrefix(line, ": ")
-					break
-				}
-			}
-			ended := <-serverEnd
-			t.Logf("slow=%v: the subscription closed %v after the revocation (Recheck %v; it includes writing the last comment to a full socket); the reader saw %q %v after it", slow, ended.Round(time.Millisecond), every, end, time.Since(revokedAt).Round(time.Millisecond))
-			if len(late) > 0 {
-				t.Fatalf("%d doorbell(s) committed after the revocation reached the reader more than two Rechecks after it: %v", len(late), late)
-			}
-			if !strings.HasPrefix(end, "reauthenticate, reconnect with since=") {
-				t.Fatalf("last comment %q, want reauthenticate with a cursor", end)
-			}
-		})
+	s.move(t, s.alice, got.Task, domain.Blocked)
+	if f := content(t, m.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindChanged {
+		t.Fatalf("the move rang the master %+v, want changed", f)
 	}
 }
 
-// A peer that stops reading is cut off by the write deadline even when no recheck is due; a peer
-// that reads (the positive control) keeps its stream.
-func TestWakeWriteDeadlineCutsAStalledReader(t *testing.T) {
-	for _, stall := range []bool{true, false} {
-		t.Run(fmt.Sprintf("stall=%v", stall), func(t *testing.T) {
-			s := startRecheckWith(t, wake.Options{Recheck: time.Hour, WriteTimeout: 300 * time.Millisecond}, time.Hour)
-			s.backlog(t, 8000)
-			_, r := rawWake(t, s.tcp, s.token, "/wake?since=0")
-			for { // through the response head and ": ok": the stream is subscribed
-				line, err := r.ReadString('\n')
-				if err != nil {
-					t.Fatal(err)
-				}
-				if line == ": ok\n" {
-					break
-				}
-			}
-			if !s.bus.Running() {
-				t.Fatal("the stream is not subscribed after its ok comment")
-			}
-			if !stall {
-				go func() { _, _ = io.Copy(io.Discard, r) }()
-			}
-			deadline := time.Now().Add(3 * time.Second)
-			for s.bus.Running() && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
-			}
-			if stall && s.bus.Running() {
-				t.Fatal("a stalled reader's stream still holds its subscription 3 s after a 300 ms write deadline")
-			}
-			if !stall && !s.bus.Running() {
-				t.Fatal("a reading peer's stream was cut")
-			}
-		})
-	}
-}
-
-// A disable ends an open stream within one recheck even while other traffic keeps the resolver's
-// account cache warm: the recheck reads the account from the store.
-func TestWakeRecheckEndsADisabledUserWithAWarmCache(t *testing.T) {
-	const every = 200 * time.Millisecond
-	s := startRecheck(t, every, time.Minute)
-	w := s.open(t, "")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { // another of alice's clients, keeping the cache entry fresh
-		for ctx.Err() == nil {
-			_, _ = s.resolver.ResolveCaller(ctx, s.token)
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if _, err := s.accounts.Disable(context.Background(), "alice"); err != nil {
-		t.Fatal(err)
-	}
-	at := time.Now()
-	if _, err := s.resolver.ResolveCaller(context.Background(), s.token); err != nil {
-		t.Fatalf("the cache is not warm (the control): %v", err)
-	}
-	if got := w.last(t, every+150*time.Millisecond); got != "reauthenticate, reconnect" {
-		t.Fatalf("last comment %q", got)
-	}
-	t.Logf("disable -> end %v with a warm cache (Recheck %v)", time.Since(at).Round(time.Millisecond), every)
-}
-
-// Added to a project, alice's stream ends so that she reconnects into its broadcasts.
-func TestWakeRecheckEndsAnAddedMembership(t *testing.T) {
-	s := startRecheck(t, 200*time.Millisecond, time.Minute)
-	ctx := context.Background()
-	other, err := s.st.CreateProject(ctx, store.CreateProjectInput{Name: "Q", CreatedBy: "U-bob"}, store.WriteOptions{})
+// changeOf reports whether the change log holds a row written by tool.
+func (s *dirServer) changeOf(t *testing.T, tool string) bool {
+	t.Helper()
+	rows, err := s.st.ReadChanges(context.Background(), 0, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := s.open(t, "?since=0")
-	if _, err := s.st.AddMember(ctx, other.ID, s.alice, domain.RoleWorker, "U-bob"); err != nil {
-		t.Fatal(err)
+	for _, r := range rows {
+		if strings.Contains(string(r.Payload), `"tool":"`+tool+`"`) {
+			return true
+		}
 	}
-	if got := w.last(t, 500*time.Millisecond); got != "scopes changed, reconnect with since=0" {
-		t.Fatalf("last comment %q", got)
-	}
-	w = s.open(t, "?since=0")
-	id := s.ring(t, service.BroadcastScope(other.ID), "broadcast", "", "T-1")
-	if f := w.frame(t, time.Second); f.Cursor != id {
-		t.Fatalf("after reconnecting: %+v, want the new project's broadcast %d", f, id)
-	}
+	return false
 }
 
-// ": reauthenticate" names the cursor to resume from, as every other ending does.
-func TestWakeReauthenticateNamesTheCursor(t *testing.T) {
-	s := startRecheck(t, 200*time.Millisecond, time.Minute)
-	w := s.open(t, "?since=0")
-	id := s.ring(t, s.alice, "assigned", s.alice, "T-1")
-	if f := w.frame(t, time.Second); f.Cursor != id {
-		t.Fatalf("frame %+v", f)
+// Review A41-5 (tested), replacing the refresh-reuse test /wake took with it: an entry registered
+// with an OAuth access token is dropped by the sweep once a reused refresh token revokes the family.
+func TestDirectoryDropsAnOAuthEntryAfterRefreshReuse(t *testing.T) {
+	old := wakeSweep
+	wakeSweep = 300 * time.Millisecond
+	t.Cleanup(func() { wakeSweep = old })
+	s := startDirectoryWith(t, nil, true)
+	public := "http://" + s.tcp
+	clientID, access, refresh := oauthGrant(t, public, "alice", "pw-alice")
+	c := s.client(t, "s-oauth", "")
+	s.register(t, person{id: s.alice.id, token: access}, c, "worker")
+	s.waitLog(t, fmt.Sprintf("registered pid %d", c.pid), 1)
+	time.Sleep(2 * wakeSweep)
+	if len(s.pids()) != 1 {
+		t.Fatalf("the OAuth entry did not hold before the reuse: %v", s.pids())
 	}
-	if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
-		t.Fatal(err)
+	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["_status"] != http.StatusOK {
+		t.Fatalf("first refresh: %v", m)
 	}
-	if got, want := w.last(t, 500*time.Millisecond), fmt.Sprintf("reauthenticate, reconnect with since=%d", id); got != want {
-		t.Fatalf("last comment %q, want %q", got, want)
+	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["error"] != "invalid_grant" {
+		t.Fatalf("refresh reuse: %v, want invalid_grant", m)
+	}
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its bearer no longer resolves", c.pid, s.alice.id), 1)
+	if len(s.pids()) != 0 {
+		t.Fatalf("pids %v after the family was revoked", s.pids())
 	}
 }

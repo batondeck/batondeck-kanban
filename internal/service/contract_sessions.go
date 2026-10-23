@@ -7,8 +7,9 @@ import (
 )
 
 // Sessions is the agent and wake session bookkeeping. The MCP transport touches the caller's agent
-// session on every request and drops it when the session ends; /wake registers a wake session.
-// None of these writes an event, an audit row or a doorbell.
+// session on every request and drops it when the session ends; the device session directory
+// (internal/wake, R0.25) persists its entries here. None of these writes an event, an audit row or
+// a doorbell.
 type Sessions interface {
 	// TouchAgentSession records one request from the caller's agent session (identity and agent from
 	// the caller): first seen, last seen, the request and per-tool counts, the client.
@@ -21,9 +22,35 @@ type Sessions interface {
 	// Not tenant-scoped; workspace admin for every identity, else the caller's own. Writes nothing.
 	ListAgentSessions(ctx context.Context, caller domain.Caller, req ListAgentSessionsReq) (ListAgentSessionsResp, error)
 
-	// RegisterWakeSession records the caller's /wake attachment, where its doorbells are delivered.
+	// RegisterWakeSession records a device session-directory entry for the caller: the client
+	// process the directory validated, where its doorbells are delivered, and the caller's bearer,
+	// sealed, so the entry can be re-resolved later. req.ID, when set, replaces that row.
 	RegisterWakeSession(ctx context.Context, caller domain.Caller, req RegisterWakeSessionReq) (RegisterWakeSessionResp, error)
 }
+
+// WakeStore is the device session directory's persistence (internal/wake, R0.25): system calls the
+// directory makes, never a tool, so outside the (ctx, caller, req) shape of the tool services.
+type WakeStore interface {
+	// RegisterWakeSession is Sessions.RegisterWakeSession.
+	RegisterWakeSession(ctx context.Context, caller domain.Caller, req RegisterWakeSessionReq) (RegisterWakeSessionResp, error)
+
+	// ListWakeSessions is every directory row with its secrets opened, for the directory's start-up
+	// rebuild. A row whose secrets do not open is listed with Sealed false and an empty Bearer, so
+	// the directory drops it.
+	ListWakeSessions(ctx context.Context) ([]WakeSessionRow, error)
+
+	// SetWakeSessionCursor records the last cursor delivered to the entry.
+	SetWakeSessionCursor(ctx context.Context, id string, cursor int64) error
+
+	// DropWakeSession deletes the entry's row; a missing row is not an error.
+	DropWakeSession(ctx context.Context, id string) error
+}
+
+// The roles a directory entry registers with.
+const (
+	RoleMaster = "master"
+	RoleWorker = "worker"
+)
 
 // TouchAgentSessionReq is one request seen on an agent session.
 type TouchAgentSessionReq struct {
@@ -48,19 +75,65 @@ type RemoveAgentSessionReq struct {
 // RemoveAgentSessionResp is empty.
 type RemoveAgentSessionResp struct{}
 
-// RegisterWakeSessionReq is a /wake attachment: the socket the doorbell is delivered on, the token
-// that socket expects (Claude Code's CLAUDE_CODE_MESSAGING_TOKEN; "" for none), and the change-log
-// cursor the caller has seen.
+// RegisterWakeSessionReq is one directory entry: the client process (PID, Role), its agent label
+// ("" for the caller's own AgentID), the socket the doorbell is delivered on ("" for a client with
+// no adapter) and the token that socket expects ("" for none), what Claude Code's registry said of
+// the process (ClientSessionID, ProcStart), the change-log cursor it has seen, and the bearer it
+// registered with (sealed, never stored as given). ID "" is a new row.
 type RegisterWakeSessionReq struct {
-	SocketPath  string `json:"socketPath,omitzero"`
-	SocketToken string `json:"socketToken,omitzero"`
-	Cursor      int64  `json:"cursor,omitzero"`
+	ID              string `json:"id,omitzero"`
+	PID             int64  `json:"pid"`
+	Role            string `json:"role"`
+	Agent           string `json:"agent,omitzero"`
+	SocketPath      string `json:"socketPath,omitzero"`
+	SocketToken     string `json:"socketToken,omitzero"`
+	ClientSessionID string `json:"clientSessionId,omitzero"`
+	ProcStart       string `json:"procStart,omitzero"`
+	Cursor          int64  `json:"cursor,omitzero"`
+	Bearer          string `json:"-"`
 }
 
-// RegisterWakeSessionResp is the registered wake session.
+// RegisterWakeSessionResp is the registered entry.
 type RegisterWakeSessionResp struct {
 	ID        string `json:"id"`
+	AgentID   string `json:"agentId"`
 	ExpiresAt string `json:"expiresAt"`
+}
+
+// WakeSessionRow is a directory row as the directory rebuilds from it, its secrets opened.
+type WakeSessionRow struct {
+	ID              string
+	IdentityID      string
+	AgentID         string
+	PID             int64
+	Role            string
+	SocketPath      string
+	SocketToken     string
+	ClientSessionID string
+	ProcStart       string
+	LastCursor      int64
+	CreatedAt       int64
+	Bearer          string
+	Sealed          bool // the bearer opened
+}
+
+// DeviceSessions is the device session directory as the web UI's presence frames read it (R1.11):
+// the live entries, and a signal on every register and unregister. Changed's channel is closed on
+// the next change; read Entries, then call Changed again.
+type DeviceSessions interface {
+	Entries() []DeviceSession
+	Changed() <-chan struct{}
+}
+
+// DeviceSession is one live entry: a CLI client process on this device. Adapter is "claude-code"
+// for a client the directory can ring, "" for one it lists only.
+type DeviceSession struct {
+	PID          int64  `json:"pid"`
+	Role         string `json:"role"`
+	IdentityID   string `json:"identityId"`
+	AgentID      string `json:"agentId"`
+	Adapter      string `json:"adapter,omitzero"`
+	RegisteredAt string `json:"registeredAt"`
 }
 
 // ListAgentSessionsReq is list_agent_sessions's input.
