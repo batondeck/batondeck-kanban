@@ -6,15 +6,19 @@
 package mcp
 
 import (
+	"context"
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 )
 
@@ -64,7 +68,7 @@ func New(o Options) *Server {
 		o.Logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{services: o.Services, log: o.Logger}
-	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]struct{}{}}
+	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]struct{}{}, agents: map[string]int{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{
@@ -97,23 +101,42 @@ func (s *Server) SDK() *mcp.Server { return s.sdk }
 // workspace-admin flag is all of it.
 type audience struct{ admin bool }
 
-// toolList filters tools/list per audience and memoises the answer.
+// toolList filters tools/list per audience and memoises the answer. gen counts registrations, so
+// a list read before one is never memoised after it.
 type toolList struct {
 	mu      sync.Mutex
+	gen     int
 	memo    map[audience]*mcp.ListToolsResult
 	visible map[string]func(audience) bool // tool name -> who sees it; absent: everyone
 }
 
 // AddTool registers a tool on s. visible says which callers see it in tools/list (nil: every
-// caller); it decides visibility only, never authority, which service.authorize holds.
+// caller); it decides visibility only, never authority, which service.authorize holds. A handler
+// error that is neither a BatonDeckError nor a protocol error is logged and becomes INTERNAL, so
+// the error middleware reads any other failure as go-sdk refusing the arguments.
 func AddTool[In, Out any](s *Server, t *mcp.Tool, visible func(admin bool) bool, h mcp.ToolHandlerFor[In, Out]) {
+	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := h(ctx, req, in)
+		if err == nil {
+			return res, out, nil
+		}
+		if _, ok := domain.AsBatonDeckError(err); ok {
+			return res, out, err
+		}
+		if _, ok := err.(*jsonrpc.Error); ok {
+			return res, out, err
+		}
+		s.log.Printf("mcp: tool %s failed: %+v\n%s", t.Name, err, debug.Stack())
+		return res, out, domain.NewError(domain.CodeInternal, "internal error", nil)
+	}
 	s.tools.mu.Lock()
+	defer s.tools.mu.Unlock()
+	mcp.AddTool(s.sdk, t, wrapped)
 	if visible != nil {
 		s.tools.visible[t.Name] = func(a audience) bool { return visible(a.admin) }
 	} else {
 		delete(s.tools.visible, t.Name)
 	}
+	s.tools.gen++
 	clear(s.tools.memo)
-	s.tools.mu.Unlock()
-	mcp.AddTool(s.sdk, t, h)
 }

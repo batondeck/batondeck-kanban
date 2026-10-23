@@ -188,7 +188,8 @@ func serve(args []string, version string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
-	srv := &http.Server{Handler: handler(version, mcpHandler(st, version, log)), ReadHeaderTimeout: 10 * time.Second}
+	mcpSrv, svc := mcpServer(st, version, log)
+	srv := &http.Server{Handler: handler(version, mcpSrv.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errc := make(chan error, 1)
@@ -197,12 +198,15 @@ func serve(args []string, version string, stderr io.Writer) int {
 	select {
 	case err := <-errc:
 		fmt.Fprintln(stderr, "serve:", err)
+		closeCore(context.Background(), svc, log)
 		return 1
 	case <-ctx.Done():
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = srv.Shutdown(shutdown)
+	closeCore(shutdown, svc, log)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(stderr, "serve: shutdown:", err)
 		return 1
 	}

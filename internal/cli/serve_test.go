@@ -1,15 +1,30 @@
 package cli
 
 import (
+	"context"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
+
+type bearerRT struct{ token string }
+
+func (b bearerRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
+}
 
 // /mcp is mounted over the store's API tokens: a live token initialises a session, a revoked one
 // and none are 401 with a Bearer challenge.
@@ -30,7 +45,9 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	srv := httptest.NewServer(handler("x", mcpHandler(st, "x", log.New(io.Discard, "", 0))))
+	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
+	defer closeCore(context.Background(), core, log.New(io.Discard, "", 0))
+	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
 	defer srv.Close()
 
 	post := func(bearer string) *http.Response {
@@ -53,7 +70,83 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 			t.Errorf("%s: %d %q, want 401 Bearer", name, r.StatusCode, r.Header.Get("WWW-Authenticate"))
 		}
 	}
+
 	if r := post(live); r.StatusCode != http.StatusOK || r.Header.Get("Mcp-Session-Id") == "" {
 		t.Errorf("live: %d, Mcp-Session-Id %q", r.StatusCode, r.Header.Get("Mcp-Session-Id"))
+	}
+}
+
+// capturing is a memstore that keeps every tool_calls row it is handed. The engines' agent-session
+// and tool-call statements are unbuilt (R0.10, R0.11), so the service core is proved over memstore.
+type capturing struct {
+	*memstore.Store
+	rows []store.ToolCall
+}
+
+func (c *capturing) InsertToolCalls(ctx context.Context, batch []store.ToolCall) error {
+	c.rows = append(c.rows, batch...)
+	return c.Store.InsertToolCalls(ctx, batch)
+}
+
+// The serve composition writes one tool_calls row per tool call and touches the caller's agent
+// session, through the service core.
+func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st := &capturing{Store: memstore.New()}
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, _, err := (&auth.TokenService{Store: st}).Create(ctx, user.ID, "", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
+	defer closeCore(context.Background(), core, log.New(io.Discard, "", 0))
+	type in struct {
+		ProjectID string `json:"projectId"`
+	}
+	type out struct {
+		OK bool `json:"ok"`
+	}
+	mcp.AddTool(mcpSrv, &sdk.Tool{Name: "probe"}, nil, func(context.Context, *sdk.CallToolRequest, in) (*sdk.CallToolResult, out, error) {
+		return nil, out{OK: true}, nil
+	})
+	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
+	defer srv.Close()
+
+	client := sdk.NewClient(&sdk.Implementation{Name: "serve-test", Version: "1"}, nil)
+	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: srv.URL + "/mcp",
+		HTTPClient: &http.Client{Transport: bearerRT{live}}, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "probe", Arguments: map[string]any{"projectId": "P-1"}}); err != nil || res.IsError {
+		t.Fatalf("probe: %+v %v", res, err)
+	}
+	if err := core.FlushToolCalls(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var rows []string
+	for _, r := range st.rows {
+		rows = append(rows, r.Tool+" "+r.Identity+" "+string(r.Outcome)+" "+r.Code)
+	}
+	if want := "probe " + user.ID + " ok OK"; len(rows) != 1 || rows[0] != want {
+		t.Errorf("tool_calls = %q, want [%q]", rows, want)
+	}
+
+	sessions, err := st.ListAgentSessions(ctx, user.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].AgentID != "id:"+user.ID || sessions[0].ClientName != "serve-test" ||
+		sessions[0].SessionCount != 1 || sessions[0].RequestCount != 1 || sessions[0].ToolCounts["probe"] != 1 || sessions[0].Kind != "service_account" {
+		t.Errorf("agent sessions = %+v, want one: client serve-test, one connection, one probe call", sessions)
 	}
 }

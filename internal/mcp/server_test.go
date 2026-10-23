@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -194,6 +195,9 @@ func plant(h *harness) {
 	AddTool(h.srv, &mcp.Tool{Name: "boom"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
 		panic("planted panic")
 	})
+	AddTool(h.srv, &mcp.Tool{Name: "plain"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		return nil, plantOut{}, errors.New("planted plain error")
+	})
 }
 
 func TestCallerReachesEveryCall(t *testing.T) {
@@ -307,9 +311,60 @@ func TestToolErrorShape(t *testing.T) {
 		t.Errorf("after the panic: %v", err)
 	}
 
+	plain := toolError(t, cs, "plain", map[string]any{"projectId": "P-1"})
+	if plain["code"] != "INTERNAL" || plain["retryable"] != true || strings.Contains(fmt.Sprint(plain["message"]), "planted") {
+		t.Errorf("plain error = %v, want INTERNAL retryable, its text kept out of the message", plain)
+	}
+	if logs := h.log.String(); !strings.Contains(logs, "mcp: tool plain failed: planted plain error") || !strings.Contains(logs, "runtime/debug.Stack") {
+		t.Errorf("the plain error was not logged with a stack:\n%s", logs)
+	}
+
 	bad := toolError(t, cs, "stale", map[string]any{"projectId": 7})
 	if bad["code"] != "VALIDATION" || bad["retryable"] != false {
 		t.Errorf("bad arguments = %v, want VALIDATION", bad)
+	}
+}
+
+func TestEveryToolCallRecordedOnce(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver())
+	plant(h)
+	cs := h.connect(t, tokenAda)
+	for _, name := range []string{"whoami", "stale", "boom", "plain"} {
+		if _, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"projectId": "P-1"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, c := range calls(f, "ToolCalls.Record") {
+		r := c.Req.(service.RecordToolCallReq)
+		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code)
+	}
+	want := []string{"u-ada whoami ok OK", "u-ada stale error STALE", "u-ada boom error INTERNAL", "u-ada plain error INTERNAL"}
+	if !slices.Equal(got, want) {
+		t.Errorf("tool_calls rows = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionRemovedWithItsLastMCPSession(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver())
+	one, two := h.connect(t, tokenAda), h.connect(t, tokenAda)
+	live := func() int {
+		h.srv.sessions.mu.Lock()
+		defer h.srv.sessions.mu.Unlock()
+		return len(h.srv.sessions.live)
+	}
+	_ = one.Close()
+	waitFor(t, func() bool { return live() == 1 })
+	time.Sleep(200 * time.Millisecond) // the ended session's goroutine has decided by now
+	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 0 {
+		t.Fatalf("%d removals after the first of two sessions ended, want 0: the other still uses the row", n)
+	}
+	_ = two.Close()
+	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
+	if r := calls(f, "Sessions.RemoveAgentSession")[0].Req.(service.RemoveAgentSessionReq); r.SessionKey != "u-ada::id:u-ada" {
+		t.Errorf("removed %q, want u-ada::id:u-ada", r.SessionKey)
 	}
 }
 

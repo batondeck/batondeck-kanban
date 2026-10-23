@@ -7,7 +7,7 @@ import (
 )
 
 // middleware filters tools/list to the caller's audience and memoises the first page per audience;
-// AddTool clears the memo.
+// AddTool clears the memo, and a list read across a registration is not memoised.
 func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if method != "tools/list" {
@@ -19,13 +19,12 @@ func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 		if p, ok := req.GetParams().(*mcp.ListToolsParams); ok && p != nil && p.Cursor != "" {
 			first = false
 		}
-		if first {
-			l.mu.Lock()
-			memo, ok := l.memo[a]
-			l.mu.Unlock()
-			if ok {
-				return memo, nil
-			}
+		l.mu.Lock()
+		gen := l.gen
+		memo, ok := l.memo[a]
+		l.mu.Unlock()
+		if first && ok {
+			return memo, nil
 		}
 		res, err := next(ctx, method, req)
 		r, ok := res.(*mcp.ListToolsResult)
@@ -41,7 +40,7 @@ func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 				out.Tools = append(out.Tools, t)
 			}
 		}
-		if first {
+		if first && gen == l.gen {
 			l.memo[a] = &out
 		}
 		return &out, nil

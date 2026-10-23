@@ -21,9 +21,13 @@ Notable changes to batondeck-kanban. The format follows
   answer 404 "session not found" afterwards; at most 1000 live (`Options.MaxSessions`), an
   initialize past it refused. Each initialised session is mirrored through `service.Sessions` as the
   caller's agent session (key `<identity>::<agent id>`): written at initialize with the client's name
-  and version, touched by every tool call, removed when the session ends (idle, DELETE or close). `tools/list` is filtered per audience (the workspace-admin
+  and version, touched by every tool call, removed when the last MCP session of that agent ends
+  (idle, DELETE or close). Every `tools/call` writes one `tool_calls` row through
+  `service.ToolCalls` (`ok`/`OK`, else `error` and the code returned); a handler error that is no
+  BatonDeckError is logged with a stack and answered INTERNAL. `tools/list` is filtered per audience (the workspace-admin
   flag) and memoised per audience; `mcp.AddTool` registers a tool with its visibility. `serve` mounts
-  `/mcp` over the store's API tokens. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
+  `/mcp` over the store's API tokens and the service core's Sessions and ToolCalls, flushed on
+  shutdown. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
   its linked dependencies (THIRD_PARTY_NOTICES: 21 to 28 linked modules).
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
