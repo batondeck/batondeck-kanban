@@ -36,7 +36,7 @@ func TestRegisterRefusesUnknownAndDuplicateAreas(t *testing.T) {
 	}
 }
 
-// TestRegisterAddsEveryAreasTools: Register adds the projects, boards, lifecycle and media tools,
+// TestRegisterAddsEveryAreasTools: Register adds the projects, boards, lifecycle, context and media tools,
 // each under its area.
 func TestRegisterAddsEveryAreasTools(t *testing.T) {
 	svc := servicefake.New().Services()
@@ -51,10 +51,12 @@ func TestRegisterAddsEveryAreasTools(t *testing.T) {
 		"boards":   "add_column create_board get_board list_boards remove_column update_column",
 		"lifecycle": "block_task cancel_task claim_next claim_task complete_task fail_task handoff_task heartbeat_task " +
 			"next_task reap_stale_leases release_task",
+		"context": "add_context_item add_dependency add_subtask get_task_context list_subtasks read_memory recall_memory " +
+			"remove_dependency set_summary write_memory",
 		"media": "attach_file list_attachments",
 	}
 	if len(got) != len(want) {
-		t.Errorf("areas registered = %v, want projects, boards, lifecycle and media", got)
+		t.Errorf("areas registered = %v, want projects, boards, lifecycle, context and media", got)
 	}
 	for area, names := range want {
 		if strings.Join(got[area], " ") != names {
