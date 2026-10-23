@@ -11,7 +11,6 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // userRoutes are Settings' users page (R1.15): the workspace admin lists the local accounts and
@@ -34,12 +33,13 @@ type userResp struct {
 	CreatedAt   int64  `json:"createdAt"`
 }
 
-func userOf(u store.User) userResp {
+// userOf takes the row's fields, not the row: api does not import internal/store (layering rule 6).
+func userOf(id, login, displayName string, admin bool, disabledAt, createdAt int64) userResp {
 	role := "member"
-	if u.WorkspaceAdmin {
+	if admin {
 		role = "admin"
 	}
-	return userResp{ID: u.ID, Login: u.Email, DisplayName: u.DisplayName, Role: role, Disabled: u.DisabledAt != 0, CreatedAt: u.CreatedAt}
+	return userResp{ID: id, Login: login, DisplayName: displayName, Role: role, Disabled: disabledAt != 0, CreatedAt: createdAt}
 }
 
 // adminOnly runs h for a workspace admin and answers FORBIDDEN to anyone else, before the body is
@@ -73,7 +73,7 @@ func listUsers(o *Options, w http.ResponseWriter, r *http.Request) error {
 	}
 	out := make([]userResp, 0, len(us))
 	for _, u := range us {
-		out = append(out, userOf(u))
+		out = append(out, userOf(u.ID, u.Email, u.DisplayName, u.WorkspaceAdmin, u.DisabledAt, u.CreatedAt))
 	}
 	writeJSON(w, http.StatusOK, struct {
 		Users []userResp `json:"users"`
@@ -108,7 +108,7 @@ func addUser(o *Options, w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, http.StatusOK, struct {
 		User     userResp `json:"user"`
 		Password string   `json:"password"`
-	}{userOf(u), password})
+	}{userOf(u.ID, u.Email, u.DisplayName, u.WorkspaceAdmin, u.DisabledAt, u.CreatedAt), password})
 	return nil
 }
 
