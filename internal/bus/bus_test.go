@@ -458,6 +458,54 @@ func TestAChangeInFlightWhenTheTailStartsIsDelivered(t *testing.T) {
 	}
 }
 
+// manual is a watcher woken by the test alone.
+type manual struct{ wake chan func() }
+
+func (m *manual) WatchChanges(ctx context.Context, wake func()) error {
+	wake()
+	m.wake <- wake
+	<-ctx.Done()
+	return nil
+}
+
+// A permanent gap (an id that never shows) under a watcher: once GapTimeout passes, the poll's tick
+// moves the frontier past it with no write and no wake, counts it and reports ErrGapPassed.
+func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
+	b := memBackend(t)
+	log := &hiding{ChangeLog: b.store}
+	w := &manual{wake: make(chan func(), 1)}
+	var mu sync.Mutex
+	var reported []error
+	bus := New(log, Options{Watcher: w, GapTimeout: 200 * time.Millisecond, OnError: func(err error) {
+		mu.Lock()
+		reported = append(reported, err)
+		mu.Unlock()
+	}})
+	t.Cleanup(bus.Close)
+	sub := subscribe(t, bus, 0, "project:P-1")
+	wake := <-w.wake
+	time.Sleep(2 * PollInterval) // past the read the first wake allowed
+	ids := write(t, b.store, change("project:P-1", 1), change("project:P-1", 2), change("project:P-1", 3))
+	log.id = ids[1] // never shown
+	wake()
+	for _, want := range []int64{ids[0], ids[2]} {
+		if c := next(t, sub, 2*time.Second); c.ID != want {
+			t.Fatalf("delivered %d, want %d", c.ID, want)
+		}
+	}
+	if f := bus.frontier.Load(); f != ids[0] {
+		t.Fatalf("frontier %d, want it held at %d below the gap", f, ids[0])
+	}
+	time.Sleep(200*time.Millisecond + 3*PollInterval)
+	mu.Lock()
+	got := slices.Clone(reported)
+	mu.Unlock()
+	if f := bus.frontier.Load(); f != ids[2] || bus.GapsPassed() != 1 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) {
+		t.Fatalf("after GapTimeout with no write: frontier %d (want %d), gaps %d, reported %v", f, ids[2], bus.GapsPassed(), got)
+	}
+	t.Logf("gap %d passed on the tick: frontier %d, %v", ids[1], ids[2], got[0])
+}
+
 // blocking is a change log whose reads wait until released.
 type blocking struct {
 	store.ChangeLog
