@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"sync/atomic"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -36,6 +37,10 @@ type SQLite struct {
 	r *sql.DB // the read pool
 	// tx is set on the copy Atomically hands its callback.
 	tx *sql.Tx
+	// sig is the file's in-process change wake (watch.go); appended marks a transaction's copy
+	// that appended a change, so its commit fires sig.
+	sig      *changeSignal
+	appended *atomic.Bool
 }
 
 var _ Store = (*SQLite)(nil)
@@ -77,7 +82,7 @@ func OpenSQLite(path, synchronous string) (*SQLite, error) {
 	}
 	r.SetMaxOpenConns(sqliteConns)
 	r.SetMaxIdleConns(sqliteConns)
-	return &SQLite{w: w, r: r}, nil
+	return &SQLite{w: w, r: r, sig: signalFor(path)}, nil
 }
 
 // ErrNotFound is what a store method returns when the row asked for is not there, on either
@@ -142,12 +147,16 @@ func (s *SQLite) Atomically(ctx context.Context, fn func(tx Store) error) error 
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	if err := fn(&SQLite{w: s.w, r: s.r, tx: tx}); err != nil {
+	in := &SQLite{w: s.w, r: s.r, tx: tx, sig: s.sig, appended: new(atomic.Bool)}
+	if err := fn(in); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: commit: %w", err)
+	}
+	if in.appended.Load() {
+		s.sig.fire()
 	}
 	return nil
 }
