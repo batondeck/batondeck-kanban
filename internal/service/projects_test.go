@@ -71,7 +71,7 @@ func TestUpdateSettingsRefusesTransitionTable(t *testing.T) {
 	}
 	wantCode(t, serr, domain.CodeValidation)
 
-	got, err := f.c.Projects().UpdateSettings(f.ctx, f.alice, UpdateSettingsReq{ProjectID: f.project.ID, MaxRunsPerTask: 7, ArtifactPolicy: "warn", Color: ptr("#aabbcc")})
+	got, err := f.c.Projects().UpdateSettings(f.ctx, f.alice, UpdateSettingsReq{ProjectID: f.project.ID, MaxRunsPerTask: 7, ArtifactPolicy: "warn", Color: Value("#aabbcc")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,12 +96,12 @@ func TestUpdateSettingsRefusals(t *testing.T) {
 		code   domain.Code
 	}{
 		{"a member is not admin", bob, UpdateSettingsReq{MaxRunsPerTask: 3}, domain.CodeForbidden},
-		{"quota from a project admin", f.alice, UpdateSettingsReq{QuotaEnabled: true}, domain.CodeForbidden},
-		{"quota from a workspace admin", domain.Caller{Identity: "alice", WorkspaceAdmin: true}, UpdateSettingsReq{TxnCap: ptr(int64(5))}, domain.CodeValidation},
+		{"quota from a project admin", f.alice, UpdateSettingsReq{QuotaEnabled: Some(true)}, domain.CodeForbidden},
+		{"quota from a workspace admin", domain.Caller{Identity: "alice", WorkspaceAdmin: true}, UpdateSettingsReq{TxnCap: Value(int64(5))}, domain.CodeValidation},
 		{"maxRunsPerTask over 50", f.alice, UpdateSettingsReq{MaxRunsPerTask: 51}, domain.CodeValidation},
 		{"maxTicketTokens under 100", f.alice, UpdateSettingsReq{MaxTicketTokens: 99}, domain.CodeValidation},
 		{"an unknown policy", f.alice, UpdateSettingsReq{TokenPolicy: "loud"}, domain.CodeValidation},
-		{"a bad colour", f.alice, UpdateSettingsReq{Color: ptr("red")}, domain.CodeValidation},
+		{"a bad colour", f.alice, UpdateSettingsReq{Color: Value("red")}, domain.CodeValidation},
 		{"retry max below base", f.alice, UpdateSettingsReq{RetryPolicy: RetryPolicyPatch{BaseDelayMs: 10, MaxDelayMs: 5, PoisonAfterAttempts: 1}}, domain.CodeValidation},
 		{"a negative weight", f.alice, UpdateSettingsReq{SelectionWeights: SelectionWeightsPatch{Aging: -1, Priority: 2}}, domain.CodeValidation},
 	}

@@ -70,13 +70,13 @@ type GetBoardResp struct {
 
 // AddColumnReq is add_column's input.
 type AddColumnReq struct {
-	BoardID        string        `json:"boardId"`
-	Name           string        `json:"name"`
-	ProjectID      string        `json:"projectId"`
-	Status         domain.Status `json:"status"`
-	IdempotencyKey string        `json:"idempotencyKey,omitzero"`
-	Order          float64       `json:"order,omitzero"`
-	WIPLimit       *int64        `json:"wipLimit,omitzero"`
+	BoardID        string            `json:"boardId"`
+	Name           string            `json:"name"`
+	ProjectID      string            `json:"projectId"`
+	Status         domain.Status     `json:"status"`
+	IdempotencyKey string            `json:"idempotencyKey,omitzero"`
+	Order          Optional[float64] `json:"order,omitzero"`
+	WIPLimit       *int64            `json:"wipLimit,omitzero"`
 }
 
 // AddColumnResp is add_column's output.
@@ -86,13 +86,13 @@ type AddColumnResp struct {
 
 // UpdateColumnReq is update_column's input.
 type UpdateColumnReq struct {
-	BoardID   string        `json:"boardId"`
-	ColumnID  string        `json:"columnId"`
-	ProjectID string        `json:"projectId"`
-	Name      string        `json:"name,omitzero"`
-	Order     float64       `json:"order,omitzero"`
-	Status    domain.Status `json:"status,omitzero"`
-	WIPLimit  *int64        `json:"wipLimit,omitzero"`
+	BoardID   string            `json:"boardId"`
+	ColumnID  string            `json:"columnId"`
+	ProjectID string            `json:"projectId"`
+	Name      string            `json:"name,omitzero"`
+	Order     Optional[float64] `json:"order,omitzero"`
+	Status    domain.Status     `json:"status,omitzero"`
+	WIPLimit  Nullable[int64]   `json:"wipLimit,omitzero"`
 }
 
 // UpdateColumnResp is update_column's output.

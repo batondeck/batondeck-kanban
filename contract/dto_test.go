@@ -96,8 +96,23 @@ func enumSchema[T ~string](values []T) *jsonschema.Schema {
 	return s
 }
 
+// optionals are the tri-state request fields' instantiations (service.Optional, service.Nullable).
+// Each is typed as its value: Optional[T] as T, Nullable[T] as *T (T or null), so a field keeps the
+// schema it had as a value or a pointer while carrying absent apart from false, 0 and null.
+var optionals = []reflect.Type{
+	reflect.TypeFor[service.Optional[bool]](),
+	reflect.TypeFor[service.Optional[float64]](),
+	reflect.TypeFor[service.Nullable[string]](),
+	reflect.TypeFor[service.Nullable[int64]](),
+	reflect.TypeFor[service.Nullable[float64]](),
+	reflect.TypeFor[service.Optional[string]](),
+	reflect.TypeFor[service.Nullable[service.ModelHintInput]](),
+	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
+}
+
 // dtoSchemaOptions is the inference recipe for the DTOs: the enums from their Go values, a custom
-// field's value as string|number|boolean, True as const true, and the open objects. Slices are
+// field's value as string|number|boolean, True as const true, the tri-state optionals, and the open
+// objects. Slices are
 // fixed after inference (dtoSchema), since jsonschema-go types every Go slice as [null, array].
 func dtoSchemaOptions(t *testing.T) *jsonschema.ForOptions {
 	t.Helper()
@@ -126,6 +141,21 @@ func dtoSchemaOptions(t *testing.T) *jsonschema.ForOptions {
 		reflect.TypeFor[service.FieldValue]():          {Types: []string{"string", "number", "boolean"}},
 		reflect.TypeFor[service.True]():                {Type: "boolean", Const: &isTrue},
 	}}
+	for _, typ := range optionals {
+		v, _ := typ.FieldByName("V")
+		elem := v.Type
+		if _, nullable := typ.FieldByName("Null"); nullable {
+			elem = reflect.PointerTo(elem)
+		}
+		s, err := jsonschema.ForType(elem, opts)
+		if err != nil {
+			t.Fatalf("infer %s: %v", typ, err)
+		}
+		if v.Type.Kind() == reflect.Struct {
+			s.AdditionalProperties = nil // conductor's nested objects are open, as openObjects below
+		}
+		opts.TypeSchemas[typ] = s
+	}
 	for _, typ := range openObjects {
 		s, err := jsonschema.ForType(typ, opts)
 		if err != nil {
@@ -230,5 +260,56 @@ func TestDTOCanonical(t *testing.T) {
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
 	if len(names) != 44 {
 		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task and list_agent_sessions (44)", len(names))
+	}
+}
+
+// requestPointers are the request fields deliberately left pointers: conductor treats their null
+// as their absence (it creates with `?? null`), so absent and null need not be told apart.
+var requestPointers = map[string]bool{
+	"AddColumnReq.WIPLimit":      true, // add_column: wipLimit ?? null
+	"ColumnSpec.WIPLimit":        true, // create_board columns[]: wipLimit ?? null
+	"CreateTaskReq.ParentTaskID": true, // create_task: parentTaskId ?? null
+}
+
+// TestRequestPointersAreDeliberate: a pointer and a service.Nullable infer one schema, so
+// TestDTOCanonical cannot tell a request field that drops its null from one that keeps it. Every
+// pointer reachable from a tool's request type is on requestPointers, or this fails naming it.
+func TestRequestPointersAreDeliberate(t *testing.T) {
+	seen := map[reflect.Type]bool{}
+	found := map[string]bool{}
+	var walk func(typ reflect.Type)
+	walk = func(typ reflect.Type) {
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Map:
+			walk(typ.Elem())
+			return
+		case reflect.Struct:
+		default:
+			return
+		}
+		if seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			if f.Type.Kind() == reflect.Pointer {
+				name := typ.Name() + "." + f.Name
+				found[name] = true
+				if !requestPointers[name] {
+					t.Errorf("%s is a pointer in a request type: its null decodes as its absence. Make it service.Nullable, or list it in requestPointers if conductor's null means absent", name)
+				}
+			}
+			walk(f.Type)
+		}
+	}
+	for _, d := range dtoTools {
+		m, _ := d.iface.MethodByName(d.method)
+		walk(m.Type.In(2))
+	}
+	for name := range requestPointers {
+		if !found[name] {
+			t.Errorf("requestPointers lists %s, which is no longer a request pointer", name)
+		}
 	}
 }

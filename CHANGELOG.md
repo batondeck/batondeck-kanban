@@ -31,6 +31,27 @@ Notable changes to batondeck-kanban. The format follows
   Access tokens live 1 h, refresh tokens 14 d, codes 10 min. `store.OAuth`
   (`internal/store/contract_oauth.go`) on SQLite, Postgres and memstore, judged by the new `oauth`
   conformance battery; no migration (the tables are 0001's).
+- The context service (R1.17): `Core.Context()` implements `service.Context` over the store in
+  `internal/service/{context,memory,dependencies,subtasks}.go`, every mutation through
+  `service.mutate`. `GetTaskContext` composes the task, its items, the caller's task memory, the
+  summary, both sides' edges, the fields and `workflow.allowedMoves` (the fixed table's row) with no
+  `id`, `title` or `description`: 6 statements once the membership and the board snapshot are
+  cached, 8 with a cold snapshot (`store.GetBoard`'s 2 for the lanes)
+  (`TestGetTaskContextCostsAtMostSixStatements`); the snapshot cache serves only once the bus feeds
+  `ObserveChange` (P-100), so until then every call is 8. `RecallMemory` is an exact key or the newest `k`,
+  the expired dropped; naming a project needs membership in it on every branch, and `agent_global`
+  is the caller's. `WriteMemory`'s `ttl` is the expiry instant (RFC 3339), refused as VALIDATION
+  when it does not parse. `AddDependency` writes the edge and both caches and bumps each task once,
+  never a status; `RemoveDependency` runs `domain.DecideUnblock` and moves a non-poisoned dependent
+  whose last blocker went to READY with one `task.dependency_cleared` (a poisoned one stays BLOCKED);
+  `txn.unblockDependent` is the auto-unblock entry R1.5 and R1.3 call. `AddSubtask` creates the
+  child in the first column with `parentTaskId` and leaves the parent untouched; it lands at the
+  column's head until the store has a last-key read (P-69). A new store primitive,
+  `store.Locks.LockProject` (a transaction-scoped Postgres advisory lock; a no-op inside SQLite's and
+  memstore's transactions, INTERNAL outside one), is taken first in `mutate` when
+  `mutation.LockProject` is set, which add_dependency and remove_dependency set: two concurrent
+  calls on disjoint pairs closed a 4-edge cycle on Postgres without it (the R0.10 review's P-110,
+  `TestConcurrentAddDependencyOnDisjointPairsClosesNoCycle` on memstore, SQLite and Postgres).
 - The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
   `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
   `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token
@@ -346,6 +367,32 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Fixed
 
+- Request fields whose false, 0 or null means something can now be sent (R0.22).
+  `internal/service/optional.go` adds `Optional[T]` (absent or a value; JSON null refused, as
+  conductor's `.optional()` refuses it) and `Nullable[T]` (absent, null or a value), each with
+  `Set`, `V` (and `Null`), `IsZero` for `omitzero`, and the constructors `Some`, `Value`, `Null`.
+  Migrated: `UpdateSettingsReq.ReviewEnabled`, `.QuotaEnabled` (Optional[bool]), `.Color`,
+  `.DefaultReviewer` (Nullable[string]), `.TxnCap` (Nullable[int64]); `UpdateColumnReq.Order`,
+  `AddColumnReq.Order` (Optional[float64]), `UpdateColumnReq.WIPLimit` (Nullable[int64]);
+  `TaskPatch.Assignee`, `.DueAt`, `.Reviewer` (Nullable[string]), `.Estimate` (Nullable[float64]);
+  `FailTaskReq.Retryable` (Optional[bool]); `ListTasksReq.Assignee` (Nullable[string]); and, from
+  review, `TaskPatch.ModelHint` (Nullable[ModelHintInput], null clears it), `TaskPatch.Description`
+  (Optional[string], "" clears it), `UpdateSettingsReq.AnomalyPolicy`
+  (Optional[AnomalyPolicyPatch], {} resets every threshold), with `capabilityAliases:{}` now
+  removing every alias. The DTO
+  recipe types each instantiation as its value (a Nullable as a pointer), so `TestDTOCanonical`
+  stays exact for all 44 tools. `update_settings {reviewEnabled:false}` turns review off,
+  `{color:null}` removes the colour, `update_column {wipLimit:null}` clears the limit, `order:0` is
+  a position, and an omitted field changes nothing. `quotaEnabled`/`txnCap` in any state stay
+  FORBIDDEN (not a workspace admin) or VALIDATION (a workspace admin). `TestRequestPointersAreDeliberate`
+  fails on any pointer field reachable from a tool's request type that is not on its allowlist
+  (`AddColumnReq.WIPLimit`, `ColumnSpec.WIPLimit`, `CreateTaskReq.ParentTaskID`), since a pointer and
+  a Nullable infer one schema and the canonical comparison cannot tell them apart.
+- Contract comments corrected to conductor: `create_project` appends no event, and the board feed
+  is newest first with the cursor paging older; the `// DEVIATION` notes that cited the old wording
+  are gone. `TestCloneSnapshotSharesNothing` fills every pointer, slice and map of the cached
+  snapshot type by reflection and fails on any the copy shares, so a reference field added later
+  is judged with no edit to the test.
 - Two processes migrating one SQLite file at once no longer race in goose's Up (`SQLITE_BUSY`,
   `table projects already exists`): `migrate` holds the data-dir lock alone, waiting up to a
   minute for another holder, and `serve` takes it through `core.AcquireServeLock`, migrates only

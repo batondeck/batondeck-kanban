@@ -189,12 +189,12 @@ type BlockTaskResp struct {
 
 // FailTaskReq is fail_task's input.
 type FailTaskReq struct {
-	LeaseID        string `json:"leaseId"`
-	ProjectID      string `json:"projectId"`
-	Reason         string `json:"reason"`
-	TaskID         string `json:"taskId"`
-	IdempotencyKey string `json:"idempotencyKey,omitzero"`
-	Retryable      bool   `json:"retryable,omitzero"`
+	LeaseID        string         `json:"leaseId"`
+	ProjectID      string         `json:"projectId"`
+	Reason         string         `json:"reason"`
+	TaskID         string         `json:"taskId"`
+	IdempotencyKey string         `json:"idempotencyKey,omitzero"`
+	Retryable      Optional[bool] `json:"retryable,omitzero"`
 }
 
 // FailTaskResp is fail_task's output.
