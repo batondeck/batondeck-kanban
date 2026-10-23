@@ -96,7 +96,7 @@ type Bus struct {
 	hint int64
 
 	active atomic.Int32 // tails running, for Running
-	// frontier is the running tail's frontier, published after each read (tests read it).
+	// frontier is the running tail's frontier, published after each read (Frontier).
 	frontier atomic.Int64
 	gaps     atomic.Int64 // ids given up on, for GapsPassed
 }
@@ -288,6 +288,11 @@ func (b *Bus) remove(s *Subscription) {
 // GapsPassed is how many ids the tail has given up on (ErrGapPassed): each one, if it was a
 // transaction running longer than GapTimeout rather than a rollback, was never delivered.
 func (b *Bus) GapsPassed() int64 { return b.gaps.Load() }
+
+// Frontier is the running tail's frontier: every change at or below it has been offered to the
+// subscribers that match it (P-108's safe cursor; a change above it may still be in flight). 0
+// before the first tail's first read.
+func (b *Bus) Frontier() int64 { return b.frontier.Load() }
 
 // Running reports whether a tail goroutine is running: true from the first Subscribe until shortly
 // after the last subscription closes.

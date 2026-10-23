@@ -556,4 +556,9 @@ type WakeSession struct {
 	CreatedAt         int64
 	LastSeenAt        int64
 	ExpiresAt         int64
+	Pid               sql.NullInt64
+	Role              sql.NullString
+	ClientSessionID   sql.NullString
+	ProcStart         sql.NullString
+	BearerSealed      []byte
 }

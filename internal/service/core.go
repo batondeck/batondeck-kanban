@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
@@ -38,6 +39,7 @@ type GrantLookup func(ctx context.Context, projectID, identityID string) (grant 
 // Sealer seals a secret that must be read back later, bound to aad (core.Keyring is the one).
 type Sealer interface {
 	Encrypt(plaintext, aad []byte) ([]byte, error)
+	Decrypt(sealed, aad []byte) ([]byte, error)
 }
 
 // Options configure a Core; every zero value takes its default.
@@ -55,7 +57,7 @@ type Options struct {
 	// (the caller flushes with FlushToolCalls).
 	ToolCallFlush  time.Duration
 	ToolCallBuffer int
-	// Sealer seals a wake session's inbox token; nil refuses a token (INTERNAL), never stores it.
+	// Sealer seals a directory entry's bearer and inbox token; nil refuses an entry (INTERNAL).
 	Sealer Sealer
 	// BlobGC is delete_task's blob hook (delete.go); nil is CollectBlobs when Media.Files is set,
 	// else a no-op.
@@ -81,6 +83,19 @@ type Core struct {
 	sealer  Sealer
 	blobGC  BlobGC
 	media   MediaOptions
+	devices atomic.Pointer[DeviceSessions]
+}
+
+// SetDeviceSessions hands the core the device session directory, which internal/wake builds after
+// the core (the service imports no transport, ADR-0003 row 5).
+func (c *Core) SetDeviceSessions(d DeviceSessions) { c.devices.Store(&d) }
+
+// DeviceSessions is the device session directory, nil until SetDeviceSessions (R1.11's presence).
+func (c *Core) DeviceSessions() DeviceSessions {
+	if d := c.devices.Load(); d != nil {
+		return *d
+	}
+	return nil
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.

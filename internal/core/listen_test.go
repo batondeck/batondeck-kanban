@@ -40,7 +40,11 @@ func sockPath(t *testing.T) string {
 func serveOn(t *testing.T, ln net.Listener) {
 	t.Helper()
 	srv := &http.Server{ConnContext: ConnContext, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := PeerOf(r.Context())
 		fmt.Fprintf(w, "unix=%v", ViaUnixSocket(r.Context()))
+		if ok {
+			fmt.Fprintf(w, " uid=%d pid=%d", p.UID, p.PID)
+		}
 	})}
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
@@ -104,8 +108,10 @@ func TestUnixSocketServesTheOwningUID(t *testing.T) {
 	if di, _ := os.Stat(filepath.Dir(path)); di.Mode().Perm() != 0o700 {
 		t.Fatalf("socket directory mode %v, want 0700", di.Mode().Perm())
 	}
-	if body, err := get(unixClient(path), "http://x/"); err != nil || body != "unix=true" {
-		t.Fatalf("same uid over the socket: %q, %v; want unix=true", body, err)
+	// The peer's credentials ride the request: this test process is the peer.
+	want := fmt.Sprintf("unix=true uid=%d pid=%d", os.Getuid(), os.Getpid())
+	if body, err := get(unixClient(path), "http://x/"); err != nil || body != want {
+		t.Fatalf("same uid over the socket: %q, %v; want %q", body, err, want)
 	}
 	tcp, err := Listen(ListenAddr{Network: NetworkTCP, Address: "127.0.0.1:0"}, nil)
 	if err != nil {
