@@ -66,7 +66,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	// The engines wake the tail on commit (store.ChangeWatcher); without one it polls.
 	watcher, _ := st.(store.ChangeWatcher)
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
-	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger})
+	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger, Recheck: wakeRecheck})
 	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
 	return &app{mcp: mcp.New(opts), as: as, core: sc, bus: b,
 		mount: func(mux *http.ServeMux) {
@@ -126,6 +126,10 @@ var (
 	shutdownBudget = 10 * time.Second
 	flushBudget    = 5 * time.Second
 )
+
+// wakeRecheck is how often an open /wake stream re-resolves its bearer (wake.Recheck). A variable
+// only so a test can watch a revocation end a stream quickly.
+var wakeRecheck = wake.Recheck
 
 // runServer serves the app over st on every listener until ctx ends or one fails.
 func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer) error {
