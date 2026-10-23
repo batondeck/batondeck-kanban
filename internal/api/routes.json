@@ -12,9 +12,24 @@
       "source": "new: R0.12's form login (ui-backend signed in through WorkOS)"
     },
     {
+      "method": "POST",
+      "path": "/api/logout",
+      "source": "new: R1.15's sign-out, deletes the session row (ui-backend signed out through WorkOS)"
+    },
+    {
       "method": "GET",
       "path": "/api/session",
       "source": "app.ts:2221"
+    },
+    {
+      "method": "GET",
+      "path": "/api/users",
+      "source": "new: R1.15's users page, workspace admin only (replaces /api/tenants/invitations)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/users",
+      "source": "new: R1.15's add-a-user, workspace admin only (replaces /api/tenants/invitations)"
     },
     {
       "method": "GET",
