@@ -115,23 +115,6 @@ func (q *Queries) DeleteChroniclePage(ctx context.Context, arg DeleteChroniclePa
 	return result.RowsAffected()
 }
 
-const deleteChronicleVersions = `-- name: DeleteChronicleVersions :execrows
-DELETE FROM chronicle_versions WHERE project_id = ? AND page_id = ?
-`
-
-type DeleteChronicleVersionsParams struct {
-	ProjectID string
-	PageID    string
-}
-
-func (q *Queries) DeleteChronicleVersions(ctx context.Context, arg DeleteChronicleVersionsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteChronicleVersions, arg.ProjectID, arg.PageID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getChronicleBlob = `-- name: GetChronicleBlob :one
 SELECT project_id, object_key, body, created_at FROM chronicle_blobs WHERE project_id = ? AND object_key = ?
 `

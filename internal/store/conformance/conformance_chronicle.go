@@ -198,7 +198,9 @@ func chronicle(t *testing.T, newStore Factory) {
 		t.Run("RacingAppendsFromOneHeadLandOne", func(t *testing.T) {
 			s, _, p, _ := seeded(t, newStore)
 			u := upsert(t, s, p, "adr/0001-race", domain.SourceHuman, cblock("a", "v1"))
-			const n = 8
+			// 32: under Postgres READ COMMITTED a head move without its head condition let 2 to 6 racers
+			// land in 3 of 20 runs at 32 racers, and in none of 3 at 8.
+			const n = 32
 			errs := make(chan error, n)
 			var wg sync.WaitGroup
 			for i := range n {

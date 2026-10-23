@@ -31,7 +31,6 @@ type chronicleQueries interface {
 	InsertChronicleVersion(ctx context.Context, arg sqlitedb.InsertChronicleVersionParams) error
 	GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChronicleVersionParams) (sqlitedb.ChronicleVersion, error)
 	ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error)
-	DeleteChronicleVersions(ctx context.Context, arg sqlitedb.DeleteChronicleVersionsParams) (int64, error)
 	InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error
 	GetChronicleBlob(ctx context.Context, arg sqlitedb.GetChronicleBlobParams) (sqlitedb.ChronicleBlob, error)
 	DeleteChronicleBlobsByPage(ctx context.Context, arg sqlitedb.DeleteChronicleBlobsByPageParams) (int64, error)
@@ -413,9 +412,8 @@ func deleteChroniclePage(ctx context.Context, e engine, projectID, pageID, expec
 		if n == 0 {
 			return lostChronicleHead(ctx, q, projectID, pageID, expected)
 		}
-		if _, err := q.DeleteChronicleVersions(ctx, sqlitedb.DeleteChronicleVersionsParams{ProjectID: projectID, PageID: pageID}); err != nil {
-			return fmt.Errorf("store: delete chronicle versions: %w", err)
-		}
+		// The versions go with the page row (chronicle_versions' ON DELETE CASCADE); the bodies,
+		// which no foreign key names, by their key range.
 		from, to := ChroniclePageKeyRange(pageID)
 		if _, err := q.DeleteChronicleBlobsByPage(ctx, sqlitedb.DeleteChronicleBlobsByPageParams{ProjectID: projectID, KeyFrom: from, KeyTo: to}); err != nil {
 			return fmt.Errorf("store: delete chronicle bodies: %w", err)
@@ -736,10 +734,6 @@ func (p pgQueries) GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChro
 func (p pgQueries) ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error) {
 	rows, err := p.q.ListChronicleVersions(ctx, pgdb.ListChronicleVersionsParams(arg))
 	return convert(rows, func(r pgdb.ChronicleVersion) sqlitedb.ChronicleVersion { return sqlitedb.ChronicleVersion(r) }), err
-}
-
-func (p pgQueries) DeleteChronicleVersions(ctx context.Context, arg sqlitedb.DeleteChronicleVersionsParams) (int64, error) {
-	return p.q.DeleteChronicleVersions(ctx, pgdb.DeleteChronicleVersionsParams(arg))
 }
 
 func (p pgQueries) InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error {

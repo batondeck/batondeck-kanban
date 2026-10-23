@@ -62,9 +62,6 @@ WHERE project_id = sqlc.arg(project_id) AND page_id = sqlc.arg(page_id)
 ORDER BY ts DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
--- name: DeleteChronicleVersions :execrows
-DELETE FROM chronicle_versions WHERE project_id = ? AND page_id = ?;
-
 -- name: InsertChronicleBlob :exec
 INSERT INTO chronicle_blobs (project_id, object_key, body, created_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (project_id, object_key) DO NOTHING;
