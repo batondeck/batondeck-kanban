@@ -192,8 +192,9 @@ func TestAttachUploadListOverTheEngines(t *testing.T) {
 				types = append(types, string(ev.Type)+" by "+ev.Actor)
 			}
 		}
-		if strings.Join(types, ",") != "attachment.updated by alice,attachment.created by alice" {
-			t.Fatalf("attachment events (newest first) %v", types)
+		slices.Sort(types) // the two events can share a millisecond, and (ts, id) ties on a random id
+		if strings.Join(types, ",") != "attachment.created by alice,attachment.updated by alice" {
+			t.Fatalf("attachment events %v, want one created and one updated by alice", types)
 		}
 	})
 }
