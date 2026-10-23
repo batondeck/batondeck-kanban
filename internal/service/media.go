@@ -26,7 +26,7 @@ type MediaOptions struct {
 	MaxBytes int64
 }
 
-// media is service.Media: attach_file and list_attachments (search_tasks is R1.9's).
+// media is service.Media: attach_file and list_attachments here, search_tasks in search.go.
 type media struct{ c *Core }
 
 var _ Media = media{}
@@ -140,11 +140,6 @@ func (m media) ListAttachments(ctx context.Context, caller domain.Caller, req Li
 		out = append(out, row)
 	}
 	return ListAttachmentsResp{Attachments: out}, nil
-}
-
-// SearchTasks is search_tasks, which R1.9 builds; it registers no tool before then.
-func (m media) SearchTasks(context.Context, domain.Caller, SearchTasksReq) (SearchTasksResp, error) {
-	return SearchTasksResp{}, internalf("search_tasks is not built yet (R1.9)")
 }
 
 // CompleteUpload ends a signed PUT /blobs/{id} (internal/api): st, the body read to disk, becomes
