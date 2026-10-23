@@ -39,7 +39,7 @@ const benchDirEnv = "BATONDECK_BENCH_DIR"
 
 const (
 	benchClaimers = 50  // plan §Performance: 50 agents × claim_next on one board
-	benchRounds   = 3   // the race's latency is the median round's
+	benchRounds   = 5   // the race's latency is the median round's, after one warm-up round
 	benchTargetMs = 25  // the plan's p95 target on local SQLite: printed, not enforced
 	benchEntries  = 200 // ADR-0004: 200 device-directory entries
 	benchStreams  = 10  // and 10 /api/stream clients
@@ -112,20 +112,21 @@ func TestBench(t *testing.T) {
 			})
 		}
 	})
-	if t.Failed() {
-		return
-	}
+	// Written even after a failure: bench/ then names every number that regressed, and refuses a
+	// baseline from the run.
 	for e, m := range got {
 		writeMetrics(t, filepath.Join(dir, "cli-"+e+".json"), m)
 	}
 }
 
-// benchRace is benchRounds claim races of benchClaimers workers, each round over a fresh serve
-// composition, and the median round's p50 and p95.
+// benchRace is a warm-up round and then benchRounds claim races of benchClaimers workers, each
+// round over a fresh serve composition, and the median round's p50 and p95. The warm-up's numbers
+// are logged and dropped: the first round on a process (and on Postgres, a fresh database) is the
+// one that varied most between runs.
 func benchRace(t *testing.T, engine string) []metric {
 	var rounds []race
-	for i := range benchRounds {
-		t.Run(fmt.Sprintf("round%d", i+1), func(t *testing.T) {
+	for i := range benchRounds + 1 {
+		t.Run(fmt.Sprintf("round%d", i), func(t *testing.T) {
 			r := join(t, engine).claimRace(benchClaimers)
 			if r.winners != benchClaimers || r.failed != 0 {
 				t.Fatalf("%d distinct winners, %d errors; want %d and 0", r.winners, r.failed, benchClaimers)
@@ -134,10 +135,12 @@ func benchRace(t *testing.T, engine string) []metric {
 			for q := 1; q <= 9; q++ {
 				deciles = append(deciles, fmt.Sprint(r.p(float64(q)/10).Round(100*time.Microsecond)))
 			}
-			t.Logf("%s round %d: %d claim_next at once: %d distinct winners, 0 errors; p50 %v p95 %v max %v; wall %v (%.0f claims/s); deciles %s",
-				engine, i+1, benchClaimers, r.winners, r.p(0.5).Round(100*time.Microsecond), r.p(0.95).Round(100*time.Microsecond),
+			t.Logf("%s round %d%s: %d claim_next at once: %d distinct winners, 0 errors; p50 %v p95 %v max %v; wall %v (%.0f claims/s); deciles %s",
+				engine, i, map[bool]string{true: " (warm-up, dropped)"}[i == 0], benchClaimers, r.winners, r.p(0.5).Round(100*time.Microsecond), r.p(0.95).Round(100*time.Microsecond),
 				r.p(1).Round(100*time.Microsecond), r.wall.Round(100*time.Microsecond), float64(benchClaimers)/r.wall.Seconds(), strings.Join(deciles, " "))
-			rounds = append(rounds, r)
+			if i > 0 {
+				rounds = append(rounds, r)
+			}
 		})
 	}
 	if len(rounds) != benchRounds {
@@ -155,12 +158,15 @@ func benchRace(t *testing.T, engine string) []metric {
 	p95 := median(func(r race) time.Duration { return r.p(0.95) })
 	slowest := median(func(r race) time.Duration { return r.p(1) })
 	wall := median(func(r race) time.Duration { return r.wall })
-	verdict := "met"
-	if ms(p95) >= benchTargetMs {
-		verdict = "MISSED"
+	verdict := ""
+	if engine == servicetest.SQLite {
+		verdict = fmt.Sprintf(" (the plan's target on local SQLite is < %d ms: met)", benchTargetMs)
+		if ms(p95) >= benchTargetMs {
+			verdict = fmt.Sprintf(" (the plan's target on local SQLite is < %d ms: MISSED)", benchTargetMs)
+		}
 	}
-	t.Logf("%s: claim race, median of %d rounds: p50 %.1f ms, p95 %.1f ms (target < %d ms on local SQLite: %s), max %.1f ms, wall %.1f ms",
-		engine, benchRounds, ms(p50), ms(p95), benchTargetMs, verdict, ms(slowest), ms(wall))
+	t.Logf("%s: claim race, median of %d rounds: p50 %.1f ms, p95 %.1f ms%s, max %.1f ms, wall %.1f ms",
+		engine, benchRounds, ms(p50), ms(p95), verdict, ms(slowest), ms(wall))
 	return []metric{
 		{engine, "claim race winners (of 50)", float64(benchClaimers), "", ""},
 		{engine, "claim race p50", ms(p50), "ms", "p20"},

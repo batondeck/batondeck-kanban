@@ -172,6 +172,19 @@ func compare(base, cur results) (fails, notes []string) {
 		baseEngines[m.Engine] = true
 	}
 	unmatched := map[string]bool{}
+	now := map[key]bool{}
+	for _, m := range cur.Metrics {
+		now[key{m.Engine, m.Name}] = true
+	}
+	curEngines := map[string]bool{}
+	for _, m := range cur.Metrics {
+		curEngines[m.Engine] = true
+	}
+	for _, m := range base.Metrics {
+		if m.Gate != "" && curEngines[m.Engine] && !now[key{m.Engine, m.Name}] {
+			fails = append(fails, fmt.Sprintf("MISSING %s %s: in the baseline (%s) and not in this run, so it was not measured", m.Engine, m.Name, show(m)))
+		}
+	}
 	for _, m := range cur.Metrics {
 		if m.Gate == "" {
 			continue
@@ -435,6 +448,14 @@ func TestUngatedAndUnmatched(t *testing.T) {
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], "no postgres baseline") {
 		t.Fatalf("notes %q, want the missing postgres baseline named", notes)
+	}
+}
+
+func TestMissingNumberFails(t *testing.T) {
+	base := on("m", run("sqlite", "claim race p95", 30, "ms", "p20"), run("sqlite", "get_task: fresh core", 3, "", "exact"))
+	f, _ := compare(base, on("m", run("sqlite", "claim race p95", 30, "ms", "p20")))
+	if len(f) != 1 || !strings.HasPrefix(f[0], "MISSING sqlite get_task: fresh core") {
+		t.Fatalf("a gated number absent from the run gave %q, want it named MISSING", f)
 	}
 }
 

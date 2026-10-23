@@ -238,7 +238,8 @@ func TestQueriesPerCall(t *testing.T) {
 		t.Run(engine, func(t *testing.T) {
 			var bench []benchMetric
 			defer func() {
-				if benchDir == "" || t.Failed() || t.Skipped() {
+				// Written after a failure too, so bench/ names the count that rose and its rise.
+				if benchDir == "" || t.Skipped() || len(bench) == 0 {
 					return
 				}
 				b, _ := json.MarshalIndent(bench, "", "  ")

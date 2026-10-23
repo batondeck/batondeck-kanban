@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: bench bench-baseline bench-run release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -213,17 +213,20 @@ perf:
 # baseline.json's. bench-baseline writes baseline.json and that block from the run instead: commit
 # both, so the PR shows the reviewer the new numbers.
 BENCH_OUT := $(CURDIR)/bench/out
-bench-run:
+bench: BENCH_MODE = compare
+bench-baseline: BENCH_MODE = write
+# Every measurement runs even after one fails, so the judge names each number that regressed; the
+# judge's own tests run first, and a baseline is written only from a run that passed.
+bench bench-baseline:
 	@rm -rf $(BENCH_OUT) && mkdir -p $(BENCH_OUT)
 	go test -count=1 -skip '^TestBench$$' ./bench/
-	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestBench$$' ./internal/cli/
-	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestQueriesPerCall$$' ./test/perf/
-
-bench: bench-run
-	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestBench$$' ./bench/
-
-bench-baseline: bench-run
-	BATONDECK_BENCH_DIR=$(BENCH_OUT) BATONDECK_BENCH_BASELINE=write go test -count=1 -v -run '^TestBench$$' ./bench/
+	@s=0; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestBench$$' ./internal/cli/ || s=1; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestQueriesPerCall$$' ./test/perf/ || s=1; \
+	if [ "$(BENCH_MODE)" = write ] && [ $$s != 0 ]; then echo "bench-baseline: a measurement failed, so no baseline is written" >&2; exit 1; fi; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) BATONDECK_BENCH_BASELINE=$(BENCH_MODE) go test -count=1 -v -run '^TestBench$$' ./bench/ || s=1; \
+	if [ $$s != 0 ]; then echo "make $@: FAILED (each failure is named above)" >&2; fi; \
+	exit $$s
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:
