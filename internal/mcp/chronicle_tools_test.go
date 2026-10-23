@@ -364,8 +364,15 @@ func TestChronicleResourcesReadAsConductorDoes(t *testing.T) {
 		if len(index.Pages) != 1 || index.Pages[0].ID != str(made["pageId"]) || index.NextCursor != nil {
 			t.Fatalf("index = %+v", index)
 		}
-		if _, err := r.grace.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: r.uri(r.p, "")}); err == nil {
-			t.Fatal("a member of another project read the index")
+		// Each read is refused to a member of another project; ada's same reads are the positive control.
+		page, version := str(made["pageId"]), str(made["versionId"])
+		for _, path := range []string{"", "/" + page, "/" + page + "/versions", "/" + page + "/versions/" + version} {
+			if _, err := r.ada.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: r.uri(r.p, path)}); err != nil {
+				t.Fatalf("ada reads %s: %v", r.uri(r.p, path), err)
+			}
+			if _, err := r.grace.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: r.uri(r.p, path)}); err == nil || !strings.Contains(err.Error(), "Not a member of project "+r.p) {
+				t.Fatalf("a member of another project reads %s: %v, want the membership refusal", r.uri(r.p, path), err)
+			}
 		}
 	})
 }

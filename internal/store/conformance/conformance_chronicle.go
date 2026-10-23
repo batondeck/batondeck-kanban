@@ -230,6 +230,47 @@ func chronicle(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// The deterministic guard of the head condition: A moves the head inside a transaction it holds
+		// open; B appends from the same head meanwhile; A commits; B must be STALE. Under Postgres READ
+		// COMMITTED both pass the head pre-check (neither sees the other's uncommitted head), so only
+		// the UPDATE's head_version_id = expected refuses B. The 300 ms is how long B gets to reach its
+		// UPDATE and wait on A's row lock before A is released: B arriving later reads A's committed
+		// head at the pre-check and is STALE without exercising the clause, so do not shorten it.
+		t.Run("AnAppendRacingAHeldHeadMoveIsStale", func(t *testing.T) {
+			s, _, p, _ := seeded(t, newStore)
+			u := upsert(t, s, p, "adr/0001-held", domain.SourceHuman, cblock("a", "v1"))
+			moved, release := make(chan struct{}), make(chan struct{})
+			aDone, bDone := make(chan error, 1), make(chan error, 1)
+			go func() {
+				aDone <- s.Atomically(ctx, func(tx store.Store) error {
+					if _, err := appendV(tx, p, u.Page.ID, u.Page.HeadVersionID, cblock("a", "A")); err != nil {
+						close(moved)
+						return err
+					}
+					close(moved)
+					<-release
+					return nil
+				})
+			}()
+			<-moved
+			go func() {
+				_, err := appendV(s, p, u.Page.ID, u.Page.HeadVersionID, cblock("a", "B"))
+				bDone <- err
+			}()
+			time.Sleep(300 * time.Millisecond)
+			close(release)
+			noErr(t, <-aDone)
+			err := <-bDone
+			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeStale {
+				t.Fatalf("B, racing A's held head move: %v, want STALE", err)
+			}
+			list, err := s.ListChronicleVersions(ctx, p, u.Page.ID, "", 0)
+			noErr(t, err)
+			if len(list.Versions) != 2 {
+				t.Fatalf("%d versions after A and B from one head, want 2: B forked the chain", len(list.Versions))
+			}
+		})
+
 		t.Run("ASweepWriteMovesTheBaseAndConflictsAndAHumanWriteClearsThem", func(t *testing.T) {
 			s, _, p, _ := seeded(t, newStore)
 			u := upsert(t, s, p, "adr/0001-a", domain.SourceSweep, cblock("a", "derived v1"))
