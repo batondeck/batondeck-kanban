@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -47,7 +48,7 @@ func TestServeOAuthToAnMCPSession(t *testing.T) {
 
 	srv := httptest.NewUnstartedServer(nil)
 	public := "http://" + srv.Listener.Addr().String()
-	a, err := compose(st, "x", public, log.New(io.Discard, "", 0), nil)
+	a, err := compose(st, "x", public, log.New(io.Discard, "", 0), nil, service.MediaOptions{})
 	if err != nil || a.as == nil {
 		t.Fatalf("compose: %v %v", a, err)
 	}
@@ -192,7 +193,7 @@ func TestServeWithoutPublicURLHasNoOAuth(t *testing.T) {
 	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil)
+	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{})
 	if err != nil || a.as != nil {
 		t.Fatalf("compose: %v %v", a, err)
 	}
@@ -207,7 +208,7 @@ func TestServeWithoutPublicURLHasNoOAuth(t *testing.T) {
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusBadRequest {
 		t.Fatalf("/token without public_url answered %d, as if mounted", resp.StatusCode)
 	}
-	if _, err := compose(st, "x", "https://bk.example/base", log.New(io.Discard, "", 0), nil); err == nil || !strings.Contains(err.Error(), "public_url") {
+	if _, err := compose(st, "x", "https://bk.example/base", log.New(io.Discard, "", 0), nil, service.MediaOptions{}); err == nil || !strings.Contains(err.Error(), "public_url") {
 		t.Fatalf("a public_url with a path: %v", err)
 	}
 }

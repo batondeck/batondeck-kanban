@@ -8,8 +8,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
-// The attachments area of contract_attachments.go. This store holds no blobs yet (P-67), so a
-// SetAttachmentReady names no blob and is NOT_FOUND, as memory.go's BlobSHA256 is.
+// The attachments area of contract_attachments.go. SetAttachmentReady names a blob of this store
+// (blobs.go) or is NOT_FOUND.
 
 var attachmentKinds = map[store.AttachmentKind]bool{
 	store.AttachmentFile: true, store.AttachmentImage: true, store.AttachmentAudio: true, store.AttachmentVideo: true,
@@ -48,7 +48,12 @@ func (s *Store) SetAttachmentReady(ctx context.Context, projectID, taskID, attac
 		if a.Status != store.AttachmentPending {
 			return store.Attachment{}, domain.Validation("the attachment is not pending", map[string]any{"attachmentId": attachmentID})
 		}
-		return store.Attachment{}, domain.NotFound("Blob", blobSHA256)
+		if _, ok := st.blobs[blobSHA256]; !ok {
+			return store.Attachment{}, domain.NotFound("Blob", blobSHA256)
+		}
+		a.BlobSHA256, a.Status = blobSHA256, store.AttachmentReady
+		st.attachments[[3]string{projectID, taskID, attachmentID}] = a
+		return a, nil
 	})
 }
 

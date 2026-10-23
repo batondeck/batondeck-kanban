@@ -9,7 +9,9 @@ package core
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -22,6 +24,17 @@ const MasterKeyEnv = "BATONDECK_MASTER_KEY"
 // only write path for secrets at rest. Build one with OpenKeyring.
 type Keyring struct {
 	aead cipher.AEAD
+	key  []byte
+}
+
+// DeriveKey is a 32-byte key for one purpose, named by label: HKDF-SHA256 of the master key, so a
+// derived key reveals nothing of the master key or of another label's key.
+func (k *Keyring) DeriveKey(label string) ([]byte, error) {
+	d, err := hkdf.Key(sha256.New, k.key, nil, label, 32)
+	if err != nil {
+		return nil, fmt.Errorf("keyring: %w", err)
+	}
+	return d, nil
 }
 
 // OpenKeyring resolves the master key (env > file; the file is created 0600 on first
@@ -53,7 +66,7 @@ func OpenKeyring(path string, lookup func(string) (string, bool)) (*Keyring, err
 	if err != nil {
 		return nil, fmt.Errorf("keyring: %w", err)
 	}
-	return &Keyring{aead: aead}, nil
+	return &Keyring{aead: aead, key: key}, nil
 }
 
 func loadOrCreateKeyFile(path string) ([]byte, error) {

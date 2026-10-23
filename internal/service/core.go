@@ -57,8 +57,11 @@ type Options struct {
 	ToolCallBuffer int
 	// Sealer seals a wake session's inbox token; nil refuses a token (INTERNAL), never stores it.
 	Sealer Sealer
-	// BlobGC is delete_task's blob hook (delete.go); nil is a no-op.
+	// BlobGC is delete_task's blob hook (delete.go); nil is CollectBlobs when Media.Files is set,
+	// else a no-op.
 	BlobGC BlobGC
+	// Media is the blob store attach_file and list_attachments sign URLs into (media.go).
+	Media MediaOptions
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -77,6 +80,7 @@ type Core struct {
 	boards  *snapshotCache
 	sealer  Sealer
 	blobGC  BlobGC
+	media   MediaOptions
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.
@@ -93,8 +97,14 @@ func New(st store.Store, o Options) *Core {
 		grants:  o.Grants,
 		sealer:  o.Sealer,
 		blobGC:  o.BlobGC,
+		media:   o.Media,
 	}
-	if c.blobGC == nil {
+	c.media.MaxBytes = orDefault(c.media.MaxBytes, core.DefaultBlobMaxBytes)
+	switch {
+	case c.blobGC != nil:
+	case c.media.Files != nil:
+		c.blobGC = c.CollectBlobs
+	default:
 		c.blobGC = func(context.Context, []string) {}
 	}
 	if c.log == nil {
@@ -114,7 +124,7 @@ func (c *Core) Close(ctx context.Context) error {
 	return c.calls.stop(ctx)
 }
 
-func orDefault[T int | time.Duration](v, def T) T {
+func orDefault[T int | int64 | time.Duration](v, def T) T {
 	if v == 0 {
 		return def
 	}

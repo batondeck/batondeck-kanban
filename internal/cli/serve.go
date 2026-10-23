@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/api"
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/auth/oauth"
+	"github.com/batondeck/batondeck-kanban/internal/blob"
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
@@ -41,8 +43,9 @@ type app struct {
 }
 
 // compose builds the app over st. With publicURL unset there is no authorization server and /mcp's
-// 401 names no resource metadata. sealer seals a wake session's inbox token; nil refuses one.
-func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer) (*app, error) {
+// 401 names no resource metadata. sealer seals a wake session's inbox token; nil refuses one. media
+// is the blob store; with its Files and Signer set, the signed PUT and GET /blobs/{id} are mounted.
+func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) (*app, error) {
 	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st}, Sessions: st}
 	var as *oauth.Server
 	if publicURL != "" {
@@ -54,11 +57,12 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	} else {
 		logger.Printf("serve: public_url is unset, so the OAuth authorization server is off; /mcp takes API tokens only")
 	}
-	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer})
+	media.MaxBytes = cmp.Or(media.MaxBytes, core.DefaultBlobMaxBytes)
+	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media})
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
-		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls()},
+		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Media: sc.Media(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls()},
 		Logger:   logger,
 	}
 	if as != nil {
@@ -78,6 +82,11 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 			}
 			mux.Handle("GET /wake", doorbell)
 			mux.Handle("POST "+internalPrefix+"wake-session", inbox)
+			if media.Files != nil && media.Signer != nil {
+				blobs := api.BlobRoutes{Signer: media.Signer, Files: media.Files, MaxBytes: media.MaxBytes, Uploads: sc, Logger: logger}
+				mux.Handle("PUT /blobs/{id}", blobs.Upload())
+				mux.Handle("GET /blobs/{id}", blobs.Download())
+			}
 		},
 	}, nil
 }
@@ -99,11 +108,12 @@ func (a *app) handler(version string) http.Handler {
 	})
 }
 
-// openKeyring is the sealer for wake-session inbox tokens: core.OpenKeyring from
+// openKeyring is the keyring (the sealer for wake-session inbox tokens and the blob signing key's
+// source): core.OpenKeyring from
 // BATONDECK_MASTER_KEY, else from master.key beside the SQLite file, or on Postgres beside the
 // config file. On Postgres with neither, serve runs without one (an inbox token is then refused)
 // and says so once.
-func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger) (service.Sealer, error) {
+func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger) (*core.Keyring, error) {
 	var path string
 	_, fromEnv := lookup(core.MasterKeyEnv)
 	switch {
@@ -116,11 +126,36 @@ func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, 
 		logger.Printf("serve: WARN no keyring: set %s (or run with -config) to register a wake session with an inbox token", core.MasterKeyEnv)
 		return nil, nil
 	}
-	k, err := core.OpenKeyring(path, lookup)
+	return core.OpenKeyring(path, lookup)
+}
+
+// mediaOptions is the blob store at cfg.BlobDir() and, with a keyring, the URL signer keyed by its
+// blob.SigningLabel key. The URLs start with public_url, else with the first TCP listener's
+// address. Without a keyring attach_file is refused and no download URL is signed, said once.
+func mediaOptions(cfg *core.Config, keys *core.Keyring, lns []net.Listener, logger *log.Logger) (service.MediaOptions, error) {
+	files, err := blob.Open(cfg.BlobDir())
 	if err != nil {
-		return nil, err
+		return service.MediaOptions{}, err
 	}
-	return k, nil
+	m := service.MediaOptions{Files: files, MaxBytes: cfg.Blob.MaxBytes, BaseURL: cfg.PublicURL}
+	if keys == nil {
+		logger.Printf("serve: WARN no keyring: attach_file is refused and no download URL is signed; set %s (or run with -config)", core.MasterKeyEnv)
+		return m, nil
+	}
+	key, err := keys.DeriveKey(blob.SigningLabel)
+	if err != nil {
+		return service.MediaOptions{}, err
+	}
+	if m.Signer, err = blob.NewSigner(key); err != nil {
+		return service.MediaOptions{}, err
+	}
+	for _, ln := range lns {
+		if m.BaseURL == "" && ln.Addr().Network() == "tcp" {
+			m.BaseURL = "http://" + ln.Addr().String()
+		}
+	}
+	logger.Printf("serve: blobs in %s, up to %d bytes each, signed URLs at %s/blobs/", files.Dir(), m.MaxBytes, m.BaseURL)
+	return m, nil
 }
 
 // shutdownBudget bounds the MCP session close and the HTTP drain; flushBudget the tool-call flush
@@ -135,8 +170,8 @@ var (
 var wakeRecheck = wake.Recheck
 
 // runServer serves the app over st on every listener until ctx ends or one fails.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer) error {
-	a, err := compose(st, version, publicURL, logger, sealer)
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) error {
+	a, err := compose(st, version, publicURL, logger, sealer, media)
 	if err != nil {
 		return err
 	}

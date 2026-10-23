@@ -17,6 +17,7 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
+	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
@@ -179,7 +180,9 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil) }()
+	go func() {
+		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{})
+	}()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
 	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
@@ -365,7 +368,7 @@ func TestFlushOutlivesASpentShutdown(t *testing.T) {
 // mustCompose is compose with no keyring, failing the test on an error.
 func mustCompose(t *testing.T, st store.Store, publicURL string, logger *log.Logger) *app {
 	t.Helper()
-	a, err := compose(st, "x", publicURL, logger, nil)
+	a, err := compose(st, "x", publicURL, logger, nil, service.MediaOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

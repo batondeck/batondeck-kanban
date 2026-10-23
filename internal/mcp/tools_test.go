@@ -182,7 +182,8 @@ func projectsBoardsCases() []toolCase {
 	}
 }
 
-// TestProjectsBoardsTools drives each of the 13 tools through a real client against servicefake:
+// TestProjectsBoardsTools drives each of the 15 projects, boards and media tools through a real
+// client against servicefake:
 // the happy path for a non-admin and a workspace-admin bearer (the decoded request and the
 // resolver's caller, field for field, reach the service; its response comes back as structured
 // content), an unknown key (VALIDATION, the service never called) and each service error (the
@@ -196,9 +197,9 @@ func TestProjectsBoardsTools(t *testing.T) {
 	for _, c := range triggerCodes {
 		triggered[c] = h.Connect(t, bearerFor(c))
 	}
-	cases := projectsBoardsCases()
-	if len(cases) != 13 {
-		t.Fatalf("%d cases, want the 13 projects and boards tools", len(cases))
+	cases := append(projectsBoardsCases(), mediaCases()...)
+	if len(cases) != 15 {
+		t.Fatalf("%d cases, want the 13 projects and boards tools and the 2 media tools", len(cases))
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
