@@ -75,6 +75,46 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The webhook ingest, in-binary (R2.9, plan §Architecture "Oncall ingest is in-binary"): `POST
+  /hooks/{integrationId}` is mounted by `serve` outside every bearer, session and CSRF check, over TCP
+  and the socket, behind `api.CapBody` (512 KiB, hdtp's, read before any lookup). `service.Core.Hook`
+  then takes, in order: a coarse per-id pre-check, the integration by its id alone
+  (`Store.GetIntegrationByID`; unknown, tombstoned and disabled are one flat 404), the integration's
+  `payloadCapKb` (413, nothing written), verification by its auth mode before a byte is parsed
+  (`hmac` in BatonDeck's `v0=` form or PagerDuty's raw-body `v1=`, `api_key` in `X-Batondeck-Key`,
+  `basic` with a `WWW-Authenticate` challenge, `jwt` RS256 against the integration's JWKS), the
+  source's connector, and one `Core.ingest` per event under `<source id or body hash>#<fingerprint>`.
+  Accepted is 202 with each event's result; a refused signature is 401 and a stderr line naming the
+  integration; a refused signature or an unparsable body is a `rejected` delivery whose raw body (64
+  KiB) is kept 7 days, 20 an hour per integration. The tradeoff the plan names is accepted under its
+  open question 6: the parser of attacker-controlled JSON shares a process with full DB access, and
+  single-workspace removes the cross-tenant blast radius.
+- The eight connectors (`internal/oncall/connectors`): alertmanager, datadog, dynatrace, gcp,
+  generic, grafana, pagerduty and webhook, with Prometheus' family shared, each judged against a
+  recorded fixture payload. The webhook connector's mapper (dotted paths, a fallback chain, literal
+  defaults; no regular expressions) is ported, and `create_integration` / `update_integration` refuse
+  a mapping path it cannot evaluate, naming it.
+- `internal/oncall/auth`: API key and Basic verification by hashed key, and JWT bearer verification
+  in the standard library (RS256 only, issuer, audience, `exp` required). The JWKS fetch is the one
+  outbound call ingest makes and is logged as such (`ingest: outbound JWKS fetch GET <url> for
+  integration <id>`); it holds conductor's SSRF posture: https only, every resolved address vetted
+  (private, loopback, link-local, unspecified, the metadata host), the dial pinned to the vetted set,
+  no redirects, 64 KiB, 5 s.
+- Incident correlation and autoclose (plan §Fold 2): the fingerprint's alert state
+  (`Store.GetAlertState`, `PutAlertState`) names the open ticket (one not DONE); a repeat firing
+  appends (`incident.occurrences`), a resolve under `autoclose` deletes an untouched ticket through
+  `delete_task`'s cascade (the delivery keeps its dangling `taskId`) and annotates any other, and
+  `correlate` always annotates. Untouched is TODO, unclaimed, never attempted and nothing written: the
+  `incident.ingestVersion` field is the version the ingest last left the ticket at, carried forward
+  only while it still matches, so a write by anyone else is never laundered by a later append. A new
+  ticket carries the event's snapshot as a note (annotations filtered by `annotationAllowlist`).
+  Ingest runs under the project lock.
+- One per-integration rate budget (conductor's token bucket, `ceil(ratePerMin/4)` refilled at
+  `ratePerMin` a minute, a delivery id charged once) that `POST /hooks`, `send_test_event` and
+  `replay_delivery` all draw on: over it is 429 on the route and `RATE_LIMITED` on the tools.
+- The retention sweep deletes expired deliveries and raw bodies (`Swept.Deliveries`, `RawBodies`),
+  on the expiry stamped on each row at write time (30 and 7 days).
+
 - The on-call integrations and their delivery log (R2.8, ADR-0004): nine tools,
   `create_integration`, `update_integration`, `delete_integration`, `list_integrations`,
   `rotate_integration_secret`, `list_deliveries`, `read_delivery_raw`, `replay_delivery` and
@@ -781,6 +821,10 @@ Notable changes to batondeck-kanban. The format follows
   pull request now reports no status check; the reviewer re-runs `make check` on its head.
 
 ### Fixed
+
+- P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
+  window; ingest verifies with the current secret alone and logs why. A current secret that will not
+  open refuses the delivery as `secret_unavailable`, on the delivery log.
 
 - Request fields whose false, 0 or null means something can now be sent (R0.22).
   `internal/service/optional.go` adds `Optional[T]` (absent or a value; JSON null refused, as
