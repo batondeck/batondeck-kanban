@@ -29,7 +29,7 @@ func (s *Postgres) LockProject(ctx context.Context, projectID string) error {
 	if s.tx == nil {
 		return outsideTx("LockProject")
 	}
-	countStatement(ctx)
+	countStatement(ctx, s.issued)
 	if _, err := s.tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", projectLockNamespace+projectID); err != nil {
 		return fmt.Errorf("store: lock project: %w", err)
 	}

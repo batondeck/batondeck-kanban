@@ -1,0 +1,489 @@
+{
+  "machine": {
+    "name": "Mac14,5, Apple M2 Max, 12 cores",
+    "model": "Mac14,5",
+    "cpu": "Apple M2 Max",
+    "cores": 12,
+    "memoryGiB": 32,
+    "os": "macOS 27.0.1 (26A434) arm64"
+  },
+  "go": "go1.26.9",
+  "metrics": [
+    {
+      "engine": "sqlite",
+      "name": "claim race winners (of 50)",
+      "value": 50,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim race p50",
+      "value": 22.175,
+      "unit": "ms",
+      "gate": "p20"
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim race p95",
+      "value": 33.917,
+      "unit": "ms",
+      "gate": "p20"
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim race max",
+      "value": 34.844,
+      "unit": "ms",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim race wall",
+      "value": 35.096,
+      "unit": "ms",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "idle: directory entries",
+      "value": 200,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "idle: /api/stream clients",
+      "value": 10,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "idle: hold",
+      "value": 60,
+      "unit": "s",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "idle: statements per entry per sweep",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "idle: statements between sweeps",
+      "value": 0,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks: snapshot cached",
+      "value": 1,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks: snapshot dropped",
+      "value": 1,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks: fresh core",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_board: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_board: snapshot cached",
+      "value": 0,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_board: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_board: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task_context: snapshot cached",
+      "value": 6,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task_context: snapshot dropped",
+      "value": 8,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task_context: fresh core",
+      "value": 9,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task_context: pin",
+      "value": 6,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "next_task: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "next_task: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "next_task: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "next_task: pin",
+      "value": 3,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim_next: snapshot cached",
+      "value": 4,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim_next: snapshot dropped",
+      "value": 6,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim_next: fresh core",
+      "value": 7,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "claim_next: pin",
+      "value": 4,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "claim race winners (of 50)",
+      "value": 50,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "claim race p50",
+      "value": 51.58,
+      "unit": "ms",
+      "gate": "p20"
+    },
+    {
+      "engine": "postgres",
+      "name": "claim race p95",
+      "value": 61.351,
+      "unit": "ms",
+      "gate": "p20"
+    },
+    {
+      "engine": "postgres",
+      "name": "claim race max",
+      "value": 62.028,
+      "unit": "ms",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "claim race wall",
+      "value": 62.42,
+      "unit": "ms",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "idle: directory entries",
+      "value": 200,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "idle: /api/stream clients",
+      "value": 10,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "idle: hold",
+      "value": 60,
+      "unit": "s",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "idle: statements per entry per sweep",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "idle: statements between sweeps",
+      "value": 0,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks: snapshot cached",
+      "value": 1,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks: snapshot dropped",
+      "value": 1,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks: fresh core",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "get_board: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_board: snapshot cached",
+      "value": 0,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_board: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_board: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task_context: snapshot cached",
+      "value": 6,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task_context: snapshot dropped",
+      "value": 8,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task_context: fresh core",
+      "value": 9,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task_context: pin",
+      "value": 6,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "next_task: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "next_task: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "next_task: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "next_task: pin",
+      "value": 3,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "claim_next: snapshot cached",
+      "value": 5,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "claim_next: snapshot dropped",
+      "value": 7,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "claim_next: fresh core",
+      "value": 8,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "claim_next: pin",
+      "value": 5,
+      "unit": "",
+      "gate": ""
+    }
+  ]
+}

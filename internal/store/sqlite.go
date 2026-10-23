@@ -41,6 +41,8 @@ type SQLite struct {
 	// that appended a change, so its commit fires sig.
 	sig      *changeSignal
 	appended *atomic.Bool
+	// issued counts every area statement, whatever its context (StatementCounter).
+	issued *atomic.Int64
 }
 
 var _ Store = (*SQLite)(nil)
@@ -82,7 +84,7 @@ func OpenSQLite(path, synchronous string) (*SQLite, error) {
 	}
 	r.SetMaxOpenConns(sqliteConns)
 	r.SetMaxIdleConns(sqliteConns)
-	return &SQLite{w: w, r: r, sig: signalFor(path)}, nil
+	return &SQLite{w: w, r: r, sig: signalFor(path), issued: new(atomic.Int64)}, nil
 }
 
 // ErrNotFound is what a store method returns when the row asked for is not there, on either
@@ -147,7 +149,7 @@ func (s *SQLite) Atomically(ctx context.Context, fn func(tx Store) error) error 
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	in := &SQLite{w: s.w, r: s.r, tx: tx, sig: s.sig, appended: new(atomic.Bool)}
+	in := &SQLite{w: s.w, r: s.r, tx: tx, sig: s.sig, appended: new(atomic.Bool), issued: s.issued}
 	if err := fn(in); err != nil {
 		_ = tx.Rollback()
 		return err
