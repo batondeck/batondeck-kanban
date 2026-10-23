@@ -14,10 +14,8 @@ import (
 // answered 401 with `WWW-Authenticate: Bearer`; any other error is logged and answered 500. ok is
 // false once an answer is written.
 func Bearer(r Resolver, logger *log.Logger, w http.ResponseWriter, req *http.Request) (c domain.Caller, ok bool) {
-	h := strings.TrimSpace(req.Header.Get("Authorization"))
-	scheme, token, _ := strings.Cut(h, " ")
-	token = strings.TrimSpace(token)
-	if !strings.EqualFold(scheme, "bearer") || token == "" {
+	token, present := BearerToken(req)
+	if !present {
 		unauthenticated(w, "a bearer token is required")
 		return c, false
 	}
@@ -32,6 +30,14 @@ func Bearer(r Resolver, logger *log.Logger, w http.ResponseWriter, req *http.Req
 		return c, false
 	}
 	return c, true
+}
+
+// BearerToken is the token of the request's `Authorization: Bearer <token>`; ok false when there is
+// none.
+func BearerToken(req *http.Request) (token string, ok bool) {
+	scheme, token, _ := strings.Cut(strings.TrimSpace(req.Header.Get("Authorization")), " ")
+	token = strings.TrimSpace(token)
+	return token, strings.EqualFold(scheme, "bearer") && token != ""
 }
 
 func unauthenticated(w http.ResponseWriter, message string) {

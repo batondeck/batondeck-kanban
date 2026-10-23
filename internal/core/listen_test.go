@@ -171,3 +171,39 @@ func TestUnixSocketStaleLiveAndForeignFiles(t *testing.T) {
 		t.Fatal("the regular file was touched")
 	}
 }
+
+// A socket directory another user could write to is refused: group- or other-writable, or owned by
+// another uid. The process's own 0700, 0750 and 0755 directories (the positive controls) are used.
+func TestUnixSocketDirectoryMustBePrivate(t *testing.T) {
+	quiet := log.New(io.Discard, "", 0)
+	path := sockPath(t)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []os.FileMode{0o777, 0o775, 0o757, 0o722} {
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Listen(ListenAddr{Network: NetworkUnix, Address: path}, quiet)
+		if want := fmt.Sprintf("directory %s is mode %04o owned by uid %d: want one owned by uid %d and not writable by group or other", dir, mode, os.Getuid(), os.Getuid()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("directory mode %04o: %v, want the refusal %q", mode, err, want)
+		}
+	}
+	for _, mode := range []os.FileMode{0o700, 0o750, 0o755} { // readable by others, writable by no one else
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		ln, err := Listen(ListenAddr{Network: NetworkUnix, Address: path}, quiet)
+		if err != nil {
+			t.Fatalf("directory mode %04o: %v, want it used", mode, err)
+		}
+		ln.Close()
+	}
+	if err := privateDir(dir, os.Getuid()+1); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("owned by uid %d: want one owned by uid %d", os.Getuid(), os.Getuid()+1)) {
+		t.Fatalf("a directory owned by another uid: %v", err)
+	}
+	if err := privateDir(path+"-missing", os.Getuid()); err == nil {
+		t.Fatal("a missing directory was accepted")
+	}
+}

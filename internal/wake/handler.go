@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -28,11 +29,13 @@ type Options struct {
 	// once per connection.
 	Scopes func(ctx context.Context, caller domain.Caller) ([]string, error)
 	Logger *log.Logger
-	// Keepalive, Quiet, MaxHold and Buffer default to the package constants; tests change them.
+	// Keepalive, Quiet, MaxHold, Buffer and Recheck default to the package constants; tests change
+	// them.
 	Keepalive time.Duration
 	Quiet     time.Duration
 	MaxHold   time.Duration
 	Buffer    int
+	Recheck   time.Duration
 }
 
 // Handler is GET /wake[?since=<cursor>]. The bearer is required; since, when given, is a
@@ -50,6 +53,9 @@ func Handler(o Options) http.Handler {
 	if o.Buffer <= 0 {
 		o.Buffer = Buffer
 	}
+	if o.Recheck <= 0 {
+		o.Recheck = Recheck
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o.serve(w, r) })
 }
 
@@ -58,6 +64,7 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	token, _ := auth.BearerToken(r)
 	var since int64
 	raw, replay := r.URL.Query()["since"]
 	if replay {
@@ -111,20 +118,26 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 	co := newCoalescer(o.Quiet, o.MaxHold)
 	keep := time.NewTicker(o.Keepalive)
 	defer keep.Stop()
+	recheck := time.NewTicker(o.Recheck)
+	defer recheck.Stop()
 	// safe is a cursor every doorbell at or below which this stream has written (or coalesced
 	// away): the replay point it names when it ends behind. -1 until it knows one.
 	safe, recv := int64(-1), int64(0)
 	if replay {
 		safe = since
 	}
+	// end writes the last comment, naming the cursor to reconnect with when there is one.
+	end := func(reason string) {
+		if safe < 0 {
+			_ = s.comment(reason + ", reconnect")
+		} else {
+			_ = s.comment(fmt.Sprintf("%s, reconnect with since=%d", reason, safe))
+		}
+	}
 	for {
 		if sub.Dropped() > 0 {
 			o.Logger.Printf("wake: the stream of %s dropped %d change(s); ending it, safe cursor %d", caller.Identity, sub.Dropped(), safe)
-			if safe < 0 {
-				_ = s.comment("dropped, reconnect")
-			} else {
-				_ = s.comment(fmt.Sprintf("dropped, reconnect with since=%d", safe))
-			}
+			end("dropped")
 			return
 		}
 		if co.empty() && recv > safe {
@@ -154,8 +167,61 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 			if s.comment("keepalive") != nil {
 				return
 			}
+		case <-recheck.C:
+			switch why := o.recheck(ctx, token, scopes); why {
+			case "":
+			case "reauthenticate":
+				_ = s.comment(why)
+				return
+			default:
+				end(why)
+				return
+			}
 		}
 	}
+}
+
+// recheck re-resolves the stream's bearer and re-reads its scopes: "" while both hold, "reauthenticate"
+// when the bearer no longer resolves (revoked, expired, its user disabled), "scopes changed" when the
+// memberships moved, and "recheck failed" when either read failed (the stream ends rather than
+// trusting what it can no longer confirm).
+func (o Options) recheck(ctx context.Context, token string, scopes []string) string {
+	caller, err := o.Resolver.ResolveCaller(ctx, token)
+	if err != nil {
+		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
+			return "reauthenticate"
+		}
+		if ctx.Err() == nil {
+			o.Logger.Printf("wake: re-resolving a stream's bearer: %+v", err)
+		}
+		return "recheck failed"
+	}
+	now, err := o.Scopes(ctx, caller)
+	if err != nil {
+		if ctx.Err() == nil {
+			o.Logger.Printf("wake: re-reading the scopes of %s: %+v", caller.Identity, err)
+		}
+		return "recheck failed"
+	}
+	if !sameSet(now, scopes) {
+		return "scopes changed"
+	}
+	return ""
+}
+
+func sameSet(a, b []string) bool {
+	in := func(x string, set []string) bool { return slices.Contains(set, x) }
+	for _, x := range a {
+		if !in(x, b) {
+			return false
+		}
+	}
+	for _, x := range b {
+		if !in(x, a) {
+			return false
+		}
+	}
+	return true
 }
 
 // stream writes SSE events and flushes each one.

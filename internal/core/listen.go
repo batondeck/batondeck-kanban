@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -73,7 +74,11 @@ func Listen(a ListenAddr, logger *log.Logger) (net.Listener, error) {
 
 // listenUnix is Listen for a socket path, admitting peers of uid alone.
 func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("unix socket %s: %w", path, err)
+	}
+	if err := privateDir(dir, os.Getuid()); err != nil {
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
 	}
 	if fi, err := os.Lstat(path); err == nil {
@@ -97,6 +102,23 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
 	}
 	return &peerListener{Listener: ln, uid: uid, path: path, log: logger}, nil
+}
+
+// privateDir refuses a socket directory that another user could replace the socket in: one not
+// owned by uid, or writable by group or other. A symlinked directory is judged by its target.
+func privateDir(dir string, uid int) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.IsDir() || !ok {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if int(st.Uid) != uid || fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("directory %s is mode %04o owned by uid %d: want one owned by uid %d and not writable by group or other", dir, fi.Mode().Perm(), st.Uid, uid)
+	}
+	return nil
 }
 
 // peerListener is a Unix listener that closes, and logs, every connection whose peer uid is not uid.

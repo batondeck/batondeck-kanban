@@ -34,6 +34,23 @@ type countedSQLite struct {
 	reads atomic.Int64
 	// beforeReplay, when set, runs once before the first ReadChangesForScope (bus.Replay's read).
 	beforeReplay atomic.Pointer[func()]
+	// rechecks counts the reads a stream's recheck makes: GetToken, GetUser, ListProjects.
+	rechecks atomic.Int64
+}
+
+func (c *countedSQLite) GetToken(ctx context.Context, id string) (store.Token, error) {
+	c.rechecks.Add(1)
+	return c.SQLite.GetToken(ctx, id)
+}
+
+func (c *countedSQLite) GetUser(ctx context.Context, id string) (store.User, error) {
+	c.rechecks.Add(1)
+	return c.SQLite.GetUser(ctx, id)
+}
+
+func (c *countedSQLite) ListProjects(ctx context.Context, identityID string) ([]store.ProjectMembership, error) {
+	c.rechecks.Add(1)
+	return c.SQLite.ListProjects(ctx, identityID)
 }
 
 func (c *countedSQLite) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
@@ -401,8 +418,23 @@ func TestInternalWakeSessionOnlyOverTheSocket(t *testing.T) {
 	if code != http.StatusNotFound {
 		t.Fatalf("over TCP: %d %q, want 404", code, got)
 	}
-	if code404, body404 := post(t, tcp, "http://"+s.tcp+"/internal/no-such-route", s.token, body); code404 != code {
-		t.Logf("a POST to a route that does not exist answers %d %q (wake-session over TCP: %d %q)", code404, body404, code, got)
+	// Over TCP the path answers every method exactly as a path that does not exist.
+	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodPatch, http.MethodGet} {
+		answer := func(path string) string {
+			req, _ := http.NewRequest(m, "http://"+s.tcp+path, strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+s.token)
+			resp, err := tcp.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return fmt.Sprintf("%d Allow=%q %q", resp.StatusCode, resp.Header.Get("Allow"), b)
+		}
+		route, missing := answer("/internal/wake-session"), answer("/internal/no-such-route")
+		if route != missing {
+			t.Fatalf("%s over TCP: /internal/wake-session answers %s, a missing path %s", m, route, missing)
+		}
 	}
 	code, got = post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, body)
 	if code != http.StatusCreated {
@@ -633,4 +665,178 @@ func TestWakeRefusesWhenItCannotSubscribe(t *testing.T) {
 			t.Fatalf("%s: %d, want %d", tc.name, resp.StatusCode, tc.status)
 		}
 	}
+}
+
+// recheckServer is /wake over the real resolver and service core, with a short Recheck and account
+// cache, for the tests of what an open stream does when its bearer or memberships change.
+type recheckServer struct {
+	*wakeServer
+	accounts *auth.Accounts
+	tokens   *auth.TokenService
+	tokenID  string
+}
+
+func startRecheck(t *testing.T, recheck, accountTTL time.Duration) *recheckServer {
+	t.Helper()
+	ctx := context.Background()
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	accounts, tokens := &auth.Accounts{Store: st}, &auth.TokenService{Store: st}
+	user, err := accounts.Add(ctx, "alice", "Alice", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, info, err := tokens.Create(ctx, user.ID, "", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: user.ID}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quiet := log.New(io.Discard, "", 0)
+	resolver := &auth.Service{Accounts: accounts, Tokens: tokens, Sessions: st, AccountCacheTTL: accountTTL}
+	sc := service.New(st, service.Options{Logger: quiet})
+	t.Cleanup(func() { sc.Close(context.Background()) })
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	h := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: quiet, Recheck: recheck, Quiet: 20 * time.Millisecond})
+	ws := &wakeServer{st: st, tcp: serveHandler(t, h), token: token, alice: user.ID, project: p.ID}
+	return &recheckServer{wakeServer: ws, accounts: accounts, tokens: tokens, tokenID: info.ID}
+}
+
+// last waits for the stream's final comment and asserts the stream then ends.
+func (s *sse) last(t *testing.T, within time.Duration) string {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		select {
+		case ev, ok := <-s.events:
+			if !ok {
+				t.Fatal("the stream ended with no comment")
+			}
+			if ev.comment == "keepalive" || ev.frame != nil {
+				continue
+			}
+			if _, open := <-s.events; open {
+				t.Fatalf("the stream went on after %q", ev.comment)
+			}
+			return ev.comment
+		case <-deadline:
+			t.Fatalf("the stream did not end within %v", within)
+		}
+	}
+}
+
+// A revoked token ends its open stream within one recheck.
+func TestWakeRecheckEndsARevokedToken(t *testing.T) {
+	s := startRecheck(t, 200*time.Millisecond, time.Minute)
+	w := s.open(t, "")
+	if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate" {
+		t.Fatalf("last comment %q, want reauthenticate", got)
+	}
+}
+
+// A disabled user's open stream ends within one recheck once the account cache has expired.
+func TestWakeRecheckEndsADisabledUser(t *testing.T) {
+	s := startRecheck(t, 200*time.Millisecond, 100*time.Millisecond)
+	w := s.open(t, "")
+	if _, err := s.accounts.Disable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate" {
+		t.Fatalf("last comment %q, want reauthenticate", got)
+	}
+}
+
+// Removed from her project, alice's stream ends naming the cursor to reconnect from, and the
+// reconnected stream no longer hears the project's broadcasts while it hears her own doorbells.
+func TestWakeRecheckEndsAChangedMembership(t *testing.T) {
+	s := startRecheck(t, 200*time.Millisecond, time.Minute)
+	w := s.open(t, "?since=0")
+	first := s.ring(t, s.alice, "assigned", s.alice, "T-1")
+	if f := w.frame(t, time.Second); f.Cursor != first {
+		t.Fatalf("frame %+v", f)
+	}
+	if err := s.st.RemoveMember(context.Background(), s.project, s.alice); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("scopes changed, reconnect with since=%d", first)
+	if got := w.last(t, 500*time.Millisecond); got != want {
+		t.Fatalf("last comment %q, want %q", got, want)
+	}
+	w = s.open(t, fmt.Sprintf("?since=%d", first))
+	s.ring(t, service.BroadcastScope(s.project), "broadcast", "", "T-2")
+	own := s.ring(t, s.alice, "assigned", s.alice, "T-3")
+	if f := w.frame(t, time.Second); f.Cursor != own {
+		t.Fatalf("after the removal: frame %+v, want only her own at cursor %d", f, own)
+	}
+}
+
+// The positive control and the statement pin: a stream whose bearer and memberships hold stays open
+// across rechecks, still delivers, costs 3 statements per recheck (GetToken, GetUser, ListProjects;
+// GetUser is skipped while the account cache is fresher than the recheck, so 3 is the ceiling), and
+// none in between.
+func TestWakeRecheckKeepsAValidStreamAtThreeStatements(t *testing.T) {
+	const every = 300 * time.Millisecond
+	s := startRecheck(t, every, every/2) // the account cache always stale at a recheck
+	w := s.open(t, "")
+	reads := s.st.reads.Load() // after the bus tail's start
+	time.Sleep(every / 2)      // between the connect and the first recheck
+	base := s.st.rechecks.Load()
+	var deltas []int64
+	for range 3 {
+		time.Sleep(every)
+		n := s.st.rechecks.Load()
+		deltas = append(deltas, n-base)
+		base = n
+	}
+	for i, d := range deltas {
+		if d != 3 {
+			t.Fatalf("recheck %d cost %d statements, want 3 (all: %v)", i+1, d, deltas)
+		}
+	}
+	if n := s.st.reads.Load() - reads; n != 0 {
+		t.Fatalf("%d change-log reads while idle, want 0", n)
+	}
+	id := s.ring(t, s.alice, "assigned", s.alice, "T-9")
+	if f := w.frame(t, time.Second); f.Cursor != id {
+		t.Fatalf("after %d rechecks: frame %+v, want cursor %d", len(deltas), f, id)
+	}
+}
+
+// A catch-up longer than one Replay page reads the next page from where the last one ended:
+// 1,001 doorbells replay once each, in order.
+func TestWakeCatchUpPagesPastOneReplay(t *testing.T) {
+	ctx := context.Background()
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
+		Logger: log.New(io.Discard, "", 0), Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
+	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
+	const n = 1001
+	var ids []int64
+	if err := st.Atomically(ctx, func(tx store.Store) error {
+		for i := range n {
+			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": "U-1", "taskId": fmt.Sprintf("T-%d", i), "projectId": "P-1", "boardId": "B-1"})
+			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: "U-1", ProjectID: "P-1", Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := s.open(t, "?since=0")
+	for i, id := range ids {
+		if f := w.frame(t, time.Second); f.Cursor != id {
+			t.Fatalf("replayed frame %d: cursor %d, want %d", i, f.Cursor, id)
+		}
+	}
+	w.none(t, 300*time.Millisecond)
 }

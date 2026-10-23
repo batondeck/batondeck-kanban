@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/api"
@@ -29,8 +30,9 @@ type app struct {
 	mcp  *mcp.Server
 	core *service.Core
 	bus  *bus.Bus
-	// mount adds GET /wake and POST /internal/wake-session to the mux handler builds.
-	mount func(*http.ServeMux)
+	// mount adds GET /wake to the mux handler builds; mountUnix adds POST /internal/wake-session to
+	// the one only the Unix listeners serve, so over TCP that path answers as a missing one does.
+	mount, mountUnix func(*http.ServeMux)
 }
 
 // compose builds the app over st. sealer seals a wake session's inbox token; nil refuses one.
@@ -48,10 +50,32 @@ func compose(st store.Store, version string, logger *log.Logger, sealer service.
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
 	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger})
 	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
-	return &app{mcp: srv, core: sc, bus: b, mount: func(mux *http.ServeMux) {
-		mux.Handle("GET /wake", doorbell)
-		mux.Handle("POST /internal/wake-session", inbox)
-	}}
+	return &app{mcp: srv, core: sc, bus: b,
+		mount:     func(mux *http.ServeMux) { mux.Handle("GET /wake", doorbell) },
+		mountUnix: func(mux *http.ServeMux) { mux.Handle("POST /internal/wake-session", inbox) },
+	}
+}
+
+// internalPrefix is the socket-only namespace: no path under it is served over TCP.
+const internalPrefix = "/internal/"
+
+// handler is the app's routes: a request that arrived on a Unix socket (core.ViaUnixSocket) is
+// served by a mux holding the socket-only routes as well; one over TCP by a mux that never held
+// them, and every path under /internal/ is 404 there whatever its method, so a socket-only route
+// answers over TCP exactly as one that does not exist.
+func (a *app) handler(version string) http.Handler {
+	tcp := handler(version, a.mcp.Handler(), a.mount)
+	unix := handler(version, a.mcp.Handler(), a.mount, a.mountUnix)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case core.ViaUnixSocket(r.Context()):
+			unix.ServeHTTP(w, r)
+		case strings.HasPrefix(r.URL.Path, internalPrefix):
+			http.NotFound(w, r)
+		default:
+			tcp.ServeHTTP(w, r)
+		}
+	})
 }
 
 // openKeyring is the sealer for wake-session inbox tokens: core.OpenKeyring from
@@ -96,7 +120,7 @@ func runServer(ctx context.Context, lns []net.Listener, st store.Store, version 
 // stream, for the same reason), the HTTP server, and the tool-call flush. It returns the first
 // failure, naming the step.
 func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string, logger *log.Logger) error {
-	srv := &http.Server{Handler: handler(version, a.mcp.Handler(), a.mount), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
+	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func() { errc <- srv.Serve(ln) }()
