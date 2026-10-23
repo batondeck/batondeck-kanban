@@ -15,13 +15,21 @@
 // so the SQLite engine supports exactly ONE serve process per data dir: a second process's writes
 // are not heard by this one's tail until something here wakes it. Run more than one on Postgres.
 //
+// Clocks: a change's Ts is its writer's clock, and a starting tail compares it with its own. The
+// processes sharing a Postgres database need clocks within GapTimeout of each other: a change from a
+// writer further behind reads as old, so an id in flight below it when a tail starts is not waited
+// for and is lost.
+//
 // Order: on Postgres a change-log id is taken at the INSERT and becomes visible at the commit, so a
 // lower id can appear after a higher one (contract_changelog.go). The tail therefore never treats
 // the highest id it has read as a watermark: it keeps a frontier below which every id has been
 // delivered, re-reads from it, and passes over the ids above it it has already delivered. An id
-// missing below delivered ones for GapTimeout is taken for a rolled-back transaction and passed
-// (counted, GapsPassed, and reported, ErrGapPassed). The tail's start is no watermark either: the
-// changes of the last GapTimeout are held as seen, so an id in flight when it starts still arrives.
+// missing below delivered ones is waited for GapTimeout from when the frontier stops at it, then
+// taken for a rolled-back transaction and passed (counted, GapsPassed, and reported, ErrGapPassed).
+// The tail's start is no watermark either: the changes of the last GapTimeout are held as seen, so
+// an id in flight when it starts still arrives. It looks back one page (readPage changes): when all
+// of them are that recent, an id in flight below the page is not waited for, which is reported
+// (ErrSeedWindowFull).
 package bus
 
 import (
@@ -107,6 +115,10 @@ var ErrClosed = errors.New("bus: closed")
 
 // ErrGapPassed is what OnError hears when the tail gives up on ids missing for GapTimeout.
 var ErrGapPassed = errors.New("bus: passed a gap")
+
+// ErrSeedWindowFull is what OnError hears when a starting tail's one page of changes is all within
+// GapTimeout: an id in flight below that page is not waited for.
+var ErrSeedWindowFull = errors.New("bus: seed window full")
 
 // Subscription is one subscriber: the changes of its scopes, in the order the tail reads them.
 type Subscription struct {
@@ -471,6 +483,9 @@ func (b *Bus) seed(ctx context.Context, t *tailState, end int64, now time.Time) 
 		if c.Ts < cutoff {
 			continue
 		}
+		if i == 0 && since > 0 {
+			b.fail(fmt.Errorf("%w: the %d changes after id %d are all within %v; ids in flight at or below it are not waited for", ErrSeedWindowFull, len(rows), since, b.opts.GapTimeout))
+		}
 		t.frontier = since
 		if i > 0 {
 			t.frontier = rows[i-1].ID
@@ -489,8 +504,9 @@ func (b *Bus) seed(ctx context.Context, t *tailState, end int64, now time.Time) 
 type tailState struct {
 	frontier int64
 	seen     map[int64]struct{}
-	// stalled is when the frontier last stopped at a missing id; zero while it is not stopped.
-	stalled time.Time
+	// stalled is when the frontier stopped at the missing id stalledAt; zero while it is not stopped.
+	stalled   time.Time
+	stalledAt int64
 }
 
 // read delivers every change after the frontier not delivered yet, then moves the frontier up.
@@ -553,8 +569,8 @@ func (t *tailState) advance(now time.Time, gap time.Duration, passed func(from, 
 			return
 		}
 		switch {
-		case t.stalled.IsZero():
-			t.stalled = now
+		case t.stalled.IsZero() || t.stalledAt != t.frontier+1: // each hole gets its own clock
+			t.stalled, t.stalledAt = now, t.frontier+1
 			return
 		case now.Sub(t.stalled) < gap:
 			return

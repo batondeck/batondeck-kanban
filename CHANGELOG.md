@@ -21,14 +21,21 @@ Notable changes to batondeck-kanban. The format follows
   write reaches all 200 in 2.6 ms (SQLite) and 5.9 ms (Postgres) (`TestIdle`). Delivery never
   blocks: a subscriber that never reads (buffer 8) drops 992 of 1,000 changes while a reading one
   gets all 1,000. On Postgres ids follow appends, not commits, so the tail keeps a frontier below
-  which every id was delivered and re-reads from it; an id missing for `GapTimeout` (10 s) is taken
-  for a rolled-back transaction (`TestPostgresDeliversChangesCommittedOutOfIDOrder`,
-  `TestPostgresPassesAnIDARolledBackTransactionTook`); a passed id is counted (`GapsPassed`) and
-  reported (`ErrGapPassed`), and a stalled frontier moves on the poll's tick with no write. The
+  which every id was delivered and re-reads from it; an id missing for `GapTimeout` (10 s) from when
+  the frontier stopped at it — each hole on its own clock — is taken for a rolled-back transaction
+  (`TestPostgresDeliversChangesCommittedOutOfIDOrder`,
+  `TestPostgresPassesAnIDARolledBackTransactionTook`,
+  `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills`); a passed id is counted per id
+  (`GapsPassed`) and its range reported (`ErrGapPassed`), and a stalled frontier moves on the poll's
+  tick with no write. The
   tail's start is no watermark either: the last page's changes of the past `GapTimeout` are held as
   seen and the frontier stops below them, so a change in flight when the first subscriber arrives
   still arrives (`TestAChangeInFlightWhenTheTailStartsIsDelivered`,
-  `TestPostgresDeliversAChangeInFlightWhenTheTailStarts`). `Subscribe` racing `Close` returns
+  `TestPostgresDeliversAChangeInFlightWhenTheTailStarts`). It looks back one page (500 changes): when
+  all of them are that recent, an id in flight below the page is not waited for, and `OnError` hears
+  `bus.ErrSeedWindowFull` (`TestASeedWindowAllRecentIsReported`). Processes sharing a Postgres
+  database need clocks within `GapTimeout` of each other, since a change's `Ts` is its writer's
+  clock. `Subscribe` racing `Close` returns
   `bus.ErrClosed`. `AppendChange` is pinned at 1 statement on SQLite and 2 on Postgres
   (`TestAppendChangeStatements`). The SQLite engine supports exactly one `serve` process per data
   dir: its wake is in-process, so a second process's writes are not heard; run several on

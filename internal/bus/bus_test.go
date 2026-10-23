@@ -392,7 +392,9 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 func TestPostgresDeliversAChangeInFlightWhenTheTailStarts(t *testing.T) {
 	b := postgresBackend(t)
 	ctx := context.Background()
-	write(t, b.store, change("project:P-1", 0))
+	old := change("project:P-1", 0) // older than GapTimeout: the seed's frontier stops at it, not below B
+	old.Ts = time.Now().Add(-time.Hour).UnixMilli()
+	idOld := write(t, b.store, old)[0]
 	appended, release := make(chan int64), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
@@ -410,6 +412,9 @@ func TestPostgresDeliversAChangeInFlightWhenTheTailStarts(t *testing.T) {
 	idB := write(t, b.store, change("project:P-1", 2))[0] // visible above A before the tail starts
 	bus, _ := newBus(t, b, Options{})
 	sub := subscribe(t, bus, 0, "project:P-1")
+	if f := bus.frontier.Load(); f != idOld {
+		t.Fatalf("seed frontier %d, want %d (the old row; %d is in flight)", f, idOld, idA)
+	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -418,23 +423,61 @@ func TestPostgresDeliversAChangeInFlightWhenTheTailStarts(t *testing.T) {
 		t.Fatalf("delivered %d, want A (%d), in flight when the tail started", c.ID, idA)
 	}
 	quiet(t, sub, 3*PollInterval) // and not B, committed before Subscribe
-	t.Logf("A took id %d before the tail started and committed after Subscribe (B %d already visible): delivered", idA, idB)
+	t.Logf("A took id %d before the tail started and committed after Subscribe (old %d, B %d already visible): seed frontier %d, delivered", idA, idOld, idB, idOld)
 }
 
-// hiding is a change log that does not show one id until shown: an in-flight transaction, over
-// memstore.
-type hiding struct {
+// hidingSet is a change log that does not show the hidden ids until each is shown: in-flight
+// transactions, over memstore. The LIMIT applies to the visible rows, as on an engine.
+type hidingSet struct {
 	store.ChangeLog
-	id    int64
-	shown atomic.Bool
+	mu     sync.Mutex
+	hidden map[int64]bool
 }
 
-func (h *hiding) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
-	rows, err := h.ChangeLog.ReadChanges(ctx, since, limit)
-	if h.shown.Load() {
-		return rows, err
+func (h *hidingSet) hide(ids ...int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hidden == nil {
+		h.hidden = map[int64]bool{}
 	}
-	return slices.DeleteFunc(rows, func(c store.Change) bool { return c.ID == h.id }), err
+	for _, id := range ids {
+		h.hidden[id] = true
+	}
+}
+
+func (h *hidingSet) show(id int64) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.hidden, id)
+}
+
+func (h *hidingSet) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	h.mu.Lock()
+	n := len(h.hidden)
+	h.mu.Unlock()
+	rows, err := h.ChangeLog.ReadChanges(ctx, since, limit+n)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rows = slices.DeleteFunc(rows, func(c store.Change) bool { return h.hidden[c.ID] })
+	return rows[:min(len(rows), limit)], err
+}
+
+// reporter collects what OnError hears.
+type reporter struct {
+	mu  sync.Mutex
+	got []error
+}
+
+func (r *reporter) on(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, err)
+}
+
+func (r *reporter) errs() []error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.got)
 }
 
 // B1 over memstore: ids 1 (an hour old), 2 (in flight) and 3 (just committed) when the tail starts;
@@ -444,11 +487,12 @@ func TestAChangeInFlightWhenTheTailStartsIsDelivered(t *testing.T) {
 	old := change("project:P-1", 0)
 	old.Ts = time.Now().Add(-time.Hour).UnixMilli()
 	ids := write(t, b.store, old, change("project:P-1", 1), change("project:P-1", 2))
-	log := &hiding{ChangeLog: b.store, id: ids[1]}
+	log := &hidingSet{ChangeLog: b.store}
+	log.hide(ids[1])
 	bus := New(log, Options{OnError: func(err error) { t.Errorf("bus: %v", err) }})
 	t.Cleanup(bus.Close)
 	sub := subscribe(t, bus, 0, "project:P-1")
-	log.shown.Store(true)
+	log.show(ids[1])
 	if c := next(t, sub, 2*time.Second); c.ID != ids[1] {
 		t.Fatalf("delivered %d, want the in-flight %d", c.ID, ids[1])
 	}
@@ -468,27 +512,23 @@ func (m *manual) WatchChanges(ctx context.Context, wake func()) error {
 	return nil
 }
 
-// A permanent gap (an id that never shows) under a watcher: once GapTimeout passes, the poll's tick
-// moves the frontier past it with no write and no wake, counts it and reports ErrGapPassed.
+// A permanent two-id gap (ids that never show) under a watcher: once GapTimeout passes, the poll's
+// tick moves the frontier past it with no write and no wake, counts each id and reports the range.
 func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	b := memBackend(t)
-	log := &hiding{ChangeLog: b.store}
+	log := &hidingSet{ChangeLog: b.store}
 	w := &manual{wake: make(chan func(), 1)}
-	var mu sync.Mutex
-	var reported []error
-	bus := New(log, Options{Watcher: w, GapTimeout: 200 * time.Millisecond, OnError: func(err error) {
-		mu.Lock()
-		reported = append(reported, err)
-		mu.Unlock()
-	}})
+	rep := &reporter{}
+	gap := 200 * time.Millisecond
+	bus := New(log, Options{Watcher: w, GapTimeout: gap, OnError: rep.on})
 	t.Cleanup(bus.Close)
 	sub := subscribe(t, bus, 0, "project:P-1")
 	wake := <-w.wake
 	time.Sleep(2 * PollInterval) // past the read the first wake allowed
-	ids := write(t, b.store, change("project:P-1", 1), change("project:P-1", 2), change("project:P-1", 3))
-	log.id = ids[1] // never shown
+	ids := write(t, b.store, change("project:P-1", 1), change("project:P-1", 2), change("project:P-1", 3), change("project:P-1", 4))
+	log.hide(ids[1], ids[2]) // never shown
 	wake()
-	for _, want := range []int64{ids[0], ids[2]} {
+	for _, want := range []int64{ids[0], ids[3]} {
 		if c := next(t, sub, 2*time.Second); c.ID != want {
 			t.Fatalf("delivered %d, want %d", c.ID, want)
 		}
@@ -496,14 +536,142 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	if f := bus.frontier.Load(); f != ids[0] {
 		t.Fatalf("frontier %d, want it held at %d below the gap", f, ids[0])
 	}
-	time.Sleep(200*time.Millisecond + 3*PollInterval)
-	mu.Lock()
-	got := slices.Clone(reported)
-	mu.Unlock()
-	if f := bus.frontier.Load(); f != ids[2] || bus.GapsPassed() != 1 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) {
-		t.Fatalf("after GapTimeout with no write: frontier %d (want %d), gaps %d, reported %v", f, ids[2], bus.GapsPassed(), got)
+	time.Sleep(gap + 3*PollInterval)
+	got := rep.errs()
+	want := fmt.Sprintf("%v: ids %d..%d not committed within %v", ErrGapPassed, ids[1], ids[2], gap)
+	if f := bus.frontier.Load(); f != ids[3] || bus.GapsPassed() != 2 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) || got[0].Error() != want {
+		t.Fatalf("after GapTimeout with no write: frontier %d (want %d), gaps %d (want 2), reported %v (want [%s])", f, ids[3], bus.GapsPassed(), got, want)
 	}
-	t.Logf("gap %d passed on the tick: frontier %d, %v", ids[1], ids[2], got[0])
+	t.Logf("gap %d..%d passed on the tick: frontier %d, GapsPassed %d, %v", ids[1], ids[2], ids[3], bus.GapsPassed(), got[0])
+}
+
+// R0.11 review B2, unit: each hole gets its own GapTimeout. Hole 1 stalls at t0 and fills at t0+9s
+// while hole 3 is open; at t0+10s hole 3 has waited 1 s and is not passed.
+func TestEachHoleGetsItsOwnStallClock(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	gap := 10 * time.Second
+	ts := &tailState{seen: map[int64]struct{}{2: {}}}
+	ts.advance(t0, gap, nil)
+	if ts.frontier != 0 || ts.stalled != t0 {
+		t.Fatalf("frontier %d stalled %v, want 0 and %v", ts.frontier, ts.stalled, t0)
+	}
+	ts.seen[1], ts.seen[4] = struct{}{}, struct{}{}
+	ts.advance(t0.Add(9*time.Second), gap, nil)
+	if ts.frontier != 2 {
+		t.Fatalf("frontier %d, want 2", ts.frontier)
+	}
+	var passed [][2]int64
+	ts.advance(t0.Add(10*time.Second), gap, func(a, b int64) { passed = append(passed, [2]int64{a, b}) })
+	if ts.frontier != 2 || len(passed) != 0 {
+		t.Fatalf("id 3, missing for 1 s of a %v GapTimeout, was passed: frontier %d, passed %v", gap, ts.frontier, passed)
+	}
+	ts.advance(t0.Add(19*time.Second), gap, func(a, b int64) { passed = append(passed, [2]int64{a, b}) })
+	if ts.frontier != 4 || !slices.Equal(passed, [][2]int64{{3, 3}}) {
+		t.Fatalf("after its own GapTimeout: frontier %d (want 4), passed %v (want [[3 3]])", ts.frontier, passed)
+	}
+}
+
+// hold appends in inside an Atomically that commits only when release is closed: an in-flight id.
+func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, chan struct{}, chan error) {
+	t.Helper()
+	appended, release, done := make(chan int64), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- s.Atomically(context.Background(), func(tx store.Store) error {
+			id, err := tx.AppendChange(context.Background(), in)
+			if err != nil {
+				return err
+			}
+			appended <- id
+			<-release
+			return nil
+		})
+	}()
+	return <-appended, release, done
+}
+
+// R0.11 review B2 on Postgres: A (id 2) is in flight when the tail starts and commits ~0.6 s later;
+// C (id 4) is taken before A commits and held 0.8 s, under a 1 s GapTimeout. C is delivered: its
+// hole is not judged by the clock A's hole started.
+func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
+	b := postgresBackend(t)
+	rep := &reporter{}
+	gap := time.Second
+	write(t, b.store, change("project:P-1", 0))                    // 1
+	idA, relA, doneA := hold(t, b.store, change("project:P-1", 1)) // 2 in flight
+	write(t, b.store, change("project:P-1", 2))                    // 3
+	bus, _ := newBus(t, b, Options{GapTimeout: gap, OnError: rep.on})
+	sub := subscribe(t, bus, 0, "project:P-1")
+	if f := bus.frontier.Load(); f != idA-1 {
+		t.Fatalf("seed frontier %d, want %d", f, idA-1)
+	}
+	time.Sleep(600 * time.Millisecond)
+	idC, relC, doneC := hold(t, b.store, change("project:P-1", 3)) // 4 in flight
+	idD := write(t, b.store, change("project:P-1", 4))[0]          // 5
+	close(relA)
+	if err := <-doneA; err != nil {
+		t.Fatal(err)
+	}
+	taken := time.Now()
+	for _, want := range []int64{idA, idD} {
+		if c := next(t, sub, 2*time.Second); c.ID != want {
+			t.Fatalf("delivered %d, want %d", c.ID, want)
+		}
+	}
+	time.Sleep(gap - 200*time.Millisecond - time.Since(taken))
+	close(relC)
+	if err := <-doneC; err != nil {
+		t.Fatal(err)
+	}
+	held := time.Since(taken)
+	select {
+	case c := <-sub.C():
+		if c.ID != idC {
+			t.Fatalf("delivered %d, want %d", c.ID, idC)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("LOST: id %d committed %v after A's commit (GapTimeout %v) and was never delivered; frontier %d, GapsPassed %d, reported %v", idC, held, gap, bus.frontier.Load(), bus.GapsPassed(), rep.errs())
+	}
+	if got := rep.errs(); len(got) != 0 || bus.GapsPassed() != 0 {
+		t.Fatalf("GapsPassed %d, reported %v; want none", bus.GapsPassed(), got)
+	}
+	t.Logf("id %d held %v past A's commit (GapTimeout %v): delivered, GapsPassed 0", idC, held, gap)
+}
+
+// A starting tail looks back one page. When the whole page is within GapTimeout and ids lie below
+// it, an id in flight there would not be waited for: that is reported, never silent. A log of exactly
+// one page (nothing below it) is the control.
+func TestASeedWindowAllRecentIsReported(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		rows   int
+		report bool
+	}{{"one page", readPage, false}, {"one page and one", readPage + 1, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			b := memBackend(t)
+			in := make([]store.ChangeInput, c.rows)
+			for i := range in {
+				in[i] = change("project:P-1", i)
+			}
+			ids := write(t, b.store, in...)
+			rep := &reporter{}
+			bus := New(b.store, Options{OnError: rep.on})
+			t.Cleanup(bus.Close)
+			subscribe(t, bus, 0, "project:P-1")
+			got := rep.errs()
+			if !c.report {
+				if len(got) != 0 {
+					t.Fatalf("reported %v, want nothing", got)
+				}
+				return
+			}
+			below := ids[len(ids)-1] - readPage
+			want := fmt.Sprintf("%v: the %d changes after id %d are all within %v; ids in flight at or below it are not waited for", ErrSeedWindowFull, readPage, below, GapTimeout)
+			if len(got) != 1 || !errors.Is(got[0], ErrSeedWindowFull) || got[0].Error() != want {
+				t.Fatalf("reported %v, want [%s]", got, want)
+			}
+			t.Logf("%d recent changes: %v", c.rows, got[0])
+		})
+	}
 }
 
 // blocking is a change log whose reads wait until released.
