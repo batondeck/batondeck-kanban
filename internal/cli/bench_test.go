@@ -319,9 +319,9 @@ func benchIdle(t *testing.T, engine string) []metric {
 		}
 	}
 
-	// quiet waits until the count has held still for d, and answers it.
-	quiet := func(d time.Duration) int64 {
-		last, since := sc.StatementsIssued(), time.Now()
+	// quiet waits until the count has held still for d, or for at most limit, and answers it.
+	quiet := func(d, limit time.Duration) int64 {
+		last, since, give := sc.StatementsIssued(), time.Now(), time.Now().Add(limit)
 		for {
 			time.Sleep(2 * time.Millisecond)
 			if n := sc.StatementsIssued(); n != last {
@@ -329,9 +329,13 @@ func benchIdle(t *testing.T, engine string) []metric {
 			} else if time.Since(since) >= d {
 				return n
 			}
+			if time.Now().After(give) {
+				t.Errorf("the count never held still for %v in %v: something issues statements with no write", d, limit)
+				return last
+			}
 		}
 	}
-	c0 := quiet(time.Second)
+	c0 := quiet(time.Second, 5*time.Second)
 	t0 := time.Now()
 	t.Logf("%s: %d entries and %d streams up %.1f s after serve started; holding %v with no write",
 		engine, benchEntries, benchStreams, t0.Sub(started).Seconds(), benchHold)
@@ -350,7 +354,6 @@ func benchIdle(t *testing.T, engine string) []metric {
 		}
 		if time.Now().Before(slot) {
 			pre += n - last
-			t.Errorf("%d statement(s) %.1f s into the hold, before the sweep was due", n-last, time.Since(t0).Seconds())
 			last = n
 			continue
 		}
@@ -358,7 +361,7 @@ func benchIdle(t *testing.T, engine string) []metric {
 		break
 	}
 	swept := time.Now()
-	after := quiet(300 * time.Millisecond)
+	after := quiet(300*time.Millisecond, 10*time.Second)
 	sweep := after - before
 	sweepTook := time.Since(swept) - 300*time.Millisecond
 	if wait := time.Until(t0.Add(benchHold)); wait > 0 {
@@ -384,6 +387,9 @@ func benchIdle(t *testing.T, engine string) []metric {
 		t.Errorf("the sweep issued 0 statements: the count saw nothing, so it proves nothing")
 	case perEntry > benchPerEntry:
 		t.Errorf("the sweep issued %d statements for %d entries: %.2f per entry, over the bound of %d", sweep, benchEntries, perEntry, benchPerEntry)
+	}
+	if pre > 0 {
+		t.Errorf("%d statement(s) in the hold before the sweep was due", pre)
 	}
 	if post > 0 {
 		t.Errorf("%d statement(s) after the sweep, before the hold ended", post)
