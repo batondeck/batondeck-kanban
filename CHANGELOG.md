@@ -8,6 +8,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
+  over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
+  (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
+  SQLite and Postgres. `ClaimNext` is one statement: on Postgres `UPDATE … WHERE id = (SELECT …
+  FOR UPDATE OF f SKIP LOCKED LIMIT 1)`, on SQLite the same UPDATE over the frontier, whose own
+  write lock serialises callers. A versioned write reads the task inside `Atomically` (`FOR UPDATE`
+  on Postgres) and answers `STALE {expected, actual}` from that read; a heartbeat, a release, a
+  delete and an event append are one statement each and read again only to name a refusal. Order
+  keys and ids sort and compare `COLLATE "C"` on Postgres. Measured per call: `GetTask` 1 statement,
+  a `ListTasks` page holding tasks 1 (an empty page 2), a winning `ClaimNext` 1
+  (`TestStatementsPerCall`). `TestClaimRace` (50 callers, 50 READY tasks, 50 distinct winners, 0
+  errors; SQLite over five stores on one file) and `TestListTasksPagesThreeBySeven` run on both
+  engines.
 - Store contract I (ADR-0003 B2): the `store.Tasks`, `Claims`, `Events` and `ChangeLog` roles in
   `internal/store/contract_{tasks,claims,events,changelog}.go`, embedded in `Store`, with doc
   comments pinning keys `(project_id, task_id)`, `domain.Stale(expected, actual)` on a versioned

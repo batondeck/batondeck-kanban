@@ -37,6 +37,10 @@ type sqlQueries interface {
 	boardQueries
 	counterQueries
 	idempotencyQueries
+	taskQueries
+	claimQueries
+	eventQueries
+	changeQueries
 }
 
 // pgQueries is the Postgres sqlc queries behind sqlQueries; its methods are in the area files.
