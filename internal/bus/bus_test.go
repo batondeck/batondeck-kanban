@@ -614,19 +614,26 @@ func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 }
 
 // A starting tail looks back one page. When the whole page is within GapTimeout and ids lie below
-// it, an id in flight there would not be waited for: that is reported, never silent. A log of exactly
-// one page (nothing below it) is the control.
+// it, an id in flight there would not be waited for: that is reported, never silent. The controls: a
+// log of exactly one page (nothing below it), and a longer log whose page starts at an old row.
 func TestASeedWindowAllRecentIsReported(t *testing.T) {
 	for _, c := range []struct {
-		name   string
-		rows   int
-		report bool
-	}{{"one page", readPage, false}, {"one page and one", readPage + 1, true}} {
+		name        string
+		old, recent int
+		report      bool
+	}{
+		{"one page", 0, readPage, false},
+		{"a page starting at an old row", 2, readPage - 1, false}, // ids below the page, the first in it old
+		{"one page and one", 0, readPage + 1, true},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			b := memBackend(t)
-			in := make([]store.ChangeInput, c.rows)
+			in := make([]store.ChangeInput, c.old+c.recent)
 			for i := range in {
 				in[i] = change("project:P-1", i)
+				if i < c.old {
+					in[i].Ts = time.Now().Add(-time.Hour).UnixMilli()
+				}
 			}
 			ids := write(t, b.store, in...)
 			rep := &reporter{}
@@ -645,7 +652,7 @@ func TestASeedWindowAllRecentIsReported(t *testing.T) {
 			if len(got) != 1 || !errors.Is(got[0], ErrSeedWindowFull) || got[0].Error() != want {
 				t.Fatalf("reported %v, want [%s]", got, want)
 			}
-			t.Logf("%d recent changes: %v", c.rows, got[0])
+			t.Logf("%d recent changes: %v", c.recent, got[0])
 		})
 	}
 }
