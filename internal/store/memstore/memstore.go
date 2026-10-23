@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,6 +58,11 @@ type state struct {
 	events   map[[2]string]store.Event  // by (project, event)
 	changes  []store.Change             // id ascending
 	lastChg  int64                      // the last change id handed out
+
+	contextItems map[[3]string]store.ContextItem    // by (project, task, item)
+	memory       map[string]store.MemoryEntry       // by id
+	summaries    map[[2]string]store.Summary        // by (project, task)
+	edges        map[[2]string]store.DependencyEdge // by (project, edge)
 }
 
 type idemEntry struct {
@@ -81,6 +87,11 @@ func newState() *state {
 		tokens:   map[string]store.Token{},
 		tasks:    map[[2]string]store.Task{},
 		events:   map[[2]string]store.Event{},
+
+		contextItems: map[[3]string]store.ContextItem{},
+		memory:       map[string]store.MemoryEntry{},
+		summaries:    map[[2]string]store.Summary{},
+		edges:        map[[2]string]store.DependencyEdge{},
 	}
 }
 
@@ -244,6 +255,12 @@ func (st *state) clone() *state {
 		c.changes[i] = cloneChange(ch)
 	}
 	c.lastChg = st.lastChg
+	maps.Copy(c.contextItems, st.contextItems)
+	for k, v := range st.memory {
+		c.memory[k] = cloneMemory(v)
+	}
+	maps.Copy(c.summaries, st.summaries)
+	maps.Copy(c.edges, st.edges)
 	return c
 }
 
