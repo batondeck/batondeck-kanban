@@ -261,6 +261,19 @@ func memory(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("DeletingAProjectLeavesNoMemoryRowOfIt", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryProject, Key: "durable"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "a-only"})
+			noErr(t, s.DeleteProjectRecursive(ctx, p))
+			left, err := s.RecallMemory(ctx, store.RecallMemoryQuery{Scope: store.MemoryProject, ProjectID: p, Limit: 10})
+			noErr(t, err)
+			if len(left) != 0 {
+				t.Fatalf("after %s was deleted it recalls %v, want none", p, keys(left))
+			}
+		})
+
 		t.Run("WriteRefusesBadRouting", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			task := seedTasks(t, sd, p, b, "a")[0]

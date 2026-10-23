@@ -24,7 +24,10 @@ Notable changes to batondeck-kanban. The format follows
 - Migration `0003_memory_drop_task_fk` on both engines (P-65, owner-approved 2026-10-23): memory loses
   its foreign key to tasks, so a project entry keeps its task as provenance after the task is deleted;
   the task scopes are the service's cascade (`DeleteMemoryByTask`). SQLite rebuilds the table (it has no
-  index, trigger or view beyond its primary key's); the down migration restores the key.
+  index, trigger or view beyond its primary key's); the down migration restores the key, deleting the
+  task, agent and shared rows whose task is gone and clearing the task_id of the other orphaned rows.
+  `TestMemoryKeepsNoKeyToTasks{SQLite,Postgres}` pin the rebuilt table's columns, scope CHECK and the
+  remaining keys' ON DELETE actions.
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
   (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
