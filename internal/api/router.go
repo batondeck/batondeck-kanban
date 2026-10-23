@@ -27,6 +27,7 @@ type Auth interface {
 	Authenticate(next http.Handler) http.Handler
 	CSRF(next http.Handler) http.Handler
 	LoginHandler() http.Handler
+	LogoutHandler() http.Handler
 }
 
 var _ Auth = (*auth.Service)(nil)
@@ -35,6 +36,8 @@ var _ Auth = (*auth.Service)(nil)
 type Options struct {
 	Services service.Services
 	Auth     Auth
+	// Users is the local accounts /api/users lists and adds to; nil answers those routes INTERNAL.
+	Users *auth.Accounts
 	// Bus feeds /api/stream; nil answers the stream 503.
 	Bus *bus.Bus
 	// Presence is the device session directory /api/stream's presence frames read; nil sends none.
@@ -72,7 +75,7 @@ func Mount(mux *http.ServeMux, o Options) {
 // table is every route, in routes.json's order.
 func table(o *Options) []route {
 	var rs []route
-	for _, area := range []func(*Options) []route{sessionRoutes, projectRoutes, boardRoutes, taskRoutes, lifecycleRoutes, contextRoutes, mediaRoutes, feedRoutes,
+	for _, area := range []func(*Options) []route{sessionRoutes, userRoutes, projectRoutes, boardRoutes, taskRoutes, lifecycleRoutes, contextRoutes, mediaRoutes, feedRoutes,
 		meRoutes, agentRoutes, notificationRoutes, commentRoutes, followUpRoutes, sprintRoutes, runRoutes, oncallRoutes, chronicleRoutes, analyticsRoutes} {
 		rs = append(rs, area(o)...)
 	}

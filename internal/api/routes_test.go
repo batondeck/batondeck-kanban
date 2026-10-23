@@ -71,8 +71,8 @@ func TestRouteTable(t *testing.T) {
 	}
 	t.Logf("route table: %d routes in routes.json, %d mounted", len(wantKeys), len(gotKeys))
 	for _, r := range want {
-		if r.Path == "/api/stream" || r.Path == "/api/login" {
-			continue // the stream stays open (stream_test.go); login is the harness's own sign-in
+		if r.Path == "/api/stream" || r.Path == "/api/login" || r.Path == "/api/logout" {
+			continue // the stream stays open (stream_test.go); login is the harness's own sign-in; logout would end it for every later row (users_test.go)
 		}
 		path := strings.NewReplacer("{projectId}", "P-1", "{boardId}", "B-1", "{taskId}", "T-1", "{columnId}", "C-1",
 			"{identityId}", "U-2", "{edgeId}", "E-1", "{sprintId}", "S-1", "{followUpId}", "F-1", "{integrationId}", "I-1",

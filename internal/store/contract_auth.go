@@ -74,6 +74,8 @@ type Sessions interface {
 	CreateSession(ctx context.Context, s Session) error
 	// GetSession returns the session or ErrNotFound, expired or not.
 	GetSession(ctx context.Context, idHash string) (Session, error)
+	// DeleteSession removes the session (sign-out); a hash with no row is not an error.
+	DeleteSession(ctx context.Context, idHash string) error
 }
 
 // Tokens is the tokens table. Key: ID. Expiry and revocation are judged by the caller.
