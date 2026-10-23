@@ -35,6 +35,9 @@ type Options struct {
 	Version string
 	// Resolver turns each request's bearer into its caller.
 	Resolver auth.Resolver
+	// ResourceMetadataURL is the RFC 9728 protected-resource metadata a 401 names in its
+	// WWW-Authenticate challenge; "" names none (no OAuth server).
+	ResourceMetadataURL string
 	// Services is what the tools and the session bookkeeping call.
 	Services service.Services
 	// SessionIdle: 0 means DefaultSessionIdle.
@@ -90,7 +93,7 @@ func New(o Options) *Server {
 		Stateless:      false,
 		SessionTimeout: o.SessionIdle,
 	})
-	s.handler = requireBearer(o.Resolver, s.log)(streamable)
+	s.handler = requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(streamable)
 	return s
 }
 

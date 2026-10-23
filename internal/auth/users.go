@@ -1,6 +1,7 @@
 // Package auth is who a request is: local users with argon2id passwords, browser sessions with
-// CSRF, API tokens (the TokenService) and ResolveCaller, which turns a bearer into a domain.Caller.
-// It reaches the database only through internal/store's Users, Sessions and Tokens.
+// CSRF, API tokens (the TokenService), the OAuth server's access tokens (oauthtokens.go; the server is
+// internal/auth/oauth) and ResolveCaller, which turns either bearer into a domain.Caller.
+// It reaches the database only through internal/store's Users, Sessions, Tokens and OAuth.
 package auth
 
 import (
