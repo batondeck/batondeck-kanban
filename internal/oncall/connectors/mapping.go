@@ -380,7 +380,7 @@ func applyMapping(payload any, m Mapping, c Context) ([]mapped, error) {
 	seen := map[string]int{}
 	for i, root := range roots {
 		if fps[i] = firstScalar(x.Fingerprint, root, payload, c); fps[i] == "" {
-			return nil, errors.New("custom mapping: no fingerprint. Point extract.fingerprint at a stable id in your payload, or add '$body_hash' to the end of the chain to derive one from the body.")
+			return nil, errors.New("custom mapping: no fingerprint. Point extract.fingerprint at a stable id in your payload, or add '$body_hash' to the end of the chain to derive one from the body")
 		}
 		seen[fps[i]]++
 	}

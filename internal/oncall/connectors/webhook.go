@@ -13,7 +13,7 @@ type webhook struct{}
 
 func (webhook) Events(p any, c Context) ([]oncall.Event, error) {
 	if c.Mapping == nil || c.Mapping.Extract == nil {
-		return nil, errors.New("custom webhook: this integration has no field mapping yet. Set mapping.extract (at minimum extract.fingerprint and extract.title) from the on-call setup screen.")
+		return nil, errors.New("custom webhook: this integration has no field mapping yet. Set mapping.extract (at minimum extract.fingerprint and extract.title) from the on-call setup screen")
 	}
 	ms, err := applyMapping(p, *c.Mapping, c)
 	if err != nil {
