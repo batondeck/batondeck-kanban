@@ -133,7 +133,7 @@ export function LeasePanel({ d }: P) {
         </Cluster>
       </KV>
       <KV k="leaseId"><span className="mono">{task.claim.leaseId}</span></KV>
-      <KV k="on expiry">returns to <span className="role ready">ready</span>, unclaimed</KV>
+      <KV k="on expiry">returns to <span className="role ready">To do</span>, unclaimed</KV>
     </Panel>
   );
 }
