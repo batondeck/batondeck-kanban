@@ -109,7 +109,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		capKb = DefaultPayloadCapKb
 	}
 	if len(r.Body) > capKb<<10 {
-		return refuse(HookTooLarge, "%d bytes over the %d KiB cap", len(r.Body), capKb)
+		return refuse(HookTooLarge, "a %d-byte body is over the %d KiB cap", len(r.Body), capKb)
 	}
 	if reason, challenge := c.verifyHook(ctx, integration, r, now); reason != "" {
 		c.log.Printf("ingest: integration %s refused a delivery's signature: %s", integration.ID, reason)
