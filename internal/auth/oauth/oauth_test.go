@@ -616,3 +616,46 @@ func TestCORSOnTheCookielessRoutesOnly(t *testing.T) {
 		t.Fatal("/authorize carries a CORS header")
 	}
 }
+
+// A code is redeemed only by the client it was issued to: another registered client presenting it,
+// with the right verifier and redirect URI, gets invalid_grant and no tokens. The owner redeeming a
+// code of its own is the control.
+func TestRefusalCodeRedeemedByAnotherClient(t *testing.T) {
+	f := newFixture(t)
+	owner, code, verifier := f.authorize(t, "worker", nil)
+	other := f.register(t, callbackURI)
+	st, m := f.exchange(t, other, code, verifier)
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	if m["error_description"] != "the code was not issued to this client_id" || m["access_token"] != nil {
+		t.Fatalf("another client's exchange: %v", m)
+	}
+	owner, code, verifier = f.authorize(t, "worker", nil)
+	if st, m := f.exchange(t, owner, code, verifier); st != http.StatusOK || m["access_token"] == nil {
+		t.Fatalf("control, the owner's exchange: %d %v", st, m)
+	}
+}
+
+// The sign-in and consent pages cannot be framed (a framed consent page is a clickjacking target)
+// and run no script: both say so in X-Frame-Options and the Content-Security-Policy.
+func TestSignInAndConsentPagesCannotBeFramed(t *testing.T) {
+	f := newFixture(t)
+	clientID := f.register(t, callbackURI)
+	_, challenge := pkce(t)
+	q := authQuery(clientID, callbackURI, challenge, nil)
+	b := f.browser(t)
+	check := func(name string) {
+		resp, err := b.Get(f.srv.URL + "/authorize?" + q.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := body(t, resp)
+		csp := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(page, name) || resp.Header.Get("X-Frame-Options") != "DENY" ||
+			!strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "default-src 'none'") {
+			t.Fatalf("%s page: X-Frame-Options %q, Content-Security-Policy %q", name, resp.Header.Get("X-Frame-Options"), csp)
+		}
+	}
+	check("Sign in to BatonDeck")
+	f.signIn(t, b)
+	check("Allow test client?")
+}
