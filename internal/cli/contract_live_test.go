@@ -174,14 +174,15 @@ func TestLiveContract(t *testing.T) {
 // should come with it.
 var (
 	snapshotTools = []string{
-		"add_column", "add_context_item", "add_dependency", "add_member", "add_subtask", "attach_file",
-		"block_task", "cancel_task", "claim_next", "claim_task", "complete_task", "create_board",
-		"create_chronicle_page", "create_project", "create_task", "delete_chronicle_page", "delete_project",
-		"delete_task", "edit_chronicle_page", "fail_task", "get_board",
-		"get_project", "get_task", "get_task_context", "handoff_task", "heartbeat_task", "ingest_chronicle_page",
-		"list_attachments", "list_boards", "list_projects", "list_subtasks", "list_tasks", "move_task",
-		"next_task", "read_memory", "reap_stale_leases", "recall_memory", "release_task",
-		"remove_column", "remove_dependency", "remove_member", "search_tasks", "set_summary",
+		"ack_follow_up", "add_artifact", "add_column", "add_comment", "add_context_item", "add_dependency",
+		"add_follow_up", "add_member", "add_subtask", "attach_file", "block_task", "cancel_task",
+		"claim_next", "claim_task", "complete_task", "create_board", "create_chronicle_page",
+		"create_project", "create_task", "delete_chronicle_page", "delete_project", "delete_task",
+		"edit_chronicle_page", "fail_task", "get_board", "get_project", "get_task", "get_task_context",
+		"handoff_task", "heartbeat_task", "ingest_chronicle_page", "list_attachments", "list_boards",
+		"list_comments", "list_follow_ups", "list_projects", "list_subtasks", "list_tasks", "move_task",
+		"next_task", "read_memory", "reap_stale_leases", "recall_memory", "release_task", "remove_column",
+		"remove_dependency", "remove_member", "retract_artifact", "search_tasks", "set_summary",
 		"update_column", "update_settings", "update_task", "write_memory",
 	}
 	// snapshotAdminOnly are listed to a workspace admin alone (ADR-0004: the on-call tools).
