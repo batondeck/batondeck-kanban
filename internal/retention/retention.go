@@ -1,12 +1,11 @@
 // Package retention is the retention sweep (plan §Performance "Retention is a job, not a request
 // path"), ported from hdtp's services/retention: a timer, never a request, deletes what has
 // outlived its window — memory past its own expiry, change-log rows past ChangeLog, tool_calls rows
-// past ToolCalls, and the blobs no attachment or memory entry references any more. Task events are
-// kept. Each table's delete is bounded per statement and per tick,
+// past ToolCalls, the on-call deliveries and the raw webhook bodies past the expiry stamped on each
+// at write time (30 and 7 days, service.DeliveryRetention and RawBodyRetention, plan
+// §Clarifications 5), and the blobs no attachment or memory entry references any more. Task events
+// are kept. Each table's delete is bounded per statement and per tick,
 // so one sweep never holds the write lock for long: what a tick leaves, the next one takes.
-//
-// Deliveries and raw webhook bodies are not swept here yet: their Store methods belong to the
-// on-call lane, and no window is configured for them until one exists.
 package retention
 
 import (
@@ -34,6 +33,8 @@ type Store interface {
 	DeleteExpiredMemory(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
+	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
 }
 
@@ -52,7 +53,7 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, Blobs int64
+	Memory, ChangeLog, ToolCalls, Deliveries, RawBodies, Blobs int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -66,7 +67,8 @@ type Sweeper struct {
 	CollectBlobs func(ctx context.Context, sha256s []string)
 }
 
-// Sweep runs one pass: memory, then the change log, then tool calls, then one Batch of the blobs
+// Sweep runs one pass: memory, then the change log, then tool calls, then the expired deliveries
+// (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
 // unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	now := time.Now
@@ -99,6 +101,8 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.ToolCalls = step("tool calls", func(limit int) (int64, error) {
 		return s.Store.DeleteToolCallsOlderThan(ctx, ms-s.Windows.ToolCalls.Milliseconds(), limit)
 	})
+	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
+	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })
 	if s.CollectBlobs != nil {
 		bs, err := s.Store.ListUnreferencedBlobs(ctx, ms-BlobGrace.Milliseconds(), Batch)
 		if err != nil && s.Report != nil && ctx.Err() == nil {
