@@ -358,6 +358,17 @@ func (s *dirServer) move(t *testing.T, p person, task service.Task, to domain.St
 	return got.Task
 }
 
+// waitLog waits until the log holds want at least n times.
+func (s *dirServer) waitLog(t *testing.T, want string, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); strings.Count(s.logs.String(), want) < n; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the log never held %q %d times:\n%s", want, n, s.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // lastChange is the change log's highest id.
 func (s *dirServer) lastChange(t *testing.T) int64 {
 	t.Helper()
@@ -536,7 +547,10 @@ func TestDirectorySweepDropsADisabledUser(t *testing.T) {
 	c := s.client(t, "s-1", "")
 	s.register(t, s.alice, c, "worker")
 	n0 := s.st.rechecks.Load()
-	time.Sleep(wakeSweep + 150*time.Millisecond)
+	for deadline := time.Now().Add(5 * wakeSweep); s.st.rechecks.Load()-n0 < 3 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // the sweep's reads are done; the next is wakeSweep away
 	per := s.st.rechecks.Load() - n0
 	t.Logf("one idle sweep of one entry: %d statements", per)
 	if per != 3 {
@@ -569,7 +583,7 @@ func TestDirectoryScopesChangeInPlace(t *testing.T) {
 	if _, err := s.a.core.Projects().AddMember(ctx, s.alice.caller(), service.AddMemberReq{ProjectID: s.project, IdentityID: s.carol.id, Role: domain.RoleWorker}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(wakeSweep + 200*time.Millisecond)
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
 	s.task(t, s.bob, "")
 	if f := content(t, c.frame(t, wake.SlowWindow+time.Second)); f.Kind != wake.KindBroadcast || f.ProjectID != s.project {
 		t.Fatalf("after the add %+v", f)
@@ -577,7 +591,7 @@ func TestDirectoryScopesChangeInPlace(t *testing.T) {
 	if _, err := s.a.core.Projects().RemoveMember(ctx, s.alice.caller(), service.RemoveMemberReq{ProjectID: s.project, IdentityID: s.carol.id}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(wakeSweep + 200*time.Millisecond)
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 2)
 	s.task(t, s.bob, "")
 	c.none(t, wake.SlowWindow+500*time.Millisecond)
 	if got := s.pids(); len(got) != 1 || got[0] != c.pid {
@@ -678,6 +692,18 @@ func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
 	s.task(t, s.bob, s.alice.id)
 	_ = live.frame(t, time.Second)
 	_ = dead.frame(t, time.Second)
+	// The cursor is recorded just after the write the client saw: wait for it before stopping.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, _ := s.st.ListWakeSessions(context.Background())
+		if len(rows) == 2 && rows[0].LastCursor > 0 && rows[1].LastCursor > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the cursors were never recorded: %+v", rows)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	s.stop()
 	_ = dead.cmd.Process.Kill()
 	_ = dead.cmd.Wait()

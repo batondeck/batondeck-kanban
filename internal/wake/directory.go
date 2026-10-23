@@ -105,7 +105,7 @@ type Directory struct {
 
 var _ service.DeviceSessions = (*Directory)(nil)
 
-// NewDirectory makes a directory and its exit watch; Start fills it.
+// NewDirectory makes a directory; Start opens its exit watch and fills it.
 func NewDirectory(o Options) (*Directory, error) {
 	if o.Sweep <= 0 {
 		o.Sweep = Sweep
@@ -116,11 +116,7 @@ func NewDirectory(o Options) (*Directory, error) {
 	if o.ProcessUID == nil {
 		o.ProcessUID = core.ProcessUID
 	}
-	w, err := core.NewExitWatcher()
-	if err != nil {
-		return nil, err
-	}
-	return &Directory{o: o, watch: w, entries: map[int64]*entry{}, index: map[string]map[int64]bool{},
+	return &Directory{o: o, entries: map[int64]*entry{}, index: map[string]map[int64]bool{},
 		changed: make(chan struct{}), catch: make(chan []released, 16), done: make(chan struct{})}, nil
 }
 
@@ -128,13 +124,20 @@ func NewDirectory(o Options) (*Directory, error) {
 // fails is dropped), subscribes the dispatcher to the bus, and runs it until ctx ends or the bus
 // closes.
 func (d *Directory) Start(ctx context.Context) error {
+	w, err := core.NewExitWatcher()
+	if err != nil {
+		return err
+	}
+	d.watch = w
 	tap, err := d.o.Bus.Tap(ctx, TapBuffer)
 	if err != nil {
+		w.Close()
 		return err
 	}
 	rows, err := d.o.Sessions.ListWakeSessions(ctx)
 	if err != nil {
 		tap.Close()
+		w.Close()
 		return err
 	}
 	for _, r := range rows {
@@ -260,10 +263,14 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 		return RegisterResp{}, err
 	}
 	d.mu.Lock()
-	old := d.entries[req.PID]
+	var old entry // a copy: the dispatcher writes lastCursor under mu
+	found := d.entries[req.PID] != nil
+	if found {
+		old = *d.entries[req.PID]
+	}
 	d.mu.Unlock()
 	id, cursor := "", req.Cursor
-	if old != nil {
+	if found {
 		if old.identity != caller.Identity {
 			return RegisterResp{}, domain.NewError(domain.CodeForbidden, fmt.Sprintf("pid %d is registered by another identity", req.PID), nil)
 		}
@@ -284,7 +291,7 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 		ClientSessionID: reg.SessionID, ProcStart: reg.ProcStart, Cursor: cursor, Bearer: bearer,
 	})
 	if err != nil {
-		if old == nil || old.id != id {
+		if !found || old.id != id {
 			d.watch.Remove(int(req.PID))
 		}
 		return RegisterResp{}, err
