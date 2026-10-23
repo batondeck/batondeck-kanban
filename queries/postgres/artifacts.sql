@@ -2,6 +2,7 @@
 -- answers both "no such task" (no row) and "no artifacts" (one row whose artifact columns are NULL).
 -- Ids order COLLATE "C", as bytes, as SQLite's BINARY does.
 
+-- One row by its key.
 -- name: GetArtifact :one
 SELECT * FROM artifacts WHERE project_id = $1 AND task_id = $2 AND id = $3;
 

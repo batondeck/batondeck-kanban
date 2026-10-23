@@ -1,6 +1,7 @@
 -- The comment area. Every read starts FROM the task, so one statement answers both "no such task"
 -- (no row) and "no comments" (one row whose comment columns are NULL).
 
+-- One row by its key.
 -- name: GetComment :one
 SELECT * FROM comments WHERE project_id = ? AND task_id = ? AND id = ?;
 

@@ -70,6 +70,9 @@ var areas = []struct{ name, owner string }{
 	{"attachments", "R0.19"},
 	{"blobs", "R0.19"},
 	{"search", "R0.19"},
+	{"artifacts", "R2.1"},
+	{"comments", "R2.1"},
+	{"followups", "R2.1"},
 	{"chronicle", "R2.6"},
 	{"oncall", "R2.8"},
 }

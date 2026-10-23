@@ -1,6 +1,7 @@
 -- The artifact area. Every read of a task's artifacts starts FROM the task, so one statement
 -- answers both "no such task" (no row) and "no artifacts" (one row whose artifact columns are NULL).
 
+-- One row by its key.
 -- name: GetArtifact :one
 SELECT * FROM artifacts WHERE project_id = ? AND task_id = ? AND id = ?;
 
@@ -25,8 +26,8 @@ LIMIT 200;
 
 -- The tombstone on a live artifact: no row is a missing or an already retracted one.
 -- name: RetractArtifact :one
-UPDATE artifacts SET retracted_by = sqlc.arg(retracted_by), retracted_by_agent = sqlc.narg(retracted_by_agent),
-  retracted_at = sqlc.arg(retracted_at), retracted_reason = sqlc.arg(retracted_reason)
+UPDATE artifacts SET retracted_by = CAST(sqlc.arg(retracted_by) AS TEXT), retracted_by_agent = CAST(sqlc.narg(retracted_by_agent) AS TEXT),
+  retracted_at = CAST(sqlc.arg(retracted_at) AS INTEGER), retracted_reason = CAST(sqlc.arg(retracted_reason) AS TEXT)
 WHERE project_id = sqlc.arg(project_id) AND task_id = sqlc.arg(task_id) AND id = sqlc.arg(id) AND retracted_at IS NULL
 RETURNING *;
 

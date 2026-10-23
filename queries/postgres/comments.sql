@@ -2,6 +2,7 @@
 -- (no row) and "no comments" (one row whose comment columns are NULL). Ids order and compare
 -- COLLATE "C", as bytes, as SQLite's BINARY does.
 
+-- One row by its key.
 -- name: GetComment :one
 SELECT * FROM comments WHERE project_id = $1 AND task_id = $2 AND id = $3;
 

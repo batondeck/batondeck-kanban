@@ -2,6 +2,7 @@
 -- (no row) and "no follow-ups" (one row whose follow-up columns are NULL). Ids order and compare
 -- COLLATE "C", as bytes, as SQLite's BINARY does.
 
+-- One row by its key.
 -- name: GetFollowUp :one
 SELECT * FROM follow_ups WHERE project_id = $1 AND task_id = $2 AND id = $3;
 
