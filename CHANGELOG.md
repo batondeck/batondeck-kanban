@@ -41,6 +41,22 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The join (R1.18, ADR-0003 B3): the transports' tests run on the real service. The new
+  `internal/service/servicetest` opens the real service, its store and a bus over one engine;
+  `BATONDECK_TEST_ENGINE=memstore|sqlite|postgres` picks one, unset runs all three (Postgres skips
+  without `BATONDECK_TEST_POSTGRES_DSN`, and a named `postgres` without one fails). Over it: every one
+  of the 43 registered tools answers once on the real stack (`TestEveryToolOnTheRealStack`, which
+  fails when a registered tool has no call there), the per-area schema comparison against
+  `contract/expected.json`, the bearer test, `search_tasks` end to end, `GET` board's shape and the
+  five `/api/stream` tests. The mapping tests that assert on servicefake's recorded calls stay on it.
+- The plan's proofs through real clients over the serve composition (`internal/cli/proofs_test.go`,
+  every engine): the 25 `move_task` verdicts (14 legal with 5 same-status, 11 `INVALID_TRANSITION`
+  carrying `allowed` and `path`); poison by three `fail_task`, skipped by `claim_next`, refused to a
+  worker and lifted by a master; the last-dependency poison refusal and its control; the eight
+  `delete_task` cases; two concurrent `claim_task` with one winner (20 rounds); 50 concurrent
+  `claim_next` with 50 distinct winners and their latency; a claim writing no doorbell row and a
+  handoff one `assigned` row; an `/api/stream` board frame after an MCP `move_task`.
+
 - `search_tasks` (R1.9), keyword only: the project's tasks whose title, description or search tokens
   hold every term of the query, best first, at most `k` (default 10, at most 50), each with the
   engine's rank as `score`; `mode` semantic is `VALIDATION` (the plan keeps no embeddings), hybrid and
