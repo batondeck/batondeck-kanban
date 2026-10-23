@@ -76,6 +76,12 @@ type mutation struct {
 	Version        *int64
 	IdempotencyKey string
 	Access         access
+	// LockProject serialises the mutation with every other that sets it in the project: the
+	// project lock (store.Locks) is the transaction's first statement, before the task is loaded or
+	// any task row locked, so lock order is project then tasks. add_dependency and remove_dependency
+	// set it: under Postgres READ COMMITTED two of them on disjoint pairs could each pass
+	// domain.CheckCycle and together close a cycle (P-110).
+	LockProject bool
 }
 
 // txn is what a mutation's fn works with: the transaction's store, the task as loaded (nil when the
@@ -157,6 +163,11 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 	run := func(tx store.Store) (r R, err error) {
 		defer c.recovered(m.Tool, &err)
 		t := &txn{Tx: tx, Now: c.now(), Caller: caller, ProjectID: m.ProjectID, ctx: ctx}
+		if m.LockProject {
+			if err := tx.LockProject(ctx, m.ProjectID); err != nil {
+				return zero, err
+			}
+		}
 		if m.TaskID != "" {
 			cur, err := tx.GetTask(ctx, m.ProjectID, m.TaskID)
 			if err != nil {

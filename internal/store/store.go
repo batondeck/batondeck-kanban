@@ -21,6 +21,7 @@ import (
 // Each area's role is declared in its contract_<area>.go.
 type Store interface {
 	Lifecycle
+	Locks
 	Projects
 	Members
 	Boards
