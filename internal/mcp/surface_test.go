@@ -292,13 +292,17 @@ func TestResourcesRead(t *testing.T) {
 		}
 	}
 
-	for _, code := range []domain.Code{domain.CodeForbidden, domain.CodeNotFound} {
+	// The JSON-RPC code is pinned: NOT_FOUND is MCP's resource-not-found (-32602), FORBIDDEN internal.
+	for code, rpc := range map[domain.Code]int64{domain.CodeForbidden: jsonrpc.CodeInternalError, domain.CodeNotFound: jsonrpc.CodeInvalidParams} {
 		uri := "batondeck://P-1/task/" + strings.ReplaceAll(servicefake.Trigger(code), ":", "%3A")
 		_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: uri})
 		var werr *jsonrpc.Error
 		if !errors.As(err, &werr) {
 			t.Errorf("read %s = %v, want a JSON-RPC error", uri, err)
 			continue
+		}
+		if werr.Code != rpc {
+			t.Errorf("read %s = JSON-RPC %d, want %d", uri, werr.Code, rpc)
 		}
 		var data domain.BatonDeckError
 		if json.Unmarshal(werr.Data, &data) != nil || data.Code != code {
@@ -410,6 +414,44 @@ func TestRoleChangeSendsToolsListChanged(t *testing.T) {
 			t.Error("list_audit_log listed to u-grace")
 		}
 		t.Logf("u-ada admin=%v: tools/list_changed sent to u-ada's session only; list_audit_log listed %v", admin, admin)
+	}
+}
+
+// TestEndedSessionsForgetTheirAudience: a session's audience entry goes when the session ends, so
+// ended sessions leave nothing behind in the tools/list_changed bookkeeping.
+func TestEndedSessionsForgetTheirAudience(t *testing.T) {
+	h := bootHarness(t, servicefake.New().Services(), resolver())
+	seen := func() int {
+		h.srv.tools.mu.Lock()
+		defer h.srv.tools.mu.Unlock()
+		return len(h.srv.tools.seen)
+	}
+	var live []*mcp.ClientSession
+	for range 3 {
+		cs, err := h.dial(tokenAda)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		if err := cs.Ping(ctx(t), nil); err != nil {
+			t.Fatal(err)
+		}
+		live = append(live, cs)
+	}
+	if n := seen(); n != 3 {
+		t.Fatalf("%d audiences noted for 3 live sessions, want 3", n)
+	}
+	for _, cs := range live {
+		if err := cs.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for seen() != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := seen(); n != 0 {
+		t.Fatalf("%d audiences left 5 s after all 3 sessions ended, want 0", n)
 	}
 }
 

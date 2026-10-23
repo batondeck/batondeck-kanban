@@ -16,7 +16,7 @@ func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 		c, _ := CallerFrom(ctx)
 		a := audience{admin: c.WorkspaceAdmin}
 		if ss, ok := req.GetSession().(*mcp.ServerSession); ok && ss.ID() != "" {
-			l.note(ss, a)
+			l.note(ss, a, method == "initialize")
 		}
 		if method != "tools/list" {
 			return next(ctx, method, req)
@@ -54,10 +54,16 @@ func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // note records ss's audience a, and when its previous request carried another, sends ss
-// notifications/tools/list_changed (asynchronously: the request does not wait on the stream).
-func (l *toolList) note(ss *mcp.ServerSession, a audience) {
+// notifications/tools/list_changed (asynchronously: the request does not wait on the stream). Only
+// an initialize adds an entry: a session that never initialises (go-sdk's server/discover probe)
+// has no end that would forget it.
+func (l *toolList) note(ss *mcp.ServerSession, a audience, initialize bool) {
 	l.mu.Lock()
 	prev, known := l.seen[ss.ID()]
+	if !known && !initialize {
+		l.mu.Unlock()
+		return
+	}
 	l.seen[ss.ID()] = a
 	send := l.send
 	l.mu.Unlock()
