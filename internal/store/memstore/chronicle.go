@@ -130,7 +130,7 @@ func (s *Store) UpsertChroniclePage(ctx context.Context, in store.UpsertChronicl
 			if p.Kind != in.Kind || p.Title != in.Title || !samePtr(p.SourcePath, in.SourcePath) || !domain.SameRecordFields(cur, next) {
 				p.Kind, p.Title, p.SourcePath = in.Kind, in.Title, clonePtr(in.SourcePath)
 				p.Topics, p.Coverage, p.SupersededBy = next.Topics, clonePtr(next.Coverage), next.SupersededBy
-				p.UpdatedAt = nowMillis()
+				p.UpdatedAt = max(nowMillis(), p.UpdatedAt)
 				st.chroniclePages[[2]string{in.ProjectID, pageID}] = cloneChroniclePage(p)
 				st.chronicleEvent(in.ProjectID, in.Author, in.Agent, domain.EventChroniclePageUpdated, map[string]any{"pageId": pageID, "kind": in.Kind, "title": in.Title})
 			}
@@ -310,7 +310,7 @@ func (s *Store) RecordChronicleConflicts(ctx context.Context, projectID, pageID 
 		}
 		body := domain.ChronicleBody(in.Theirs)
 		key := store.ChronicleObjectKey(pageID, body)
-		now := nowMillis()
+		now := max(nowMillis(), p.UpdatedAt)
 		old := p.Conflict
 		items := slices.Clone(in.Items)
 		if items == nil {

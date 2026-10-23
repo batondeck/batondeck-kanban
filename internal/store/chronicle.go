@@ -377,7 +377,7 @@ func refreshChroniclePage(ctx context.Context, q sqlQueries, p ChroniclePage, in
 	if p.Kind == in.Kind && p.Title == in.Title && samePath && domain.SameRecordFields(cur, next) {
 		return UpsertedChroniclePage{Page: p}, nil
 	}
-	now := nowMillis()
+	now := max(nowMillis(), p.UpdatedAt) // never below the head's ts: appends order by it
 	n, err := q.RefreshChroniclePage(ctx, sqlitedb.RefreshChroniclePageParams{
 		Kind: string(in.Kind), Title: in.Title, SourcePath: nullStr(in.SourcePath), Topics: jsonText(next.Topics),
 		Coverage: nullCoverage(next.Coverage), SupersededBy: jsonText(next.SupersededBy), UpdatedAt: now, ProjectID: p.ProjectID, ID: p.ID,
@@ -565,7 +565,7 @@ func recordChronicleConflicts(ctx context.Context, e engine, projectID, pageID s
 		}
 		body := domain.ChronicleBody(in.Theirs)
 		key := ChronicleObjectKey(pageID, body)
-		now := nowMillis()
+		now := max(nowMillis(), p.UpdatedAt)
 		conflict := &ChronicleConflict{VersionID: in.VersionID, Ts: now, Items: slices.Clone(in.Items), TheirsObject: key}
 		if conflict.Items == nil {
 			conflict.Items = []domain.ChronicleConflictItem{}
