@@ -48,13 +48,13 @@ func fiveStatesSeed() []string {
 		// index; and B-1's second READY column (C-R2) pins the fold to the FIRST one.
 		fmt.Sprintf(`INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at) VALUES
 			('P-1', 'T-0', 'B-1', 'C-R', 'gone', '%[2]s', 'a0', 'u', 1, 'u', 1)`, b, r),
-		`DELETE FROM tasks WHERE id = 'T-0'`,
 		fmt.Sprintf(`INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at) VALUES
 			('P-1', 'T-1', 'B-1', 'C-B', 'zorblat parked', '%[1]s', 'a0', 'u', 1, 'u', 1),
 			('P-1', 'T-2', 'B-1', 'C-R', 'next up', '%[2]s', 'a0', 'u', 1, 'u', 1),
 			('P-1', 'T-3', 'B-1', 'C-I', 'doing', 'IN_PROGRESS', 'a0', 'u', 1, 'u', 1),
 			('P-1', 'T-4', 'B-2', 'C-X', 'inbox', '%[1]s', 'a0', 'u', 1, 'u', 1),
 			('P-1', 'T-5', 'B-1', 'C-D', 'shipped', 'DONE', 'a0', 'u', 1, 'u', 1)`, b, r),
+		`DELETE FROM tasks WHERE id = 'T-0'`, // after the others, so its rid stays a gap below theirs
 		`INSERT INTO task_events (project_id, id, board_id, task_id, actor, type, ts) VALUES ('P-1', 'E-1', 'B-1', 'T-1', 'u', 'task.created', 1)`,
 		`INSERT INTO dependencies (project_id, id, blocker_id, dependent_id, created_by, ts) VALUES ('P-1', 'D-1', 'T-1', 'T-2', 'u', 1)`,
 		`INSERT INTO integrations (project_id, id, name, source, board_id, column_id, auth, routing, limits, created_by, created_at, updated_at)
