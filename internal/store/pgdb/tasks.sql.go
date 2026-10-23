@@ -952,7 +952,8 @@ type WriteTaskStateRow struct {
 	UpdatedAt            int64
 }
 
-// The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state and lease.
+// The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state, lease, and the
+// assignee, deliverable and review a SetStatus may carry with them.
 func (q *Queries) WriteTaskState(ctx context.Context, arg WriteTaskStateParams) (WriteTaskStateRow, error) {
 	row := q.db.QueryRow(ctx, writeTaskState,
 		arg.Status,
