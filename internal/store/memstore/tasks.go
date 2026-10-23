@@ -294,6 +294,11 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 	if c.OrderKey != nil && *c.OrderKey == "" {
 		return store.Task{}, domain.Validation("an empty order key", nil)
 	}
+	if c.Review != nil && c.Review.Value != nil {
+		if err := validJSON("review", *c.Review.Value); err != nil {
+			return store.Task{}, err
+		}
+	}
 	return get(ctx, s, func(st *state) (store.Task, error) {
 		t, err := st.taskAt(projectID, taskID, expectedVersion)
 		if err != nil {
@@ -336,6 +341,9 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		if c.ClearClaim {
 			t.Claim = nil
 		}
+		setNullable(&t.Assignee, c.Assignee)
+		setNullable(&t.Deliverable, c.Deliverable)
+		setNullableJSON(&t.Review, c.Review)
 		t.Version++
 		t.UpdatedBy, t.UpdatedAt = c.UpdatedBy, c.UpdatedAt
 		return st.put(t), nil

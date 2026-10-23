@@ -300,9 +300,13 @@ type changePayload struct {
 }
 
 // assigneeScope is the token scope an assigned doorbell rings: the assignee's identity when it is a
-// member of the project (one GetMember, inside the transaction), else AgentScope(assignee), since an
-// assignee may be a free-text agent label (conductor's handoff_task toAgent).
+// member of the project (one GetMember, inside the transaction; none when the assignee is the caller,
+// whom authorize has just found a member), else AgentScope(assignee), since an assignee may be a
+// free-text agent label (conductor's handoff_task toAgent).
 func (t *txn) assigneeScope(assignee string) (string, error) {
+	if assignee == t.Caller.Identity {
+		return assignee, nil
+	}
 	_, err := t.Tx.GetMember(t.ctx, t.ProjectID, assignee)
 	if err == nil {
 		return assignee, nil
