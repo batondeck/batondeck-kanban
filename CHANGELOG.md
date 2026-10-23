@@ -6,6 +6,33 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Five states (R0.26, ADR-0005; the owner, 2026-10-23: "rename Ready to TODO and remove backlog. if
+  task is added, it can't be draft"). `domain.Todo` (`"TODO"`) replaces the claimable state and the
+  parking state is gone: `domain.AllStatuses()` is `TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE`, and the
+  fixed table is TODO→IN_PROGRESS; IN_PROGRESS→REVIEW, BLOCKED, TODO; BLOCKED→IN_PROGRESS, TODO;
+  REVIEW→DONE, IN_PROGRESS; DONE→IN_PROGRESS, 14 legal pairs of 25 with the same-status moves.
+  Unblock, retry backoff, release, lease expiry, handoff and un-poison land on TODO; poison stays
+  BLOCKED with `blockedReason: "poison"`. A new board's default columns are To do, In progress,
+  Blocked, Review, Done. `create_task` and `add_subtask` always land TODO: in the board's first TODO
+  column, and a `columnId` naming a column of any other status is `VALIDATION` (`create_task` already
+  took no `status`); every unassigned create rings the broadcast doorbell. Every tool schema's status
+  enum is the five values, from `domain.AllStatuses()`.
+- Migration `0004_five_states` on both engines (zone Z2, approved with the plan): every task in either
+  retired state becomes TODO; each board's parking columns fold into its first claimable column, which
+  keeps its WIP limit and takes their tasks and integrations (a board without one keeps them as TODO
+  columns); the default column names become "To do"; both status CHECKs become the five values. On
+  SQLite `columns` and `tasks` are rebuilt outside goose's transaction with foreign keys off, since
+  dropping `tasks` with them on would cascade through every table that references it; `rid` is kept,
+  so the FTS5 index stays valid. Down maps TODO back and restores the six-value CHECKs, lossily (no
+  parking column comes back). `internal/store/five_states_migration_test.go` runs up, down and up on
+  a seeded database on both engines and pins the schema to 0003's, CHECKs aside.
+- `contract/deltas.json` records the divergence from conductor: 58 `renamedEnumValues` (conductor's
+  claimable state to TODO, a new delta kind in `contract/canonical.go`, every entry required to hit and
+  refused onto a value already present) and 58 more `removedEnumValues`; `contract/expected.json` is
+  re-derived. `TestNoRemovedStatusRemains` refuses the two retired names in the surface.
+
 ### Added
 
 - Attachments on local disk behind HMAC-signed URLs (R1.8). `attach_file` creates a pending

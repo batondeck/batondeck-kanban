@@ -64,7 +64,7 @@ func TestAuditCuratesThePayload(t *testing.T) {
 	}
 	d, _ = DescribeAudit("update_settings", map[string]any{
 		"projectId": "P-1", "reviewEnabled": false, "retryPolicy": map[string]any{"poisonAfterAttempts": 3},
-		"transitionTable": map[string]any{"BACKLOG": []string{"DONE"}}, "color": "#fff",
+		"transitionTable": map[string]any{"TODO": []string{"DONE"}}, "color": "#fff",
 	})
 	want := map[string]any{"reviewEnabled": false, "retryPolicy": map[string]any{"poisonAfterAttempts": 3}}
 	if d.Action != "settings.updated" || !reflect.DeepEqual(d.Data, want) {

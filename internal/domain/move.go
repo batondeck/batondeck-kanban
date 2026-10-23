@@ -122,7 +122,7 @@ func DecideMove(req MoveRequest) (MoveDecision, error) {
 			break
 		}
 	}
-	wantsWork := target.Status == Ready || target.Status == InProgress
+	wantsWork := target.Status == Todo || target.Status == InProgress
 	d := MoveDecision{ColumnID: target.ColumnID, Status: target.Status, Order: req.Order}
 	if blockedColumnID != "" && wantsWork && req.FromStatus != target.Status && req.OpenBlockers > 0 {
 		d.ColumnID, d.Status, d.RedirectedToBlocked = blockedColumnID, Blocked, true

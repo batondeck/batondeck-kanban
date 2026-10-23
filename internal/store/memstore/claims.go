@@ -153,7 +153,7 @@ func (s *Store) ClaimTask(ctx context.Context, projectID, taskID string, expecte
 		if live(t.Claim, in.Now) && !mine {
 			return store.Task{}, domain.ConflictLocked(taskID, t.Claim.Owner)
 		}
-		reclaimable := t.Status == domain.Ready || (t.Status == domain.InProgress && (!live(t.Claim, in.Now) || mine))
+		reclaimable := t.Status == domain.Todo || (t.Status == domain.InProgress && (!live(t.Claim, in.Now) || mine))
 		if !reclaimable {
 			return store.Task{}, domain.InvalidTransition(t.Status, domain.InProgress, nil, nil)
 		}

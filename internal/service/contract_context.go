@@ -48,7 +48,7 @@ type Context interface {
 	// AddSubtask is add_subtask.
 	// Tier: master. Creates the child with parentTaskId in the board's first column; adds no edge and
 	// leaves the parent as it is. Event: task.created (the child, in the board's first column). Audit:
-	// none. Doorbell: broadcast only if that column is READY. Replays on idempotencyKey.
+	// none. Doorbell: broadcast only if that column is TODO. Replays on idempotencyKey.
 	AddSubtask(ctx context.Context, caller domain.Caller, req AddSubtaskReq) (AddSubtaskResp, error)
 
 	// ListSubtasks is list_subtasks.

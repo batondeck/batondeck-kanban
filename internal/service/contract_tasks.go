@@ -9,8 +9,8 @@ import (
 // Tasks is the task CRUD, move and delete service.
 type Tasks interface {
 	// Create is create_task.
-	// Tier: master. Event: task.created. Audit: none. Doorbell: broadcast when the task lands READY
-	// (it has no assignee on create). Replays on idempotencyKey.
+	// Tier: master. Event: task.created. Audit: none. Doorbell: broadcast (it lands TODO, ADR-0005, with
+	// no assignee on create). Replays on idempotencyKey.
 	Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error)
 
 	// Get is get_task.
@@ -19,14 +19,14 @@ type Tasks interface {
 
 	// Update is update_task.
 	// Tier: master; version-checked (STALE). Event: task.updated. Audit: none. Doorbell: assigned when
-	// the patch gives the task a new assignee; broadcast when it clears the assignee of a READY task.
+	// the patch gives the task a new assignee; broadcast when it clears the assignee of a TODO task.
 	Update(ctx context.Context, caller domain.Caller, req UpdateTaskReq) (UpdateTaskResp, error)
 
 	// Move is move_task.
 	// Tier: master; version-checked (STALE), the fixed table (INVALID_TRANSITION), the WIP limit
 	// (WIP_EXCEEDED), another identity's live lease (CONFLICT_LOCKED). Event: task.moved, plus
 	// task.dependency_cleared on each dependent a move to DONE unblocks. Audit: none. Doorbell: broadcast for
-	// every task that lands READY with no assignee (the moved one and the unblocked dependents), and
+	// every task that lands TODO with no assignee (the moved one and the unblocked dependents), and
 	// assigned to the assignee of each unblocked dependent that has one.
 	Move(ctx context.Context, caller domain.Caller, req MoveTaskReq) (MoveTaskResp, error)
 

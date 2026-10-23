@@ -30,7 +30,7 @@ func sqliteBoardStore(t *testing.T) (Store, boardTasks) {
 	return s, func(t *testing.T, projectID, boardID, columnID, taskID string) {
 		t.Helper()
 		if _, err := db.Exec(`INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at)
-			VALUES (?, ?, ?, ?, 't', 'BACKLOG', 'a0', 'u', 1, 'u', 1)`, projectID, taskID, boardID, columnID); err != nil {
+			VALUES (?, ?, ?, ?, 't', 'TODO', 'a0', 'u', 1, 'u', 1)`, projectID, taskID, boardID, columnID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -56,7 +56,7 @@ func postgresBoardStore(t *testing.T) (Store, boardTasks) {
 	return s, func(t *testing.T, projectID, boardID, columnID, taskID string) {
 		t.Helper()
 		if _, err := c.Exec(ctx, `INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at)
-			VALUES ($1, $2, $3, $4, 't', 'BACKLOG', 'a0', 'u', 1, 'u', 1)`, projectID, taskID, boardID, columnID); err != nil {
+			VALUES ($1, $2, $3, $4, 't', 'TODO', 'a0', 'u', 1, 'u', 1)`, projectID, taskID, boardID, columnID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -87,10 +87,10 @@ func boardsWithTasks(t *testing.T, s Store, addTask boardTasks) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backlog, ready := b.Columns[0].ID, b.Columns[1].ID
-	addTask(t, p.ID, b.ID, backlog, "T-1")
-	addTask(t, p.ID, b.ID, backlog, "T-2")
-	addTask(t, p.ID, b.ID, ready, "T-3")
+	todo, doing := b.Columns[0].ID, b.Columns[1].ID
+	addTask(t, p.ID, b.ID, todo, "T-1")
+	addTask(t, p.ID, b.ID, todo, "T-2")
+	addTask(t, p.ID, b.ID, doing, "T-3")
 	addTask(t, p.ID, b2.ID, b2.Columns[0].ID, "T-4")
 	addTask(t, other.ID, ob.ID, ob.Columns[0].ID, "T-1")
 
@@ -103,7 +103,7 @@ func boardsWithTasks(t *testing.T, s Store, addTask boardTasks) {
 		t.Fatalf("GetBoard issued %d statements, want at most 2", got)
 	}
 	t.Logf("GetBoard issued %d statements", n.Load())
-	want := map[string]int64{backlog: 2, ready: 1}
+	want := map[string]int64{todo: 2, doing: 1}
 	if len(counts) != len(board.Columns) {
 		t.Fatalf("counts %v for %d columns", counts, len(board.Columns))
 	}
@@ -113,13 +113,13 @@ func boardsWithTasks(t *testing.T, s Store, addTask boardTasks) {
 		}
 	}
 
-	_, err = s.RemoveColumn(ctx, p.ID, b.ID, ready)
+	_, err = s.RemoveColumn(ctx, p.ID, b.ID, doing)
 	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation {
 		t.Fatalf("removing a column holding a task: %v, want VALIDATION", err)
 	}
 	after, _, err := s.GetBoard(ctx, p.ID, b.ID)
-	if err != nil || len(after.Columns) != 6 {
-		t.Fatalf("after the refused removal %d columns, %v: want 6", len(after.Columns), err)
+	if err != nil || len(after.Columns) != 5 {
+		t.Fatalf("after the refused removal %d columns, %v: want 5", len(after.Columns), err)
 	}
 	// Positive control: the empty column next to it goes.
 	if _, err := s.RemoveColumn(ctx, p.ID, b.ID, b.Columns[2].ID); err != nil {

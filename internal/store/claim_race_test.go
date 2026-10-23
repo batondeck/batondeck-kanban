@@ -16,7 +16,7 @@ import (
 // raceClock is the time the claims here are judged at.
 const raceClock int64 = 1_700_000_000_000
 
-// raceBoard is a project with one board of the default columns and n READY tasks on it.
+// raceBoard is a project with one board of the default columns and n TODO tasks on it.
 func raceBoard(t *testing.T, s Store, n int) (FrontierQuery, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -34,8 +34,8 @@ func raceBoard(t *testing.T, s Store, n int) (FrontierQuery, string) {
 	}
 	for i := range n {
 		if _, err := s.CreateTask(ctx, CreateTaskInput{
-			ProjectID: p.ID, BoardID: b.ID, ColumnID: col[domain.Ready], Title: fmt.Sprint("task ", i),
-			Status: domain.Ready, OrderKey: "a0", CreatedBy: "alice", CreatedAt: raceClock,
+			ProjectID: p.ID, BoardID: b.ID, ColumnID: col[domain.Todo], Title: fmt.Sprint("task ", i),
+			Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: raceClock,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func openPostgresStore(t *testing.T) Store {
 }
 
 // claimRace runs one ClaimNext per caller, at once, each through stores[i % len(stores)], over a
-// board of as many READY tasks: every caller must win, and no two win the same task.
+// board of as many TODO tasks: every caller must win, and no two win the same task.
 func claimRace(t *testing.T, stores []Store, q FrontierQuery, inProgress string) {
 	const callers = 50
 	ctx := context.Background()
@@ -123,7 +123,7 @@ func claimRace(t *testing.T, stores []Store, q FrontierQuery, inProgress string)
 }
 
 // TestClaimRace is the plan's two-callers-one-winner at the Store: 50 goroutines × ClaimNext on a
-// board of 50 READY tasks, 50 distinct winners, no error (no SQLITE_BUSY, no duplicate). On SQLite
+// board of 50 TODO tasks, 50 distinct winners, no error (no SQLITE_BUSY, no duplicate). On SQLite
 // the callers are spread over five stores on one file, five processes' worth of write connections,
 // so the statement's own write lock is what keeps them apart, not one connection's queue.
 func TestClaimRace(t *testing.T) {

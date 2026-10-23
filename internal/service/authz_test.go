@@ -208,8 +208,8 @@ func TestAuthorizeTaskGrantIsCheckedInMutate(t *testing.T) {
 		return domain.CapabilityGrant{Labels: []string{"frontend"}}, identity == "mona", nil
 	}})
 	mona := f.member(t, "mona", domain.RoleMaster)
-	plain := f.task(t, domain.Backlog, nil)
-	labelled := f.task(t, domain.Backlog, nil)
+	plain := f.task(t, domain.Done, nil)
+	labelled := f.task(t, domain.Done, nil)
 	if _, err := f.st.UpdateTask(f.ctx, f.project.ID, labelled.ID, labelled.Version, store.TaskPatch{Labels: &[]string{"frontend"}, UpdatedBy: "alice", UpdatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}

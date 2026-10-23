@@ -6,36 +6,35 @@ package domain
 
 import "fmt"
 
-// Status is a ticket's workflow state. There are six; CANCELLED and DEAD_LETTER do not exist here
-// (plan §Ticket states: CANCELLED is a hard delete, DEAD_LETTER is BLOCKED with reason "poison").
+// Status is a ticket's workflow state. There are five (ADR-0005: no created task is a
+// draft, so every one lands TODO); CANCELLED and DEAD_LETTER do not exist here (plan §Ticket
+// states: CANCELLED is a hard delete, DEAD_LETTER is BLOCKED with reason "poison").
 type Status string
 
 const (
-	Backlog    Status = "BACKLOG"
-	Ready      Status = "READY"
+	Todo       Status = "TODO"
 	InProgress Status = "IN_PROGRESS"
 	Blocked    Status = "BLOCKED"
 	Review     Status = "REVIEW"
 	Done       Status = "DONE"
 )
 
-// AllStatuses returns the six statuses in workflow order.
+// AllStatuses returns the five statuses in workflow order.
 func AllStatuses() []Status {
-	return []Status{Backlog, Ready, InProgress, Blocked, Review, Done}
+	return []Status{Todo, InProgress, Blocked, Review, Done}
 }
 
 // fixedTransitions is the transition table: closed (every status has an entry) and not editable.
 // The order of each list is the order guidance reports and the tie-break ShortestPath takes.
 var fixedTransitions = map[Status][]Status{
-	Backlog:    {Ready},
-	Ready:      {InProgress, Backlog},
-	InProgress: {Review, Blocked, Ready},
-	Blocked:    {InProgress, Ready},
+	Todo:       {InProgress},
+	InProgress: {Review, Blocked, Todo},
+	Blocked:    {InProgress, Todo},
 	Review:     {Done, InProgress},
 	Done:       {InProgress},
 }
 
-// ParseStatus accepts exactly the six statuses; anything else is VALIDATION.
+// ParseStatus accepts exactly the five statuses; anything else is VALIDATION.
 func ParseStatus(s string) (Status, error) {
 	if _, ok := fixedTransitions[Status(s)]; ok {
 		return Status(s), nil

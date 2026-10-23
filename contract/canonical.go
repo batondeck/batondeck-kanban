@@ -395,11 +395,19 @@ func Marshal(v any) ([]byte, error) {
 
 // Deltas are every departure from conductor's surface, each one a reviewable line.
 type Deltas struct {
-	RemovedTools      []string    `json:"removedTools"`
-	RemovedProps      []string    `json:"removedProps"`
-	RemovedEnumValues []string    `json:"removedEnumValues"`
-	AddedTools        []RawTool   `json:"addedTools"`
-	AddedProps        []AddedProp `json:"addedProps"`
+	RemovedTools      []string      `json:"removedTools"`
+	RemovedProps      []string      `json:"removedProps"`
+	RemovedEnumValues []string      `json:"removedEnumValues"`
+	RenamedEnumValues []RenamedEnum `json:"renamedEnumValues"`
+	AddedTools        []RawTool     `json:"addedTools"`
+	AddedProps        []AddedProp   `json:"addedProps"`
+}
+
+// RenamedEnum renames the enum value at Pointer (…/enum/<value>) to To, keeping the enum's place
+// in the schema: ADR-0005's TODO for conductor's claimable state.
+type RenamedEnum struct {
+	Pointer string `json:"pointer"`
+	To      string `json:"to"`
 }
 
 // RawTool is a tool as JSON Schema, the shape of tools.json's entries and of deltas' additions.
@@ -443,8 +451,8 @@ func (s Surface) add(t RawTool) error {
 	return nil
 }
 
-// Apply subtracts d from s in place: removed tools, removed properties, removed enum values, then
-// added tools and added properties. Every entry must hit something: a removal of what is not there,
+// Apply subtracts d from s in place: removed tools, removed properties, removed enum values, renamed
+// enum values, then added tools and added properties. Every entry must hit something: a removal of what is not there,
 // or an addition of what already is, is an error, so a stale delta cannot hide in the file.
 func Apply(s Surface, d Deltas) error {
 	for _, name := range d.RemovedTools {
@@ -485,6 +493,26 @@ func Apply(s Surface, d Deltas) error {
 		if len(n.Enum) == 0 {
 			return fmt.Errorf("removedEnumValues: %s empties the enum", p)
 		}
+	}
+	for _, r := range d.RenamedEnumValues {
+		i := strings.LastIndex(r.Pointer, "/enum/")
+		if i < 0 {
+			return fmt.Errorf("renamedEnumValues: %s does not end in /enum/<value>", r.Pointer)
+		}
+		n, err := s.resolve(r.Pointer[:i])
+		if err != nil {
+			return fmt.Errorf("renamedEnumValues: %w", err)
+		}
+		value := unescape(r.Pointer[i+len("/enum/"):])
+		at := slices.IndexFunc(n.Enum, func(v any) bool { return enumSegment(v) == value })
+		if at < 0 {
+			return fmt.Errorf("renamedEnumValues: %s is not in the surface", r.Pointer)
+		}
+		if slices.ContainsFunc(n.Enum, func(v any) bool { return enumSegment(v) == r.To }) {
+			return fmt.Errorf("renamedEnumValues: %s is already in the enum at %s", r.To, r.Pointer[:i])
+		}
+		n.Enum[at] = r.To
+		n.Enum = sortedValues(n.Enum)
 	}
 	for _, t := range d.AddedTools {
 		if err := s.add(t); err != nil {

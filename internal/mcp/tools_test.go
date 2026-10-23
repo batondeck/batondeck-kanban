@@ -102,7 +102,7 @@ func sampleBoard() service.Board {
 	return service.Board{
 		ID: "B-1", Name: "Main", ProjectID: "P-1", Transitions: fixedTable(),
 		Columns: []service.Column{
-			{ID: "C-1", Name: "Ready", Order: 0, Status: domain.Ready, WIPLimit: &wip},
+			{ID: "C-1", Name: "Ready", Order: 0, Status: domain.Todo, WIPLimit: &wip},
 			{ID: "C-2", Name: "Done", Order: 1, Status: domain.Done},
 		},
 	}
@@ -156,8 +156,8 @@ func projectsBoardsCases() []toolCase {
 			want: service.RemoveMemberReq{ProjectID: "P-1", IdentityID: "u-grace"},
 			resp: service.RemoveMemberResp{Ok: true}},
 		{tool: "create_board", method: "Boards.Create", trigger: "projectId",
-			args: map[string]any{"projectId": "P-1", "name": "Main", "columns": []any{map[string]any{"name": "Ready", "status": "READY", "wipLimit": 3}}},
-			want: service.CreateBoardReq{ProjectID: "P-1", Name: "Main", Columns: []service.ColumnSpec{{Name: "Ready", Status: domain.Ready, WIPLimit: &one}}},
+			args: map[string]any{"projectId": "P-1", "name": "Main", "columns": []any{map[string]any{"name": "Ready", "status": "TODO", "wipLimit": 3}}},
+			want: service.CreateBoardReq{ProjectID: "P-1", Name: "Main", Columns: []service.ColumnSpec{{Name: "Ready", Status: domain.Todo, WIPLimit: &one}}},
 			resp: service.CreateBoardResp{Board: sampleBoard()}},
 		{tool: "list_boards", method: "Boards.List", trigger: "projectId",
 			args: map[string]any{"projectId": "P-1"},
@@ -292,13 +292,13 @@ func TestArgumentFailuresAreValidation(t *testing.T) {
 	}
 	t.Run("open_object_keeps_extras", func(t *testing.T) {
 		f.Reset()
-		args := map[string]any{"projectId": "P-1", "name": "Main", "columns": []any{map[string]any{"name": "Ready", "status": "READY", "colour": "red"}}}
+		args := map[string]any{"projectId": "P-1", "name": "Main", "columns": []any{map[string]any{"name": "Ready", "status": "TODO", "colour": "red"}}}
 		res, err := cs.CallTool(testCtx(t), &sdk.CallToolParams{Name: "create_board", Arguments: args})
 		if err != nil || res.IsError {
 			t.Fatalf("create_board with an extra key in an open columns[] item: %+v, %v", res, err)
 		}
 		got := callsOf(f, "Boards.Create")
-		want := service.CreateBoardReq{ProjectID: "P-1", Name: "Main", Columns: []service.ColumnSpec{{Name: "Ready", Status: domain.Ready}}}
+		want := service.CreateBoardReq{ProjectID: "P-1", Name: "Main", Columns: []service.ColumnSpec{{Name: "Ready", Status: domain.Todo}}}
 		if len(got) != 1 || !reflect.DeepEqual(got[0].Req, want) {
 			t.Errorf("create_board reached the service as %+v, want %+v", got, want)
 		}

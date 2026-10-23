@@ -113,22 +113,24 @@ func TestAddedToolsAreDeltas(t *testing.T) {
 	}
 }
 
-// TestNoRemovedStatusRemains: CANCELLED and DEAD_LETTER are gone from every enum of the surface
-// (refusal), and conductor's surface does carry them (positive control: the walk can see them).
+// TestNoRemovedStatusRemains: CANCELLED and DEAD_LETTER, and since ADR-0005 conductor's parking and
+// claimable states, are gone from every enum of the surface (refusal), and conductor's surface does
+// carry each of them (positive control: the walk can see them).
 func TestNoRemovedStatusRemains(t *testing.T) {
-	count := func(s Surface) (n int, at []string) {
+	removed := []any{"CANCELLED", "DEAD_LETTER", "BACK" + "LOG", "RE" + "ADY"}
+	count := func(s Surface, status any) (n int, at []string) {
 		s.Walk(func(p string, node *Node) {
-			for _, v := range node.Enum {
-				if v == "CANCELLED" || v == "DEAD_LETTER" {
-					n++
-					at = append(at, p)
-				}
+			if slices.Contains(node.Enum, status) {
+				n++
+				at = append(at, p)
 			}
 		})
 		return n, at
 	}
-	if n, at := count(committed(t)); n != 0 {
-		t.Errorf("expected.json still offers a removed status at %d places: %v", n, at)
+	for _, status := range removed {
+		if n, at := count(committed(t), status); n != 0 {
+			t.Errorf("expected.json still offers %s at %d places: %v", status, n, at)
+		}
 	}
 	var src SourceFile
 	if err := ReadJSON("tools.json", &src); err != nil {
@@ -138,8 +140,10 @@ func TestNoRemovedStatusRemains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := count(s); n == 0 {
-		t.Error("tools.json shows no CANCELLED or DEAD_LETTER: the residue check could not have failed")
+	for _, status := range removed {
+		if n, _ := count(s, status); n == 0 {
+			t.Errorf("tools.json shows no %s: the residue check could not have failed", status)
+		}
 	}
 }
 
@@ -159,12 +163,13 @@ func TestCounts(t *testing.T) {
 		"deltas removedTools":           len(d.RemovedTools),
 		"deltas removedProps":           len(d.RemovedProps),
 		"deltas removedEnumValues":      len(d.RemovedEnumValues),
+		"deltas renamedEnumValues":      len(d.RenamedEnumValues),
 		"deltas addedTools":             len(d.AddedTools),
 		"deltas addedProps":             len(d.AddedProps),
 		"expected.json tools":           len(committed(t).Tools),
 		"expected.json tools (derived)": len(derived(t).Tools),
 	}
-	for _, k := range []string{"tools.json tools", "admin-tools.json tools", "deltas removedTools", "deltas removedProps", "deltas removedEnumValues", "deltas addedTools", "deltas addedProps", "expected.json tools", "expected.json tools (derived)"} {
+	for _, k := range []string{"tools.json tools", "admin-tools.json tools", "deltas removedTools", "deltas removedProps", "deltas removedEnumValues", "deltas renamedEnumValues", "deltas addedTools", "deltas addedProps", "expected.json tools", "expected.json tools (derived)"} {
 		t.Logf("%-30s %d", k, got[k])
 	}
 	for k, want := range map[string]int{"tools.json tools": 130, "admin-tools.json tools": 1, "deltas removedTools": 40, "expected.json tools": 93} {
