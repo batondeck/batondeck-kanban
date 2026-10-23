@@ -1,0 +1,200 @@
+{
+  "_comment": "The REST BFF's route table (R1.11): conductor gateway/ui-backend/src/app.ts's in-scope board-area routes at 5e2baafa, as Go ServeMux patterns, with the line each comes from. Out of this table by decision: the transitions pair (the table is fixed, plan Ticket states), the cli-token and me routes (ADR-0004), and comments, follow-ups, sprints, runs, notifications and the overview (R1.12). internal/api/routes_test.go fails when the mounted table and this file differ.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/public-config",
+      "source": "app.ts:2121"
+    },
+    {
+      "method": "POST",
+      "path": "/api/login",
+      "source": "new: R0.12's form login (ui-backend signed in through WorkOS)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/session",
+      "source": "app.ts:2221"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects",
+      "source": "app.ts:2674"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects",
+      "source": "app.ts:2675"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}",
+      "source": "app.ts:2676"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/members",
+      "source": "app.ts:2677"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/projects/{projectId}/members/{identityId}",
+      "source": "app.ts:2682"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/projects/{projectId}/settings",
+      "source": "app.ts:2689"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/boards",
+      "source": "app.ts:2739"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/boards",
+      "source": "app.ts:2740"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/boards/{boardId}",
+      "source": "app.ts:2743"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/boards/{boardId}/columns",
+      "source": "app.ts:2752"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/projects/{projectId}/boards/{boardId}/columns/{columnId}",
+      "source": "app.ts:2755"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/projects/{projectId}/boards/{boardId}/columns/{columnId}",
+      "source": "app.ts:2765"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/boards/{boardId}/tasks",
+      "source": "app.ts:2775"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/boards/{boardId}/tasks",
+      "source": "app.ts:2786"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}",
+      "source": "app.ts:2790"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/projects/{projectId}/tasks/{taskId}",
+      "source": "app.ts:2796"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/move",
+      "source": "app.ts:2799"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/claim",
+      "source": "app.ts:2802"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/release",
+      "source": "app.ts:3188"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/complete",
+      "source": "app.ts:3191"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/block",
+      "source": "app.ts:3194"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/handoff",
+      "source": "app.ts:3197"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/context",
+      "source": "app.ts:2793"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/context-items",
+      "source": "app.ts:2805"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/summary",
+      "source": "app.ts:3200"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/subtasks",
+      "source": "app.ts:3205"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/subtasks",
+      "source": "app.ts:3208"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/memory",
+      "source": "app.ts:3211"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/memory",
+      "source": "app.ts:3214"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/dependencies",
+      "source": "app.ts:3225"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/projects/{projectId}/dependencies/{edgeId}",
+      "source": "app.ts:3229"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/attachments",
+      "source": "app.ts:3217"
+    },
+    {
+      "method": "POST",
+      "path": "/api/projects/{projectId}/tasks/{taskId}/attachments",
+      "source": "app.ts:3220"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/search",
+      "source": "app.ts:2823"
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects/{projectId}/boards/{boardId}/feed",
+      "source": "app.ts:3267"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stream",
+      "source": "app.ts:3540"
+    }
+  ]
+}
