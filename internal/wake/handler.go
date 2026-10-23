@@ -15,9 +15,10 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
-// buffer is a stream's bus subscription buffer. A stream whose subscription drops a change ends
-// (": dropped") so that the client reconnects from its cursor and replays what it missed.
-const buffer = 256
+// Buffer is a stream's bus subscription buffer. A stream whose subscription drops a change ends
+// with ": dropped", naming the cursor to reconnect with when it knows one, so that the client
+// replays what it missed.
+const Buffer = 256
 
 // Options builds the /wake handler.
 type Options struct {
@@ -27,10 +28,11 @@ type Options struct {
 	// once per connection.
 	Scopes func(ctx context.Context, caller domain.Caller) ([]string, error)
 	Logger *log.Logger
-	// Keepalive, Quiet and MaxHold default to the package constants; tests shorten them.
+	// Keepalive, Quiet, MaxHold and Buffer default to the package constants; tests change them.
 	Keepalive time.Duration
 	Quiet     time.Duration
 	MaxHold   time.Duration
+	Buffer    int
 }
 
 // Handler is GET /wake[?since=<cursor>]. The bearer is required; since, when given, is a
@@ -44,6 +46,9 @@ func Handler(o Options) http.Handler {
 	}
 	if o.MaxHold <= 0 {
 		o.MaxHold = MaxHold
+	}
+	if o.Buffer <= 0 {
+		o.Buffer = Buffer
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o.serve(w, r) })
 }
@@ -71,7 +76,7 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Subscribe before replaying, so that nothing committed meanwhile falls between the two.
-	sub, err := o.Bus.Subscribe(ctx, scopes, buffer)
+	sub, err := o.Bus.Subscribe(ctx, scopes, o.Buffer)
 	if err != nil {
 		if errors.Is(err, bus.ErrClosed) {
 			auth.WriteError(w, http.StatusServiceUnavailable, domain.CodeInternal, "the server is stopping")

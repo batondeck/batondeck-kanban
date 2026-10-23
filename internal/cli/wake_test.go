@@ -32,6 +32,8 @@ import (
 type countedSQLite struct {
 	*store.SQLite
 	reads atomic.Int64
+	// beforeReplay, when set, runs once before the first ReadChangesForScope (bus.Replay's read).
+	beforeReplay atomic.Pointer[func()]
 }
 
 func (c *countedSQLite) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
@@ -41,6 +43,9 @@ func (c *countedSQLite) ReadChanges(ctx context.Context, since int64, limit int)
 
 func (c *countedSQLite) ReadChangesForScope(ctx context.Context, scope string, since int64, limit int) ([]store.Change, error) {
 	c.reads.Add(1)
+	if f := c.beforeReplay.Swap(nil); f != nil {
+		(*f)()
+	}
 	return c.SQLite.ReadChangesForScope(ctx, scope, since, limit)
 }
 
@@ -505,5 +510,127 @@ func TestOpenKeyringChain(t *testing.T) {
 	env := func(n string) (string, bool) { return key, n == core.MasterKeyEnv }
 	if k, err := openKeyring(pg, "", env, logger); err != nil || k == nil {
 		t.Fatalf("postgres with %s: %v %v", core.MasterKeyEnv, k, err)
+	}
+}
+
+// serveHandler serves h on a fresh TCP listener and returns its host:port.
+func serveHandler(t *testing.T, h http.Handler) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: h}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return ln.Addr().String()
+}
+
+// A stream whose subscription overflows ends with ": dropped", naming a cursor from which a replay
+// recovers every doorbell it had not written; a stream with nothing written yet past its since names
+// that since.
+func TestWakeDroppedStreamNamesASafeCursor(t *testing.T) {
+	ctx := context.Background()
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
+		Logger: log.New(io.Discard, "", 0), Buffer: 1, Quiet: 20 * time.Millisecond,
+		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
+	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
+	w := s.open(t, "?since=0")
+	first := s.ring(t, "U-1", "assigned", "U-1", "T-0")
+	if f := w.frame(t, time.Second); f.Cursor != first {
+		t.Fatalf("frame %+v, want cursor %d", f, first)
+	}
+	time.Sleep(50 * time.Millisecond) // the stream's next turn records first as written
+	var ids []int64
+	if err := st.Atomically(ctx, func(tx store.Store) error {
+		for i := range 50 {
+			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": "U-1", "taskId": fmt.Sprintf("T-%d", i+1), "projectId": "P-1", "boardId": "B-1"})
+			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: "U-1", ProjectID: "P-1", Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ev event
+	for ev = w.next(t, 2*time.Second); ev.frame != nil; ev = w.next(t, 2*time.Second) {
+	}
+	want := fmt.Sprintf("dropped, reconnect with since=%d", first)
+	if ev.comment != want {
+		t.Fatalf("last event %+v, want the comment %q", ev, want)
+	}
+	if _, open := <-w.events; open {
+		t.Fatal("the stream went on after the dropped comment")
+	}
+	w = s.open(t, fmt.Sprintf("?since=%d", first))
+	for _, id := range ids {
+		if f := w.frame(t, time.Second); f.Cursor != id {
+			t.Fatalf("replay after the drop: %+v, want cursor %d", f, id)
+		}
+	}
+}
+
+// A change committed between the stream's Subscribe and its Replay arrives both ways (the live
+// subscription and the replay) and is written once.
+func TestWakeReplayAndLiveOverlapWritesOnce(t *testing.T) {
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}},
+		Logger: log.New(io.Discard, "", 0), Quiet: 20 * time.Millisecond,
+		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
+	s := &wakeServer{st: st, tcp: serveHandler(t, h), token: "t", project: "P-1"}
+	before := s.ring(t, "U-1", "assigned", "U-1", "T-before")
+	var overlap atomic.Int64
+	hook := func() {
+		// Subscribed already: this commit reaches the subscription, and the replay reads it.
+		overlap.Store(s.ring(t, "U-1", "assigned", "U-1", "T-overlap"))
+		time.Sleep(100 * time.Millisecond) // the bus tail delivers it to the subscription meanwhile
+	}
+	st.beforeReplay.Store(&hook)
+	w := s.open(t, fmt.Sprintf("?since=%d", before-1))
+	got := []int64{w.frame(t, time.Second).Cursor, w.frame(t, time.Second).Cursor}
+	if got[0] != before || got[1] != overlap.Load() {
+		t.Fatalf("frames %v, want [%d %d]", got, before, overlap.Load())
+	}
+	w.none(t, 300*time.Millisecond)
+}
+
+// /wake answers 503 while the bus is closed and 500 when the caller's scopes cannot be read.
+func TestWakeRefusesWhenItCannotSubscribe(t *testing.T) {
+	st := storetest.SQLite(t)
+	resolver := authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}}
+	closed := bus.New(st, bus.Options{})
+	closed.Close()
+	scopes := func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }
+	failing := func(context.Context, domain.Caller) ([]string, error) { return nil, fmt.Errorf("store down") }
+	open := bus.New(st, bus.Options{})
+	t.Cleanup(open.Close)
+	for _, tc := range []struct {
+		name   string
+		o      wake.Options
+		status int
+	}{
+		{"closed bus", wake.Options{Bus: closed, Scopes: scopes}, http.StatusServiceUnavailable},
+		{"scopes fail", wake.Options{Bus: open, Scopes: failing}, http.StatusInternalServerError},
+	} {
+		tc.o.Resolver, tc.o.Logger = resolver, log.New(io.Discard, "", 0)
+		addr := serveHandler(t, wake.Handler(tc.o))
+		req, _ := http.NewRequest(http.MethodGet, "http://"+addr+"/wake", nil)
+		req.Header.Set("Authorization", "Bearer t")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.status {
+			t.Fatalf("%s: %d, want %d", tc.name, resp.StatusCode, tc.status)
+		}
 	}
 }
