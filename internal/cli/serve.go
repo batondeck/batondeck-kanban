@@ -200,6 +200,27 @@ var wakeRegistry = func() string {
 	return filepath.Join(home, ".claude", "sessions")
 }
 
+// snapshotTapBuffer is the board snapshot cache's bus.Tap buffer: a change it drops clears every
+// snapshot.
+const snapshotTapBuffer = 1024
+
+// feedSnapshots hands every change the bus delivers to the board snapshot cache
+// (Core.ObserveChange, ADR-0004) until the tap closes with the bus, then turns the cache off. A change
+// the tap dropped clears every snapshot, since which board it named is unknown. It reads only the
+// tap: no statement, no poll.
+func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) {
+	defer sc.ResetSnapshots(false)
+	var dropped int64
+	for c := range tap.C() {
+		sc.ObserveChange(c)
+		if n := tap.Dropped(); n > dropped {
+			logger.Printf("serve: the board snapshot cache's tap dropped %d change(s); clearing every snapshot", n-dropped)
+			dropped = n
+			sc.ResetSnapshots(true)
+		}
+	}
+}
+
 // runServer serves the app over st on every listener until ctx ends or one fails.
 func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) error {
 	a, err := compose(st, version, publicURL, logger, sealer, media)
@@ -212,12 +233,20 @@ func runServer(ctx context.Context, lns []net.Listener, st store.Store, version,
 // serveUntil serves one handler on every listener until ctx ends or one fails, then stops in
 // order: the MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
 // deadline; a handler still running at the deadline is cancelled), the bus (which stops the
-// session directory's dispatcher), the HTTP server, and the tool-call flush. It returns the first
+// session directory's dispatcher and the board snapshot cache's feed), the HTTP server, and the
+// tool-call flush. The cache's feed is the bus's second tap, so it adds no statement. It returns the first
 // failure, naming the step.
 func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string, logger *log.Logger) error {
 	if err := a.dir.Start(ctx); err != nil {
 		return fmt.Errorf("starting the session directory: %w", err)
 	}
+	snaps, err := a.bus.Tap(ctx, snapshotTapBuffer)
+	if err != nil {
+		a.bus.Close()
+		return fmt.Errorf("subscribing the board snapshot cache to the bus: %w", err)
+	}
+	a.core.ResetSnapshots(true)
+	go feedSnapshots(snaps, a.core, logger)
 	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
