@@ -18,10 +18,16 @@ Notable changes to batondeck-kanban. The format follows
   from the log through `bus.Replay`, oldest first and uncoalesced, before the stream goes live; live
   doorbells of one kind are one frame carrying the highest cursor once that kind has been quiet for
   300 ms (the bus's 250 ms read interval plus 50 ms), at most 1 s after the first, so five doorbells
-  in 4 ms are one frame. Comments: `: ok` when subscribed, `: keepalive` every 20 s, and `: dropped,
-  reconnect with since=<cursor>` before ending a stream whose subscription overflowed. Measured on
-  the real binary over Postgres: a row's frame 294 ms after its commit; an idle stream issued 0
-  statements in 45 s (`log_statement=all`).
+  in 4 ms are one frame. Every 60 s an open stream re-resolves its bearer and re-reads its scopes:
+  a revoked or expired token or a disabled user ends it with `: reauthenticate`, a changed
+  membership with `: scopes changed, reconnect with since=<cursor>`, and a recheck that cannot read
+  either with `: recheck failed, …`; a disabled user's stream therefore ends within 60 s of the
+  account cache expiring (at most 120 s after `user disable`). Comments: `: ok` when subscribed,
+  `: keepalive` every 20 s, and `: dropped, reconnect with since=<cursor>` before ending a stream
+  whose subscription overflowed. Cost: at most 3 statements per open stream per 60 s (GetToken,
+  GetUser unless the account cache is fresh, ListProjects; `TestWakeRecheckKeepsAValidStreamAtThreeStatements`)
+  and 0 in between. Measured on the real binary over Postgres: a row's frame 294 ms after its
+  commit; an idle stream issued 0 statements in 45 s (`log_statement=all`).
   `listen` is now a list of `tcp://host:port` and `unix:///abs/path` entries (default
   `["tcp://127.0.0.1:8080"]`; `BATONDECK_LISTEN` comma-separated; anything else is refused by name,
   `listen_entries_are_tcp_or_unix_urls`; the Dockerfile sets `tcp://:8080`), every entry serving the
@@ -31,7 +37,10 @@ Notable changes to batondeck-kanban. The format follows
   requirement at the version already linked): another uid is closed before HTTP reads it, and logged.
   `healthcheck` probes the first entry, a socket by its path.
   `POST /internal/wake-session {socket, token}` registers a Claude Code session inbox for the
-  bearer's identity (201 `{id, expiresAt}`); it is served only on a Unix socket and is 404 over TCP.
+  bearer's identity (201 `{id, expiresAt}`); it is served only on a Unix socket. Over TCP every
+  path under `/internal/` is 404 whatever its method, so the route answers there exactly as a
+  missing one does. A socket directory owned by another uid or writable by group or other is
+  refused by name.
   The inbox token is stored sealed with the keyring (`RegisterWakeSessionReq.SocketToken`,
   `service.Options.Sealer`, AAD `wake_sessions.socket_token:<id>`), never as given. The key chain:
   `BATONDECK_MASTER_KEY`, else `master.key` (generated 0600 on first run) beside the SQLite file,
