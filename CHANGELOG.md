@@ -46,8 +46,9 @@ Notable changes to batondeck-kanban. The format follows
   the master key; an upload signature does not download and a download signature does not upload.
   The routes sit outside every bearer, session and CSRF check; an expired, wrong-purpose or tampered
   signature is 403 with a log line naming the reason, a body over `blob.max_bytes` 413 (by
-  Content-Length and by bytes read, nothing left on disk), a second upload 409, a body not the
-  declared size 400. New config: `blob.dir` (`BATONDECK_BLOB_DIR`, default `blobs` beside the SQLite
+  Content-Length and by bytes read, nothing left on disk), a second upload 409, a second PUT while
+  one is still reading the same id's body 409, a body still arriving at the URL's expiry 403 (the
+  connection's read deadline is the expiry), a body not the declared size 400. New config: `blob.dir` (`BATONDECK_BLOB_DIR`, default `blobs` beside the SQLite
   file) and `blob.max_bytes` (`BATONDECK_BLOB_MAX_BYTES`, default 50 MiB). Without a keyring
   `attach_file` is INTERNAL and `downloadUrl` null, said once at boot. Both engines and memstore build
   the `Attachments` and `Blobs` store areas; delete_task's blob hook now removes each freed blob's row
