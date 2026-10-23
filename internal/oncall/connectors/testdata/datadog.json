@@ -1,0 +1,2 @@
+{"alert_id":7001234567,"event_type":"query_alert_monitor","transition":"Triggered","title":"[Triggered] Error rate high on checkout",
+ "body":"Error rate is 7.2% (threshold 5%)","severity":"P1","link":"https://app.datadoghq.com/monitors/7001234567","tags":"env:prod,service:checkout,team:payments","date":"2026-10-24T10:00:00Z"}

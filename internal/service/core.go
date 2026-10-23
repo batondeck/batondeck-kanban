@@ -11,6 +11,8 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/oncall"
+	"github.com/batondeck/batondeck-kanban/internal/oncall/auth"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -64,6 +66,9 @@ type Options struct {
 	BlobGC BlobGC
 	// Media is the blob store attach_file and list_attachments sign URLs into (media.go).
 	Media MediaOptions
+	// JWKSFetch is how a jwt-mode integration's key set is fetched (POST /hooks); nil is
+	// auth.SafeFetch, the SSRF-guarded https GET. A test stubs it.
+	JWKSFetch auth.Fetch
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -84,6 +89,11 @@ type Core struct {
 	blobGC  BlobGC
 	media   MediaOptions
 	devices atomic.Pointer[DeviceSessions]
+	// limiter is the per-integration ingest budget: POST /hooks, send_test_event and
+	// replay_delivery all draw on it (Core.ingest).
+	limiter *oncall.RateLimiter
+	// jwt verifies a jwt-mode integration's bearer, its JWKS cached per URL.
+	jwt *auth.Verifier
 }
 
 // SetDeviceSessions hands the core the device session directory, which internal/wake builds after
@@ -128,6 +138,8 @@ func New(st store.Store, o Options) *Core {
 	if c.now == nil {
 		c.now = time.Now
 	}
+	c.limiter = oncall.NewRateLimiter()
+	c.jwt = &auth.Verifier{Fetch: o.JWKSFetch, Logf: c.log.Printf, Now: c.now}
 	c.access = newAccessCache(orDefault(o.AccessTTL, DefaultAccessTTL))
 	c.boards = newSnapshotCache()
 	c.calls = newToolCalls(c, orDefault(o.ToolCallBatch, DefaultToolCallBatch), orDefault(o.ToolCallBuffer, DefaultToolCallBuffer), orDefault(o.ToolCallFlush, DefaultToolCallFlush))
