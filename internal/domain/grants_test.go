@@ -192,6 +192,11 @@ func TestPostureFoldedRows(t *testing.T) {
 	if got := land("fail_task", LandingFacts{}); !reflect.DeepEqual(got, []Status{Todo, Blocked}) {
 		t.Errorf("fail_task lands %v", got)
 	}
+	for _, tool := range []string{"create_task", "add_subtask"} { // ADR-0005: a created task lands TODO
+		if got := land(tool, LandingFacts{}); !reflect.DeepEqual(got, []Status{Todo}) {
+			t.Errorf("%s lands %v, want [TODO]", tool, got)
+		}
+	}
 	if got := land("delete_task", LandingFacts{}); len(got) != 0 {
 		t.Errorf("delete_task lands %v", got)
 	}

@@ -41,8 +41,14 @@ func fiveStatesSeed() []string {
 			('P-1', 'B-1', 'C-R', 'Ready', 1, '%[2]s', 4),
 			('P-1', 'B-1', 'C-I', 'In progress', 2, 'IN_PROGRESS', 2),
 			('P-1', 'B-1', 'C-D', 'Done', 3, 'DONE', NULL),
+			('P-1', 'B-1', 'C-R2', 'Next', 5, '%[2]s', NULL),
 			('P-1', 'B-2', 'C-X', 'Inbox', 0, '%[1]s', 7),
 			('P-1', 'B-2', 'C-Y', 'Backlog', 1, '%[1]s', NULL)`, b, r),
+		// A deleted task leaves a gap in rid, so a rebuild that renumbered rid would break the FTS5
+		// index; and B-1's second READY column (C-R2) pins the fold to the FIRST one.
+		fmt.Sprintf(`INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at) VALUES
+			('P-1', 'T-0', 'B-1', 'C-R', 'gone', '%[2]s', 'a0', 'u', 1, 'u', 1)`, b, r),
+		`DELETE FROM tasks WHERE id = 'T-0'`,
 		fmt.Sprintf(`INSERT INTO tasks (project_id, id, board_id, column_id, title, status, order_key, created_by, created_at, updated_by, updated_at) VALUES
 			('P-1', 'T-1', 'B-1', 'C-B', 'zorblat parked', '%[1]s', 'a0', 'u', 1, 'u', 1),
 			('P-1', 'T-2', 'B-1', 'C-R', 'next up', '%[2]s', 'a0', 'u', 1, 'u', 1),
@@ -79,7 +85,7 @@ func fiveStatesWant(down bool) []string {
 	}
 	return []string{
 		"task T-1 " + todo + " C-R", "task T-2 " + todo + " C-R", "task T-3 IN_PROGRESS C-I", "task T-4 " + todo + " C-X", "task T-5 DONE C-D",
-		"column B-1 C-D Done 3 DONE -", "column B-1 C-I In progress 2 IN_PROGRESS 2", "column B-1 C-R " + toDo + " 1 " + todo + " 4",
+		"column B-1 C-D Done 3 DONE -", "column B-1 C-I In progress 2 IN_PROGRESS 2", "column B-1 C-R " + toDo + " 1 " + todo + " 4", "column B-1 C-R2 Next 5 " + todo + " -",
 		"column B-2 C-X Inbox 0 " + todo + " 7", "column B-2 C-Y " + toDo + " 1 " + todo + " -",
 		"integration I-1 C-R", "events 1", "dependencies 1",
 	}

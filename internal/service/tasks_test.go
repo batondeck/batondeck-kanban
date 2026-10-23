@@ -53,6 +53,46 @@ func tkCode(err error) domain.Code {
 	return ""
 }
 
+// ADR-0005 for add_subtask, and the no-TODO refusal of both creating tools: the child lands TODO in
+// its board's first TODO column whatever the first column is, and a board with no TODO column refuses
+// create_task and add_subtask with VALIDATION, writing nothing.
+func TestCreatedTasksLandTodo(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		doneFirst, err := e.c.Boards().Create(e.ctx, e.alice, CreateBoardReq{ProjectID: e.project, Name: "done first", Columns: []ColumnSpec{{Name: "Done", Status: domain.Done}, {Name: "To do", Status: domain.Todo}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: doneFirst.Board.ID, Title: "parent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: parent.Task.ID, Title: "child"})
+		if err != nil || child.Task.Status != domain.Todo || child.Task.ColumnID != doneFirst.Board.Columns[1].ID {
+			t.Fatalf("add_subtask on a board whose first column is DONE: %+v, %v; want TODO in its To do column", child.Task, err)
+		}
+
+		noTodo, err := e.c.Boards().Create(e.ctx, e.alice, CreateBoardReq{ProjectID: e.project, Name: "no todo", Columns: []ColumnSpec{{Name: "In progress", Status: domain.InProgress}, {Name: "Done", Status: domain.Done}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: noTodo.Board.ID, Title: "x"})
+		wantCode(t, err, domain.CodeValidation)
+		held, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{
+			ProjectID: e.project, BoardID: noTodo.Board.ID, ColumnID: noTodo.Board.Columns[1].ID, Title: "held", Status: domain.Done,
+			OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: held.ID, Title: "x"})
+		wantCode(t, err, domain.CodeValidation)
+		page, err := e.st.ListTasks(e.ctx, e.project, store.TaskFilter{BoardID: noTodo.Board.ID}, "", 50)
+		if err != nil || len(page.Tasks) != 1 {
+			t.Fatalf("the no-TODO board holds %d tasks (%v), want only the seeded parent", len(page.Tasks), err)
+		}
+	})
+}
+
 // AC1: all 25 (from, to) pairs through Move: the 14 legal ones (9 table edges + 5 same-status)
 // land on to, the 11 illegal ones are INVALID_TRANSITION carrying allowed and the shortest path
 // (ADR-0005's table: 1+3+2+2+1 edges).
