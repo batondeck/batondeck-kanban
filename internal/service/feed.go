@@ -31,8 +31,7 @@ func (f feed) BoardFeed(ctx context.Context, caller domain.Caller, req BoardFeed
 	if req.BoardID == "" {
 		return BoardFeedResp{}, domain.Validation("boardId is required", map[string]any{"field": "boardId"})
 	}
-	// DEVIATION: the page is in the store's order, newest first, and the cursor pages older. The
-	// contract says oldest first after the cursor, which ListBoardFeed cannot serve in bounded reads.
+	// The page is newest first, the store's order and conductor's, and the cursor pages older.
 	page, err := f.c.store.ListBoardFeed(ctx, req.ProjectID, req.BoardID, req.Cursor, int(req.Limit))
 	if err != nil {
 		return BoardFeedResp{}, f.c.mapErr("board_feed", err)

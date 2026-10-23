@@ -9,8 +9,8 @@ import (
 // Feed is the board read side behind the board and board-feed resources and the SPA's stream: tier
 // read on the board's project, and it writes nothing.
 type Feed interface {
-	// BoardFeed is a board's events, oldest first, after cursor (the base64url {order, id} of the last
-	// event seen; "" from the start).
+	// BoardFeed is a board's events, newest first as conductor's listEvents orders them, older than
+	// cursor (the base64url {order, id} of the last event seen; "" from the newest).
 	BoardFeed(ctx context.Context, caller domain.Caller, req BoardFeedReq) (BoardFeedResp, error)
 
 	// BoardSnapshot is a board with its per-column task counts, cached by change-log cursor: two reads
