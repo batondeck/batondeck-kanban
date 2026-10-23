@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -188,26 +187,10 @@ func serve(args []string, version string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
-	mcpSrv, svc := mcpServer(st, version, log)
-	srv := &http.Server{Handler: handler(version, mcpSrv.Handler()), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
-	log.Printf("serve: batondeck-kanban %s listening on %s", version, ln.Addr())
-	select {
-	case err := <-errc:
+	if err := runServer(ctx, ln, st, version, log); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
-		closeCore(context.Background(), svc, log)
-		return 1
-	case <-ctx.Done():
-	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err = srv.Shutdown(shutdown)
-	closeCore(shutdown, svc, log)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintln(stderr, "serve: shutdown:", err)
 		return 1
 	}
 	log.Printf("serve: stopped")

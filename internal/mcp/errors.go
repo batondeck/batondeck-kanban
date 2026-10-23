@@ -33,8 +33,8 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			s.record(ctx, req, res, err, time.Since(start))
 		}()
 		res, err = next(ctx, method, req)
-		r, ok := res.(*mcp.CallToolResult)
-		if err != nil || !ok || !r.IsError || r.StructuredContent != nil {
+		r, _ := res.(*mcp.CallToolResult)
+		if err != nil || r == nil || !r.IsError || r.StructuredContent != nil {
 			return res, err
 		}
 		e, ok := domain.AsBatonDeckError(r.GetError())
@@ -50,19 +50,29 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
-// client received (INTERNAL for a protocol error). ToolCalls.Record never fails the call.
+// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil).
+// It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
+// the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Printf("mcp: recording tool call %s panicked: %v\n%s", toolName(req), p, debug.Stack())
+		}
+	}()
 	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds()}
-	if r, ok := res.(*mcp.CallToolResult); err != nil || !ok || r.IsError {
+	r, _ := res.(*mcp.CallToolResult)
+	if err != nil || r == nil || r.IsError {
 		row.Outcome, row.Code = "error", string(domain.CodeInternal)
-		if ok && r.IsError {
-			if e, isBDE := domain.AsBatonDeckError(r.GetError()); isBDE {
+		if err == nil && r != nil {
+			if e, ok := domain.AsBatonDeckError(r.GetError()); ok {
 				row.Code = string(e.Code)
 			}
 		}
 	}
 	caller, _ := CallerFrom(ctx)
-	_, _ = s.services.ToolCalls.Record(ctx, caller, row)
+	if _, rerr := s.services.ToolCalls.Record(ctx, caller, row); rerr != nil {
+		s.log.Printf("mcp: recording tool call %s failed: %+v", row.Tool, rerr)
+	}
 }
 
 // errorResult is e as a tool result.

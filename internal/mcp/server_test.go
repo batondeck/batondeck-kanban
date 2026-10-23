@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth/authfake"
@@ -194,6 +195,9 @@ func plant(h *harness) {
 	})
 	AddTool(h.srv, &mcp.Tool{Name: "boom"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
 		panic("planted panic")
+	})
+	AddTool(h.srv, &mcp.Tool{Name: "rpcerr"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		return nil, plantOut{}, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "planted protocol error"}
 	})
 	AddTool(h.srv, &mcp.Tool{Name: "plain"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
 		return nil, plantOut{}, errors.New("planted plain error")
@@ -489,4 +493,79 @@ func waitFor(t *testing.T, cond func() bool) {
 		}
 	}
 	t.Fatal("condition not met in 5s")
+}
+
+// A protocol error from tools/call (an unknown tool, a handler's *jsonrpc.Error) reaches the
+// client as a JSON-RPC error, is recorded once, and leaves the server serving: go-sdk hands the
+// middleware a typed-nil result beside the error.
+func TestProtocolErrorsLeaveTheServerServing(t *testing.T) {
+	for _, name := range []string{"nosuch", "rpcerr"} {
+		t.Run(name, func(t *testing.T) {
+			f := servicefake.New()
+			h := bootHarness(t, f.Services(), resolver())
+			plant(h)
+			cs := h.connect(t, tokenAda)
+			if res, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"projectId": "P-1"}}); err == nil {
+				t.Fatalf("%s: %+v, want a JSON-RPC error", name, res)
+			}
+			if _, err := cs.ListTools(ctx(t), nil); err != nil {
+				t.Fatalf("after %s the server stopped answering: %v", name, err)
+			}
+			var rows []string
+			for _, c := range calls(f, "ToolCalls.Record") {
+				r := c.Req.(service.RecordToolCallReq)
+				rows = append(rows, r.Tool+" "+r.Outcome+" "+r.Code)
+			}
+			if want := []string{name + " error INTERNAL"}; !slices.Equal(rows, want) {
+				t.Errorf("tool_calls rows = %q, want %q", rows, want)
+			}
+		})
+	}
+}
+
+// panicky is a ToolCalls whose Record panics.
+type panicky struct{}
+
+func (panicky) Record(context.Context, domain.Caller, service.RecordToolCallReq) (service.RecordToolCallResp, error) {
+	panic("planted record panic")
+}
+
+// A panic in the tool-call bookkeeping is logged and never fails the call or the server.
+func TestRecordPanicIsContained(t *testing.T) {
+	svc := servicefake.New().Services()
+	svc.ToolCalls = panicky{}
+	h := bootHarness(t, svc, resolver())
+	plant(h)
+	cs := h.connect(t, tokenAda)
+	res, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1"}})
+	if err != nil || res.IsError {
+		t.Fatalf("whoami with Record panicking: %+v %v", res, err)
+	}
+	if _, err := cs.ListTools(ctx(t), nil); err != nil {
+		t.Fatalf("the server stopped answering: %v", err)
+	}
+	if logs := h.log.String(); !strings.Contains(logs, "mcp: recording tool call whoami panicked: planted record panic") {
+		t.Errorf("the record panic was not logged:\n%s", logs)
+	}
+}
+
+// Close ends a session holding an open GET stream, removes its agent session and admits no new
+// one, well inside a shutdown budget.
+func TestCloseEndsLiveSessions(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver())
+	h.connect(t, tokenAda) // the go-sdk client opens its standalone GET stream after initialize
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := h.srv.Close(c); err != nil {
+		t.Fatalf("Close: %v after %s", err, time.Since(start))
+	}
+	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 1 {
+		t.Errorf("%d agent sessions removed by Close, want 1", n)
+	}
+	if cs, err := h.dial(tokenAda); err == nil {
+		t.Cleanup(func() { _ = cs.Close() })
+		t.Error("a session was admitted after Close")
+	}
 }

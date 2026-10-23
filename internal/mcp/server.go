@@ -68,7 +68,7 @@ func New(o Options) *Server {
 		o.Logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{services: o.Services, log: o.Logger}
-	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]struct{}{}, agents: map[string]int{}}
+	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
 		Capabilities: &mcp.ServerCapabilities{
@@ -88,6 +88,27 @@ func New(o Options) *Server {
 	})
 	s.handler = requireBearer(o.Resolver, s.log)(streamable)
 	return s
+}
+
+// Close ends every live session, each as any other end does (its agent session removed with the
+// last of its agent's), refuses new ones, and waits for that bookkeeping or ctx. Call it before
+// the HTTP server's Shutdown: a session's open GET stream would otherwise hold Shutdown until its
+// deadline.
+func (s *Server) Close(ctx context.Context) error {
+	for _, ss := range s.sessions.closeAll() {
+		_ = ss.Close()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.sessions.ends.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Handler is what /mcp mounts.

@@ -2,7 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
@@ -26,9 +31,41 @@ func mcpServer(st store.Store, version string, logger *log.Logger) (*mcp.Server,
 	return srv, core
 }
 
-// closeCore flushes and stops the core, logging a failure.
-func closeCore(ctx context.Context, core *service.Core, logger *log.Logger) {
-	if err := core.Close(ctx); err != nil {
-		logger.Printf("serve: flushing tool calls: %+v", err)
+// shutdownBudget bounds the MCP session close and the HTTP drain; flushBudget the tool-call flush
+// after them.
+const (
+	shutdownBudget = 10 * time.Second
+	flushBudget    = 5 * time.Second
+)
+
+// runServer serves on ln until ctx ends or the listener fails, then stops in order: the MCP
+// sessions (an attached client's open GET stream would otherwise hold Shutdown to its deadline),
+// the HTTP server, and, once no handler can run, the tool-call flush. It returns the first
+// failure, naming the step.
+func runServer(ctx context.Context, ln net.Listener, st store.Store, version string, logger *log.Logger) error {
+	mcpSrv, core := mcpServer(st, version, logger)
+	srv := &http.Server{Handler: handler(version, mcpSrv.Handler()), ReadHeaderTimeout: 10 * time.Second}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	logger.Printf("serve: batondeck-kanban %s listening on %s", version, ln.Addr())
+	var failed error
+	select {
+	case err := <-errc:
+		failed = err
+	case <-ctx.Done():
 	}
+	shutdown, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+	defer cancel()
+	if err := mcpSrv.Close(shutdown); err != nil {
+		logger.Printf("serve: closing the MCP sessions: %+v", err)
+	}
+	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
+		failed = fmt.Errorf("http shutdown: %w", err)
+	}
+	flush, cancelFlush := context.WithTimeout(context.Background(), flushBudget)
+	defer cancelFlush()
+	if err := core.Close(flush); err != nil {
+		logger.Printf("serve: flushing the buffered tool calls: %+v", err)
+	}
+	return failed
 }

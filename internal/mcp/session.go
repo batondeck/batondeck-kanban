@@ -17,22 +17,36 @@ import (
 type sessionTable struct {
 	mu     sync.Mutex
 	max    int
-	live   map[string]struct{}
-	agents map[string]int // agent-session key -> its live MCP sessions
+	closed bool                          // Server.Close ran: no session is admitted again
+	live   map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
+	agents map[string]int                // agent-session key -> its live MCP sessions
+	ends   sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
-// reserve admits id, or refuses when the table is full.
-func (t *sessionTable) reserve(id string) bool {
+// reserve admits ss, or refuses when the table is full or closed.
+func (t *sessionTable) reserve(ss *mcp.ServerSession) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, ok := t.live[id]; ok {
+	if _, ok := t.live[ss.ID()]; ok {
 		return true
 	}
-	if len(t.live) >= t.max {
+	if t.closed || len(t.live) >= t.max {
 		return false
 	}
-	t.live[id] = struct{}{}
+	t.live[ss.ID()] = ss
 	return true
+}
+
+// closeAll refuses new sessions and returns the live ones.
+func (t *sessionTable) closeAll() []*mcp.ServerSession {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	out := make([]*mcp.ServerSession, 0, len(t.live))
+	for _, ss := range t.live {
+		out = append(out, ss)
+	}
+	return out
 }
 
 func (t *sessionTable) release(id string) {
@@ -96,7 +110,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 
 func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller domain.Caller, method string, req mcp.Request, next mcp.MethodHandler) (mcp.Result, error) {
 	id := ss.ID()
-	if !s.sessions.reserve(id) {
+	if !s.sessions.reserve(ss) {
 		s.log.Printf("mcp: session limit %d reached; initialize refused", s.sessions.max)
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "too many MCP sessions; retry later"}
 	}
@@ -115,7 +129,9 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 		s.log.Printf("mcp: create agent session %s failed: %+v", key, err)
 	}
 	s.sessions.join(key)
+	s.sessions.ends.Add(1)
 	go func() {
+		defer s.sessions.ends.Done()
 		_ = ss.Wait()
 		s.sessions.release(id)
 		if !s.sessions.leave(key) {

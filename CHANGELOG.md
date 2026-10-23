@@ -24,7 +24,11 @@ Notable changes to batondeck-kanban. The format follows
   and version, touched by every tool call, removed when the last MCP session of that agent ends
   (idle, DELETE or close). Every `tools/call` writes one `tool_calls` row through
   `service.ToolCalls` (`ok`/`OK`, else `error` and the code returned); a handler error that is no
-  BatonDeckError is logged with a stack and answered INTERNAL. `tools/list` is filtered per audience (the workspace-admin
+  BatonDeckError is logged with a stack and answered INTERNAL. A protocol error from `tools/call`
+  (an unknown tool, a handler's `*jsonrpc.Error`) reaches the client as a JSON-RPC error and is
+  recorded; the bookkeeping never aborts a call or the process. `serve` stops in order: the MCP
+  sessions are closed first (their agent sessions removed), then the HTTP server drains, then the
+  buffered tool calls are flushed, so a stop with a client attached returns at once. `tools/list` is filtered per audience (the workspace-admin
   flag) and memoised per audience; `mcp.AddTool` registers a tool with its visibility. `serve` mounts
   `/mcp` over the store's API tokens and the service core's Sessions and ToolCalls, flushed on
   shutdown. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and

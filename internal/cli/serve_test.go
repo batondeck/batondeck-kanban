@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,7 +47,7 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 	}
 	defer st.Close()
 	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
-	defer closeCore(context.Background(), core, log.New(io.Discard, "", 0))
+	defer core.Close(context.Background())
 	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
 	defer srv.Close()
 
@@ -106,7 +107,7 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
-	defer closeCore(context.Background(), core, log.New(io.Discard, "", 0))
+	defer core.Close(context.Background())
 	type in struct {
 		ProjectID string `json:"projectId"`
 	}
@@ -148,5 +149,58 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].AgentID != "id:"+user.ID || sessions[0].ClientName != "serve-test" ||
 		sessions[0].SessionCount != 1 || sessions[0].RequestCount != 1 || sessions[0].ToolCounts["probe"] != 1 || sessions[0].Kind != "service_account" {
 		t.Errorf("agent sessions = %+v, want one: client serve-test, one connection, one probe call", sessions)
+	}
+}
+
+// A stop with a client attached (initialised, its GET stream open) returns nil well inside the
+// shutdown budget, and the session's agent row is removed on the way out.
+func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := memstore.New()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, _, err := (&auth.TokenService{Store: st}).Create(ctx, user.ID, "", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- runServer(serveCtx, ln, st, "x", log.New(io.Discard, "", 0)) }()
+
+	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
+	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
+		HTTPClient: &http.Client{Transport: bearerRT{live}}, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if rows, err := st.ListAgentSessions(ctx, user.ID, 10); err != nil || len(rows) != 1 {
+		t.Fatalf("agent sessions while attached = %+v, %v; want one", rows, err)
+	}
+	time.Sleep(200 * time.Millisecond) // the client's standalone GET stream is open by now
+
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServer returned %v after %s, want nil", err, time.Since(start))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("runServer still stopping after 5s (the budget is %s)", shutdownBudget)
+	}
+	t.Logf("stopped in %s", time.Since(start))
+	if rows, err := st.ListAgentSessions(ctx, user.ID, 10); err != nil || len(rows) != 0 {
+		t.Errorf("agent sessions after the stop = %+v, %v; want none", rows, err)
 	}
 }
