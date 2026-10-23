@@ -6,7 +6,7 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -94,9 +94,9 @@ image:
 # sources, web/dist against a fresh web build, the layering guard, the tests under the race
 # detector, the store conformance suite once per engine, the MCP contract (files and live server),
 # the per-call statement pins, web/public against its allow-list, the vendored brand kit against its
-# lock, and the plugin: its instructions against the contract (skill-lint) and its hooks' stdout
-# (hook-check).
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check
+# lock, the plugin: its instructions against the contract (skill-lint) and its hooks' stdout
+# (hook-check), and the SPA's states against the five.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -136,6 +136,16 @@ web-dist-check:
 		git status --short --untracked-files=all -- web/dist; \
 		exit 1; \
 	fi
+
+# web-states-check refuses a retired state name or the dropped transition routes anywhere in web/src,
+# tests included (ADR-0005: five states; ADR-0001: CANCELLED and DEAD_LETTER are labels now). The
+# match is case-sensitive, so CSS tokens such as --ready pass.
+WEB_STATES_RETIRED := CANCELLED\|DEAD_LETTER\|BACKLOG\|READY\|getTransitions\|setTransitions
+web-states-check:
+	@if hits=$$(grep -rn '$(WEB_STATES_RETIRED)' web/src); then \
+		printf 'web-states-check: web/src names a retired state or transition route (ADR-0005):\n%s\n' "$$hits" >&2; exit 1; \
+	fi; \
+	echo "web-states-check: web/src names only the five states"
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
 # on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed

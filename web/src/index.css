@@ -555,6 +555,7 @@ select:disabled { cursor: default; opacity: 0.6; }
   border: 1px solid var(--border); color: var(--text-2);
 }
 .badge.blocked { color: var(--blocked); border-color: var(--blocked); }
+.badge.poisoned { color: var(--blocked); border-color: var(--blocked); background: color-mix(in srgb, var(--blocked) 14%, transparent); font-weight: 600; }
 .badge.lease { color: var(--progress); border-color: var(--progress); }
 .badge.racing { color: var(--progress); border-color: var(--progress); }
 .badge.sprint { color: var(--review); border-color: var(--review); }
@@ -749,7 +750,7 @@ th { color: var(--text-muted); font-weight: 700; font-size: 11px; text-transform
 /* ---- optimistic move: the card is already in its destination lane, the server has not agreed yet ----
    On failure the mutation's snapshot restore puts it back; the veil's only job is to stop the UI
    claiming success in the meantime. */
-/* The card is ALREADY in its destination lane — the optimistic patch put it there on drop. What is
+/* The card is already in its destination lane — the optimistic patch put it there on drop. What is
    unconfirmed is whether the server agrees, so the card is veiled: its content stays in place and
    readable in outline, with the uncertainty made obvious.
 

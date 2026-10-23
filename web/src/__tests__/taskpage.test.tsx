@@ -16,7 +16,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { TaskPage } from '../screens/TaskPage.js';
 import { ProjectProvider } from '../projectContext.js';
-import { routeFetch } from './taskFixtures.js';
+import { routeFetch, task } from './taskFixtures.js';
 
 /** `panels.tsx` source, for the one assertion whose subject is a PROP rather than rendered output. */
 const PANELS_SRC = (): string => {
@@ -75,28 +75,30 @@ describe('TaskPage', () => {
   });
 
   it('moves the task via the status control (board-gated targets)', async () => {
-    const fetchMock = routeFetch();
+    // IN_PROGRESS → REVIEW, BLOCKED, TODO; the fixture board has To do and Building columns only.
+    const fetchMock = routeFetch({ '/tasks/T-1$': { json: { task: { ...task, status: 'IN_PROGRESS', columnId: 'c2' } } } });
     vi.stubGlobal('fetch', fetchMock);
     renderPage();
     await screen.findByText('Ship the parser');
 
     const sel = await screen.findByLabelText('Status');
-    expect(sel).toHaveValue('READY');
-    // Once the board loads, only statuses that HAVE a column remain — READY→BACKLOG/CANCELLED drop
-    // out, because a move to a column that does not exist is not a move.
-    await within(sel).findByRole('option', { name: 'IN PROGRESS' });
+    expect(sel).toHaveValue('IN_PROGRESS');
+    // Once the board loads, only statuses that HAVE a column remain — REVIEW and BLOCKED drop out,
+    // because a move to a column that does not exist is not a move.
     await waitFor(() =>
-      expect(within(sel).queryByRole('option', { name: 'BACKLOG' })).not.toBeInTheDocument(),
+      expect(within(sel).queryByRole('option', { name: 'REVIEW' })).not.toBeInTheDocument(),
     );
+    expect(within(sel).queryByRole('option', { name: 'BLOCKED' })).not.toBeInTheDocument();
+    await within(sel).findByRole('option', { name: 'TODO' });
 
-    fireEvent.change(sel, { target: { value: 'IN_PROGRESS' } });
+    fireEvent.change(sel, { target: { value: 'TODO' } });
 
     await waitFor(() => {
       const move = (fetchMock as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.find(
         ([url]) => String(url).endsWith('/tasks/T-1/move'),
       );
       expect(move, 'no /move request was sent').toBeTruthy();
-      expect(JSON.parse(String(move![1]?.body))).toEqual({ version: 3, toStatus: 'IN_PROGRESS' });
+      expect(JSON.parse(String(move![1]?.body))).toEqual({ version: 3, toStatus: 'TODO' });
     });
   });
 
@@ -110,7 +112,7 @@ describe('TaskPage', () => {
           json: {
             task: {
               id: 'T-1', projectId: 'p1', boardId: 'b1', columnId: 'c1',
-              title: 'CheckoutLatencyHigh', description: '', status: 'READY', priority: 'urgent',
+              title: 'CheckoutLatencyHigh', description: '', status: 'TODO', priority: 'urgent',
               assignee: null, labels: [], requiredCapabilities: [], estimate: null, dueAt: null,
               customFields: { 'incident.fingerprint': '9f2ac41d', 'incident.source': 'grafana' },
               parentTaskId: null, order: 'a0', blockedBy: [], blocks: [], contextSummary: '',

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './auth.js';
-import { ApiError } from './api.js';
+import { ApiError } from './api/http.js';
 import { pushToast } from './toast.js';
 import { App } from './App.js';
 import { ErrorBoundary, installClientErrorReporting } from './errors.js';

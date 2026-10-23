@@ -6,7 +6,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
-import { api } from '../api.js';
+import * as commentsApi from '../api/comments.js';
 import { Avatar, mdComponents, mdPlugins, timeAgo } from '../components.js';
 import type { Comment } from '../types.js';
 import { Cluster, Stack } from '../ui.js';
@@ -89,7 +89,7 @@ export function Comments({
   const qc = useQueryClient();
   const commentsQ = useQuery({
     queryKey: ['comments', projectId, taskId],
-    queryFn: () => api.listComments(projectId, taskId),
+    queryFn: () => commentsApi.listComments(projectId, taskId),
   });
   const [body, setBody] = useState('');
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
@@ -128,7 +128,7 @@ export function Comments({
     setBusy(true);
     setErr(null);
     try {
-      await api.addComment(projectId, taskId, text, replyTo?.id);
+      await commentsApi.addComment(projectId, taskId, text, replyTo?.id);
       setBody('');
       setReplyTo(null);
       await qc.invalidateQueries({ queryKey: ['comments', projectId, taskId] });

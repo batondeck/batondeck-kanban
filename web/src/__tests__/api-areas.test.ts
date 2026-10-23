@@ -1,40 +1,25 @@
-// R1.12 AC3's placeholder: every web/src/api/<area>.ts function is one of api.ts's, with its type
-// (`satisfies` fails tsc on a signature that drifted), so R1.14 can split api.ts onto them.
+// R1.14: api.ts is gone; every client function lives in exactly one web/src/api/<area>.ts, so a lane
+// that owns an area edits that file and nothing shared.
 import { describe, expect, it } from 'vitest';
-import { api } from '../api.js';
-import * as agents from '../api/agents.js';
-import * as analytics from '../api/analytics.js';
-import * as chronicle from '../api/chronicle.js';
-import * as comments from '../api/comments.js';
-import * as followups from '../api/followups.js';
-import * as me from '../api/me.js';
-import * as notifications from '../api/notifications.js';
-import * as oncall from '../api/oncall.js';
-import * as runs from '../api/runs.js';
-import * as sprints from '../api/sprints.js';
 
-const areas = { agents, analytics, chronicle, comments, followups, me, notifications, oncall, runs, sprints };
-const all = {
-  ...agents,
-  ...analytics,
-  ...chronicle,
-  ...comments,
-  ...followups,
-  ...me,
-  ...notifications,
-  ...oncall,
-  ...runs,
-  ...sprints,
-} satisfies Partial<typeof api>;
+const areas = import.meta.glob<Record<string, unknown>>('../api/*.ts', { eager: true });
+const legacy = import.meta.glob('../api.ts');
 
 describe('web/src/api/<area>.ts', () => {
-  it('names only api.ts functions, each a function', () => {
-    for (const [area, mod] of Object.entries(areas)) {
-      for (const [name, fn] of Object.entries(mod)) {
-        expect(typeof fn, `${area}.${name}`).toBe('function');
-        expect(Object.keys(api), `${area}.${name}`).toContain(name);
+  it('has no api.ts beside the area files', () => {
+    expect(Object.keys(legacy)).toEqual([]);
+  });
+
+  it('exports each name from one area only', () => {
+    const owner = new Map<string, string>();
+    for (const [file, mod] of Object.entries(areas)) {
+      for (const name of Object.keys(mod)) {
+        expect(owner.get(name), `${name} in ${file}`).toBeUndefined();
+        owner.set(name, file);
       }
     }
-    expect(Object.keys(all)).toHaveLength(41);
+    expect(owner.get('req')).toBe('../api/http.ts');
+    expect(owner.get('moveTask')).toBe('../api/tasks.ts');
+    expect(owner.get('joinStream')).toBe('../api/stream.ts');
   });
 });

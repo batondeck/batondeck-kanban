@@ -27,7 +27,7 @@ const task = (over: Partial<Task> = {}): Task =>
     projectId: 'P-1',
     boardId: 'B-1',
     columnId: 'c1',
-    status: 'READY',
+    status: 'TODO',
     title: 'a task',
     description: '',
     priority: 'normal',
@@ -59,7 +59,7 @@ function mount(over: { agents?: AgentEntry[]; t?: Task } = {}): { onAssign: Retu
   render(
     <TaskCard
       t={over.t ?? task()}
-      col={{ status: 'READY' }}
+      col={{ status: 'TODO' }}
       selected={false}
       onOpen={onOpen}
       agents={over.agents ?? [liveAgent('creepy-gopher'), liveAgent('opus-bot')]}

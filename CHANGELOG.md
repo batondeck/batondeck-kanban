@@ -8,6 +8,27 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- The SPA on five states (R1.14, ADR-0005): `Status` is `TODO · IN_PROGRESS · BLOCKED · REVIEW ·
+  DONE`, derived from the exported `STATUSES`; every status map, filter, chart order, the move-button
+  fallback table and the ticket-search aliases follow it (no `CANCELLED`, `BACKLOG`, `READY`, and the
+  `cancelled`/`canceled`/`backlog` aliases are gone), and the move targets read the board's fixed
+  `transitions` instead of the dropped `settings.transitionTable`. `make web-states-check`, a `make
+  check` step, refuses `CANCELLED`, `DEAD_LETTER`, `BACKLOG`, `READY`, `getTransitions` or
+  `setTransitions` anywhere in `web/src`, tests included.
+- The poison badge (plan §Fold 1, ADR-0001): a BLOCKED task carrying the `poisoned` system label shows
+  `Poisoned · N attempts` (its `claimAttempts`) on its card in the Blocked lane and in the drawer,
+  where a master (master, member or admin of the project) gets "Requeue to To do" (`move_task` →
+  TODO) and a worker sees it disabled. A task blocked by a dependency keeps the plain `Blocked` badge.
+- `web/src/api.ts` is gone: every client function lives in one `web/src/api/<area>.ts`, one per
+  `internal/api/<area>.go` (new: `session`, `projects`, `boards`, `tasks`, `lifecycle`, `context`,
+  `media`, `feed`, `stream`, and `tenants` for the four unmounted invitation calls Settings still
+  makes), `http.ts` holds `req`, `ApiError` and the local-edit marks, and every screen imports its
+  areas directly. The studio, admin, billing, tenant-switch and onboarding functions, which no kept
+  screen called, are dropped with the routes.
+- Live board from `/api/stream`: presence frames (the device session directory's entries) become
+  `device:<pid>` session rows that each frame replaces, and a `resync` frame or a rebuilt socket
+  refetches the board, its tasks and its feed, since no board frame comes until the next change.
+
 - The board snapshot cache serves (P-100, ADR-0004): `serve` subscribes it to the bus with a second
   `bus.Tap` that feeds `Core.ObserveChange`, so a second `get_board`, `get_task_context`, `claim_next`
   or `/api/stream` board frame on an unchanged board reads no board (2 statements saved), and any

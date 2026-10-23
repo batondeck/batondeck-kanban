@@ -5,7 +5,7 @@
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from './api.js';
+import * as projectsApi from './api/projects.js';
 
 export interface ProjectInfo {
   projectId: string;
@@ -24,7 +24,7 @@ const KEY = 'bd.projectId';
 const Ctx = createContext<ProjectCtx>({ projectId: '', setProjectId: () => {}, projects: [], loading: true });
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
-  const q = useQuery({ queryKey: ['projects'], queryFn: () => api.listProjects() });
+  const q = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
   const projects = q.data?.projects ?? [];
   const [stored, setStored] = useState(() => localStorage.getItem(KEY) ?? '');
   // '' means "All projects" (no scope) — the default. A stored non-empty id is honored only while it's

@@ -1,6 +1,9 @@
 /** api client behavior: error mapping and the 401 → batondeck:unauthorized signal. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { api, ApiError } from '../api.js';
+import * as sessionApi from '../api/session.js';
+import * as streamApi from '../api/stream.js';
+import * as tasksApi from '../api/tasks.js';
+import { ApiError } from '../api/http.js';
 
 function jsonResponse(status: number, body: unknown): Response {
   return { ok: status < 400, status, json: async () => body } as Response;
@@ -14,7 +17,7 @@ afterEach(() => {
 describe('api error handling', () => {
   it('maps a non-ok response to an ApiError with the gateway code', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(409, { code: 'STALE', message: 'version mismatch' })));
-    await expect(api.getTask('p1', 'T-1')).rejects.toMatchObject({ code: 'STALE', status: 409, message: 'version mismatch' });
+    await expect(tasksApi.getTask('p1', 'T-1')).rejects.toMatchObject({ code: 'STALE', status: 409, message: 'version mismatch' });
   });
 
   it('dispatches batondeck:unauthorized on a 401 from any API call', async () => {
@@ -22,7 +25,7 @@ describe('api error handling', () => {
     const heard = vi.fn();
     window.addEventListener('batondeck:unauthorized', heard);
     try {
-      await expect(api.getTask('p1', 'T-1')).rejects.toBeInstanceOf(ApiError);
+      await expect(tasksApi.getTask('p1', 'T-1')).rejects.toBeInstanceOf(ApiError);
       expect(heard).toHaveBeenCalledTimes(1);
     } finally {
       window.removeEventListener('batondeck:unauthorized', heard);
@@ -34,7 +37,7 @@ describe('api error handling', () => {
     const heard = vi.fn();
     window.addEventListener('batondeck:unauthorized', heard);
     try {
-      await expect(api.session()).rejects.toBeInstanceOf(ApiError);
+      await expect(sessionApi.session()).rejects.toBeInstanceOf(ApiError);
       expect(heard).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener('batondeck:unauthorized', heard);
@@ -44,9 +47,9 @@ describe('api error handling', () => {
 
 /**
  * T-47: a non-2xx on /stream (5xx blip, redeploy, expired session) puts EventSource in CLOSED for good.
- * api.stream must notice and reconnect, and must report liveness so the board can poll faster meanwhile.
+ * streamApi.stream must notice and reconnect, and must report liveness so the board can poll faster meanwhile.
  */
-describe('api.stream reconnect', () => {
+describe('streamApi.stream reconnect', () => {
   class FakeES {
     static instances: FakeES[] = [];
     readyState = 0;
@@ -77,7 +80,7 @@ describe('api.stream reconnect', () => {
     vi.stubGlobal('EventSource', FakeES);
     const live: boolean[] = [];
     const updates = vi.fn();
-    const stop = api.stream('p1', 'B-1', updates, (l) => live.push(l));
+    const stop = streamApi.stream('p1', 'B-1', updates, (l) => live.push(l));
 
     const first = FakeES.instances[0]!;
     first.readyState = 1;
@@ -109,7 +112,7 @@ describe('api.stream reconnect', () => {
   it('leaves a CONNECTING stream to the browser and reconnects nothing after stop()', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeES);
-    const stop = api.stream('p1', 'B-1', () => {});
+    const stop = streamApi.stream('p1', 'B-1', () => {});
     const es = FakeES.instances[0]!;
     es.readyState = 0; // browser is retrying the dropped connection itself
     es.emit('error');
@@ -129,7 +132,7 @@ describe('api.stream reconnect', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeES);
     const live: boolean[] = [];
-    const stop = api.stream('p1', 'B-1', () => {}, (l) => live.push(l));
+    const stop = streamApi.stream('p1', 'B-1', () => {}, (l) => live.push(l));
     const first = FakeES.instances[0]!;
     first.readyState = 1;
     first.emit('open');
@@ -167,7 +170,7 @@ describe('api.stream reconnect', () => {
   it('stop() leaves no pending timer (neither the retry nor the stall watchdog)', () => {
     vi.useFakeTimers();
     vi.stubGlobal('EventSource', FakeES);
-    const stop = api.stream('p1', 'B-1', () => {});
+    const stop = streamApi.stream('p1', 'B-1', () => {});
     const first = FakeES.instances[0]!;
     first.readyState = 1;
     first.emit('open');
@@ -182,7 +185,7 @@ describe('api.stream reconnect', () => {
 /**
  * A stream must never take down the tree that opened it.
  *
- * `NotificationsNavLink` mounts `api.userStream` app-wide, so an EventSource that is absent or throws on
+ * `NotificationsNavLink` mounts `streamApi.userStream` app-wide, so an EventSource that is absent or throws on
  * construction would crash the entire nav — not merely cost live updates. That is exactly what happened
  * when the app-wide stream landed: two unrelated shell tests started failing with "An error occurred in
  * the <NotificationsNavLink> component". The fix belongs in the connector, not in the tests.
@@ -191,7 +194,7 @@ describe('sseConnect degrades instead of crashing', () => {
   it('EventSource missing entirely: reports not-live and returns a working unsubscribe', () => {
     vi.stubGlobal('EventSource', undefined);
     const live: boolean[] = [];
-    const off = api.userStream({ onLive: (l) => void live.push(l) });
+    const off = streamApi.userStream({ onLive: (l) => void live.push(l) });
     expect(live, 'callers must be told the stream is down so they can fall back').toEqual([false]);
     expect(() => off()).not.toThrow();
     vi.unstubAllGlobals();
@@ -203,7 +206,7 @@ describe('sseConnect degrades instead of crashing', () => {
     });
     const live: boolean[] = [];
     let off: (() => void) | undefined;
-    expect(() => (off = api.userStream({ onLive: (l) => void live.push(l) }))).not.toThrow();
+    expect(() => (off = streamApi.userStream({ onLive: (l) => void live.push(l) }))).not.toThrow();
     expect(live).toEqual([false]);
     off?.(); // MUST unsubscribe: the stream is a module-level singleton, so a leak here makes every
              // later test in this file order-dependent. That is exactly how the one-socket tests below
@@ -245,8 +248,8 @@ describe('the shared stream opens exactly one EventSource', () => {
 
   it('a board subscriber AND the app-wide nav share ONE open socket, scoped to the board', () => {
     reset();
-    const offNav = api.userStream({});
-    const offBoard = api.stream('P-1', 'B-1', () => {});
+    const offNav = streamApi.userStream({});
+    const offBoard = streamApi.stream('P-1', 'B-1', () => {});
     expect(Counting.open, `urls: ${JSON.stringify(Counting.urls)}`).toBe(1);
     expect(Counting.urls.at(-1), 'the live socket must be scoped to the board').toContain('boardId=B-1');
     offBoard();
@@ -256,8 +259,8 @@ describe('the shared stream opens exactly one EventSource', () => {
 
   it('leaving the board rescopes rather than stacking — still ONE open socket', () => {
     reset();
-    const offNav = api.userStream({});
-    const offBoard = api.stream('P-1', 'B-1', () => {});
+    const offNav = streamApi.userStream({});
+    const offBoard = streamApi.stream('P-1', 'B-1', () => {});
     offBoard(); // navigate away from the board
     expect(Counting.open).toBe(1);
     expect(Counting.urls.at(-1), 'must fall back to the unscoped stream').toBe('/api/stream');
@@ -267,7 +270,7 @@ describe('the shared stream opens exactly one EventSource', () => {
 
   it('the last subscriber leaving closes the socket — an idle tab holds no connection', () => {
     reset();
-    const off = api.userStream({});
+    const off = streamApi.userStream({});
     expect(Counting.open).toBe(1);
     off();
     expect(Counting.open, 'a tab with nothing mounted must hold no socket').toBe(0);
@@ -280,14 +283,14 @@ describe('the shared stream opens exactly one EventSource', () => {
  *
  * *** THIS IS THE LAST HOP, AND IT IS THE ONE NO SERVER TEST CAN SEE. *** The BFF suite proves
  * `/auth/logout` EMITS a URL naming this session; nothing there proves anyone goes to it. Delete the
- * navigation in `api.logout` and every server-side test stays green while the browser never leaves our
+ * navigation in `sessionApi.logout` and every server-side test stays green while the browser never leaves our
  * origin, the AuthKit session survives, and the defect is fully restored — precisely the "green guard
  * over a deleted line" shape CONTRIBUTING rule 12 is about.
  *
- * Driven through the REAL `api.logout` with `fetch` stubbed, never through a mocked `api`: mocking the
+ * Driven through the REAL `sessionApi.logout` with `fetch` stubbed, never through a mocked `api`: mocking the
  * module under test would assert the interface against itself.
  */
-describe('api.logout navigates to the IdP logout URL', () => {
+describe('sessionApi.logout navigates to the IdP logout URL', () => {
   const LOGOUT_URL = 'https://api.workos.com/user_management/sessions/logout?session_id=session_01X';
 
   const stubbedLocation = (logoutUrl: string | null): ReturnType<typeof vi.fn> => {
@@ -301,7 +304,7 @@ describe('api.logout navigates to the IdP logout URL', () => {
     const assign = stubbedLocation(LOGOUT_URL);
     // NOT awaited — since T-490 a logout with a URL never resolves (the navigation is the sign-out,
     // and resolving is what let SignIn's auto-redirect abort it). The race rows below pin that.
-    void api.logout();
+    void sessionApi.logout();
     for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(assign, 'the browser never left our origin — the AuthKit session would survive').toHaveBeenCalledWith(
       LOGOUT_URL,
@@ -315,7 +318,7 @@ describe('api.logout navigates to the IdP logout URL', () => {
    */
   it('NEGATIVE CONTROL: a null logout URL navigates nowhere', async () => {
     const assign = stubbedLocation(null);
-    await api.logout();
+    await sessionApi.logout();
     expect(assign).not.toHaveBeenCalled();
   });
 });
@@ -332,7 +335,7 @@ describe('logout wins the race (T-490)', () => {
     const assign = vi.fn();
     vi.stubGlobal('location', { assign, search: '', href: '' });
     let resolved = false;
-    void api.logout().then(() => { resolved = true; });
+    void sessionApi.logout().then(() => { resolved = true; });
     // Drain microtasks well past the fetch + assign.
     for (let i = 0; i < 20; i++) await Promise.resolve();
     expect(assign).toHaveBeenCalledWith('https://idp.example/logout?session_id=s1');
@@ -343,7 +346,7 @@ describe('logout wins the race (T-490)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { ok: true, logoutUrl: null })));
     const assign = vi.fn();
     vi.stubGlobal('location', { assign, search: '', href: '' });
-    await api.logout();
+    await sessionApi.logout();
     expect(assign).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,10 @@ export interface BillingStatus {
   publishableKey: string;
 }
 
-export type Status = 'BACKLOG' | 'READY' | 'IN_PROGRESS' | 'BLOCKED' | 'REVIEW' | 'DONE' | 'CANCELLED';
+/** The five states (ADR-0005), in board order. A cancelled task is DONE with the `cancelled` label and
+ *  a poisoned one BLOCKED with the `poisoned` label (ADR-0001): neither is a state. */
+export const STATUSES = ['TODO', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE'] as const;
+export type Status = (typeof STATUSES)[number];
 export type Priority = 'low' | 'normal' | 'high' | 'urgent';
 export type Role = 'viewer' | 'worker' | 'master' | 'member' | 'admin';
 
@@ -48,6 +51,9 @@ export interface Task {
   createdBy: string;
   /** Display name of the agent that created the task; null/absent for human-created tasks. */
   createdByAgent?: string | null;
+  /** Failed claims so far (the retry policy's count); absent at zero. Poison is BLOCKED with the
+   *  `poisoned` label once it reaches the policy's poisonAfterAttempts (ADR-0001). */
+  claimAttempts?: number;
   /** ISO creation time. On the wire since the core's `TaskSchema`; the SPA simply never mirrored it,
    *  which is why every time-series in Analytics had to bucket on `updatedAt` or not exist. */
   createdAt: string;
@@ -144,7 +150,7 @@ export interface Project {
   id: string;
   name: string;
   members: Record<string, Role>;
-  settings: { reviewEnabled: boolean; quotaEnabled: boolean; txnCap: number | null; transitionTable?: Record<string, Status[]>; /** Accent hex color for the project card; null/absent → hashed palette fallback. */ color?: string | null };
+  settings: { reviewEnabled: boolean; quotaEnabled: boolean; txnCap: number | null; /** Accent hex color for the project card; null/absent → hashed palette fallback. */ color?: string | null };
 }
 export interface ContextItem {
   id: string;
