@@ -6,11 +6,13 @@ import (
 	"log"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
 )
 
 // The R1.3 tests run on memstore and on both engines (onEngines); the Postgres leg skips without
@@ -601,4 +603,149 @@ func TestListTasksCostsOneStatement(t *testing.T) {
 	if statements(warm) > 2 || warm["ListTasks"] != 1 {
 		t.Fatalf("list_tasks made %v, want one ListTasks (pin 2)", warm)
 	}
+}
+
+// pgOnly is a fresh env over Postgres; it skips without BATONDECK_TEST_POSTGRES_DSN. memstore and
+// SQLite serialise every transaction whole, so a race needs Postgres's READ COMMITTED to show.
+func pgOnly(t *testing.T) *env {
+	t.Helper()
+	return newEnv(t, storetest.Postgres(t))
+}
+
+// P-146 (review round 1, the reviewer's TestProbeMoveWIPRace): two concurrent moves of two READY
+// tasks into a wipLimit-1 In progress admit exactly one, 40 runs out of 40; without the project lock
+// both were admitted in 40 of 40.
+func TestMoveWIPRaceAdmitsOne(t *testing.T) {
+	e := pgOnly(t)
+	limit := int64(1)
+	if _, err := e.st.UpdateColumn(e.ctx, e.project, e.board.ID, e.column(t, domain.InProgress), store.ColumnPatch{SetWIPLimit: true, WIPLimit: &limit}); err != nil {
+		t.Fatal(err)
+	}
+	over, runs := 0, 40
+	for i := range runs {
+		pair := []store.Task{e.tkSeed(t, domain.Ready, "", 0, nil), e.tkSeed(t, domain.Ready, "", 0, nil)}
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for j, task := range pair {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, errs[j] = e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: task.ID, Version: task.Version, ToStatus: domain.InProgress})
+			}()
+		}
+		close(start)
+		wg.Wait()
+		ip := domain.InProgress
+		n, err := e.st.CountTasks(e.ctx, e.project, store.TaskFilter{BoardID: e.board.ID, Status: &ip})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n > 1 {
+			over++
+			t.Logf("run %d: IN_PROGRESS=%d under wipLimit 1; errors %v / %v", i, n, errs[0], errs[1])
+		} else if (errs[0] == nil) == (errs[1] == nil) || tkCode(cmpErr(errs)) != domain.CodeWIPExceeded {
+			t.Fatalf("run %d: errors %v / %v, want one success and one WIP_EXCEEDED", i, errs[0], errs[1])
+		}
+		for _, task := range pair {
+			if cur := e.get(t, task.ID); cur.Status == domain.InProgress {
+				if _, err := e.tkMove(t, e.alice, cur, domain.Review); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	t.Logf("WIP over-admitted in %d of %d runs", over, runs)
+	if over > 0 {
+		t.Fatalf("P-146: %d of %d runs left 2 tasks IN_PROGRESS under wipLimit 1", over, runs)
+	}
+}
+
+// cmpErr is the one non-nil error of two, or nil.
+func cmpErr(errs []error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Review round 1: a move landing on DONE takes the project lock first, so it cannot deadlock against
+// add/remove_dependency's lockPair (dependent first when its id sorts lower). The reviewer saw one
+// INTERNAL in about 800 unlocked runs; 200 runs here must show none. Not mutation-provable at that
+// rate: it is the regression sentry, the lock order is the argument.
+func TestMoveToDoneVersusDependenciesNeverInternal(t *testing.T) {
+	e := pgOnly(t)
+	internal := 0
+	for i := range 200 {
+		dep, blocker := e.tkSeed(t, domain.Blocked, "", 0, nil), e.tkSeed(t, domain.Review, "", 0, nil)
+		edge, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: dep.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocker = e.get(t, blocker.ID)
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[0] = e.tkMove(t, e.alice, blocker, domain.Done)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				_, errs[1] = e.c.Context().RemoveDependency(e.ctx, e.alice, RemoveDependencyReq{ProjectID: e.project, EdgeID: edge.Edge.ID})
+			} else {
+				_, errs[1] = e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: dep.ID, ToTaskID: blocker.ID})
+			}
+		}()
+		close(start)
+		wg.Wait()
+		for _, err := range errs {
+			if tkCode(err) == domain.CodeInternal {
+				internal++
+				t.Logf("run %d: %v", i, err)
+			}
+		}
+	}
+	if internal > 0 {
+		t.Fatalf("%d INTERNAL in 200 runs of move→DONE against add/remove_dependency", internal)
+	}
+}
+
+// O4 (review round 1): a move into IN_PROGRESS consumes the retry backoff (conductor's clearBackoff,
+// tasks.ts:418); a move elsewhere keeps it.
+func TestMoveIntoInProgressClearsTheBackoff(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		later := time.Now().Add(time.Hour).UnixMilli()
+		seed := func(t *testing.T) store.Task {
+			task := e.tkSeed(t, domain.Ready, "", 0, nil)
+			got, err := e.st.SetStatus(e.ctx, e.project, task.ID, task.Version, store.StatusChange{
+				Status: domain.Ready, NextEligibleAt: &store.Nullable[int64]{Value: &later}, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got
+		}
+		in := seed(t)
+		if _, err := e.tkMove(t, e.alice, in, domain.InProgress); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, in.ID); got.NextEligibleAt != nil {
+			t.Fatalf("after the move into IN_PROGRESS nextEligibleAt is %d, want cleared", *got.NextEligibleAt)
+		}
+		kept := seed(t)
+		if _, err := e.tkMove(t, e.alice, kept, domain.Backlog); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, kept.ID); got.NextEligibleAt == nil || *got.NextEligibleAt != later {
+			t.Fatalf("a move to BACKLOG left nextEligibleAt %v, want %d kept", got.NextEligibleAt, later)
+		}
+	})
 }

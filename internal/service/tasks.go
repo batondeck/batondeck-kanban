@@ -462,9 +462,15 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		return MoveTaskResp{}, domain.Validation("Invalid order key: "+req.Order, map[string]any{"field": "order"})
 	}
 	version := req.Version
+	// The project lock, first in the transaction (before mutate's FOR UPDATE read of the task, so the
+	// order is project then tasks, as add/remove_dependency take it): a move that may enter
+	// IN_PROGRESS counts the lane under it, so two moves cannot both take the last WIP slot (P-146);
+	// one that may land on DONE writes its dependents under it, so it cannot deadlock against
+	// lockPair's id order. A toColumnId-only move resolves its status inside, so it locks too.
+	lock := req.ToColumnID != "" || req.ToStatus == domain.InProgress || req.ToStatus == domain.Done
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "move_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, Access: a,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, Access: a, LockProject: lock,
 	}, func(t *txn) (MoveTaskResp, error) {
 		cur := *t.Task
 		if cur.Racing {
@@ -484,6 +490,9 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 			ToColumnID: req.ToColumnID, ToStatus: req.ToStatus, Order: req.Order,
 		}
 		if target, err := domain.ResolveColumnAndStatus(db, req.ToColumnID, req.ToStatus, cur.ColumnID); err == nil && target.Status == domain.InProgress && cur.Status != domain.InProgress {
+			if !lock {
+				return MoveTaskResp{}, internalf("move_task: counting the WIP lane without the project lock")
+			}
 			ip := domain.InProgress
 			n, err := t.Tx.CountTasks(ctx, req.ProjectID, store.TaskFilter{BoardID: cur.BoardID, Status: &ip})
 			if err != nil {

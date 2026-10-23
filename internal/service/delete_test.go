@@ -307,3 +307,64 @@ func TestDeleteCallsTheBlobHook(t *testing.T) {
 		t.Fatalf("%d attachment rows left (%v), want 0", n, err)
 	}
 }
+
+// Review round 1 (the reviewer's TestProbeCascadeIntraSetEdge): edges inside the deletion set — a
+// subtask blocking its sibling and the root — are not unblocked or stripped (they go with the set),
+// while a blocker outside the set is stripped. Kills O1 (skip ignored in unblockDependentsOf) and O2
+// (skip ignored in stripFromBlockers).
+func TestDeleteCascadeIntraSetEdges(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		root := e.tkSeed(t, domain.Ready, "", 0, nil)
+		var subs []string
+		for range 2 {
+			s, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: root.ID, Title: "s"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			subs = append(subs, s.Task.ID)
+		}
+		e.tkDepend(t, subs[0], subs[1])
+		e.tkDepend(t, subs[1], root.ID)
+		outside := e.tkSeed(t, domain.Ready, "", 0, nil)
+		e.tkDepend(t, outside.ID, subs[0])
+		if err := e.tkDelete(e.alice, e.get(t, root.ID)); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		for _, id := range append([]string{root.ID}, subs...) {
+			e.tkGone(t, id)
+		}
+		if o := e.get(t, outside.ID); len(o.Blocks) != 0 {
+			t.Fatalf("outside blocker blocks %v, want []", o.Blocks)
+		}
+	})
+}
+
+// Review round 1 (the reviewer's TestProbeCascadeOver200Runs): runsOf pages past one ListTasks page
+// (200). Kills O5 (one page only).
+func TestDeleteCascadeOver200Runs(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		root := e.tkSeed(t, domain.Ready, "", 0, nil)
+		now := time.Now().UnixMilli()
+		var ids []string
+		for range 250 {
+			of := root.ID
+			r, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Ready), Title: "run", Status: domain.Ready, OrderKey: "a0", RunOf: &of, CreatedBy: "alice", CreatedAt: now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, r.ID)
+		}
+		if err := e.tkDelete(e.alice, e.get(t, root.ID)); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		left := 0
+		for _, id := range ids {
+			if _, err := e.st.GetTask(e.ctx, e.project, id); tkCode(err) != domain.CodeNotFound {
+				left++
+			}
+		}
+		if left != 0 {
+			t.Fatalf("%d of 250 runs survived the cascade", left)
+		}
+	})
+}
