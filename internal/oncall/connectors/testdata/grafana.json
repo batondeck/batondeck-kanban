@@ -1,0 +1,5 @@
+{"receiver":"batondeck","status":"firing","orgId":1,"groupKey":"{}/{}:{alertname=\"CPU\"}","groupLabels":{"alertname":"CPU"},
+ "commonLabels":{"alertname":"CPU"},"commonAnnotations":{},"externalURL":"https://grafana.example.com/","version":"1","title":"[FIRING:1] CPU","state":"alerting","message":"",
+ "alerts":[{"status":"firing","labels":{"alertname":"CPU","grafana_folder":"infra","severity":"high"},"annotations":{"summary":"CPU above 90% on web-1"},
+  "startsAt":"2026-10-24T09:10:00Z","endsAt":"0001-01-01T00:00:00Z","generatorURL":"https://grafana.example.com/alerting/grafana/abc/view",
+  "fingerprint":"5f0c2d1e9a8b7c6d","silenceURL":"https://grafana.example.com/alerting/silence/new","dashboardURL":"https://grafana.example.com/d/xyz","panelURL":""}]}

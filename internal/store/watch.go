@@ -89,7 +89,7 @@ func (s *Postgres) notifyChanges(ctx context.Context) error {
 	if s.tx != nil {
 		db = s.tx
 	}
-	if err := pgdb.New(pgCounted{db}).NotifyChanges(ctx); err != nil {
+	if err := pgdb.New(pgCounted{db, s.issued}).NotifyChanges(ctx); err != nil {
 		return fmt.Errorf("store: notify changes: %w", err)
 	}
 	return nil

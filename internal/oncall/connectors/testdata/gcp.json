@@ -1,0 +1,9 @@
+{"version":"1.2","incident":{"incident_id":"0.mx1abcdefghi","scoping_project_id":"acme-prod","scoping_project_number":123456789012,
+ "url":"https://console.cloud.google.com/monitoring/alerting/incidents/0.mx1abcdefghi?project=acme-prod","started_at":1729764000,"ended_at":null,
+ "state":"open","summary":"Request Count for acme-prod Cloud Run Revision labels {service_name=api} is above the threshold of 3.000 with a value of 30.000.",
+ "apigee_url":"","observed_value":"30.000","resource":{"type":"cloud_run_revision","labels":{"project_id":"acme-prod","service_name":"api"}},
+ "resource_type_display_name":"Cloud Run Revision","resource_id":"","resource_display_name":"api","resource_name":"projects/acme-prod/revisions/api-00042",
+ "metric":{"type":"run.googleapis.com/request_count","displayName":"Request Count","labels":{"response_code_class":"5xx"}},
+ "metadata":{"system_labels":{},"user_labels":{}},"policy_name":"api — 5xx responses","policy_user_labels":{"team":"platform"},
+ "documentation":{"content":"Check the api revision's logs.","mime_type":"text/markdown","subject":"api 5xx","links":[]},
+ "condition":{"name":"projects/acme-prod/alertPolicies/1/conditions/2","displayName":"5xx above 3"},"condition_name":"5xx above 3","severity":"No severity","threshold_value":"3"}}

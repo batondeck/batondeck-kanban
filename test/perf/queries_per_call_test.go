@@ -8,9 +8,12 @@ package perf_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -214,13 +217,36 @@ func at(t *testing.T, f *fixture, cl call, state snapshot) int64 {
 	return measure(t, f, f.core, cl)
 }
 
+// benchMetric is one count make bench records (internal/cli/bench_test.go's metric, which bench/
+// compares with its baseline: "exact" fails on any rise).
+type benchMetric struct {
+	Engine string  `json:"engine"`
+	Name   string  `json:"name"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit"`
+	Gate   string  `json:"gate"`
+}
+
 // TestQueriesPerCall: each pinned tool issues at most its pin, on each SQL engine, in the state
 // its pin names, and prints the count beside the pin with the other two states for the record: the
 // other snapshot state and a fresh core (no membership cached, no snapshot). A pinned count of zero
-// fails, since the counter then saw nothing and the pin proved nothing.
+// fails, since the counter then saw nothing and the pin proved nothing. With BATONDECK_BENCH_DIR
+// set (make bench), the three counts and the pin of each tool go to pins-<engine>.json there.
 func TestQueriesPerCall(t *testing.T) {
+	benchDir := os.Getenv("BATONDECK_BENCH_DIR")
 	for _, engine := range sqlEngines(t) {
 		t.Run(engine, func(t *testing.T) {
+			var bench []benchMetric
+			defer func() {
+				// Written after a failure too, so bench/ names the count that rose and its rise.
+				if benchDir == "" || t.Skipped() || len(bench) == 0 {
+					return
+				}
+				b, _ := json.MarshalIndent(bench, "", "  ")
+				if err := os.WriteFile(filepath.Join(benchDir, "pins-"+engine+".json"), append(b, '\n'), 0o644); err != nil {
+					t.Error(err)
+				}
+			}()
 			f := open(t, engine)
 			for _, cl := range calls {
 				fresh := service.New(f.st, service.Options{Logger: log.New(io.Discard, "", 0), ToolCallFlush: -1})
@@ -235,6 +261,11 @@ func TestQueriesPerCall(t *testing.T) {
 				otherN := at(t, f, cl, other)
 				got, pin := at(t, f, cl, cl.state), cl.pin(engine)
 				t.Logf("%-16s %-8s %d statements (pin %d, %s); %s %d; fresh core %d", cl.tool, engine, got, pin, cl.state, other, otherN, cold)
+				bench = append(bench,
+					benchMetric{engine, cl.tool + ": " + cl.state.String(), float64(got), "", "exact"},
+					benchMetric{engine, cl.tool + ": " + other.String(), float64(otherN), "", "exact"},
+					benchMetric{engine, cl.tool + ": fresh core", float64(cold), "", "exact"},
+					benchMetric{engine, cl.tool + ": pin", float64(pin), "", ""})
 				switch {
 				case got == 0:
 					t.Errorf("%s on %s issued 0 statements (%s): the counter saw nothing, so the pin proves nothing", cl.tool, engine, cl.state)
