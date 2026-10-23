@@ -41,6 +41,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The rest of the REST BFF's route table as stubs (R1.12): 38 more routes in `internal/api/{me,agents,
+  notifications,comments,followups,sprints,runs,oncall,chronicle,analytics}.go`, each answering `404
+  {"code":"NOT_FOUND","message":"<tool> lands in <lane>"}` until its lane (R2.1, R2.2, R2.3, R2.5, R2.7,
+  R2.10, R2.11) replaces it; `routes.json` is 77 routes, every in-scope `/api` route of conductor's
+  ui-backend less the transitions pair, `me/cli-tokens`, `me/marketplace-key`, `/api/healthz`,
+  `/api/client-error` and `/api/projects/{projectId}/overview`. `TestOutOfScopeRoutesAreRefused` fails
+  on a studio, admin, tenants, billing or onboarding route, or an excluded one, in the router or in
+  `routes.json`, by name; `TestStubsNameTheirLane` checks every stub's answer. `web/src/api/<area>.ts`
+  holds the 38 `api.ts` functions for these routes over a `req` copy in `web/src/api/http.ts`, held to
+  `api.ts`'s signatures by `web/src/__tests__/api-areas.test.ts`.
 - The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
   check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
   (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
