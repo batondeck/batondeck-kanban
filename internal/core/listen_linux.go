@@ -7,21 +7,21 @@ import (
 	"syscall"
 )
 
-// peerUID is the connected peer's uid, from SO_PEERCRED.
-func peerUID(c *net.UnixConn) (int, error) {
+// peerCred is the connected peer's uid and pid, from SO_PEERCRED.
+func peerCred(c *net.UnixConn) (Peer, error) {
 	raw, err := c.SyscallConn()
 	if err != nil {
-		return 0, err
+		return Peer{}, err
 	}
 	var cred *syscall.Ucred
 	var serr error
 	if err := raw.Control(func(fd uintptr) {
 		cred, serr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
 	}); err != nil {
-		return 0, err
+		return Peer{}, err
 	}
 	if serr != nil {
-		return 0, serr
+		return Peer{}, serr
 	}
-	return int(cred.Uid), nil
+	return Peer{UID: int(cred.Uid), PID: int(cred.Pid)}, nil
 }

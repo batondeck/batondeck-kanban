@@ -313,6 +313,9 @@ type changePayload struct {
 	ProjectID string `json:"projectId,omitempty"`
 	BoardID   string `json:"boardId,omitempty"`
 	Tool      string `json:"tool,omitempty"`
+	// Actor is the caller's identity: the directory rings no master for its own change (R0.25). It
+	// never reaches a doorbell frame, which is contentless.
+	Actor string `json:"actor,omitempty"`
 }
 
 // assigneeScope is the token scope an assigned doorbell rings: the assignee's identity when it is a
@@ -355,7 +358,7 @@ func (t *txn) writeChanges(tool string, ms int64) error {
 		if t.ProjectID == "" {
 			return internalf("mutate %s: a change names no project", tool)
 		}
-		payload, err := json.Marshal(changePayload{Kind: d.Kind, Agent: d.Agent, TaskID: d.TaskID, ProjectID: t.ProjectID, BoardID: d.BoardID, Tool: tool})
+		payload, err := json.Marshal(changePayload{Kind: d.Kind, Agent: d.Agent, TaskID: d.TaskID, ProjectID: t.ProjectID, BoardID: d.BoardID, Tool: tool, Actor: t.Caller.Identity})
 		if err != nil {
 			return err
 		}

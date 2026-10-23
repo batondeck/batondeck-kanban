@@ -15,10 +15,16 @@ import (
 // event, audit row or doorbell.
 type sessions struct{ c *Core }
 
-var _ Sessions = sessions{}
+var (
+	_ Sessions  = sessions{}
+	_ WakeStore = sessions{}
+)
 
 // Sessions is the agent and wake session service.
 func (c *Core) Sessions() Sessions { return sessions{c} }
+
+// WakeStore is the device session directory's persistence.
+func (c *Core) WakeStore() WakeStore { return sessions{c} }
 
 // SessionKey is an agent session's key, conductor's `${identityId}::${agentId}`: one row per agent
 // of an identity.
@@ -120,27 +126,48 @@ func (s sessions) ListAgentSessions(ctx context.Context, caller domain.Caller, r
 // SocketTokenAAD binds a sealed inbox token to its wake session's row.
 func SocketTokenAAD(id string) []byte { return []byte("wake_sessions.socket_token:" + id) }
 
-// RegisterWakeSession records the caller's /wake attachment for the wake-session TTL, under a new id.
-// A socket token is stored sealed (Options.Sealer), never as given; with no sealer it is refused.
+// BearerAAD binds a sealed directory bearer to its wake session's row.
+func BearerAAD(id string) []byte { return []byte("wake_sessions.bearer:" + id) }
+
+// RegisterWakeSession records a directory entry for the wake-session TTL. The bearer and any socket
+// token are stored sealed (Options.Sealer), never as given; with no sealer the entry is refused,
+// since its bearer could not be re-resolved after a restart.
 func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller, req RegisterWakeSessionReq) (resp RegisterWakeSessionResp, err error) {
 	defer s.c.recovered("register_wake_session", &err)
-	if req.Cursor < 0 {
+	switch {
+	case req.Cursor < 0:
 		return resp, domain.Validation("cursor cannot be negative", map[string]any{"field": "cursor"})
-	}
-	if req.SocketToken != "" && req.SocketPath == "" {
+	case req.PID <= 0:
+		return resp, domain.Validation("pid must be a positive process id", map[string]any{"field": "pid"})
+	case req.Role != RoleMaster && req.Role != RoleWorker:
+		return resp, domain.Validation("role must be master or worker", map[string]any{"field": "role"})
+	case req.SocketToken != "" && req.SocketPath == "":
 		return resp, domain.Validation("socketToken needs a socketPath", map[string]any{"field": "socketToken"})
+	case req.Bearer == "":
+		return resp, domain.Validation("a directory entry needs the bearer it registered with", nil)
+	case s.c.sealer == nil:
+		return resp, domain.NewError(domain.CodeInternal, "No keyring to seal the entry's bearer: set BATONDECK_MASTER_KEY", nil)
 	}
-	if req.SocketToken != "" && s.c.sealer == nil {
-		return resp, domain.NewError(domain.CodeInternal, "No keyring to seal the socket token: set BATONDECK_MASTER_KEY", nil)
+	id := req.ID
+	if id == "" {
+		b := make([]byte, 12)
+		if _, err := rand.Read(b); err != nil {
+			return resp, s.c.mapErr("register_wake_session", err)
+		}
+		id = "W-" + hex.EncodeToString(b)
 	}
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return resp, s.c.mapErr("register_wake_session", err)
+	agent := req.Agent
+	if agent == "" {
+		agent = AgentID(caller)
 	}
 	now := s.c.now()
 	w := store.WakeSession{
-		ID: "W-" + hex.EncodeToString(b), IdentityID: caller.Identity, AgentID: AgentID(caller), SocketPath: req.SocketPath,
+		ID: id, IdentityID: caller.Identity, AgentID: agent, SocketPath: req.SocketPath,
 		LastCursor: req.Cursor, CreatedAt: now.UnixMilli(), LastSeenAt: now.UnixMilli(), ExpiresAt: now.Add(s.c.wakeTTL).UnixMilli(),
+		PID: req.PID, Role: req.Role, ClientSessionID: req.ClientSessionID, ProcStart: req.ProcStart,
+	}
+	if w.BearerSealed, err = s.c.sealer.Encrypt([]byte(req.Bearer), BearerAAD(w.ID)); err != nil {
+		return resp, s.c.mapErr("register_wake_session", err)
 	}
 	if req.SocketToken != "" {
 		if w.SocketTokenSealed, err = s.c.sealer.Encrypt([]byte(req.SocketToken), SocketTokenAAD(w.ID)); err != nil {
@@ -150,7 +177,56 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 	if err := s.c.store.PutWakeSession(ctx, w); err != nil {
 		return resp, s.c.mapErr("register_wake_session", err)
 	}
-	return RegisterWakeSessionResp{ID: w.ID, ExpiresAt: isoMs(w.ExpiresAt)}, nil
+	return RegisterWakeSessionResp{ID: w.ID, AgentID: agent, ExpiresAt: isoMs(w.ExpiresAt)}, nil
+}
+
+// ListWakeSessions opens each row's bearer and socket token under the row's own AAD.
+func (s sessions) ListWakeSessions(ctx context.Context) (out []WakeSessionRow, err error) {
+	defer s.c.recovered("list_wake_sessions", &err)
+	rows, err := s.c.store.ListWakeSessions(ctx)
+	if err != nil {
+		return nil, s.c.mapErr("list_wake_sessions", err)
+	}
+	for _, w := range rows {
+		r := WakeSessionRow{ID: w.ID, IdentityID: w.IdentityID, AgentID: w.AgentID, PID: w.PID, Role: w.Role,
+			SocketPath: w.SocketPath, ClientSessionID: w.ClientSessionID, ProcStart: w.ProcStart, LastCursor: w.LastCursor, CreatedAt: w.CreatedAt}
+		if s.c.sealer != nil && w.BearerSealed != nil {
+			if pt, err := s.c.sealer.Decrypt(w.BearerSealed, BearerAAD(w.ID)); err == nil {
+				r.Bearer, r.Sealed = string(pt), true
+			}
+			if w.SocketTokenSealed != nil {
+				if pt, err := s.c.sealer.Decrypt(w.SocketTokenSealed, SocketTokenAAD(w.ID)); err == nil {
+					r.SocketToken = string(pt)
+				} else {
+					r.Bearer, r.Sealed = "", false
+				}
+			}
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// SetWakeSessionCursor is one statement.
+func (s sessions) SetWakeSessionCursor(ctx context.Context, id string, cursor int64) (err error) {
+	defer s.c.recovered("set_wake_session_cursor", &err)
+	if err := s.c.store.SetWakeSessionCursor(ctx, id, cursor, s.c.nowMs()); err != nil {
+		return s.c.mapErr("set_wake_session_cursor", err)
+	}
+	return nil
+}
+
+// DropWakeSession is one statement; NOT_FOUND is success.
+func (s sessions) DropWakeSession(ctx context.Context, id string) (err error) {
+	defer s.c.recovered("drop_wake_session", &err)
+	err = s.c.store.DeleteWakeSession(ctx, id)
+	if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+		return nil
+	}
+	if err != nil {
+		return s.c.mapErr("drop_wake_session", err)
+	}
+	return nil
 }
 
 // WakeScopes is the token scopes a caller's doorbell listener subscribes to: its own (the assigned

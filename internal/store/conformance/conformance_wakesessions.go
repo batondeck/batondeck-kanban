@@ -11,8 +11,9 @@ import (
 
 func init() { register("wakesessions", wakeSessions) }
 
-// wakeSessions is the wake-session area: put, get and delete, a replace keeping its creation time,
-// expiry judged at the read, and the refusals.
+// wakeSessions is the wake-session area: put, get, list, the cursor and delete, a replace keeping its
+// creation time, expiry judged at the read (and not by the list), one pid per session, and the
+// refusals.
 func wakeSessions(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -58,6 +59,39 @@ func wakeSessions(t *testing.T, newStore Factory) {
 			noErr(t, s.DeleteWakeSession(ctx, "W-2"))
 		})
 
+		t.Run("TheDirectoryFieldsListAndCursor", func(t *testing.T) {
+			s := migrated(t, newStore)
+			a := live("W-a", 200)
+			a.PID, a.Role, a.ClientSessionID, a.ProcStart, a.BearerSealed = 4242, "worker", "f73a2587", "Fri Oct 23 08:36:23 2026", []byte{9, 8}
+			noErr(t, s.PutWakeSession(ctx, a))
+			b := live("W-b", 100)
+			b.ExpiresAt = time.Now().Add(-time.Second).UnixMilli() // expired: still listed
+			noErr(t, s.PutWakeSession(ctx, b))
+			c := live("W-c", 100) // no pid, like b: two of them are allowed
+			noErr(t, s.PutWakeSession(ctx, c))
+			list, err := s.ListWakeSessions(ctx)
+			noErr(t, err)
+			if len(list) != 3 || list[0].ID != "W-b" || list[1].ID != "W-c" || list[2].ID != "W-a" {
+				t.Fatalf("ListWakeSessions = %+v, want W-b, W-c (created 100, by id) then W-a", list)
+			}
+			got := list[2]
+			if got.PID != 4242 || got.Role != "worker" || got.ClientSessionID != "f73a2587" || got.ProcStart != a.ProcStart || string(got.BearerSealed) != string(a.BearerSealed) {
+				t.Fatalf("the directory fields read back %+v, want %+v", got, a)
+			}
+			taken := live("W-d", 300)
+			taken.PID = 4242
+			wantErr(t, s.PutWakeSession(ctx, taken), domain.CodeValidation, "")
+			a.Role = "master" // the same id may keep its pid
+			noErr(t, s.PutWakeSession(ctx, a))
+			noErr(t, s.SetWakeSessionCursor(ctx, "W-a", 77, 900))
+			got, err = s.GetWakeSession(ctx, "W-a")
+			noErr(t, err)
+			if got.LastCursor != 77 || got.LastSeenAt != 900 || got.Role != "master" || got.PID != 4242 {
+				t.Fatalf("after SetWakeSessionCursor %+v", got)
+			}
+			wantErr(t, s.SetWakeSessionCursor(ctx, "W-none", 1, 1), domain.CodeNotFound, "WakeSession")
+		})
+
 		t.Run("TheRefusals", func(t *testing.T) {
 			s := migrated(t, newStore)
 			for _, in := range []store.WakeSession{
@@ -65,6 +99,8 @@ func wakeSessions(t *testing.T, newStore Factory) {
 				{ID: "W-3", AgentID: "a1", ExpiresAt: 1},
 				{ID: "W-3", IdentityID: "alice", ExpiresAt: 1},
 				{ID: "W-3", IdentityID: "alice", AgentID: "a1"},
+				{ID: "W-3", IdentityID: "alice", AgentID: "a1", ExpiresAt: 1, Role: "admin"},
+				{ID: "W-3", IdentityID: "alice", AgentID: "a1", ExpiresAt: 1, PID: -1},
 			} {
 				wantErr(t, s.PutWakeSession(ctx, in), domain.CodeValidation, "")
 			}

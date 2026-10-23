@@ -716,8 +716,13 @@ func (r *reference) DeleteIdleAgentSessions(_ context.Context, before int64) (in
 // --- WakeSessions ---
 
 func (r *reference) PutWakeSession(_ context.Context, s store.WakeSession) error {
-	if s.ID == "" || s.IdentityID == "" || s.AgentID == "" || s.ExpiresAt == 0 {
+	if s.ID == "" || s.IdentityID == "" || s.AgentID == "" || s.ExpiresAt == 0 || s.PID < 0 || (s.Role != "" && s.Role != "master" && s.Role != "worker") {
 		return invalid("bad wake session")
+	}
+	for id, o := range r.st.wake {
+		if s.PID != 0 && o.PID == s.PID && id != s.ID {
+			return invalid("pid taken")
+		}
 	}
 	if old, ok := r.st.wake[s.ID]; ok {
 		s.CreatedAt = old.CreatedAt
@@ -732,6 +737,27 @@ func (r *reference) GetWakeSession(_ context.Context, id string) (store.WakeSess
 		return store.WakeSession{}, domain.NotFound("WakeSession", id)
 	}
 	return s, nil
+}
+
+func (r *reference) ListWakeSessions(_ context.Context) ([]store.WakeSession, error) {
+	out := slices.Collect(maps.Values(r.st.wake))
+	slices.SortFunc(out, func(a, b store.WakeSession) int {
+		if a.CreatedAt != b.CreatedAt {
+			return int(a.CreatedAt - b.CreatedAt)
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out, nil
+}
+
+func (r *reference) SetWakeSessionCursor(_ context.Context, id string, cursor, lastSeenAt int64) error {
+	s, ok := r.st.wake[id]
+	if !ok {
+		return domain.NotFound("WakeSession", id)
+	}
+	s.LastCursor, s.LastSeenAt = cursor, lastSeenAt
+	r.st.wake[id] = s
+	return nil
 }
 
 func (r *reference) DeleteWakeSession(_ context.Context, id string) error {
