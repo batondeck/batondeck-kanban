@@ -27,7 +27,7 @@ import (
 // POST /hooks/{id} is mounted by serve outside every bearer, session and CSRF check, over TCP: a
 // signed delivery with no credential but its signature is 202 with the ticket; an unsigned one 401;
 // an id of the wrong shape and an unknown one the same flat 404; a body over the outer 512 KiB cap
-// 413 before the service sees it; a body over the integration's own cap 413 too.
+// 413 before the service sees it (an unknown id too); a body over the integration's own cap 413.
 func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "bk.db"), "FULL")
@@ -106,8 +106,12 @@ func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 			t.Fatalf("id %q: %d %s, want the flat 404 %s", id, code, got, unknown)
 		}
 	}
-	if code, got, _ := post(in.Integration.ID, bytes.Repeat([]byte("x"), 512<<10+1), true); code != http.StatusRequestEntityTooLarge || !strings.Contains(got, "too_large") {
-		t.Fatalf("over the outer cap: %d %s", code, got)
+	// The outer cap reads at most 512 KiB + 1 before any lookup: an unknown id with a bigger body is
+	// 413, not the 404 a read of the whole body and a lookup would answer.
+	for _, id := range []string{in.Integration.ID, "I-00000000000000000000000000000000"} {
+		if code, got, _ := post(id, bytes.Repeat([]byte("x"), 512<<10+1), true); code != http.StatusRequestEntityTooLarge || !strings.Contains(got, "too_large") {
+			t.Fatalf("%s over the outer cap: %d %s", id, code, got)
+		}
 	}
 	if code, _, _ := post(in.Integration.ID, append(body[:len(body)-1], []byte(`,"description":"`+strings.Repeat("y", 2048)+`"}`)...), true); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over the integration's 2 KiB cap: %d", code)
