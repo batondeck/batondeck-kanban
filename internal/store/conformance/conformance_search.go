@@ -11,10 +11,10 @@ import (
 )
 
 // searchCorpus is the one corpus the search battery pins its orders over. Every body (title, then
-// description) is six tokens, so a ranking that weights a token by how often it occurs (bm25 and
-// ts_rank both do) orders it the same on both engines; where two bodies tie on a multi-term query,
-// they hold the terms the same distance apart, so ts_rank's proximity weighting ties them too and
-// task number decides.
+// description) is six tokens, so a ranking that weights a token by how often it occurs (SQLite's
+// matched-token count and ts_rank both do) orders it the same on both engines; where two bodies
+// tie on a multi-term query, they hold the terms the same distance apart, so ts_rank's proximity
+// weighting ties them too and task number decides.
 var searchCorpus = []struct {
 	board       int // 0 or 1: the project's first or second board
 	status      domain.Status
@@ -52,8 +52,9 @@ var searchQueries = []struct {
 
 func init() { register("search", search) }
 
-// search is lexical task search: the ten pinned queries, the count, paging, no hit, and the
-// refusals.
+// search is lexical task search: the ten pinned queries, the count, paging, no hit, the index
+// following an update and a delete, scores another project cannot move, no row left by a delete,
+// and the refusals.
 func search(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -160,6 +161,88 @@ func search(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			if len(missing.Hits) != 0 {
 				t.Fatalf("a missing project matched %v", ids(missing.Hits))
+			}
+		})
+
+		// The index follows the task inside its own write: a title change drops the old word and
+		// finds the new one, search tokens are searched, and a deleted task is never a hit.
+		t.Run("TheIndexFollowsTheTask", func(t *testing.T) {
+			s, p, _ := corpus(t)
+			hit := func(q string) []string {
+				t.Helper()
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				return ids(page.Hits)
+			}
+			tk, err := s.GetTask(ctx, p, "T-7")
+			noErr(t, err)
+			tk, err = s.UpdateTask(ctx, p, "T-7", tk.Version, store.TaskPatch{Title: ptr("verify webhook calls"), SearchTokens: ptr("zorblat"), UpdatedBy: seedIdentity, UpdatedAt: 2})
+			noErr(t, err)
+			if got := hit("authorize"); len(got) != 0 {
+				t.Fatalf("the old title word still finds %v", got)
+			}
+			for _, q := range []string{"verify", "zorblat"} {
+				if got := hit(q); !slices.Equal(got, []string{"T-7"}) {
+					t.Fatalf("%q found %v, want [T-7]", q, got)
+				}
+			}
+			noErr(t, s.DeleteTask(ctx, p, "T-7", tk.Version))
+			for _, q := range []string{"verify", "zorblat", "webhook"} {
+				if got := hit(q); len(got) != 0 {
+					t.Fatalf("%q still finds %v after the delete", q, got)
+				}
+			}
+		})
+
+		// A project's scores and order read only its own tasks: another project gaining tasks that
+		// hold the words moves neither (bm25's IDF, which counts every project's rows, would).
+		t.Run("AnotherProjectsRowsMoveNoScore", func(t *testing.T) {
+			s, p, _ := corpus(t)
+			queries := []string{"alpha", "login sso", "auth*", "gamma"}
+			before := map[string]store.SearchPage{}
+			for _, q := range queries {
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				before[q] = page
+			}
+			sd := s.(seeder)
+			other, ob, err := sd.seedProject(ctx)
+			noErr(t, err)
+			for _, title := range []string{"alpha login sso", "authorize alpha gamma", "alpha alpha alpha", "gamma auth login", "sso alpha"} {
+				_, err := sd.seedTask(ctx, seedTaskInput{ProjectID: other, BoardID: ob, Title: title, Description: "alpha"})
+				noErr(t, err)
+			}
+			for _, q := range queries {
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				if !slices.Equal(page.Hits, before[q].Hits) {
+					t.Errorf("%q in %s: %v before another project's tasks, %v after", q, p, before[q].Hits, page.Hits)
+				}
+			}
+		})
+
+		// A deleted task leaves no index row: a task of another project that reuses its row id
+		// (SQLite's rid has no AUTOINCREMENT) is never found by the deleted task's words.
+		t.Run("ADeletedTasksWordsNeverMatchARowThatReusesItsID", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			id, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: "zorblat launch", Description: "quuxly"})
+			noErr(t, err)
+			noErr(t, s.DeleteTask(ctx, p, id, stateOf(t, sd, p, id).Version))
+			q, qb, err := sd.seedProject(ctx)
+			noErr(t, err)
+			_, err = sd.seedTask(ctx, seedTaskInput{ProjectID: q, BoardID: qb, Title: "plain words", Description: "nothing more"})
+			noErr(t, err)
+			for _, w := range []string{"zorblat", "quuxly"} {
+				page, err := s.SearchTasks(ctx, q, w, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				if len(page.Hits) != 0 {
+					t.Errorf("%q in %s found %v: a deleted task's words match another project's task", w, q, ids(page.Hits))
+				}
+			}
+			page, err := s.SearchTasks(ctx, q, "plain", store.SearchFilter{}, "", 0)
+			noErr(t, err)
+			if got := ids(page.Hits); !slices.Equal(got, []string{"T-1"}) {
+				t.Errorf("plain in %s found %v, want [T-1]", q, got)
 			}
 		})
 

@@ -43,23 +43,21 @@ every HDTP area removed.
 | wakesessions (`conformance_wakesessions.go`) | put, get, replace keeping created-at, delete, expiry at the read; NOT_FOUND and VALIDATION |
 | attachments (`conformance_attachments.go`) | pending then ready on an existing blob, oldest-first list, per-task delete, project isolation; NOT_FOUND task/attachment/blob, VALIDATION |
 | blobs (`conformance_blobs.go`) | put once, get, delete, a referenced blob kept, the unreferenced list by age and limit; VALIDATION |
-| search (`conformance_search.go`) | ten pinned queries over one corpus with their ordered ids and counts, cursor paging through ranks and ties, no hit; VALIDATION |
+| search (`conformance_search.go`) | ten pinned queries over one corpus with their ordered ids and counts, cursor paging through ranks and ties, no hit, the index following a title and token update and a delete, scores and order another project's tasks cannot move, no index row left by a delete under a reused row id; VALIDATION |
 
 The two-statement pin on `GetBoard` is `internal/store/boards_test.go`; task counts over real tasks and
 the refusal to remove a column holding a task are there too, and in the tasks battery.
 
 The twelve areas from context on are store contract II (`internal/store/contract_<area>.go`). Each
 registers its battery from an init, and its subtest SKIPS, naming the task that builds it, while the
-store's methods are unbuilt: the engines' stubs (`internal/store/stubs_contract_ii.go`) and memstore's
-(`internal/store/memstore/unbuilt_contract_ii.go`, through `store.Unbuilt`) return INTERNAL with the task
-under the detail `unbuilt` (`internal/store/unbuilt.go`), and `store.UnbuiltTask` is what `area`
+store's methods are unbuilt: an unbuilt method returns INTERNAL with the task under the detail `unbuilt`
+(`internal/store/unbuilt.go`; memstore through `store.Unbuilt`), and `store.UnbuiltTask` is what `area`
 (`conformance_seed.go`) checks; `noErr` and `wantErr` skip on it too. Every other outcome of a built area fails, including a missing seeder: a battery standing
 on projects, boards and tasks takes them from the store's `seeder`, and a store that is built but offers
 none fails the battery rather than skipping it. `WithSeeder(store)` (`conformance_seed.go`) is that
 seeder, over the store's own `Projects`, `Boards` and `Tasks`; the three factories below return their
-store through it. `TestContractIIBatteriesOnAReference` (`reference_test.go`) runs all twelve against a
-map-backed reference that keeps the contract, which is where the batteries of the areas no store has
-built yet are proven to pass and to fail.
+store through it. All twelve are built on both engines and on memstore (search last, R1.9), so the
+map-backed reference that judged the batteries before any store carried them is gone.
 
 ## Its callers
 
