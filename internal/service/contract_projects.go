@@ -10,7 +10,8 @@ import (
 type Projects interface {
 	// Create is create_project.
 	// Tier: any authenticated caller (not tenant-scoped); the caller becomes the project's admin.
-	// Event: project.created. Audit: none. Doorbell: none. Replays on idempotencyKey.
+	// Event: none (conductor's create_project appends none). Audit: none. Doorbell: none. Replays on
+	// idempotencyKey.
 	Create(ctx context.Context, caller domain.Caller, req CreateProjectReq) (CreateProjectResp, error)
 
 	// Get is get_project.
@@ -72,23 +73,23 @@ type ListProjectsResp struct {
 
 // UpdateSettingsReq is update_settings's input.
 type UpdateSettingsReq struct {
-	ProjectID          string                `json:"projectId"`
-	AgingCeilingMs     int64                 `json:"agingCeilingMs,omitzero"`
-	AnomalyPolicy      AnomalyPolicyPatch    `json:"anomalyPolicy,omitzero"`
-	ArtifactPolicy     PolicyMode            `json:"artifactPolicy,omitzero"`
-	CapabilityAliases  map[string]string     `json:"capabilityAliases,omitzero"`
-	CheckpointPolicy   PolicyMode            `json:"checkpointPolicy,omitzero"`
-	Color              *string               `json:"color,omitzero"`
-	DefaultReviewer    *string               `json:"defaultReviewer,omitzero"`
-	MaxRunsPerTask     int64                 `json:"maxRunsPerTask,omitzero"`
-	MaxTicketTokens    int64                 `json:"maxTicketTokens,omitzero"`
-	QuotaEnabled       bool                  `json:"quotaEnabled,omitzero"`
-	RetryPolicy        RetryPolicyPatch      `json:"retryPolicy,omitzero"`
-	ReviewEnabled      bool                  `json:"reviewEnabled,omitzero"`
-	SelectionWeights   SelectionWeightsPatch `json:"selectionWeights,omitzero"`
-	SelfApprovalPolicy PolicyMode            `json:"selfApprovalPolicy,omitzero"`
-	TokenPolicy        PolicyMode            `json:"tokenPolicy,omitzero"`
-	TxnCap             *int64                `json:"txnCap,omitzero"`
+	ProjectID          string                       `json:"projectId"`
+	AgingCeilingMs     int64                        `json:"agingCeilingMs,omitzero"`
+	AnomalyPolicy      Optional[AnomalyPolicyPatch] `json:"anomalyPolicy,omitzero"`
+	ArtifactPolicy     PolicyMode                   `json:"artifactPolicy,omitzero"`
+	CapabilityAliases  map[string]string            `json:"capabilityAliases,omitzero"`
+	CheckpointPolicy   PolicyMode                   `json:"checkpointPolicy,omitzero"`
+	Color              Nullable[string]             `json:"color,omitzero"`
+	DefaultReviewer    Nullable[string]             `json:"defaultReviewer,omitzero"`
+	MaxRunsPerTask     int64                        `json:"maxRunsPerTask,omitzero"`
+	MaxTicketTokens    int64                        `json:"maxTicketTokens,omitzero"`
+	QuotaEnabled       Optional[bool]               `json:"quotaEnabled,omitzero"`
+	RetryPolicy        RetryPolicyPatch             `json:"retryPolicy,omitzero"`
+	ReviewEnabled      Optional[bool]               `json:"reviewEnabled,omitzero"`
+	SelectionWeights   SelectionWeightsPatch        `json:"selectionWeights,omitzero"`
+	SelfApprovalPolicy PolicyMode                   `json:"selfApprovalPolicy,omitzero"`
+	TokenPolicy        PolicyMode                   `json:"tokenPolicy,omitzero"`
+	TxnCap             Nullable[int64]              `json:"txnCap,omitzero"`
 }
 
 // UpdateSettingsResp is update_settings's output.

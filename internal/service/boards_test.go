@@ -110,7 +110,7 @@ func TestColumns(t *testing.T) {
 	if err != nil || again.Column.ID != add.Column.ID {
 		t.Fatalf("the add_column replay made %s, first %s (err %v)", again.Column.ID, add.Column.ID, err)
 	}
-	upd, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: add.Column.ID, WIPLimit: ptr(int64(5)), Name: "QA2"})
+	upd, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: add.Column.ID, WIPLimit: Value(int64(5)), Name: "QA2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +128,11 @@ func TestColumns(t *testing.T) {
 		err  error
 	}{
 		{"a fractional order", func() error {
-			_, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Status: domain.Ready, Order: 1.5})
+			_, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Status: domain.Ready, Order: Some(1.5)})
 			return err
 		}()},
 		{"a zero wipLimit", func() error {
-			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: add.Column.ID, WIPLimit: ptr(int64(0))})
+			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: add.Column.ID, WIPLimit: Value(int64(0))})
 			return err
 		}()},
 		{"an unknown status", func() error {

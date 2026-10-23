@@ -105,17 +105,17 @@ type MoveTaskResp struct {
 
 // ListTasksReq is list_tasks's input.
 type ListTasksReq struct {
-	BoardID          string        `json:"boardId"`
-	ProjectID        string        `json:"projectId"`
-	Assignee         *string       `json:"assignee,omitzero"`
-	Cursor           string        `json:"cursor,omitzero"`
-	Label            string        `json:"label,omitzero"`
-	Limit            int64         `json:"limit,omitzero"`
-	MissingArtifacts bool          `json:"missingArtifacts,omitzero"`
-	SprintID         string        `json:"sprintId,omitzero"`
-	Status           domain.Status `json:"status,omitzero"`
-	UnblockedOnly    bool          `json:"unblockedOnly,omitzero"`
-	UpdatedSince     string        `json:"updatedSince,omitzero"`
+	BoardID          string           `json:"boardId"`
+	ProjectID        string           `json:"projectId"`
+	Assignee         Nullable[string] `json:"assignee,omitzero"`
+	Cursor           string           `json:"cursor,omitzero"`
+	Label            string           `json:"label,omitzero"`
+	Limit            int64            `json:"limit,omitzero"`
+	MissingArtifacts bool             `json:"missingArtifacts,omitzero"`
+	SprintID         string           `json:"sprintId,omitzero"`
+	Status           domain.Status    `json:"status,omitzero"`
+	UnblockedOnly    bool             `json:"unblockedOnly,omitzero"`
+	UpdatedSince     string           `json:"updatedSince,omitzero"`
 }
 
 // ListTasksResp is list_tasks's output.
@@ -243,17 +243,17 @@ type TaskReview struct {
 
 // TaskPatch is update_task's input patch, first seen there. It is an open object: conductor's schema allows properties it does not name.
 type TaskPatch struct {
-	Assignee             *string               `json:"assignee,omitzero"`
-	CustomFields         map[string]FieldValue `json:"customFields,omitzero"`
-	Description          string                `json:"description,omitzero"`
-	DueAt                *string               `json:"dueAt,omitzero"`
-	Estimate             *float64              `json:"estimate,omitzero"`
-	Labels               []string              `json:"labels,omitzero"`
-	ModelHint            *ModelHintInput       `json:"modelHint,omitzero"`
-	Priority             domain.Priority       `json:"priority,omitzero"`
-	RequiredCapabilities []string              `json:"requiredCapabilities,omitzero"`
-	Reviewer             *string               `json:"reviewer,omitzero"`
-	Title                string                `json:"title,omitzero"`
+	Assignee             Nullable[string]         `json:"assignee,omitzero"`
+	CustomFields         map[string]FieldValue    `json:"customFields,omitzero"`
+	Description          Optional[string]         `json:"description,omitzero"`
+	DueAt                Nullable[string]         `json:"dueAt,omitzero"`
+	Estimate             Nullable[float64]        `json:"estimate,omitzero"`
+	Labels               []string                 `json:"labels,omitzero"`
+	ModelHint            Nullable[ModelHintInput] `json:"modelHint,omitzero"`
+	Priority             domain.Priority          `json:"priority,omitzero"`
+	RequiredCapabilities []string                 `json:"requiredCapabilities,omitzero"`
+	Reviewer             Nullable[string]         `json:"reviewer,omitzero"`
+	Title                string                   `json:"title,omitzero"`
 }
 
 // FieldValue is a custom field's value: a string (at most 500 characters), a number or a boolean.

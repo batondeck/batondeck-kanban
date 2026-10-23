@@ -50,8 +50,7 @@ func TestEveryMutationWritesItsRowsOnce(t *testing.T) {
 		board bool // the change row names a board
 		run   func() error
 	}{
-		// DEVIATION: the contract names a project.created event, which the store cannot append
-		// (AppendBoardEvent requires a board); want.events is 0 until it can.
+		// create_project appends no event, as conductor's does not.
 		{"create_project", rows{0, 0, 1}, false, func() error {
 			r, err := f.c.Projects().Create(f.ctx, f.alice, CreateProjectReq{Name: "Q"})
 			made.project = r.ProjectID
@@ -87,7 +86,7 @@ func TestEveryMutationWritesItsRowsOnce(t *testing.T) {
 			return err
 		}},
 		{"update_column", rows{0, 0, 1}, true, func() error {
-			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: made.board.ID, ColumnID: made.column.ID, WIPLimit: ptr(int64(4))})
+			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: made.board.ID, ColumnID: made.column.ID, WIPLimit: Value(int64(4))})
 			return err
 		}},
 		{"remove_column", rows{0, 0, 1}, true, func() error {
