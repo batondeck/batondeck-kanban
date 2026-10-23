@@ -16,7 +16,7 @@ import (
 func deleteTask(f *fixture, task store.Task, version int64) error {
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{
 		Tool: "delete_task", Args: map[string]any{"projectId": f.project.ID, "taskId": task.ID},
-		ProjectID: f.project.ID, TaskID: task.ID, Version: version,
+		ProjectID: f.project.ID, TaskID: task.ID, Version: &version,
 	}, func(t *txn) (struct{}, error) {
 		if err := t.Tx.DeleteTask(f.ctx, t.Task.ProjectID, t.Task.ID, t.Task.Version); err != nil {
 			return struct{}{}, err
@@ -32,7 +32,7 @@ func deleteTask(f *fixture, task store.Task, version int64) error {
 func retitle(f *fixture, task store.Task, version int64, title string) (store.Task, error) {
 	return mutate(f.ctx, f.c, f.alice, mutation{
 		Tool: "update_task", Args: map[string]any{"projectId": f.project.ID, "taskId": task.ID},
-		ProjectID: f.project.ID, TaskID: task.ID, Version: version,
+		ProjectID: f.project.ID, TaskID: task.ID, Version: &version,
 	}, func(t *txn) (store.Task, error) {
 		got, err := t.Tx.UpdateTask(f.ctx, t.Task.ProjectID, t.Task.ID, t.Task.Version, store.TaskPatch{Title: &title, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli()})
 		if err != nil {
@@ -125,7 +125,7 @@ func TestMutateStaleWritesNothing(t *testing.T) {
 	task := f.task(t, domain.Backlog, nil)
 	before := f.count(t)
 	ran := false
-	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version + 7}, func(t *txn) (int, error) {
+	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: ptr(task.Version + 7)}, func(t *txn) (int, error) {
 		ran = true
 		return 0, nil
 	})
@@ -227,11 +227,12 @@ func TestMutateCreateRingsBroadcast(t *testing.T) {
 	}
 }
 
-// Assigning a task rings assigned in the ASSIGNEE's scope, not the caller's.
+// Assigning a task to a member rings assigned in the ASSIGNEE's identity scope, not the caller's.
 func TestMutateAssignRingsTheAssignee(t *testing.T) {
 	f := newFixture(t, Options{})
+	f.member(t, "bob", domain.RoleWorker)
 	task := f.task(t, domain.Ready, nil)
-	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version}, func(t *txn) (store.Task, error) {
+	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: &task.Version}, func(t *txn) (store.Task, error) {
 		got, err := t.Tx.UpdateTask(f.ctx, f.project.ID, task.ID, task.Version, store.TaskPatch{Assignee: &store.Nullable[string]{Value: ptr("bob")}, UpdatedBy: "alice", UpdatedAt: t.Now.UnixMilli()})
 		if err != nil {
 			return got, err
@@ -353,7 +354,7 @@ func TestMutatePanicIsInternalAndRollsBack(t *testing.T) {
 // A missing task is NOT_FOUND before fn runs.
 func TestMutateMissingTaskIsNotFound(t *testing.T) {
 	f := newFixture(t, Options{})
-	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: "T-404", Version: 1}, func(t *txn) (int, error) {
+	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: "T-404", Version: ptr(int64(1))}, func(t *txn) (int, error) {
 		t.Event(store.EventInput{Type: domain.EventTaskUpdated})
 		return 0, nil
 	})

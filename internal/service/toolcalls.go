@@ -132,13 +132,21 @@ func (tc *toolCalls) loop(every time.Duration) {
 	}
 }
 
-// stop ends the flusher and flushes what is left.
+// stop ends the flusher and flushes what is left, even when ctx is already done: the flush runs on
+// ctx's values without its cancellation, bounded by its own timeout, so Close never drops rows
+// silently.
 func (tc *toolCalls) stop(ctx context.Context) error {
 	tc.stopped.Do(func() { close(tc.quit) })
+	var waitErr error
 	select {
 	case <-tc.done:
 	case <-ctx.Done():
-		return ctx.Err()
+		waitErr = ctx.Err()
 	}
-	return tc.flush(ctx)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := tc.flush(fctx); err != nil {
+		return err
+	}
+	return waitErr
 }

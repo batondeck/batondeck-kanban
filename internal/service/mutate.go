@@ -24,6 +24,11 @@ const (
 // identity's token scope (internal/auth: TokenScope = the identity id).
 func BroadcastScope(projectID string) string { return "project:" + projectID }
 
+// AgentScope is the token scope of an assigned doorbell whose assignee is a free-text agent label
+// rather than a member identity (conductor allows both: handoff_task's toAgent): the sessions of
+// that agent read it besides their identity's scope.
+func AgentScope(label string) string { return "agent:" + label }
+
 // Doorbell is one ring: Kind assigned (to Agent, the assignee identity) or broadcast (to the
 // project's open frontier). The payload is zero-authority: it names a task, never grants anything.
 type Doorbell struct {
@@ -59,15 +64,16 @@ func doorbellsFor(before *store.Task, after store.Task, unblocked bool) []Doorbe
 // mutation names one mutating call. Tool is the tool (or route) name: the audit descriptor is
 // domain.DescribeAudit(Tool, Args), and Args are the call's arguments. TaskID "" is a mutation
 // that loads no task (a create, a project or board change). Version is the caller's expected
-// version of that task, 0 when the call is not version-checked (versions start at 1).
-// IdempotencyKey "" keeps nothing. Access is authorize's decision; a grant check it left pending is
+// version of that task; nil only on the paths that are not version-checked (the lease-guarded
+// ones). A supplied 0 is checked and is STALE, since versions start at 1, as conductor's
+// nonnegative version is. IdempotencyKey "" keeps nothing; a key is kept per tool. Access is authorize's decision; a grant check it left pending is
 // finished against the loaded task.
 type mutation struct {
 	Tool           string
 	Args           map[string]any
 	ProjectID      string
 	TaskID         string
-	Version        int64
+	Version        *int64
 	IdempotencyKey string
 	Access         access
 }
@@ -140,7 +146,7 @@ func (t *txn) RingFor(before *store.Task, after store.Task, unblocked bool) {
 // mutate is the only composition of a mutation (ADR-0003), in one store transaction: the
 // idempotency replay (before any precondition, as conductor's runTaskTxnIdem: a replayed call
 // answers what it answered, even if the task has moved since), then load the task → STALE when
-// its version is not m.Version → the pending grant check → fn → the version bump (exactly one;
+// its version is not *m.Version → the pending grant check → fn → the version bump (exactly one;
 // mutate makes it when fn did not) → the task_events rows → the audit row when
 // domain.DescribeAudit names the tool → the change-log rows (one per doorbell, else one
 // ChangeKindChanged row) → the idempotency entry. Any error, from fn or any step, rolls all of it
@@ -156,8 +162,8 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 			if err != nil {
 				return zero, err
 			}
-			if m.Version != 0 && cur.Version != m.Version {
-				return zero, domain.Stale(m.Version, cur.Version)
+			if m.Version != nil && cur.Version != *m.Version {
+				return zero, domain.Stale(*m.Version, cur.Version)
 			}
 			t.Task = &cur
 		}
@@ -186,11 +192,13 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		}
 		return out, nil
 	}
+	// The key is namespaced by tool, as conductor's `${tool}:${key}` (common.ts:216-219): one key
+	// sent to two tools must not replay one's result as the other's.
 	scope := m.ProjectID
 	if scope == "" {
 		scope = store.GlobalScope
 	}
-	raw, err := c.store.WithIdempotency(ctx, scope, caller.Identity, m.IdempotencyKey, c.idemTTL, func(tx store.Store) ([]byte, error) {
+	raw, err := c.store.WithIdempotency(ctx, scope, caller.Identity, m.Tool+":"+m.IdempotencyKey, c.idemTTL, func(tx store.Store) ([]byte, error) {
 		r, err := run(tx)
 		if err != nil {
 			return nil, err
@@ -280,11 +288,28 @@ type changePayload struct {
 	Tool      string `json:"tool,omitempty"`
 }
 
+// assigneeScope is the token scope an assigned doorbell rings: the assignee's identity when it is a
+// member of the project (one GetMember, inside the transaction), else AgentScope(assignee), since an
+// assignee may be a free-text agent label (conductor's handoff_task toAgent).
+func (t *txn) assigneeScope(assignee string) (string, error) {
+	_, err := t.Tx.GetMember(t.ctx, t.ProjectID, assignee)
+	if err == nil {
+		return assignee, nil
+	}
+	if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+		return AgentScope(assignee), nil
+	}
+	return "", err
+}
+
 func (t *txn) writeChanges(tool string, ms int64) error {
 	bells := t.bells
 	if len(bells) == 0 {
 		d := Doorbell{Kind: ChangeKindChanged}
-		if t.Task != nil {
+		switch {
+		case t.after != nil:
+			d.TaskID, d.BoardID = t.after.ID, t.after.BoardID
+		case t.Task != nil:
 			d.TaskID, d.BoardID = t.Task.ID, t.Task.BoardID
 		}
 		bells = []Doorbell{d}
@@ -295,7 +320,10 @@ func (t *txn) writeChanges(tool string, ms int64) error {
 			if d.Agent == "" {
 				return internalf("mutate %s: an assigned doorbell names no assignee", tool)
 			}
-			scope = d.Agent
+			var err error
+			if scope, err = t.assigneeScope(d.Agent); err != nil {
+				return err
+			}
 		}
 		if t.ProjectID == "" {
 			return internalf("mutate %s: a change names no project", tool)

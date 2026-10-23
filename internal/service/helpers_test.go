@@ -160,3 +160,7 @@ func wantCode(t *testing.T, err error, code domain.Code) *domain.BatonDeckError 
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func contextWithCancel(f *fixture) (context.Context, context.CancelFunc) {
+	return context.WithCancel(f.ctx)
+}

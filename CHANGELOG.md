@@ -43,8 +43,11 @@ Notable changes to batondeck-kanban. The format follows
   row when `domain.DescribeAudit` names the tool, and the change-log rows; a panic is INTERNAL with
   its stack logged, a domain code passes unchanged, any other error is INTERNAL. Every mutation
   writes at least one change-log row: one per doorbell (`assigned`, scoped to the assignee's
-  identity; `broadcast`, scoped to `service.BroadcastScope(projectID)` = `project:<id>`), else one
-  `changed` row in the project's scope. `authorize` checks the tool's posture (an unclassified
+  identity when it is a project member, else to `service.AgentScope(label)` = `agent:<label>`, since
+  an assignee may be a free-text agent label; `broadcast`, scoped to
+  `service.BroadcastScope(projectID)` = `project:<id>`), else one `changed` row in the project's
+  scope naming the task it wrote. An idempotency key is kept per tool (`<tool>:<key>`), and a
+  supplied expected version 0 is STALE; only the lease-guarded paths pass no version. `authorize` checks the tool's posture (an unclassified
   tool is FORBIDDEN), workspace admin for AdminOnly "only", membership (a non-member or a missing
   project is FORBIDDEN), the tier against the member's role capped by the token's, and the
   capability grant through `domain.CheckGrant`, finishing a task-attribute grant inside `mutate`
