@@ -70,7 +70,11 @@ Notable changes to batondeck-kanban. The format follows
   refused), and a partial unique index on `pid`. No row is deleted. The store's wake-session area adds
   `ListWakeSessions` and `SetWakeSessionCursor`, with conformance cases on every backend;
   `internal/store/wake_directory_migration_test.go` runs up, down and up on both engines.
-
+- The six task tools (R1.2): `create_task`, `get_task`, `update_task`, `move_task`, `list_tasks` and
+  `delete_task`, registered in `internal/mcp/tools/tasks.go`, each one `service.Tasks` call; `serve`
+  wires `Tasks` into the MCP services. Their schemas equal `contract/expected.json`; `create_task` takes
+  no `status`; `delete_task`, `create_task`, `update_task` and `move_task` are master tier, `get_task`
+  and `list_tasks` read tier, as `internal/domain/grants.go` classifies them.
 - The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
   `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
   `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
