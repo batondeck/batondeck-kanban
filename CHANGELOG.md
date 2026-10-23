@@ -23,7 +23,16 @@ Notable changes to batondeck-kanban. The format follows
   gets all 1,000. On Postgres ids follow appends, not commits, so the tail keeps a frontier below
   which every id was delivered and re-reads from it; an id missing for `GapTimeout` (10 s) is taken
   for a rolled-back transaction (`TestPostgresDeliversChangesCommittedOutOfIDOrder`,
-  `TestPostgresPassesAnIDARolledBackTransactionTook`). `store.Audit` and `store.ToolCalls` are built
+  `TestPostgresPassesAnIDARolledBackTransactionTook`); a passed id is counted (`GapsPassed`) and
+  reported (`ErrGapPassed`), and a stalled frontier moves on the poll's tick with no write. The
+  tail's start is no watermark either: the last page's changes of the past `GapTimeout` are held as
+  seen and the frontier stops below them, so a change in flight when the first subscriber arrives
+  still arrives (`TestAChangeInFlightWhenTheTailStartsIsDelivered`,
+  `TestPostgresDeliversAChangeInFlightWhenTheTailStarts`). `Subscribe` racing `Close` returns
+  `bus.ErrClosed`. `AppendChange` is pinned at 1 statement on SQLite and 2 on Postgres
+  (`TestAppendChangeStatements`). The SQLite engine supports exactly one `serve` process per data
+  dir: its wake is in-process, so a second process's writes are not heard; run several on
+  Postgres. `store.Audit` and `store.ToolCalls` are built
   on SQLite and Postgres (`internal/store/{audit,toolcalls}.go` over
   `queries/{sqlite,postgres}/{audit,toolcalls}.sql`; the eight stubs are gone) and their batteries
   pass on both. `internal/retention`: a `Sweeper` deleting memory past its own expiry, change-log

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -337,10 +338,17 @@ func TestPostgresDeliversChangesCommittedOutOfIDOrder(t *testing.T) {
 }
 
 // The positive control of the frontier: an id a rolled-back transaction took never appears, and
-// after GapTimeout the tail passes it — later changes still arrive and the frontier moves past it.
+// after GapTimeout the tail passes it — with no further write (the poll's tick moves a stalled
+// frontier), counted and reported — and later changes still arrive.
 func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	b := postgresBackend(t)
-	bus, _ := newBus(t, b, Options{GapTimeout: 300 * time.Millisecond})
+	var mu sync.Mutex
+	var reported []error
+	bus, _ := newBus(t, b, Options{GapTimeout: 300 * time.Millisecond, OnError: func(err error) {
+		mu.Lock()
+		reported = append(reported, err)
+		mu.Unlock()
+	}})
 	sub := subscribe(t, bus, 0, "project:P-1")
 	ctx := context.Background()
 	var lost int64
@@ -362,15 +370,138 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	if f := bus.frontier.Load(); f != lost-1 {
 		t.Fatalf("frontier %d right after the gap, want it held at %d", f, lost-1)
 	}
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(300*time.Millisecond + 3*PollInterval) // no write: only the tick can move it
+	if f := bus.frontier.Load(); f != after {
+		t.Fatalf("frontier %d after GapTimeout with no write, want %d: the rolled-back id %d was never passed", f, after, lost)
+	}
+	mu.Lock()
+	got := slices.Clone(reported)
+	mu.Unlock()
+	if bus.GapsPassed() != 1 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) {
+		t.Fatalf("gaps passed %d, reported %v; want 1 and one ErrGapPassed", bus.GapsPassed(), got)
+	}
 	last := write(t, b.store, change("project:P-1", 3))[0]
 	if c := next(t, sub, 2*time.Second); c.ID != last {
 		t.Fatalf("delivered %d, want %d", c.ID, last)
 	}
-	if f := bus.frontier.Load(); f != last {
-		t.Fatalf("frontier %d after GapTimeout, want %d: the rolled-back id %d was never passed", f, last, lost)
+	t.Logf("id %d rolled back; the frontier held at %d, then passed it to %d with no write (%v)", lost, lost-1, after, got[0])
+}
+
+// R0.11 review B1: the tail's start is no watermark. On Postgres a transaction that took its id
+// before the first subscriber's tail started, and commits after Subscribe returned, is delivered.
+func TestPostgresDeliversAChangeInFlightWhenTheTailStarts(t *testing.T) {
+	b := postgresBackend(t)
+	ctx := context.Background()
+	write(t, b.store, change("project:P-1", 0))
+	appended, release := make(chan int64), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- b.store.Atomically(ctx, func(tx store.Store) error {
+			id, err := tx.AppendChange(ctx, change("project:P-1", 1))
+			if err != nil {
+				return err
+			}
+			appended <- id
+			<-release
+			return nil
+		})
+	}()
+	idA := <-appended
+	idB := write(t, b.store, change("project:P-1", 2))[0] // visible above A before the tail starts
+	bus, _ := newBus(t, b, Options{})
+	sub := subscribe(t, bus, 0, "project:P-1")
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
-	t.Logf("id %d rolled back; the frontier held at %d, then passed it to %d", lost, lost-1, last)
+	if c := next(t, sub, 2*time.Second); c.ID != idA {
+		t.Fatalf("delivered %d, want A (%d), in flight when the tail started", c.ID, idA)
+	}
+	quiet(t, sub, 3*PollInterval) // and not B, committed before Subscribe
+	t.Logf("A took id %d before the tail started and committed after Subscribe (B %d already visible): delivered", idA, idB)
+}
+
+// hiding is a change log that does not show one id until shown: an in-flight transaction, over
+// memstore.
+type hiding struct {
+	store.ChangeLog
+	id    int64
+	shown atomic.Bool
+}
+
+func (h *hiding) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	rows, err := h.ChangeLog.ReadChanges(ctx, since, limit)
+	if h.shown.Load() {
+		return rows, err
+	}
+	return slices.DeleteFunc(rows, func(c store.Change) bool { return c.ID == h.id }), err
+}
+
+// B1 over memstore: ids 1 (an hour old), 2 (in flight) and 3 (just committed) when the tail starts;
+// 2 commits after Subscribe and is delivered, 3 is not.
+func TestAChangeInFlightWhenTheTailStartsIsDelivered(t *testing.T) {
+	b := memBackend(t)
+	old := change("project:P-1", 0)
+	old.Ts = time.Now().Add(-time.Hour).UnixMilli()
+	ids := write(t, b.store, old, change("project:P-1", 1), change("project:P-1", 2))
+	log := &hiding{ChangeLog: b.store, id: ids[1]}
+	bus := New(log, Options{OnError: func(err error) { t.Errorf("bus: %v", err) }})
+	t.Cleanup(bus.Close)
+	sub := subscribe(t, bus, 0, "project:P-1")
+	log.shown.Store(true)
+	if c := next(t, sub, 2*time.Second); c.ID != ids[1] {
+		t.Fatalf("delivered %d, want the in-flight %d", c.ID, ids[1])
+	}
+	quiet(t, sub, 3*PollInterval)
+	if f := bus.frontier.Load(); f != ids[2] {
+		t.Fatalf("frontier %d, want %d", f, ids[2])
+	}
+}
+
+// blocking is a change log whose reads wait until released.
+type blocking struct {
+	store.ChangeLog
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blocking) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return b.ChangeLog.ReadChanges(context.WithoutCancel(ctx), since, limit) // the read succeeds after Close
+}
+
+// A Bus closed while the first Subscribe waits for its tail fails that Subscribe: it never hands back
+// a subscription whose channel is already closed.
+func TestSubscribeRacingCloseFails(t *testing.T) {
+	b := memBackend(t)
+	log := &blocking{ChangeLog: b.store, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	bus := New(log, Options{})
+	got := make(chan error, 1)
+	go func() {
+		_, err := bus.Subscribe(context.Background(), []string{"project:P-1"}, 0)
+		got <- err
+	}()
+	<-log.entered
+	closed := make(chan struct{})
+	go func() { bus.Close(); close(closed) }()
+	for {
+		bus.mu.RLock()
+		n := bus.count
+		bus.mu.RUnlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(log.release)
+	if err := <-got; !errors.Is(err, ErrClosed) {
+		t.Fatalf("Subscribe racing Close returned %v, want ErrClosed", err)
+	}
+	<-closed
 }
 
 // Subscribers come and go while changes flow: no panic, no send on a closed channel (-race).

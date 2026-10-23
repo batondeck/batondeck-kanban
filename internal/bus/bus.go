@@ -11,16 +11,23 @@
 // fit is dropped and counted (Subscription.Dropped). A change is a hint; a subscriber that dropped
 // one re-reads what it serves, or replays the log from its cursor (Replay).
 //
+// Processes: Postgres's wake is heard by every process sharing the database. SQLite's is in-process,
+// so the SQLite engine supports exactly ONE serve process per data dir: a second process's writes
+// are not heard by this one's tail until something here wakes it. Run more than one on Postgres.
+//
 // Order: on Postgres a change-log id is taken at the INSERT and becomes visible at the commit, so a
 // lower id can appear after a higher one (contract_changelog.go). The tail therefore never treats
 // the highest id it has read as a watermark: it keeps a frontier below which every id has been
 // delivered, re-reads from it, and passes over the ids above it it has already delivered. An id
-// missing below delivered ones for GapTimeout is taken for a rolled-back transaction and passed.
+// missing below delivered ones for GapTimeout is taken for a rolled-back transaction and passed
+// (counted, GapsPassed, and reported, ErrGapPassed). The tail's start is no watermark either: the
+// changes of the last GapTimeout are held as seen, so an id in flight when it starts still arrives.
 package bus
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -73,6 +80,7 @@ type Bus struct {
 	active atomic.Int32 // tails running, for Running
 	// frontier is the running tail's frontier, published after each read (tests read it).
 	frontier atomic.Int64
+	gaps     atomic.Int64 // ids given up on, for GapsPassed
 }
 
 // runner is one tail, from the first subscription to the last one's Close.
@@ -97,6 +105,9 @@ func New(log store.ChangeLog, opts Options) *Bus {
 // ErrClosed is Subscribe on a closed Bus.
 var ErrClosed = errors.New("bus: closed")
 
+// ErrGapPassed is what OnError hears when the tail gives up on ids missing for GapTimeout.
+var ErrGapPassed = errors.New("bus: passed a gap")
+
 // Subscription is one subscriber: the changes of its scopes, in the order the tail reads them.
 type Subscription struct {
 	b       *Bus
@@ -104,6 +115,7 @@ type Subscription struct {
 	ch      chan store.Change
 	dropped atomic.Int64
 	once    sync.Once
+	closed  bool // under b.mu
 }
 
 // C is the subscription's changes. It is closed by Close, and by the Bus's Close.
@@ -150,7 +162,13 @@ func (b *Bus) Subscribe(ctx context.Context, scopes []string, buffer int) (*Subs
 	b.mu.Unlock()
 	select {
 	case <-r.ready:
-		if r.err != nil {
+		b.mu.RLock()
+		closed := s.closed
+		b.mu.RUnlock()
+		switch {
+		case closed: // the Bus closed while the tail started
+			return nil, ErrClosed
+		case r.err != nil:
 			s.Close()
 			return nil, r.err
 		}
@@ -187,12 +205,17 @@ func (b *Bus) remove(s *Subscription) {
 		}
 	}
 	close(s.ch)
+	s.closed = true
 	b.count--
 	if b.count == 0 && b.run != nil {
 		b.run.cancel()
 		b.run = nil
 	}
 }
+
+// GapsPassed is how many ids the tail has given up on (ErrGapPassed): each one, if it was a
+// transaction running longer than GapTimeout rather than a rollback, was never delivered.
+func (b *Bus) GapsPassed() int64 { return b.gaps.Load() }
 
 // Running reports whether a tail goroutine is running: true from the first Subscribe until shortly
 // after the last subscription closes.
@@ -307,13 +330,15 @@ func (b *Bus) tail(ctx context.Context, r *runner, hint int64) {
 		}
 	}
 	end, err := b.end(ctx, hint)
+	if err == nil {
+		err = b.seed(ctx, t, end, time.Now())
+	}
 	if err != nil {
 		r.err = err
 		close(r.ready)
 		return
 	}
-	t.frontier = end
-	b.frontier.Store(end)
+	b.frontier.Store(t.frontier)
 	close(r.ready)
 	tick := time.NewTicker(b.opts.PollInterval)
 	defer tick.Stop()
@@ -336,8 +361,11 @@ func (b *Bus) tail(ctx context.Context, r *runner, hint int64) {
 				dirty = true
 			}
 		case <-tick.C:
-			if dirty || b.opts.Watcher == nil || degraded.Load() {
+			switch {
+			case dirty || b.opts.Watcher == nil || degraded.Load():
 				read()
+			case !t.stalled.IsZero():
+				b.advance(t) // no statement: a gap's clock runs with no write
 			}
 		}
 	}
@@ -423,6 +451,39 @@ func (b *Bus) end(ctx context.Context, hint int64) (int64, error) {
 	return lo, nil
 }
 
+// seed is the tail's start position. end is the highest id visible, but on Postgres a lower id can
+// still be in flight (taken, not committed), so end is no watermark: the last page's rows written
+// within GapTimeout go into seen (committed before Subscribe returned, so never delivered) and the
+// frontier stops just below the first of them. An in-flight id is then a gap above the frontier,
+// delivered when it commits or passed after GapTimeout, as one found later is. One statement.
+func (b *Bus) seed(ctx context.Context, t *tailState, end int64, now time.Time) error {
+	since := max(end-readPage, 0)
+	t.frontier, t.seen = end, map[int64]struct{}{}
+	if end == 0 {
+		return nil
+	}
+	rows, err := b.log.ReadChanges(ctx, since, readPage)
+	if err != nil {
+		return err
+	}
+	cutoff := now.Add(-b.opts.GapTimeout).UnixMilli()
+	for i, c := range rows {
+		if c.Ts < cutoff {
+			continue
+		}
+		t.frontier = since
+		if i > 0 {
+			t.frontier = rows[i-1].ID
+		}
+		for _, r := range rows[i:] {
+			t.seen[r.ID] = struct{}{}
+		}
+		break
+	}
+	t.advance(now, b.opts.GapTimeout, nil)
+	return nil
+}
+
 // tailState is what a tail knows of the log: every id at or below frontier has been delivered (or
 // given up as a gap), and seen holds the delivered ids above it.
 type tailState struct {
@@ -460,13 +521,25 @@ func (b *Bus) read(ctx context.Context, t *tailState) {
 			break
 		}
 	}
-	t.advance(time.Now(), b.opts.GapTimeout)
+	b.advance(t)
+}
+
+// advance moves the frontier now, reporting each run of ids it gives up on, and publishes it.
+func (b *Bus) advance(t *tailState) {
+	t.advance(time.Now(), b.opts.GapTimeout, b.passed)
 	b.frontier.Store(t.frontier)
 }
 
-// advance moves the frontier over the delivered ids above it, and past a missing one waited for
-// longer than gap.
-func (t *tailState) advance(now time.Time, gap time.Duration) {
+// passed counts and reports ids given up on: a transaction that held them longer than GapTimeout
+// is not delivered when it commits.
+func (b *Bus) passed(from, to int64) {
+	b.gaps.Add(to - from + 1)
+	b.fail(fmt.Errorf("%w: ids %d..%d not committed within %v", ErrGapPassed, from, to, b.opts.GapTimeout))
+}
+
+// advance moves the frontier over the delivered ids above it, and past the missing ones waited for
+// longer than gap, handing each run it passes to passed (nil: none).
+func (t *tailState) advance(now time.Time, gap time.Duration, passed func(from, to int64)) {
 	for {
 		for {
 			if _, ok := t.seen[t.frontier+1]; !ok {
@@ -492,6 +565,9 @@ func (t *tailState) advance(now time.Time, gap time.Duration) {
 			if low < 0 || id < low {
 				low = id
 			}
+		}
+		if passed != nil {
+			passed(t.frontier+1, low-1)
 		}
 		t.frontier = low - 1
 		t.stalled = time.Time{}

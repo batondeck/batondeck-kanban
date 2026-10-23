@@ -68,8 +68,9 @@ const notifyChanges = `-- name: NotifyChanges :exec
 SELECT pg_notify('batondeck_changes', '')
 `
 
-// The wake the bus's LISTEN (ListenChanges) hears. Issued by AppendChange in the change's own
-// transaction, so Postgres delivers it at commit, once per transaction however many rows it wrote.
+// The wake the bus's LISTEN (ListenChanges) hears, sent by AppendChange after its INSERT: inside
+// Atomically on its transaction, so Postgres delivers it at that commit (once per transaction
+// however many rows it wrote); outside, once the INSERT has committed.
 func (q *Queries) NotifyChanges(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, notifyChanges)
 	return err

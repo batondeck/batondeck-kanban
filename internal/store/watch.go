@@ -14,8 +14,10 @@ import (
 // after each commit that appended a change, until ctx ends (it then returns nil) or the watch fails
 // (an error). wake must not block. A wake is a hint to read the change log, never the change.
 //
-// Postgres LISTENs on one pooled connection for the NOTIFY every AppendChange sends in its own
-// transaction, which Postgres delivers at commit: every process sharing the database is heard.
+// Postgres LISTENs on one pooled connection for the NOTIFY every AppendChange sends after its
+// INSERT: inside Atomically on the same transaction, so Postgres delivers it at that commit;
+// outside, as a statement of its own once the INSERT has committed. Every process sharing the
+// database is heard.
 // SQLite has no notification: its wake is in-process, fired after the commit of a write connection
 // opened on the same file in this process. A second process writing the same file (several
 // `serve` on one host, core/lock.go) is NOT heard by it.
@@ -80,7 +82,8 @@ func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 	return nil
 }
 
-// notifyChanges sends the NOTIFY WatchChanges listens for, on the transaction when there is one.
+// notifyChanges sends the NOTIFY WatchChanges listens for: on Atomically's transaction when there
+// is one (delivered at its commit), else on the pool.
 func (s *Postgres) notifyChanges(ctx context.Context) error {
 	var db pgdb.DBTX = s.pool
 	if s.tx != nil {

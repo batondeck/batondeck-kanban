@@ -32,8 +32,8 @@ func (s *SQLite) AppendChange(ctx context.Context, in ChangeInput) (int64, error
 	return id, err
 }
 
-// AppendChange sends the NOTIFY the bus LISTENs for in the change's transaction (watch.go): a
-// second statement, delivered by Postgres at commit.
+// AppendChange sends the NOTIFY the bus LISTENs for (watch.go) as a second statement: inside
+// Atomically on its transaction, delivered at that commit; outside it, after the INSERT committed.
 func (s *Postgres) AppendChange(ctx context.Context, in ChangeInput) (int64, error) {
 	id, err := appendChange(ctx, s, in)
 	if err != nil {
