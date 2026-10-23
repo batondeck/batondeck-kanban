@@ -120,7 +120,7 @@ func TestLiveContract(t *testing.T) {
 			s    contract.Surface
 		}{{"contract/expected.json", expected}, {"the derivation from tools.json, admin-tools.json and deltas.json", derived}} {
 			if d := contract.CheckLive(want.s, live.tools, pending.ToolNames()); len(d) > 0 {
-				t.Errorf("tools/list departs from %s less contract/pending.json at %d places:\n  %s", want.name, len(d), strings.Join(d, "\n  "))
+				t.Errorf("tools/list departs from %s less contract/pending.json at %d place(s):\n  %s", want.name, len(d), strings.Join(d, "\n  "))
 			}
 		}
 		t.Logf("%s: tools/list %d tools compared with contract/expected.json exactly (input and output); pending %d (contract/pending.json); contract %d",
@@ -164,7 +164,7 @@ func TestLiveContract(t *testing.T) {
 		if !maps.Equal(wantTpl, gotTpl) {
 			t.Errorf("resources/templates/list = %v, want %v", gotTpl, wantTpl)
 		}
-		t.Logf("%s: prompts %d equal contract/tools.json; templates %d = %d of contract/tools.json - %d pending + %d added",
+		t.Logf("%s: prompts %d compared with contract/tools.json; templates %d compared with %d of contract/tools.json - %d pending + %d added",
 			j.engine, len(gotPrompts), len(gotTpl), len(conductor.ResourceTemplates), len(pending.TemplateNames()), len(templatesAdded))
 	})
 }
@@ -212,7 +212,7 @@ func TestSurfaceSnapshot(t *testing.T) {
 						a.login, c.what, minus(c.got, c.want), minus(c.want, c.got))
 				}
 			}
-			t.Logf("%s as %s: %d tools, %d prompts, %d resource templates equal the snapshot", j.engine, a.login, len(tools), len(prompts), len(templates))
+			t.Logf("%s as %s: %d tools, %d prompts, %d resource templates served, compared with the snapshot's %d, %d, %d", j.engine, a.login, len(tools), len(prompts), len(templates), len(snapshotTools), len(snapshotPrompts), len(snapshotTemplates))
 		}
 	})
 }
