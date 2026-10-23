@@ -16,6 +16,7 @@ const (
 	RuleDatabaseURL = "database_url_is_a_file_path_or_postgres"
 	RuleEnum        = "invalid_enum_value"
 	RuleRetention   = "retention_days_are_positive_integers"
+	RuleListen      = "listen_entries_are_tcp_or_unix_urls"
 )
 
 // The engines database.url selects between.
@@ -50,8 +51,9 @@ type Retention struct {
 // the JSON file, the defaults. Load reads all three.
 type Config struct {
 	Database Database `json:"database"`
-	// Listen is the host:port the HTTP server binds.
-	Listen string `json:"listen"`
+	// Listen is every address the HTTP server binds, each tcp://host:port or unix:///abs/path; all
+	// serve the same handler (internal/core/listen.go). Environment: BATONDECK_LISTEN, comma-separated.
+	Listen []string `json:"listen"`
 	// PublicURL is the externally reachable base (scheme://host[:port]); "" until configured.
 	PublicURL string `json:"public_url"`
 	// Retention is the retention sweep's windows.
@@ -63,7 +65,7 @@ type Config struct {
 func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	c := Config{
 		Database:  Database{Synchronous: "FULL"},
-		Listen:    "127.0.0.1:8080",
+		Listen:    []string{"tcp://127.0.0.1:8080"},
 		Retention: Retention{ChangeLogDays: 7, ToolCallsDays: 45},
 	}
 
@@ -88,7 +90,14 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	}
 	envStr("BATONDECK_DATABASE_URL", &c.Database.URL)
 	envStr("BATONDECK_DATABASE_SYNCHRONOUS", &c.Database.Synchronous)
-	envStr("BATONDECK_LISTEN", &c.Listen)
+	if v, ok := lookup("BATONDECK_LISTEN"); ok {
+		c.Listen = nil
+		for _, a := range strings.Split(v, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				c.Listen = append(c.Listen, a)
+			}
+		}
+	}
 	envStr("BATONDECK_PUBLIC_URL", &c.PublicURL)
 	envDays := func(key string, dst *int) error {
 		v, ok := lookup(key)
@@ -123,6 +132,14 @@ func (c *Config) validate() error {
 	}
 	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 {
 		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d (each must be at least 1)", RuleRetention, c.Retention.ChangeLogDays, c.Retention.ToolCallsDays)
+	}
+	if len(c.Listen) == 0 {
+		return fmt.Errorf("%s: listen is empty (want at least one tcp://host:port or unix:///path)", RuleListen)
+	}
+	for _, a := range c.Listen {
+		if _, err := ParseListen(a); err != nil {
+			return fmt.Errorf("%s: %w", RuleListen, err)
+		}
 	}
 	if strings.Contains(c.Database.URL, "://") && c.Engine() != EnginePostgres {
 		return fmt.Errorf("%s: database.url %q is neither a file path nor a postgres:// URL", RuleDatabaseURL, c.Database.URL)

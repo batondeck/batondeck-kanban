@@ -76,7 +76,7 @@ func TestHealthzNamesBinaryAndVersion(t *testing.T) {
 func TestHealthcheckExitCodes(t *testing.T) {
 	srv := httptest.NewServer(handler("x", http.NotFoundHandler()))
 	addr := strings.TrimPrefix(srv.URL, "http://")
-	t.Setenv("BATONDECK_LISTEN", addr)
+	t.Setenv("BATONDECK_LISTEN", "tcp://"+addr)
 	if code, _, errs := run("healthcheck"); code != 0 {
 		t.Fatalf("healthcheck against a live server: %d %q", code, errs)
 	}
@@ -192,7 +192,7 @@ func TestServeMigratesBeforeListening(t *testing.T) {
 	ln.Close()
 	path := filepath.Join(t.TempDir(), "fresh.db")
 	t.Setenv("BATONDECK_DATABASE_URL", path)
-	t.Setenv("BATONDECK_LISTEN", addr)
+	t.Setenv("BATONDECK_LISTEN", "tcp://"+addr)
 	done := make(chan int, 1)
 	var errb bytes.Buffer
 	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()
@@ -293,7 +293,7 @@ func TestAServeBesideAnotherDoesNotMigrate(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	t.Setenv("BATONDECK_LISTEN", addr)
+	t.Setenv("BATONDECK_LISTEN", "tcp://"+addr)
 	var errb bytes.Buffer
 	done := make(chan int, 1)
 	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()

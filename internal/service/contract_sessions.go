@@ -48,11 +48,13 @@ type RemoveAgentSessionReq struct {
 // RemoveAgentSessionResp is empty.
 type RemoveAgentSessionResp struct{}
 
-// RegisterWakeSessionReq is a /wake attachment: the socket the doorbell is delivered on and the
-// change-log cursor the caller has seen.
+// RegisterWakeSessionReq is a /wake attachment: the socket the doorbell is delivered on, the token
+// that socket expects (Claude Code's CLAUDE_CODE_MESSAGING_TOKEN; "" for none), and the change-log
+// cursor the caller has seen.
 type RegisterWakeSessionReq struct {
-	SocketPath string `json:"socketPath,omitzero"`
-	Cursor     int64  `json:"cursor,omitzero"`
+	SocketPath  string `json:"socketPath,omitzero"`
+	SocketToken string `json:"socketToken,omitzero"`
+	Cursor      int64  `json:"cursor,omitzero"`
 }
 
 // RegisterWakeSessionResp is the registered wake session.

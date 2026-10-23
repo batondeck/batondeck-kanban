@@ -30,7 +30,7 @@ COPY --from=build --chown=nonroot:nonroot /data-skel /data
 # The SQLite file lives on the volume, and the server listens on every interface so a published
 # port reaches it (the binary's own default is loopback); the healthcheck dials loopback.
 ENV BATONDECK_DATABASE_URL=/data/batondeck-kanban.db
-ENV BATONDECK_LISTEN=:8080
+ENV BATONDECK_LISTEN=tcp://:8080
 VOLUME /data
 EXPOSE 8080
 USER nonroot

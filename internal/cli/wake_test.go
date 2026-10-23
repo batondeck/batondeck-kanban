@@ -1,0 +1,467 @@
+package cli
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/auth/authfake"
+	"github.com/batondeck/batondeck-kanban/internal/bus"
+	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/service"
+	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
+	"github.com/batondeck/batondeck-kanban/internal/wake"
+)
+
+// countedSQLite counts the change-log reads the bus and /wake make: each is one statement.
+type countedSQLite struct {
+	*store.SQLite
+	reads atomic.Int64
+}
+
+func (c *countedSQLite) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	c.reads.Add(1)
+	return c.SQLite.ReadChanges(ctx, since, limit)
+}
+
+func (c *countedSQLite) ReadChangesForScope(ctx context.Context, scope string, since int64, limit int) ([]store.Change, error) {
+	c.reads.Add(1)
+	return c.SQLite.ReadChangesForScope(ctx, scope, since, limit)
+}
+
+// wakeServer is the real serve composition on a TCP and a Unix listener over a migrated SQLite
+// store, with alice (a member of project P) holding a token.
+type wakeServer struct {
+	st      *countedSQLite
+	tcp     string // host:port
+	sock    string // socket path
+	token   string
+	alice   string // her identity, her token scope
+	project string
+	logs    *lockedLog
+}
+
+func startWake(t *testing.T, sealer service.Sealer) *wakeServer {
+	t.Helper()
+	ctx := context.Background()
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := (&auth.TokenService{Store: st}).Create(ctx, user.ID, "", "test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: user.ID}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("", "bkw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	logs := &lockedLog{}
+	logger := log.New(logs, "", 0)
+	lns, err := listenAll([]string{"tcp://127.0.0.1:0", "unix://" + filepath.Join(dir, "bk.sock")}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- runServer(serveCtx, lns, st, "x", logger, sealer) }()
+	t.Cleanup(func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Errorf("runServer: %v", err)
+		}
+	})
+	return &wakeServer{st: st, tcp: lns[0].Addr().String(), sock: filepath.Join(dir, "bk.sock"), token: token, alice: user.ID, project: p.ID, logs: logs}
+}
+
+// ring appends a doorbell row as the service writes one (service.writeChanges) and returns its id.
+func (s *wakeServer) ring(t *testing.T, scope, kind, agent, taskID string) int64 {
+	t.Helper()
+	payload, _ := json.Marshal(map[string]string{"kind": kind, "agent": agent, "taskId": taskID, "projectId": s.project, "boardId": "B-1", "tool": "test"})
+	id, err := s.st.AppendChange(context.Background(), store.ChangeInput{Scope: scope, ProjectID: s.project, Kind: kind, Payload: payload, Ts: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// event is one SSE event: a frame, or a comment.
+type event struct {
+	frame   *wake.Frame
+	id      string
+	comment string
+	at      time.Time
+}
+
+// sse is an open /wake stream.
+type sse struct {
+	resp   *http.Response
+	events chan event
+}
+
+func (s *wakeServer) open(t *testing.T, query string) *sse {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, "http://"+s.tcp+"/wake"+query, nil)
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/event-stream" {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET /wake%s: %d %q", query, resp.StatusCode, b)
+	}
+	st := &sse{resp: resp, events: make(chan event, 64)}
+	go func() {
+		defer close(st.events)
+		r := bufio.NewReader(resp.Body)
+		var ev event
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimRight(line, "\n")
+			switch {
+			case line == "":
+				ev.at = time.Now()
+				st.events <- ev
+				ev = event{}
+			case strings.HasPrefix(line, ": "):
+				ev.comment = strings.TrimPrefix(line, ": ")
+			case strings.HasPrefix(line, "id: "):
+				ev.id = strings.TrimPrefix(line, "id: ")
+			case strings.HasPrefix(line, "data: "):
+				var f wake.Frame
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f); err != nil {
+					panic(err)
+				}
+				ev.frame = &f
+			}
+		}
+	}()
+	t.Cleanup(func() { resp.Body.Close() })
+	if ev := st.next(t, time.Second); ev.comment != "ok" {
+		t.Fatalf("first event %+v, want the ok comment", ev)
+	}
+	return st
+}
+
+func (s *sse) next(t *testing.T, within time.Duration) event {
+	t.Helper()
+	select {
+	case ev, ok := <-s.events:
+		if !ok {
+			t.Fatal("the stream ended")
+		}
+		return ev
+	case <-time.After(within):
+		t.Fatalf("no event within %v", within)
+	}
+	return event{}
+}
+
+// none asserts no event arrives for d.
+func (s *sse) none(t *testing.T, d time.Duration) {
+	t.Helper()
+	select {
+	case ev := <-s.events:
+		t.Fatalf("an event arrived: %+v (frame %+v)", ev, ev.frame)
+	case <-time.After(d):
+	}
+}
+
+func (s *sse) frame(t *testing.T, within time.Duration) wake.Frame {
+	t.Helper()
+	ev := s.next(t, within)
+	if ev.frame == nil {
+		t.Fatalf("event %+v, want a frame", ev)
+	}
+	if ev.id != fmt.Sprint(ev.frame.Cursor) {
+		t.Fatalf("id line %q, frame cursor %d", ev.id, ev.frame.Cursor)
+	}
+	return *ev.frame
+}
+
+// AC1: a doorbell row for the caller's scope is one frame within 500 ms, carrying exactly the
+// zero-authority fields; an idle stream issues no statement.
+func TestWakeLiveFrameAndIdleCost(t *testing.T) {
+	s := startWake(t, nil)
+	w := s.open(t, "")
+	before := s.st.reads.Load()
+	w.none(t, 2*time.Second)
+	if idle := s.st.reads.Load() - before; idle != 0 {
+		t.Fatalf("an idle /wake stream cost %d change-log statements in 2 s, want 0", idle)
+	}
+	at := time.Now()
+	id := s.ring(t, s.alice, "assigned", s.alice, "T-7")
+	f := w.frame(t, time.Second)
+	took := time.Since(at)
+	t.Logf("row %d -> frame in %v", id, took)
+	if took > 500*time.Millisecond {
+		t.Fatalf("frame after %v, want within 500 ms", took)
+	}
+	want := wake.Frame{Agent: s.alice, Kind: "assigned", TaskID: "T-7", ProjectID: s.project, BoardID: "B-1", Cursor: id}
+	if f != want {
+		t.Fatalf("frame %+v, want %+v", f, want)
+	}
+	// broadcast to the project the caller is a member of rings; a changed row does not.
+	s.ring(t, service.BroadcastScope(s.project), "changed", "", "T-8")
+	id = s.ring(t, service.BroadcastScope(s.project), "broadcast", "", "T-8")
+	if f = w.frame(t, time.Second); f.Kind != "broadcast" || f.Cursor != id || f.Agent != "" {
+		t.Fatalf("broadcast frame %+v, want cursor %d", f, id)
+	}
+}
+
+// Another identity's doorbells and another project's broadcasts never reach the stream; the
+// caller's own, written after them, does (the positive control).
+func TestWakeScopesIsolate(t *testing.T) {
+	s := startWake(t, nil)
+	w := s.open(t, "")
+	s.ring(t, "U-someone-else", "assigned", "U-someone-else", "T-1")
+	s.ring(t, service.BroadcastScope("P-not-hers"), "broadcast", "", "T-2")
+	w.none(t, 700*time.Millisecond)
+	id := s.ring(t, s.alice, "assigned", s.alice, "T-3")
+	if f := w.frame(t, time.Second); f.Cursor != id {
+		t.Fatalf("frame %+v, want her own at cursor %d", f, id)
+	}
+}
+
+// AC2: close the stream, write two doorbells, reopen with ?since=<last cursor>: both replay in order,
+// uncoalesced, before a new live one.
+func TestWakeCatchUpReplaysThenGoesLive(t *testing.T) {
+	s := startWake(t, nil)
+	w := s.open(t, "")
+	c0 := s.ring(t, s.alice, "assigned", s.alice, "T-1")
+	if f := w.frame(t, time.Second); f.Cursor != c0 {
+		t.Fatalf("live frame %+v, want cursor %d", f, c0)
+	}
+	w.resp.Body.Close()
+	c1 := s.ring(t, s.alice, "assigned", s.alice, "T-2")
+	s.ring(t, s.alice, "changed", "", "T-2")
+	c2 := s.ring(t, s.alice, "assigned", s.alice, "T-3")
+	w = s.open(t, fmt.Sprintf("?since=%d", c0))
+	for _, want := range []struct {
+		cursor int64
+		task   string
+	}{{c1, "T-2"}, {c2, "T-3"}} {
+		if f := w.frame(t, time.Second); f.Cursor != want.cursor || f.TaskID != want.task {
+			t.Fatalf("replayed %+v, want cursor %d %s", f, want.cursor, want.task)
+		}
+	}
+	c3 := s.ring(t, s.alice, "assigned", s.alice, "T-4")
+	if f := w.frame(t, time.Second); f.Cursor != c3 {
+		t.Fatalf("live after the replay %+v, want cursor %d", f, c3)
+	}
+	w.none(t, 500*time.Millisecond)
+}
+
+// AC3: five doorbells of one kind inside 100 ms are exactly one frame, carrying the last cursor.
+func TestWakeCoalescesABurst(t *testing.T) {
+	s := startWake(t, nil)
+	w := s.open(t, "")
+	start := time.Now()
+	var last int64
+	for i := range 5 {
+		last = s.ring(t, s.alice, "assigned", s.alice, fmt.Sprintf("T-%d", i))
+		time.Sleep(15 * time.Millisecond)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("the five writes took %v, over the 100 ms the control needs", took)
+	}
+	f := w.frame(t, time.Second)
+	if f.Cursor != last || f.TaskID != "T-4" {
+		t.Fatalf("frame %+v, want one carrying the last cursor %d", f, last)
+	}
+	w.none(t, 700*time.Millisecond)
+}
+
+// The keepalive comment arrives every Keepalive on a stream with nothing to say, at no statement.
+func TestWakeKeepalive(t *testing.T) {
+	st := &countedSQLite{SQLite: storetest.SQLite(t)}
+	b := bus.New(st, bus.Options{Watcher: st})
+	t.Cleanup(b.Close)
+	h := wake.Handler(wake.Options{Bus: b, Resolver: authfake.Resolver{Callers: map[string]domain.Caller{"t": {Identity: "U-1", TokenScope: "U-1"}}}, Logger: log.New(io.Discard, "", 0), Keepalive: 100 * time.Millisecond,
+		Scopes: func(context.Context, domain.Caller) ([]string, error) { return []string{"U-1"}, nil }})
+	srv := &http.Server{Handler: h}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	s := &wakeServer{tcp: ln.Addr().String(), token: "t"}
+	w := s.open(t, "")
+	before := st.reads.Load()
+	var prev time.Time
+	for i := range 3 {
+		ev := w.next(t, time.Second)
+		if ev.comment != "keepalive" {
+			t.Fatalf("event %+v, want a keepalive", ev)
+		}
+		if i > 0 && ev.at.Sub(prev) < 80*time.Millisecond {
+			t.Fatalf("keepalives %v apart, want about 100 ms", ev.at.Sub(prev))
+		}
+		prev = ev.at
+	}
+	if n := st.reads.Load() - before; n != 0 {
+		t.Fatalf("%d statements while keeping alive, want 0", n)
+	}
+}
+
+// /wake refuses a missing or unknown bearer (401 with the challenge) and a malformed cursor (400).
+func TestWakeRefusals(t *testing.T) {
+	s := startWake(t, nil)
+	for _, tc := range []struct {
+		bearer, query string
+		status        int
+	}{
+		{"", "", http.StatusUnauthorized},
+		{"bd_nope", "", http.StatusUnauthorized},
+		{s.token, "?since=-1", http.StatusBadRequest},
+		{s.token, "?since=abc", http.StatusBadRequest},
+		{s.token, "?since=1&since=2", http.StatusBadRequest},
+	} {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+s.tcp+"/wake"+tc.query, nil)
+		if tc.bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+tc.bearer)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != tc.status {
+			t.Fatalf("%q %q: %d, want %d", tc.bearer, tc.query, resp.StatusCode, tc.status)
+		}
+		if tc.status == http.StatusUnauthorized && resp.Header.Get("WWW-Authenticate") != "Bearer" {
+			t.Fatalf("401 without the Bearer challenge: %v", resp.Header)
+		}
+	}
+}
+
+func unixHTTP(path string) *http.Client {
+	return &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", path)
+	}}}
+}
+
+func post(t *testing.T, c *http.Client, url, bearer, body string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// AC5: POST /internal/wake-session over the socket is 201 and writes the row, its token sealed;
+// over TCP it is 404, as a route that does not exist is.
+func TestInternalWakeSessionOnlyOverTheSocket(t *testing.T) {
+	key, err := core.OpenKeyring(filepath.Join(t.TempDir(), "master.key"), func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := startWake(t, key)
+	body := `{"socket":"/tmp/claude-inbox.sock","token":"inbox-secret-1"}`
+	tcp := &http.Client{Timeout: 3 * time.Second}
+	code, got := post(t, tcp, "http://"+s.tcp+"/internal/wake-session", s.token, body)
+	if code != http.StatusNotFound {
+		t.Fatalf("over TCP: %d %q, want 404", code, got)
+	}
+	if code404, body404 := post(t, tcp, "http://"+s.tcp+"/internal/no-such-route", s.token, body); code404 != code {
+		t.Logf("a POST to a route that does not exist answers %d %q (wake-session over TCP: %d %q)", code404, body404, code, got)
+	}
+	code, got = post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, body)
+	if code != http.StatusCreated {
+		t.Fatalf("over the socket: %d %q, want 201", code, got)
+	}
+	var resp service.RegisterWakeSessionResp
+	if err := json.Unmarshal([]byte(got), &resp); err != nil || !strings.HasPrefix(resp.ID, "W-") || resp.ExpiresAt == "" {
+		t.Fatalf("body %q: %+v %v", got, resp, err)
+	}
+	row, err := s.st.GetWakeSession(context.Background(), resp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.IdentityID != s.alice || row.SocketPath != "/tmp/claude-inbox.sock" || bytes.Contains(row.SocketTokenSealed, []byte("inbox-secret-1")) {
+		t.Fatalf("row %+v", row)
+	}
+	if pt, err := key.Decrypt(row.SocketTokenSealed, service.SocketTokenAAD(row.ID)); err != nil || string(pt) != "inbox-secret-1" {
+		t.Fatalf("the sealed token opens to %q, %v", pt, err)
+	}
+	// Refusals over the socket.
+	for _, tc := range []struct {
+		bearer, body string
+		status       int
+	}{
+		{"", body, http.StatusUnauthorized},
+		{"bd_nope", body, http.StatusUnauthorized},
+		{s.token, `{"socket":"rel/inbox.sock"}`, http.StatusBadRequest},
+		{s.token, `{"socket":"/a","extra":1}`, http.StatusBadRequest},
+		{s.token, `{"socket":"/a"} {}`, http.StatusBadRequest},
+		{s.token, `not json`, http.StatusBadRequest},
+		{s.token, `{"socket":"/a","token":"` + strings.Repeat("x", 17<<10) + `"}`, http.StatusBadRequest},
+	} {
+		if code, got := post(t, unixHTTP(s.sock), "http://x/internal/wake-session", tc.bearer, tc.body); code != tc.status {
+			t.Fatalf("%q %.40q: %d %q, want %d", tc.bearer, tc.body, code, got, tc.status)
+		}
+	}
+}
+
+// With no keyring a token is refused 500 INTERNAL naming the setting, and a session without one
+// still registers.
+func TestInternalWakeSessionWithoutAKeyring(t *testing.T) {
+	s := startWake(t, nil)
+	code, got := post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, `{"socket":"/tmp/i.sock","token":"t"}`)
+	if code != http.StatusInternalServerError || !strings.Contains(got, core.MasterKeyEnv) || !strings.Contains(got, `"INTERNAL"`) {
+		t.Fatalf("a token with no keyring: %d %q", code, got)
+	}
+	if code, got = post(t, unixHTTP(s.sock), "http://x/internal/wake-session", s.token, `{"socket":"/tmp/i.sock"}`); code != http.StatusCreated {
+		t.Fatalf("no token, no keyring: %d %q, want 201", code, got)
+	}
+}
+
+// AC4 at the server: the same handler answers on the Unix socket as on TCP.
+func TestServeAnswersOnTheUnixSocket(t *testing.T) {
+	s := startWake(t, nil)
+	resp, err := unixHTTP(s.sock).Get("http://x/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(b) != healthBody("x") {
+		t.Fatalf("healthz over the socket: %d %q", resp.StatusCode, b)
+	}
+	if fi, err := os.Stat(s.sock); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket %v %v, want mode 0600", fi, err)
+	}
+}
