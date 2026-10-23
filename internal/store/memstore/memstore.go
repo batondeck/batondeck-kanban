@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,11 +59,15 @@ type state struct {
 	changes  []store.Change             // id ascending
 	lastChg  int64                      // the last change id handed out
 
-	audit     []store.AuditRow                 // id ascending
-	lastAudit int64                            // the last audit id handed out
-	toolCalls []store.ToolCall                 // insertion order
-	agents    map[[2]string]store.AgentSession // by (identity, agent)
-	wake      map[string]store.WakeSession     // by id
+	contextItems map[[3]string]store.ContextItem    // by (project, task, item)
+	memory       map[string]store.MemoryEntry       // by id
+	summaries    map[[2]string]store.Summary        // by (project, task)
+	edges        map[[2]string]store.DependencyEdge // by (project, edge)
+	audit        []store.AuditRow                   // id ascending
+	lastAudit    int64                              // the last audit id handed out
+	toolCalls    []store.ToolCall                   // insertion order
+	agents       map[[2]string]store.AgentSession   // by (identity, agent)
+	wake         map[string]store.WakeSession       // by id
 }
 
 type idemEntry struct {
@@ -87,8 +92,13 @@ func newState() *state {
 		tokens:   map[string]store.Token{},
 		tasks:    map[[2]string]store.Task{},
 		events:   map[[2]string]store.Event{},
-		agents:   map[[2]string]store.AgentSession{},
-		wake:     map[string]store.WakeSession{},
+
+		contextItems: map[[3]string]store.ContextItem{},
+		memory:       map[string]store.MemoryEntry{},
+		summaries:    map[[2]string]store.Summary{},
+		edges:        map[[2]string]store.DependencyEdge{},
+		agents:       map[[2]string]store.AgentSession{},
+		wake:         map[string]store.WakeSession{},
 	}
 }
 
@@ -252,6 +262,12 @@ func (st *state) clone() *state {
 		c.changes[i] = cloneChange(ch)
 	}
 	c.lastChg = st.lastChg
+	maps.Copy(c.contextItems, st.contextItems)
+	for k, v := range st.memory {
+		c.memory[k] = cloneMemory(v)
+	}
+	maps.Copy(c.summaries, st.summaries)
+	maps.Copy(c.edges, st.edges)
 	c.audit = make([]store.AuditRow, len(st.audit))
 	for i, r := range st.audit {
 		c.audit[i] = cloneAudit(r)

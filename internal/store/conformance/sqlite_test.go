@@ -17,6 +17,6 @@ func TestSQLiteConformance(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { s.Close() })
-		return s
+		return conformance.WithSeeder(s)
 	})
 }

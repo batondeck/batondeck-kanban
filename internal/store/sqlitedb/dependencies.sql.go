@@ -7,19 +7,21 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
 
-const getDependencie = `-- name: GetDependencie :one
-SELECT project_id, id, blocker_id, dependent_id, type, created_by, ts FROM dependencies WHERE project_id = ? AND id = ?
+const deleteEdge = `-- name: DeleteEdge :one
+DELETE FROM dependencies WHERE project_id = ? AND id = ?
+RETURNING project_id, id, blocker_id, dependent_id, type, created_by, ts
 `
 
-type GetDependencieParams struct {
+type DeleteEdgeParams struct {
 	ProjectID string
 	ID        string
 }
 
-func (q *Queries) GetDependencie(ctx context.Context, arg GetDependencieParams) (Dependency, error) {
-	row := q.db.QueryRowContext(ctx, getDependencie, arg.ProjectID, arg.ID)
+func (q *Queries) DeleteEdge(ctx context.Context, arg DeleteEdgeParams) (Dependency, error) {
+	row := q.db.QueryRowContext(ctx, deleteEdge, arg.ProjectID, arg.ID)
 	var i Dependency
 	err := row.Scan(
 		&i.ProjectID,
@@ -31,4 +33,293 @@ func (q *Queries) GetDependencie(ctx context.Context, arg GetDependencieParams) 
 		&i.Ts,
 	)
 	return i, err
+}
+
+const findEdge = `-- name: FindEdge :one
+
+SELECT project_id, id, blocker_id, dependent_id, type, created_by, ts FROM dependencies
+WHERE project_id = ? AND blocker_id = ? AND dependent_id = ? AND type = ?
+ORDER BY ts, id LIMIT 1
+`
+
+type FindEdgeParams struct {
+	ProjectID   string
+	BlockerID   string
+	DependentID string
+	Type        string
+}
+
+// The dependency area: canonical edges (blocker_id is the contract's FromTaskID, dependent_id its
+// ToTaskID) and the tasks' two caches. Lists are (ts, id) ascending, as bytes. A list starts FROM
+// its project or task, so one statement answers "missing" (no row) and "none" (one NULL row).
+func (q *Queries) FindEdge(ctx context.Context, arg FindEdgeParams) (Dependency, error) {
+	row := q.db.QueryRowContext(ctx, findEdge,
+		arg.ProjectID,
+		arg.BlockerID,
+		arg.DependentID,
+		arg.Type,
+	)
+	var i Dependency
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BlockerID,
+		&i.DependentID,
+		&i.Type,
+		&i.CreatedBy,
+		&i.Ts,
+	)
+	return i, err
+}
+
+const insertEdge = `-- name: InsertEdge :one
+INSERT INTO dependencies (project_id, id, blocker_id, dependent_id, type, created_by, ts) VALUES (?, ?, ?, ?, ?, ?, ?)
+RETURNING project_id, id, blocker_id, dependent_id, type, created_by, ts
+`
+
+type InsertEdgeParams struct {
+	ProjectID   string
+	ID          string
+	BlockerID   string
+	DependentID string
+	Type        string
+	CreatedBy   string
+	Ts          int64
+}
+
+func (q *Queries) InsertEdge(ctx context.Context, arg InsertEdgeParams) (Dependency, error) {
+	row := q.db.QueryRowContext(ctx, insertEdge,
+		arg.ProjectID,
+		arg.ID,
+		arg.BlockerID,
+		arg.DependentID,
+		arg.Type,
+		arg.CreatedBy,
+		arg.Ts,
+	)
+	var i Dependency
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BlockerID,
+		&i.DependentID,
+		&i.Type,
+		&i.CreatedBy,
+		&i.Ts,
+	)
+	return i, err
+}
+
+const listBlockerEdges = `-- name: ListBlockerEdges :many
+SELECT t.id AS task_id, d.id, d.blocker_id, d.dependent_id, d.type, d.created_by, d.ts
+FROM tasks t LEFT JOIN dependencies d ON d.project_id = t.project_id AND d.dependent_id = t.id
+WHERE t.project_id = ? AND t.id = ?
+ORDER BY d.ts, d.id
+`
+
+type ListBlockerEdgesParams struct {
+	ProjectID string
+	ID        string
+}
+
+type ListBlockerEdgesRow struct {
+	TaskID      string
+	ID          sql.NullString
+	BlockerID   sql.NullString
+	DependentID sql.NullString
+	Type        sql.NullString
+	CreatedBy   sql.NullString
+	Ts          sql.NullInt64
+}
+
+// What the task waits on: the edges whose dependent is the task.
+func (q *Queries) ListBlockerEdges(ctx context.Context, arg ListBlockerEdgesParams) ([]ListBlockerEdgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBlockerEdges, arg.ProjectID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBlockerEdgesRow
+	for rows.Next() {
+		var i ListBlockerEdgesRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.BlockerID,
+			&i.DependentID,
+			&i.Type,
+			&i.CreatedBy,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBlocksEdges = `-- name: ListBlocksEdges :many
+SELECT blocker_id, dependent_id FROM dependencies WHERE project_id = ? AND type = 'blocks'
+`
+
+type ListBlocksEdgesRow struct {
+	BlockerID   string
+	DependentID string
+}
+
+// What domain.CheckCycle reads: every blocks edge of the project.
+func (q *Queries) ListBlocksEdges(ctx context.Context, projectID string) ([]ListBlocksEdgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBlocksEdges, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBlocksEdgesRow
+	for rows.Next() {
+		var i ListBlocksEdgesRow
+		if err := rows.Scan(&i.BlockerID, &i.DependentID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDependentEdges = `-- name: ListDependentEdges :many
+SELECT t.id AS task_id, d.id, d.blocker_id, d.dependent_id, d.type, d.created_by, d.ts
+FROM tasks t LEFT JOIN dependencies d ON d.project_id = t.project_id AND d.blocker_id = t.id
+WHERE t.project_id = ? AND t.id = ?
+ORDER BY d.ts, d.id
+`
+
+type ListDependentEdgesParams struct {
+	ProjectID string
+	ID        string
+}
+
+type ListDependentEdgesRow struct {
+	TaskID      string
+	ID          sql.NullString
+	BlockerID   sql.NullString
+	DependentID sql.NullString
+	Type        sql.NullString
+	CreatedBy   sql.NullString
+	Ts          sql.NullInt64
+}
+
+// What waits on the task: the edges whose blocker is the task.
+func (q *Queries) ListDependentEdges(ctx context.Context, arg ListDependentEdgesParams) ([]ListDependentEdgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDependentEdges, arg.ProjectID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDependentEdgesRow
+	for rows.Next() {
+		var i ListDependentEdgesRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.BlockerID,
+			&i.DependentID,
+			&i.Type,
+			&i.CreatedBy,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectEdges = `-- name: ListProjectEdges :many
+SELECT p.id AS project_id, d.id, d.blocker_id, d.dependent_id, d.type, d.created_by, d.ts
+FROM projects p LEFT JOIN dependencies d ON d.project_id = p.id
+WHERE p.id = ?
+ORDER BY d.ts, d.id
+`
+
+type ListProjectEdgesRow struct {
+	ProjectID   string
+	ID          sql.NullString
+	BlockerID   sql.NullString
+	DependentID sql.NullString
+	Type        sql.NullString
+	CreatedBy   sql.NullString
+	Ts          sql.NullInt64
+}
+
+func (q *Queries) ListProjectEdges(ctx context.Context, id string) ([]ListProjectEdgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectEdges, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectEdgesRow
+	for rows.Next() {
+		var i ListProjectEdgesRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BlockerID,
+			&i.DependentID,
+			&i.Type,
+			&i.CreatedBy,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setTaskCaches = `-- name: SetTaskCaches :execrows
+UPDATE tasks SET blocked_by = ?, blocks = ? WHERE project_id = ? AND id = ?
+`
+
+type SetTaskCachesParams struct {
+	BlockedBy string
+	Blocks    string
+	ProjectID string
+	ID        string
+}
+
+// The two caches alone: never the version, never updated_at (the bump is the caller's).
+func (q *Queries) SetTaskCaches(ctx context.Context, arg SetTaskCachesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setTaskCaches,
+		arg.BlockedBy,
+		arg.Blocks,
+		arg.ProjectID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
