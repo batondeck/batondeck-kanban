@@ -101,7 +101,9 @@ Notable changes to batondeck-kanban. The format follows
   `ack_follow_up` is the target's or a project admin's; `list_follow_ups` takes `openOnly`. A
   comment, a follow-up without a reopen and an ack leave the task's version as it was, as
   conductor's do. The comment and follow-up routes under `/api/projects/{projectId}/tasks/{taskId}`
-  replace R1.12's stubs. No migration: 0001 holds the three tables.
+  replace R1.12's stubs. No migration: 0001 holds the three tables. Autoclose (R2.9) now keeps an
+  incident that carries a comment or follow-up by anyone but the ingest, and annotates it instead,
+  since those writes leave the version its untouched stamp compares.
 - The webhook ingest, in-binary (R2.9, plan §Architecture "Oncall ingest is in-binary"): `POST
   /hooks/{integrationId}` is mounted by `serve` outside every bearer, session and CSRF check, over TCP
   and the socket, behind `api.CapBody` (512 KiB, hdtp's, read before any lookup). `service.Core.Hook`
