@@ -41,6 +41,17 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `search_tasks` (R1.9), keyword only: the project's tasks whose title, description or search tokens
+  hold every term of the query, best first, at most `k` (default 10, at most 50), each with the
+  engine's rank as `score`; `mode` semantic is `VALIDATION` (the plan keeps no embeddings), hybrid and
+  keyword run keyword and answer `mode: "keyword"`. The query is split into letters-and-digits terms
+  (`word*` a prefix) and only those reach the engine: an FTS5 match of quoted tokens ranked by `bm25`
+  on SQLite, a `to_tsquery('simple', …)` of quoted lexemes ranked by `ts_rank` on Postgres, each a
+  bound parameter; a query with no term is `VALIDATION`. Two statements (the page, then its tasks by
+  id), pinned on both engines. `store.Search` is built on SQLite, Postgres and memstore, and the
+  search battery gains the index following a title and token update and a delete; with search, the
+  last unbuilt contract II area, `internal/store/conformance/reference_test.go` is gone.
+
 - The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
   check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
   (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
