@@ -113,6 +113,48 @@ func write(t *testing.T, s store.Store, in ...store.ChangeInput) []int64 {
 	return ids
 }
 
+// changeIn is a change of project to the token scope scope; project "" is none.
+func changeIn(scope, project string, n int) store.ChangeInput {
+	c := change(scope, n)
+	c.ProjectID = project
+	return c
+}
+
+// handoff is the row service.writeChanges writes for handoff_task to assignee: one assigned
+// doorbell, scoped to the new assignee's identity, and nothing under the project's scope.
+func handoff(assignee, project string) store.ChangeInput {
+	return store.ChangeInput{
+		Scope: assignee, ProjectID: project, Kind: "assigned", Ts: time.Now().UnixMilli(),
+		Payload: json.RawMessage(fmt.Sprintf(`{"kind":"assigned","agent":%q,"taskId":"T-1","projectId":%q,"boardId":"B-1","tool":"handoff_task"}`, assignee, project)),
+	}
+}
+
+func subscribeProjects(t *testing.T, bus *Bus, buffer int, projects ...string) *Subscription {
+	t.Helper()
+	s, err := bus.SubscribeProjects(context.Background(), projects, buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func tap(t *testing.T, bus *Bus, buffer int) *Subscription {
+	t.Helper()
+	s, err := bus.Tap(context.Background(), buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func idsOf(cs []store.Change) []int64 {
+	out := []int64{}
+	for _, c := range cs {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
 func subscribe(t *testing.T, bus *Bus, buffer int, scopes ...string) *Subscription {
 	t.Helper()
 	s, err := bus.Subscribe(context.Background(), scopes, buffer)
@@ -159,10 +201,12 @@ func TestIdle(t *testing.T) {
 			for i := range subs {
 				subs[i] = subscribe(t, bus, 0, "project:P-1", fmt.Sprintf("agent:a%d", i))
 			}
+			// R0.24: a project subscription and a tap are in-memory indexes, not reads of their own.
+			subs = append(subs, subscribeProjects(t, bus, 0, "P-1"), tap(t, bus, 0))
 			tail := log.reads.Load()
 			time.Sleep(10 * time.Second)
 			idle := log.reads.Load() - tail
-			t.Logf("200 subscribers: %d statement(s) to find the end of the log, %d in 10 s idle", tail, idle)
+			t.Logf("200 subscribers, a project subscription and a tap: %d statement(s) to find the end of the log, %d in 10 s idle", tail, idle)
 			if idle != 0 {
 				t.Fatalf("an idle tail issued %d statements in 10 s, want 0", idle)
 			}
@@ -175,7 +219,7 @@ func TestIdle(t *testing.T) {
 				}
 				worst = max(worst, time.Since(began))
 			}
-			t.Logf("one write: all 200 received it within %v (%d statement(s) to read it)", worst, log.reads.Load()-tail)
+			t.Logf("one write: all %d received it within %v (%d statement(s) to read it)", len(subs), worst, log.reads.Load()-tail)
 		})
 	}
 }
@@ -187,23 +231,34 @@ func TestASlowSubscriberDoesNotDelayAFastOne(t *testing.T) {
 		bus, _ := newBus(t, b, Options{})
 		slow := subscribe(t, bus, 8, "project:P-1")
 		fast := subscribe(t, bus, 1024, "project:P-1")
+		// R0.24: each form drops for itself; a slow tap or project subscription delays nobody.
+		slowTap, fastTap := tap(t, bus, 8), tap(t, bus, 1024)
+		slowProj, fastProj := subscribeProjects(t, bus, 8, "P-1"), subscribeProjects(t, bus, 1024, "P-1")
 		in := make([]store.ChangeInput, 1000)
 		for i := range in {
 			in[i] = change("project:P-1", i)
 		}
 		ids := write(t, b.store, in...)
-		for i := range ids {
-			if c := next(t, fast, 5*time.Second); c.ID != ids[i] {
-				t.Fatalf("fast: change %d is %d, want %d", i, c.ID, ids[i])
+		for name, f := range map[string]*Subscription{"fast": fast, "fast tap": fastTap, "fast project": fastProj} {
+			for i := range ids {
+				if c := next(t, f, 5*time.Second); c.ID != ids[i] {
+					t.Fatalf("%s: change %d is %d, want %d", name, i, c.ID, ids[i])
+				}
 			}
 		}
-		deadline := time.Now().Add(time.Second)
-		for slow.Dropped() != 992 && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
+		for name, s := range map[string]*Subscription{"slow": slow, "slow tap": slowTap, "slow project": slowProj} {
+			deadline := time.Now().Add(time.Second)
+			for s.Dropped() != 992 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Logf("%s holds %d, dropped %d", name, len(s.C()), s.Dropped())
+			if s.Dropped() != 992 || len(s.C()) != 8 {
+				t.Fatalf("%s dropped %d holding %d; want 992, 8", name, s.Dropped(), len(s.C()))
+			}
 		}
-		t.Logf("fast received %d; slow holds %d, dropped %d; fast dropped %d", len(ids), len(slow.C()), slow.Dropped(), fast.Dropped())
-		if slow.Dropped() != 992 || len(slow.C()) != 8 || fast.Dropped() != 0 {
-			t.Fatalf("slow dropped %d holding %d, fast dropped %d; want 992, 8, 0", slow.Dropped(), len(slow.C()), fast.Dropped())
+		t.Logf("fast, fast tap and fast project each received %d; dropped %d, %d, %d", len(ids), fast.Dropped(), fastTap.Dropped(), fastProj.Dropped())
+		if fast.Dropped() != 0 || fastTap.Dropped() != 0 || fastProj.Dropped() != 0 {
+			t.Fatalf("a fast subscriber dropped: %d, %d, %d", fast.Dropped(), fastTap.Dropped(), fastProj.Dropped())
 		}
 	})
 }
@@ -223,15 +278,18 @@ func TestTheTailRunsOnlyWhileASubscriberExists(t *testing.T) {
 		}
 		one := subscribe(t, bus, 0, "project:P-1")
 		two := subscribe(t, bus, 0, "agent:x")
+		three, four := tap(t, bus, 0), subscribeProjects(t, bus, 0, "P-1")
 		during := runtime.NumGoroutine()
 		if !bus.Running() {
-			t.Fatal("no tail runs with two subscribers")
+			t.Fatal("no tail runs with four subscribers")
 		}
-		one.Close()
-		if !bus.Running() {
-			t.Fatal("the tail stopped while a subscriber remained")
+		for _, s := range []*Subscription{one, two, three} {
+			s.Close()
+			if !bus.Running() {
+				t.Fatal("the tail stopped while a subscriber remained")
+			}
 		}
-		two.Close()
+		four.Close()
 		deadline := time.Now().Add(2 * time.Second)
 		for bus.Running() && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
@@ -292,6 +350,136 @@ func TestScopesAndReplay(t *testing.T) {
 			t.Fatal("an empty scope was accepted")
 		}
 	})
+}
+
+// R0.24 AC1: a project subscription receives every change of its project, matched on the stored
+// ProjectID, whatever its token scope — a handoff_task row scoped to its new assignee bob included,
+// which no recipient subscription but bob's receives — and no change of another project. The
+// recipient forms are unchanged: project:P-1 (the broadcast token scope) still does not hear bob's
+// handoff.
+func TestAProjectSubscriptionReceivesEveryChangeOfItsProject(t *testing.T) {
+	each(t, func(t *testing.T, b backend) {
+		bus, _ := newBus(t, b, Options{})
+		proj := subscribeProjects(t, bus, 0, "P-1", "P-1")
+		if got := proj.Projects(); len(got) != 1 || proj.Scopes() != nil {
+			t.Fatalf("a project listed twice: projects %v, scopes %v", got, proj.Scopes())
+		}
+		broadcast := subscribe(t, bus, 0, "project:P-1")
+		bob := subscribe(t, bus, 0, "bob")
+		ids := write(t, b.store,
+			handoff("bob", "P-1"),             // 0: the handoff, scoped to bob only
+			changeIn("project:P-2", "P-2", 1), // 1: project q's broadcast
+			handoff("alice", "P-2"),           // 2: project q's handoff
+			changeIn("project:P-1", "P-1", 3), // 3: P-1's broadcast
+			changeIn("system", "", 4),         // 4: no project
+		)
+		for _, want := range []int64{ids[0], ids[3]} {
+			if c := next(t, proj, 2*time.Second); c.ID != want || *c.ProjectID != "P-1" {
+				t.Fatalf("project P-1: %+v, want change %d", c, want)
+			}
+		}
+		if c := next(t, bob, 2*time.Second); c.ID != ids[0] || c.Kind != "assigned" {
+			t.Fatalf("bob: %+v, want the handoff %d", c, ids[0])
+		}
+		if c := next(t, broadcast, 2*time.Second); c.ID != ids[3] {
+			t.Fatalf("project:P-1 scope: %+v, want only the broadcast %d", c, ids[3])
+		}
+		for _, s := range []*Subscription{proj, bob, broadcast} {
+			quiet(t, s, 3*PollInterval)
+		}
+		t.Logf("project P-1 received the handoff %d scoped to bob and the broadcast %d; nothing of P-2 or of no project", ids[0], ids[3])
+		if _, err := bus.SubscribeProjects(context.Background(), nil, 0); err == nil {
+			t.Fatal("a project subscription with no project was accepted")
+		}
+		if _, err := bus.SubscribeProjects(context.Background(), []string{""}, 0); err == nil {
+			t.Fatal("an empty project id was accepted")
+		}
+	})
+}
+
+// R0.24 AC3: the tap receives every change, of two projects, of any scope and of none, in cursor
+// (id) order; ReplayAll from a mid cursor is exactly the later changes, and ReplayProjects exactly
+// the later changes of its projects — the catch-up a late subscriber of each form runs.
+func TestTheTapReceivesEveryChangeInCursorOrderAndBothReplay(t *testing.T) {
+	each(t, func(t *testing.T, b backend) {
+		before := write(t, b.store, changeIn("project:P-1", "P-1", 0))[0] // committed before the tap
+		bus, _ := newBus(t, b, Options{})
+		all := tap(t, bus, 0)
+		ids := write(t, b.store, handoff("bob", "P-1"), changeIn("project:P-2", "P-2", 1), changeIn("system", "", 2))
+		ids = append(ids, write(t, b.store, handoff("alice", "P-2"), changeIn("project:P-1", "P-1", 3))...)
+		for i, want := range ids {
+			if c := next(t, all, 2*time.Second); c.ID != want {
+				t.Fatalf("tap: change %d is %d, want %d (cursor order %v)", i, c.ID, want, ids)
+			}
+		}
+		quiet(t, all, 3*PollInterval)
+		ctx := context.Background()
+		got, err := bus.ReplayAll(ctx, ids[1], 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := ids[2:]; !slices.Equal(idsOf(got), want) {
+			t.Fatalf("ReplayAll after %d = %v, want %v", ids[1], idsOf(got), want)
+		}
+		if got, err = bus.ReplayAll(ctx, 0, 2); err != nil || !slices.Equal(idsOf(got), []int64{before, ids[0]}) {
+			t.Fatalf("ReplayAll(0, 2) = %v, %v; want [%d %d]", idsOf(got), err, before, ids[0])
+		}
+		if got, err = bus.ReplayProjects(ctx, []string{"P-1"}, before, 0); err != nil || !slices.Equal(idsOf(got), []int64{ids[0], ids[4]}) {
+			t.Fatalf("ReplayProjects(P-1) after %d = %v, %v; want [%d %d]", before, idsOf(got), err, ids[0], ids[4])
+		}
+		if got, err = bus.ReplayProjects(ctx, []string{"P-2", "P-1"}, ids[0], 2); err != nil || !slices.Equal(idsOf(got), []int64{ids[1], ids[3]}) {
+			t.Fatalf("ReplayProjects(P-2, P-1) after %d, limit 2 = %v, %v; want [%d %d]", ids[0], idsOf(got), err, ids[1], ids[3])
+		}
+		if _, err := bus.ReplayProjects(ctx, nil, 0, 0); err == nil {
+			t.Fatal("ReplayProjects with no project was accepted")
+		}
+		t.Logf("tap: %v in order; ReplayAll after %d = %v", ids, ids[1], ids[2:])
+	})
+}
+
+// ReplayProjects reads past a full page of other projects' changes: a project's catch-up is not cut
+// short by a busy neighbour (one statement per 1000 rows read).
+func TestReplayProjectsPagesPastOtherProjects(t *testing.T) {
+	each(t, func(t *testing.T, b backend) {
+		in := make([]store.ChangeInput, maxReplay+1)
+		for i := range in {
+			in[i] = changeIn("project:P-2", "P-2", i)
+		}
+		write(t, b.store, in...)
+		want := write(t, b.store, handoff("bob", "P-1"))[0]
+		bus, log := newBus(t, b, Options{})
+		got, err := bus.ReplayProjects(context.Background(), []string{"P-1"}, 0, 0)
+		if err != nil || !slices.Equal(idsOf(got), []int64{want}) {
+			t.Fatalf("ReplayProjects(P-1) = %v, %v; want [%d]", idsOf(got), err, want)
+		}
+		if n := log.reads.Load(); n != 2 {
+			t.Fatalf("%d statements for %d rows, want 2", n, maxReplay+2)
+		}
+	})
+}
+
+// Bus.Close ends every form: a tap's and a project subscription's channels close with a recipient's.
+func TestCloseEndsEveryForm(t *testing.T) {
+	b := memBackend(t)
+	bus, _ := newBus(t, b, Options{})
+	subs := []*Subscription{subscribe(t, bus, 0, "bob"), tap(t, bus, 0), subscribeProjects(t, bus, 0, "P-1")}
+	bus.Close()
+	for i, s := range subs {
+		select {
+		case _, ok := <-s.C():
+			if ok {
+				t.Fatalf("subscription %d delivered after Close", i)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("subscription %d not closed by Bus.Close", i)
+		}
+	}
+	if _, err := bus.Tap(context.Background(), 0); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Tap after Close: %v, want ErrClosed", err)
+	}
+	if _, err := bus.SubscribeProjects(context.Background(), []string{"P-1"}, 0); !errors.Is(err, ErrClosed) {
+		t.Fatalf("SubscribeProjects after Close: %v, want ErrClosed", err)
+	}
 }
 
 // The amended requirement 1 (contract_changelog.go:30-32): on Postgres an id is taken at the INSERT
@@ -711,8 +899,17 @@ func TestChurn(t *testing.T) {
 	errs := make(chan error, 200)
 	for i := range 20 {
 		wg.Go(func() {
-			for range 10 {
-				s, err := bus.Subscribe(context.Background(), []string{"project:P-1", fmt.Sprintf("agent:%d", i)}, 1)
+			for j := range 10 {
+				var s *Subscription
+				var err error
+				switch (i + j) % 3 { // R0.24: every form churns
+				case 0:
+					s, err = bus.Subscribe(context.Background(), []string{"project:P-1", fmt.Sprintf("agent:%d", i)}, 1)
+				case 1:
+					s, err = bus.Tap(context.Background(), 1)
+				default:
+					s, err = bus.SubscribeProjects(context.Background(), []string{"P-1"}, 1)
+				}
 				if err != nil {
 					errs <- err
 					return
