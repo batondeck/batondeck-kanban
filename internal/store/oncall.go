@@ -22,6 +22,9 @@ import (
 type oncallQueries interface {
 	InsertIntegration(ctx context.Context, arg sqlitedb.InsertIntegrationParams) (sqlitedb.Integration, error)
 	GetIntegration(ctx context.Context, arg sqlitedb.GetIntegrationParams) (sqlitedb.Integration, error)
+	GetIntegrationByID(ctx context.Context, id string) (sqlitedb.Integration, error)
+	GetAlertState(ctx context.Context, arg sqlitedb.GetAlertStateParams) (sqlitedb.AlertState, error)
+	PutAlertState(ctx context.Context, arg sqlitedb.PutAlertStateParams) error
 	ListIntegrations(ctx context.Context, arg sqlitedb.ListIntegrationsParams) ([]sqlitedb.Integration, error)
 	UpdateIntegration(ctx context.Context, arg sqlitedb.UpdateIntegrationParams) (sqlitedb.Integration, error)
 	InsertDelivery(ctx context.Context, arg sqlitedb.InsertDeliveryParams) (sqlitedb.Delivery, error)
@@ -61,6 +64,30 @@ func (s *SQLite) GetIntegration(ctx context.Context, projectID, integrationID st
 
 func (s *Postgres) GetIntegration(ctx context.Context, projectID, integrationID string) (Integration, error) {
 	return getIntegration(ctx, s, projectID, integrationID)
+}
+
+func (s *SQLite) GetIntegrationByID(ctx context.Context, integrationID string) (Integration, error) {
+	return getIntegrationByID(ctx, s, integrationID)
+}
+
+func (s *Postgres) GetIntegrationByID(ctx context.Context, integrationID string) (Integration, error) {
+	return getIntegrationByID(ctx, s, integrationID)
+}
+
+func (s *SQLite) GetAlertState(ctx context.Context, projectID, integrationID, fingerprint string) (AlertState, error) {
+	return getAlertState(ctx, s, projectID, integrationID, fingerprint)
+}
+
+func (s *Postgres) GetAlertState(ctx context.Context, projectID, integrationID, fingerprint string) (AlertState, error) {
+	return getAlertState(ctx, s, projectID, integrationID, fingerprint)
+}
+
+func (s *SQLite) PutAlertState(ctx context.Context, a AlertState) error {
+	return putAlertState(ctx, s, a)
+}
+
+func (s *Postgres) PutAlertState(ctx context.Context, a AlertState) error {
+	return putAlertState(ctx, s, a)
 }
 
 func (s *SQLite) ListIntegrations(ctx context.Context, projectID string, limit int, includeDeleted bool) ([]Integration, error) {
@@ -201,6 +228,45 @@ func getIntegration(ctx context.Context, e engine, projectID, integrationID stri
 		return Integration{}, err
 	}
 	return integrationFrom(r), nil
+}
+
+func getIntegrationByID(ctx context.Context, e engine, integrationID string) (Integration, error) {
+	r, err := e.queries(false).GetIntegrationByID(ctx, integrationID)
+	if err := found(err, "Integration", integrationID); err != nil {
+		return Integration{}, err
+	}
+	return integrationFrom(r), nil
+}
+
+func getAlertState(ctx context.Context, e engine, projectID, integrationID, fingerprint string) (AlertState, error) {
+	r, err := e.queries(false).GetAlertState(ctx, sqlitedb.GetAlertStateParams{ProjectID: projectID, IntegrationID: integrationID, FingerprintHash: DeliveryKey(fingerprint)})
+	if err := found(err, "AlertState", fingerprint); err != nil {
+		return AlertState{}, err
+	}
+	return AlertState{ProjectID: r.ProjectID, IntegrationID: r.IntegrationID, Fingerprint: r.Fingerprint, TaskID: r.TaskID,
+		Occurrences: r.Occurrences, FirstAt: r.FirstAt, LastAt: r.LastAt, AlertStatus: r.AlertStatus, ExpiresAt: r.ExpiresAt.Int64}, nil
+}
+
+func putAlertState(ctx context.Context, e engine, a AlertState) error {
+	switch {
+	case a.Fingerprint == "" || a.TaskID == "" || a.IntegrationID == "":
+		return domain.Validation("an alert state needs an integration, a fingerprint and a task", nil)
+	case a.AlertStatus != "firing" && a.AlertStatus != "resolved":
+		return domain.Validation("unknown alert status: "+a.AlertStatus, map[string]any{"alertStatus": a.AlertStatus})
+	case a.FirstAt <= 0 || a.LastAt <= 0 || a.Occurrences <= 0:
+		return domain.Validation("an alert state needs its times and a positive occurrence count", nil)
+	}
+	err := e.queries(true).PutAlertState(ctx, sqlitedb.PutAlertStateParams{
+		ProjectID: a.ProjectID, IntegrationID: a.IntegrationID, FingerprintHash: DeliveryKey(a.Fingerprint), Fingerprint: a.Fingerprint,
+		TaskID: a.TaskID, Occurrences: a.Occurrences, FirstAt: a.FirstAt, LastAt: a.LastAt, AlertStatus: a.AlertStatus, ExpiresAt: nullMillis(a.ExpiresAt),
+	})
+	if isForeignKeyViolation(err) {
+		return domain.NotFound("Integration", a.IntegrationID)
+	}
+	if err != nil {
+		return fmt.Errorf("store: put alert state: %w", err)
+	}
+	return nil
 }
 
 func listIntegrations(ctx context.Context, e engine, projectID string, limit int, includeDeleted bool) ([]Integration, error) {
@@ -428,6 +494,20 @@ func (p pgQueries) InsertIntegration(ctx context.Context, arg sqlitedb.InsertInt
 func (p pgQueries) GetIntegration(ctx context.Context, arg sqlitedb.GetIntegrationParams) (sqlitedb.Integration, error) {
 	r, err := p.q.GetIntegration(ctx, pgdb.GetIntegrationParams(arg))
 	return sqlitedb.Integration(r), err
+}
+
+func (p pgQueries) GetIntegrationByID(ctx context.Context, id string) (sqlitedb.Integration, error) {
+	r, err := p.q.GetIntegrationByID(ctx, id)
+	return sqlitedb.Integration(r), err
+}
+
+func (p pgQueries) GetAlertState(ctx context.Context, arg sqlitedb.GetAlertStateParams) (sqlitedb.AlertState, error) {
+	r, err := p.q.GetAlertState(ctx, pgdb.GetAlertStateParams(arg))
+	return sqlitedb.AlertState(r), err
+}
+
+func (p pgQueries) PutAlertState(ctx context.Context, arg sqlitedb.PutAlertStateParams) error {
+	return p.q.PutAlertState(ctx, pgdb.PutAlertStateParams(arg))
 }
 
 func (p pgQueries) ListIntegrations(ctx context.Context, arg sqlitedb.ListIntegrationsParams) ([]sqlitedb.Integration, error) {

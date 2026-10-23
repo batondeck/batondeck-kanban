@@ -1,0 +1,4 @@
+{"source":"homegrown-monitor","checks":[
+  {"id":"chk-db","name":"Database reachable","state":"DOWN","level":"critical","url":"https://status.example.com/chk-db","tags":["env:prod","tier=data"],"at":"1729771200"},
+  {"id":"chk-cache","name":"Cache warm","state":"ok","level":"info","url":"javascript:alert(1)","tags":[],"at":"1729771200000"}
+]}

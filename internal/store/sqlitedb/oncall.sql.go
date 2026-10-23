@@ -166,6 +166,38 @@ func (q *Queries) GetIntegration(ctx context.Context, arg GetIntegrationParams) 
 	return i, err
 }
 
+const getIntegrationByID = `-- name: GetIntegrationByID :one
+SELECT project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at FROM integrations WHERE id = ? AND deleted_at IS NULL
+`
+
+// The one id-only lookup: POST /hooks/{id} resolves its project from the integration id, which is
+// unguessable and UNIQUE on its own. A tombstone is not found.
+func (q *Queries) GetIntegrationByID(ctx context.Context, id string) (Integration, error) {
+	row := q.db.QueryRowContext(ctx, getIntegrationByID, id)
+	var i Integration
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Enabled,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Auth,
+		&i.Mapping,
+		&i.Routing,
+		&i.Lifecycle,
+		&i.Policy,
+		&i.Limits,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (project_id, integration_id, id, delivery_id, ts, kind, result, task_id, error, normalized_event, expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -406,6 +438,43 @@ func (q *Queries) ListIntegrations(ctx context.Context, arg ListIntegrationsPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const putAlertState = `-- name: PutAlertState :exec
+INSERT INTO alert_states (project_id, integration_id, fingerprint_hash, fingerprint, task_id, occurrences, first_at, last_at, alert_status, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (project_id, integration_id, fingerprint_hash) DO UPDATE SET fingerprint = excluded.fingerprint, task_id = excluded.task_id,
+  occurrences = excluded.occurrences, first_at = excluded.first_at, last_at = excluded.last_at, alert_status = excluded.alert_status, expires_at = excluded.expires_at
+`
+
+type PutAlertStateParams struct {
+	ProjectID       string
+	IntegrationID   string
+	FingerprintHash string
+	Fingerprint     string
+	TaskID          string
+	Occurrences     int64
+	FirstAt         int64
+	LastAt          int64
+	AlertStatus     string
+	ExpiresAt       sql.NullInt64
+}
+
+// A fingerprint's correlation row, written whole: inserted on the first event, replaced after.
+func (q *Queries) PutAlertState(ctx context.Context, arg PutAlertStateParams) error {
+	_, err := q.db.ExecContext(ctx, putAlertState,
+		arg.ProjectID,
+		arg.IntegrationID,
+		arg.FingerprintHash,
+		arg.Fingerprint,
+		arg.TaskID,
+		arg.Occurrences,
+		arg.FirstAt,
+		arg.LastAt,
+		arg.AlertStatus,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const putDeliveryRawBody = `-- name: PutDeliveryRawBody :exec

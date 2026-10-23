@@ -1,0 +1,10 @@
+{"version":"4","groupKey":"{}:{alertname=\"HighLatency\"}","truncatedAlerts":0,"status":"firing","receiver":"batondeck",
+ "groupLabels":{"alertname":"HighLatency"},"commonLabels":{"alertname":"HighLatency","severity":"critical"},"commonAnnotations":{},
+ "externalURL":"http://alertmanager:9093",
+ "alerts":[
+  {"status":"firing","labels":{"alertname":"HighLatency","severity":"critical","service":"api"},
+   "annotations":{"summary":"p99 latency above 2s on api","description":"p99 has been over 2s for 10 minutes"},
+   "startsAt":"2026-10-24T08:00:00.000Z","endsAt":"0001-01-01T00:00:00Z","generatorURL":"http://prometheus:9090/graph?g0.expr=latency","fingerprint":"a1b2c3d4e5f60718"},
+  {"status":"resolved","labels":{"alertname":"DiskFull","severity":"warning","instance":"db-1"},"annotations":{},
+   "startsAt":"2026-10-24T07:00:00.000Z","endsAt":"2026-10-24T07:45:00.000Z","generatorURL":"http://prometheus:9090/graph?g0.expr=disk","fingerprint":"ffeeddccbbaa0099"}
+ ]}

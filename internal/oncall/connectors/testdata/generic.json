@@ -1,0 +1,3 @@
+{"fingerprint":"checkout-latency","status":"firing","severity":"critical","title":"Checkout latency over budget","description":"p95 above 800ms for 5 minutes",
+ "labels":{"env":"prod","service":"checkout"},"annotations":{"runbook":"https://runbooks.example.com/checkout"},"links":["https://grafana.example.com/d/checkout"],
+ "occurredAt":"2026-10-24T11:00:00Z","deliveryId":"gen-0001"}

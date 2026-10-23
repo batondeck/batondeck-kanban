@@ -126,6 +126,65 @@ func oncall(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("ByIDResolvesTheLiveIntegrationAlone", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			create(t, s, p, b, "I-a", 100)
+			p2, b2, err := sd.seedProject(ctx)
+			noErr(t, err)
+			create(t, s, p2, b2, "I-b", 100)
+			got, err := s.GetIntegrationByID(ctx, "I-b")
+			noErr(t, err)
+			if got.ProjectID != p2 || got.ID != "I-b" || got.BoardID != b2 {
+				t.Fatalf("GetIntegrationByID(I-b) = %+v, want project %s", got, p2)
+			}
+			_, err = s.GetIntegrationByID(ctx, "I-none")
+			wantErr(t, err, domain.CodeNotFound, "Integration")
+			_, err = s.DeleteIntegration(ctx, p, "I-a", 1, 300)
+			noErr(t, err)
+			_, err = s.GetIntegrationByID(ctx, "I-a")
+			wantErr(t, err, domain.CodeNotFound, "Integration")
+		})
+
+		t.Run("AnAlertStateIsWrittenWholeAndReadByFingerprint", func(t *testing.T) {
+			s, _, p, b := seeded(t, newStore)
+			create(t, s, p, b, "I-a", 1)
+			_, err := s.GetAlertState(ctx, p, "I-a", "fp/1")
+			wantErr(t, err, domain.CodeNotFound, "AlertState")
+			first := store.AlertState{ProjectID: p, IntegrationID: "I-a", Fingerprint: "fp/1", TaskID: "T-1", Occurrences: 1, FirstAt: 10, LastAt: 10, AlertStatus: "firing", ExpiresAt: 99}
+			noErr(t, s.PutAlertState(ctx, first))
+			got, err := s.GetAlertState(ctx, p, "I-a", "fp/1")
+			noErr(t, err)
+			if got != first {
+				t.Fatalf("GetAlertState = %+v, want %+v", got, first)
+			}
+			next := first
+			next.Occurrences, next.LastAt, next.AlertStatus, next.ExpiresAt = 2, 20, "resolved", 0
+			noErr(t, s.PutAlertState(ctx, next))
+			got, err = s.GetAlertState(ctx, p, "I-a", "fp/1")
+			noErr(t, err)
+			if got != next {
+				t.Fatalf("after a replace GetAlertState = %+v, want %+v", got, next)
+			}
+			_, err = s.GetAlertState(ctx, p, "I-a", "fp/2")
+			wantErr(t, err, domain.CodeNotFound, "AlertState")
+			none := first
+			none.IntegrationID = "I-none"
+			wantErr(t, s.PutAlertState(ctx, none), domain.CodeNotFound, "Integration")
+			for name, mut := range map[string]func(*store.AlertState){
+				"no fingerprint":   func(a *store.AlertState) { a.Fingerprint = "" },
+				"no task":          func(a *store.AlertState) { a.TaskID = "" },
+				"an unknown state": func(a *store.AlertState) { a.AlertStatus = "test" },
+				"no time":          func(a *store.AlertState) { a.LastAt = 0 },
+				"no occurrence":    func(a *store.AlertState) { a.Occurrences = 0 },
+			} {
+				bad := first
+				mut(&bad)
+				if e, ok := domain.AsBatonDeckError(s.PutAlertState(ctx, bad)); !ok || e.Code != domain.CodeValidation {
+					t.Errorf("%s: %v, want VALIDATION", name, e)
+				}
+			}
+		})
+
 		t.Run("ListIsNewestFirstLimitedAndPerProject", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			for i := range 3 {
@@ -307,7 +366,10 @@ func oncall(t *testing.T, newStore Factory) {
 			_, _, err := s.InsertDelivery(ctx, delivery(p, "I-a", "d", 100, store.DeliveryRejected))
 			noErr(t, err)
 			noErr(t, s.PutDeliveryRawBody(ctx, p, "I-a", "d", []byte("b"), 500))
+			noErr(t, s.PutAlertState(ctx, store.AlertState{ProjectID: p, IntegrationID: "I-a", Fingerprint: "f", TaskID: "T-1", Occurrences: 1, FirstAt: 1, LastAt: 1, AlertStatus: "firing"}))
 			noErr(t, s.DeleteProjectRecursive(ctx, p))
+			_, aerr := s.GetAlertState(ctx, p, "I-a", "f")
+			wantErr(t, aerr, domain.CodeNotFound, "AlertState")
 			all, err := s.ListIntegrations(ctx, p, 0, true)
 			noErr(t, err)
 			_, derr := s.GetDelivery(ctx, p, "I-a", "d")

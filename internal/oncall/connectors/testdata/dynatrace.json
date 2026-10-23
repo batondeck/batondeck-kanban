@@ -1,0 +1,3 @@
+{"PID":"-1234567890123456789_1729760000000V2","State":"OPEN","ProblemTitle":"Response time degradation","ProblemSeverity":"PERFORMANCE",
+ "ProblemURL":"https://abc12345.live.dynatrace.com/#problems/problemdetails;pid=-1234567890123456789","ProblemDetailsText":"Response time of service checkout increased by 300%",
+ "ProblemImpact":"SERVICE","ImpactedEntities":[{"type":"SERVICE","name":"checkout","entity":"SERVICE-0123456789ABCDEF"},{"type":"SERVICE","name":"cart","entity":"SERVICE-FEDCBA9876543210"}]}
