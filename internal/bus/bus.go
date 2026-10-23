@@ -1,6 +1,14 @@
 // Package bus is the change-log tail: the one event source behind the /wake doorbell, MCP
 // resource push and the UI stream (plan §Notifications). It reads store.ChangeLog and nothing
-// else, and fans each change out in process to the subscribers holding its token scope.
+// else, and fans each change out in process to the subscribers that match it. A subscription has
+// one of three forms, each an in-memory index the tail consults per change:
+//   - Subscribe: token scopes, matched on Change.Scope (a recipient: an identity, agent:<label>,
+//     project:<id> for broadcasts);
+//   - SubscribeProjects: project ids, matched on Change.ProjectID, so every change of the project
+//     whatever its recipient (a handoff scoped to the new assignee included);
+//   - Tap: every change.
+//
+// Each has its catch-up from a cursor: Replay, ReplayProjects and ReplayAll.
 //
 // Cost: the tail runs only while a subscriber exists, and reads the log at most once per
 // PollInterval. When the engine gives a wake (store.ChangeWatcher: Postgres LISTEN/NOTIFY,
@@ -77,11 +85,13 @@ type Bus struct {
 	log  store.ChangeLog
 	opts Options
 
-	mu     sync.RWMutex
-	scopes map[string]map[*Subscription]struct{}
-	count  int
-	run    *runner
-	closed bool
+	mu       sync.RWMutex
+	scopes   map[string]map[*Subscription]struct{}
+	projects map[string]map[*Subscription]struct{} // keyed on a bare project id
+	taps     map[*Subscription]struct{}
+	count    int
+	run      *runner
+	closed   bool
 	// hint is the frontier the last tail reached: the next one finds the log's end from it.
 	hint int64
 
@@ -107,7 +117,10 @@ func New(log store.ChangeLog, opts Options) *Bus {
 	if opts.GapTimeout <= 0 {
 		opts.GapTimeout = GapTimeout
 	}
-	return &Bus{log: log, opts: opts, scopes: map[string]map[*Subscription]struct{}{}}
+	return &Bus{
+		log: log, opts: opts, scopes: map[string]map[*Subscription]struct{}{},
+		projects: map[string]map[*Subscription]struct{}{}, taps: map[*Subscription]struct{}{},
+	}
 }
 
 // ErrClosed is Subscribe on a closed Bus.
@@ -120,14 +133,17 @@ var ErrGapPassed = errors.New("bus: passed a gap")
 // GapTimeout: an id in flight below that page is not waited for.
 var ErrSeedWindowFull = errors.New("bus: seed window full")
 
-// Subscription is one subscriber: the changes of its scopes, in the order the tail reads them.
+// Subscription is one subscriber: the changes it matches (its scopes, its projects, or every one
+// for a tap), in the order the tail reads them.
 type Subscription struct {
-	b       *Bus
-	scopes  []string
-	ch      chan store.Change
-	dropped atomic.Int64
-	once    sync.Once
-	closed  bool // under b.mu
+	b        *Bus
+	scopes   []string
+	projects []string
+	tap      bool
+	ch       chan store.Change
+	dropped  atomic.Int64
+	once     sync.Once
+	closed   bool // under b.mu
 }
 
 // C is the subscription's changes. It is closed by Close, and by the Bus's Close.
@@ -136,8 +152,11 @@ func (s *Subscription) C() <-chan store.Change { return s.ch }
 // Dropped is how many changes did not fit the buffer and were dropped.
 func (s *Subscription) Dropped() int64 { return s.dropped.Load() }
 
-// Scopes is the token scopes the subscription receives.
+// Scopes is the token scopes the subscription receives; nil for SubscribeProjects and Tap.
 func (s *Subscription) Scopes() []string { return slices.Clone(s.scopes) }
+
+// Projects is the project ids the subscription receives; nil for Subscribe and Tap.
+func (s *Subscription) Projects() []string { return slices.Clone(s.projects) }
 
 // Close ends the subscription and closes C; the last one stops the tail. It is idempotent.
 func (s *Subscription) Close() { s.once.Do(func() { s.b.remove(s) }) }
@@ -151,20 +170,52 @@ func (b *Bus) Subscribe(ctx context.Context, scopes []string, buffer int) (*Subs
 	if err != nil {
 		return nil, err
 	}
+	return b.subscribe(ctx, &Subscription{scopes: scopes}, buffer)
+}
+
+// SubscribeProjects receives every change whose ProjectID is one of projectIDs, whatever its token
+// scope, as Subscribe does otherwise: a handoff, scoped to its new assignee, reaches it. A project
+// id is bare ("P-1"): Subscribe([]string{"project:P-1"}) is a token scope (service.BroadcastScope)
+// and still receives only the changes stored under it. A change with no ProjectID matches none. An
+// id listed twice counts once; none, or an empty one, is an error.
+func (b *Bus) SubscribeProjects(ctx context.Context, projectIDs []string, buffer int) (*Subscription, error) {
+	ids, err := validKeys("project id", projectIDs)
+	if err != nil {
+		return nil, err
+	}
+	return b.subscribe(ctx, &Subscription{projects: ids}, buffer)
+}
+
+// Tap receives every change, of every scope and project, as Subscribe does otherwise.
+func (b *Bus) Tap(ctx context.Context, buffer int) (*Subscription, error) {
+	return b.subscribe(ctx, &Subscription{tap: true}, buffer)
+}
+
+// subscribe indexes s, starting the tail for the first subscription and waiting for it to be ready.
+func (b *Bus) subscribe(ctx context.Context, s *Subscription, buffer int) (*Subscription, error) {
 	if buffer <= 0 {
 		buffer = DefaultBuffer
 	}
-	s := &Subscription{b: b, scopes: scopes, ch: make(chan store.Change, buffer)}
+	s.b, s.ch = b, make(chan store.Change, buffer)
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return nil, ErrClosed
 	}
-	for _, sc := range scopes {
-		if b.scopes[sc] == nil {
-			b.scopes[sc] = map[*Subscription]struct{}{}
+	add := func(index map[string]map[*Subscription]struct{}, key string) {
+		if index[key] == nil {
+			index[key] = map[*Subscription]struct{}{}
 		}
-		b.scopes[sc][s] = struct{}{}
+		index[key][s] = struct{}{}
+	}
+	for _, sc := range s.scopes {
+		add(b.scopes, sc)
+	}
+	for _, p := range s.projects {
+		add(b.projects, p)
+	}
+	if s.tap {
+		b.taps[s] = struct{}{}
 	}
 	b.count++
 	if b.run == nil {
@@ -191,17 +242,19 @@ func (b *Bus) Subscribe(ctx context.Context, scopes []string, buffer int) (*Subs
 	}
 }
 
-func validScopes(scopes []string) ([]string, error) {
-	if len(scopes) == 0 {
-		return nil, errors.New("bus: a subscription needs a scope")
+func validScopes(scopes []string) ([]string, error) { return validKeys("scope", scopes) }
+
+func validKeys(what string, keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("bus: a subscription needs a %s", what)
 	}
-	out := make([]string, 0, len(scopes))
-	for _, sc := range scopes {
-		if sc == "" {
-			return nil, errors.New("bus: an empty scope")
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k == "" {
+			return nil, fmt.Errorf("bus: an empty %s", what)
 		}
-		if !slices.Contains(out, sc) {
-			out = append(out, sc)
+		if !slices.Contains(out, k) {
+			out = append(out, k)
 		}
 	}
 	return out, nil
@@ -210,12 +263,19 @@ func validScopes(scopes []string) ([]string, error) {
 func (b *Bus) remove(s *Subscription) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, sc := range s.scopes {
-		delete(b.scopes[sc], s)
-		if len(b.scopes[sc]) == 0 {
-			delete(b.scopes, sc)
+	drop := func(index map[string]map[*Subscription]struct{}, key string) {
+		delete(index[key], s)
+		if len(index[key]) == 0 {
+			delete(index, key)
 		}
 	}
+	for _, sc := range s.scopes {
+		drop(b.scopes, sc)
+	}
+	for _, p := range s.projects {
+		drop(b.projects, p)
+	}
+	delete(b.taps, s)
 	close(s.ch)
 	s.closed = true
 	b.count--
@@ -237,17 +297,20 @@ func (b *Bus) Running() bool { return b.active.Load() > 0 }
 func (b *Bus) Close() {
 	b.mu.Lock()
 	b.closed = true
-	var subs []*Subscription
-	for _, set := range b.scopes {
-		for s := range set {
-			if !slices.Contains(subs, s) {
-				subs = append(subs, s)
+	subs := map[*Subscription]struct{}{}
+	for _, index := range []map[string]map[*Subscription]struct{}{b.scopes, b.projects} {
+		for _, set := range index {
+			for s := range set {
+				subs[s] = struct{}{}
 			}
 		}
 	}
+	for s := range b.taps {
+		subs[s] = struct{}{}
+	}
 	r := b.run
 	b.mu.Unlock()
-	for _, s := range subs {
+	for s := range subs {
 		s.Close()
 	}
 	if r != nil {
@@ -265,12 +328,7 @@ func (b *Bus) Replay(ctx context.Context, scopes []string, since int64, limit in
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case limit <= 0:
-		limit = 100
-	case limit > 1000:
-		limit = 1000
-	}
+	limit = replayLimit(limit)
 	var all []store.Change
 	for _, sc := range scopes {
 		rows, err := b.log.ReadChangesForScope(ctx, sc, since, limit)
@@ -284,6 +342,58 @@ func (b *Bus) Replay(ctx context.Context, scopes []string, since int64, limit in
 		all = all[:limit]
 	}
 	return all, nil
+}
+
+// ReplayProjects is the changes of the given projects (matched on ProjectID, as SubscribeProjects)
+// after since, oldest first, at most limit (as Replay), for a SubscribeProjects client's catch-up,
+// with Replay's rules on subscribing first and on a safe cursor. It pages ReadChanges and keeps the
+// projects' rows, until limit of them or the end of the log: one statement per 1000 rows read.
+// ponytail: no (project_id, id) index exists, so a project's catch-up reads every row after since
+// (bounded by the change log's retention); a ReadChangesForProject over such an index is the upgrade.
+func (b *Bus) ReplayProjects(ctx context.Context, projectIDs []string, since int64, limit int) ([]store.Change, error) {
+	ids, err := validKeys("project id", projectIDs)
+	if err != nil {
+		return nil, err
+	}
+	limit = replayLimit(limit)
+	out := []store.Change{}
+	for {
+		rows, err := b.log.ReadChanges(ctx, since, maxReplay)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range rows {
+			if c.ProjectID != nil && slices.Contains(ids, *c.ProjectID) {
+				out = append(out, c)
+				if len(out) == limit {
+					return out, nil
+				}
+			}
+		}
+		if len(rows) < maxReplay {
+			return out, nil
+		}
+		since = rows[len(rows)-1].ID
+	}
+}
+
+// ReplayAll is every change after since, oldest first, at most limit (as Replay): a Tap client's
+// catch-up, with Replay's rules on subscribing first and on a safe cursor. One statement.
+func (b *Bus) ReplayAll(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	return b.log.ReadChanges(ctx, since, replayLimit(limit))
+}
+
+// maxReplay is the most changes one Replay returns, and one ChangeLog read's largest page.
+const maxReplay = 1000
+
+func replayLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return 100
+	case limit > maxReplay:
+		return maxReplay
+	}
+	return limit
 }
 
 func compareID(x, y int64) int {
@@ -590,14 +700,28 @@ func (t *tailState) advance(now time.Time, gap time.Duration, passed func(from, 
 	}
 }
 
-// deliverLocked hands c to every subscriber of its scope without blocking. Caller holds b.mu for
-// reading.
+// deliverLocked hands c, without blocking, to every subscriber of its scope, of its project and
+// every tap: three index lookups, no statement. A subscription has one form, so none matches c
+// twice. Caller holds b.mu for reading.
 func (b *Bus) deliverLocked(c store.Change) {
 	for s := range b.scopes[c.Scope] {
-		select {
-		case s.ch <- c:
-		default:
-			s.dropped.Add(1)
+		s.offer(c)
+	}
+	if c.ProjectID != nil {
+		for s := range b.projects[*c.ProjectID] {
+			s.offer(c)
 		}
+	}
+	for s := range b.taps {
+		s.offer(c)
+	}
+}
+
+// offer sends c when the buffer has room, and otherwise drops and counts it.
+func (s *Subscription) offer(c store.Change) {
+	select {
+	case s.ch <- c:
+	default:
+		s.dropped.Add(1)
 	}
 }
