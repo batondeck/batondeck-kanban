@@ -8,6 +8,35 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The MCP mount (`internal/mcp`, R0.14): a go-sdk v1.8.0 server behind the stateful Streamable HTTP
+  handler at `/mcp` (GET, POST, DELETE), declaring tools, prompts and resources with `listChanged`
+  and resource subscribe; all three lists are empty in R0 and `resources/subscribe` refuses every URI
+  until resources exist. Every request's bearer resolves through `auth.Resolver`: none, or one the
+  resolver refuses, is 401 with `WWW-Authenticate: Bearer`; a resolver failure is 500; a session is
+  bound to its caller's identity (another identity's bearer on it is 403). The caller reaches every
+  handler through `mcp.CallerFrom(ctx)`. A failed `tools/call` is a result with `isError` carrying
+  the `contract/errors.json` object (`{code, message, details?, retryable}`) as structured content
+  and as text; a go-sdk argument refusal is VALIDATION; a panic is INTERNAL (retryable) and its log
+  line carries the stack. Sessions are collected after 30 min idle (`Options.SessionIdle`) and
+  answer 404 "session not found" afterwards; at most 1000 live (`Options.MaxSessions`), an
+  initialize past it refused. Each initialised session is mirrored through `service.Sessions` as the
+  caller's agent session (key `<identity>::<agent id>`): written at initialize with the client's name
+  and version, touched by every tool call, removed when the last MCP session of that agent ends
+  (idle, DELETE or close). Every `tools/call` writes one `tool_calls` row through
+  `service.ToolCalls` (`ok`/`OK`, else `error` and the code returned); a handler error that is no
+  BatonDeckError is logged with a stack and answered INTERNAL. A protocol error from `tools/call`
+  (an unknown tool, a handler's `*jsonrpc.Error`) reaches the client as a JSON-RPC error and is
+  recorded; the bookkeeping never aborts a call or the process. `serve` stops in order: the MCP
+  sessions are closed first (their agent sessions removed), then the HTTP server drains, then the
+  buffered tool calls are flushed on their own 5 s budget. A stop with an idle client attached
+  returns at once; a tool call still running gets the 10 s shutdown budget to finish, then its
+  context is cancelled and `serve` exits 1 naming the step that ran out. A second `initialize` on a
+  live session is refused and leaves the session, and the session bound, as they were.
+  `tools/list` is filtered per audience (the workspace-admin
+  flag) and memoised per audience; `mcp.AddTool` registers a tool with its visibility. `serve` mounts
+  `/mcp` over the store's API tokens and the service core's Sessions and ToolCalls, flushed on
+  shutdown. New modules: `github.com/modelcontextprotocol/go-sdk` v1.8.0 and
+  its linked dependencies (THIRD_PARTY_NOTICES: 21 to 28 linked modules).
 - Store contract II in SQL on both engines for seven areas (R0.10): `internal/store/{context,memory,
   summaries,dependencies,subtasks,agentsessions,wakesessions}.go` over
   `queries/{sqlite,postgres}/{context,memory,summaries,dependencies,subtasks,agentsessions,wakesessions}.sql`
