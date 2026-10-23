@@ -8,26 +8,10 @@ import (
 
 // The in-memory store's methods for the areas of store contract II still unbuilt here: each returns
 // store.Unbuilt's INTERNAL naming the task that writes it here, so the batteries skip on memstore as
-// they do on the engines - P-67 attachments, blobs and search. R0.10 wrote context, memory,
-// summaries, dependencies and subtasks, and R0.21 audit, tool calls, agent and wake sessions, each
-// in its own files. A lane deletes its methods
+// they do on the engines - P-67 blobs and search. R0.10 wrote context, memory,
+// summaries, dependencies and subtasks, and R0.21 audit, tool calls, agent and wake sessions, and R1.3
+// attachments, each in its own files. A lane deletes its methods
 // from this file as it writes them, and the file with its last method.
-
-func (s *Store) CreateAttachment(context.Context, store.CreateAttachmentInput) (store.Attachment, error) {
-	return store.Attachment{}, store.Unbuilt("CreateAttachment", "P-67")
-}
-
-func (s *Store) SetAttachmentReady(context.Context, string, string, string, string) (store.Attachment, error) {
-	return store.Attachment{}, store.Unbuilt("SetAttachmentReady", "P-67")
-}
-
-func (s *Store) ListAttachments(context.Context, string, string) ([]store.Attachment, error) {
-	return nil, store.Unbuilt("ListAttachments", "P-67")
-}
-
-func (s *Store) DeleteAttachmentsByTask(context.Context, string, string) (int64, error) {
-	return 0, store.Unbuilt("DeleteAttachmentsByTask", "P-67")
-}
 
 func (s *Store) PutBlob(context.Context, string, int64) (store.Blob, error) {
 	return store.Blob{}, store.Unbuilt("PutBlob", "P-67")

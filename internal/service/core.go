@@ -57,6 +57,8 @@ type Options struct {
 	ToolCallBuffer int
 	// Sealer seals a wake session's inbox token; nil refuses a token (INTERNAL), never stores it.
 	Sealer Sealer
+	// BlobGC is delete_task's blob hook (delete.go); nil is a no-op.
+	BlobGC BlobGC
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -74,6 +76,7 @@ type Core struct {
 	calls   *toolCalls
 	boards  *snapshotCache
 	sealer  Sealer
+	blobGC  BlobGC
 }
 
 // New builds the core over st and starts the tool-call flusher; Close stops it.
@@ -89,6 +92,10 @@ func New(st store.Store, o Options) *Core {
 		wakeTTL: orDefault(o.WakeSessionTTL, DefaultWakeSessionTTL),
 		grants:  o.Grants,
 		sealer:  o.Sealer,
+		blobGC:  o.BlobGC,
+	}
+	if c.blobGC == nil {
+		c.blobGC = func(context.Context, []string) {}
 	}
 	if c.log == nil {
 		c.log = core.NewLogger(os.Stderr)
