@@ -8,6 +8,46 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
+  `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
+  `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token
+  scopes; `C()` carries `store.Change` as-is, its id the cursor; `Dropped()` counts what a full
+  buffer refused), `Replay(ctx, scopes, since, limit)`, `Running()` and `Close()`. The tail runs
+  only while a subscriber exists, reads the log at most once per 250 ms, and with an engine wake
+  (`store.ChangeWatcher`, new in `internal/store/watch.go`: Postgres `LISTEN batondeck_changes` on
+  one pooled connection, `AppendChange` now sending `pg_notify` in its transaction; SQLite an
+  in-process signal fired after the commit of a transaction that appended a change) it reads only
+  after a wake: 200 subscribers held 10 s with no write issue 0 statements on both engines, and one
+  write reaches all 200 in 2.6 ms (SQLite) and 5.9 ms (Postgres) (`TestIdle`). Delivery never
+  blocks: a subscriber that never reads (buffer 8) drops 992 of 1,000 changes while a reading one
+  gets all 1,000. On Postgres ids follow appends, not commits, so the tail keeps a frontier below
+  which every id was delivered and re-reads from it; an id missing for `GapTimeout` (10 s) from when
+  the frontier stopped at it — each hole on its own clock — is taken for a rolled-back transaction
+  (`TestPostgresDeliversChangesCommittedOutOfIDOrder`,
+  `TestPostgresPassesAnIDARolledBackTransactionTook`,
+  `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills`); a passed id is counted per id
+  (`GapsPassed`) and its range reported (`ErrGapPassed`), and a stalled frontier moves on the poll's
+  tick with no write. The
+  tail's start is no watermark either: the last page's changes of the past `GapTimeout` are held as
+  seen and the frontier stops below them, so a change in flight when the first subscriber arrives
+  still arrives (`TestAChangeInFlightWhenTheTailStartsIsDelivered`,
+  `TestPostgresDeliversAChangeInFlightWhenTheTailStarts`). It looks back one page (500 changes): when
+  all of them are that recent, an id in flight below the page is not waited for, and `OnError` hears
+  `bus.ErrSeedWindowFull` (`TestASeedWindowAllRecentIsReported`). Processes sharing a Postgres
+  database need clocks within `GapTimeout` of each other, since a change's `Ts` is its writer's
+  clock. `Subscribe` racing `Close` returns
+  `bus.ErrClosed`. `AppendChange` is pinned at 1 statement on SQLite and 2 on Postgres
+  (`TestAppendChangeStatements`). The SQLite engine supports exactly one `serve` process per data
+  dir: its wake is in-process, so a second process's writes are not heard; run several on
+  Postgres. `store.Audit` and `store.ToolCalls` are built
+  on SQLite and Postgres (`internal/store/{audit,toolcalls}.go` over
+  `queries/{sqlite,postgres}/{audit,toolcalls}.sql`; the eight stubs are gone) and their batteries
+  pass on both. `internal/retention`: a `Sweeper` deleting memory past its own expiry, change-log
+  rows past `retention.change_log_days` (7) and tool_calls rows past `retention.tool_calls_days`
+  (45) — new config keys, env `BATONDECK_RETENTION_CHANGE_LOG_DAYS` and
+  `BATONDECK_RETENTION_TOOL_CALLS_DAYS` — 500 rows a statement and at most 50,000 a table a sweep,
+  hourly; task events are kept. Deliveries and raw webhook bodies are not swept yet (no Store
+  method). `internal/store/storetest` opens migrated engine stores for tests above the store.
 - The MCP mount (`internal/mcp`, R0.14): a go-sdk v1.8.0 server behind the stateful Streamable HTTP
   handler at `/mcp` (GET, POST, DELETE), declaring tools, prompts and resources with `listChanged`
   and resource subscribe; all three lists are empty in R0 and `resources/subscribe` refuses every URI

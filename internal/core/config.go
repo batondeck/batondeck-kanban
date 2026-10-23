@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,7 @@ import (
 const (
 	RuleDatabaseURL = "database_url_is_a_file_path_or_postgres"
 	RuleEnum        = "invalid_enum_value"
+	RuleRetention   = "retention_days_are_positive_integers"
 )
 
 // The engines database.url selects between.
@@ -34,6 +36,16 @@ type Database struct {
 	Synchronous string `json:"synchronous"`
 }
 
+// Retention is the `retention` object of the config file: how many days the retention sweep
+// (internal/retention) keeps a row of each table it sweeps by age. Memory has no window here (each
+// entry carries its own expiry) and task events are never swept.
+type Retention struct {
+	// ChangeLogDays is the change log's window: 7 days by default (hdtp retention.ChangeLogKept).
+	ChangeLogDays int `json:"change_log_days"`
+	// ToolCallsDays is tool_calls' window: 45 days by default (conductor's BigQuery table expiry).
+	ToolCallsDays int `json:"tool_calls_days"`
+}
+
 // Config is the resolved configuration. Highest precedence first: the BATONDECK_* environment,
 // the JSON file, the defaults. Load reads all three.
 type Config struct {
@@ -42,14 +54,17 @@ type Config struct {
 	Listen string `json:"listen"`
 	// PublicURL is the externally reachable base (scheme://host[:port]); "" until configured.
 	PublicURL string `json:"public_url"`
+	// Retention is the retention sweep's windows.
+	Retention Retention `json:"retention"`
 }
 
 // Load reads path (optional, "" = no file) and environment via lookup (injectable for
 // tests; production passes os.LookupEnv). Precedence: env > file > defaults.
 func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	c := Config{
-		Database: Database{Synchronous: "FULL"},
-		Listen:   "127.0.0.1:8080",
+		Database:  Database{Synchronous: "FULL"},
+		Listen:    "127.0.0.1:8080",
+		Retention: Retention{ChangeLogDays: 7, ToolCallsDays: 45},
 	}
 
 	// file layer
@@ -75,6 +90,24 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	envStr("BATONDECK_DATABASE_SYNCHRONOUS", &c.Database.Synchronous)
 	envStr("BATONDECK_LISTEN", &c.Listen)
 	envStr("BATONDECK_PUBLIC_URL", &c.PublicURL)
+	envDays := func(key string, dst *int) error {
+		v, ok := lookup(key)
+		if !ok {
+			return nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("%s: %s %q is not an integer", RuleRetention, key, v)
+		}
+		*dst = n
+		return nil
+	}
+	if err := envDays("BATONDECK_RETENTION_CHANGE_LOG_DAYS", &c.Retention.ChangeLogDays); err != nil {
+		return nil, err
+	}
+	if err := envDays("BATONDECK_RETENTION_TOOL_CALLS_DAYS", &c.Retention.ToolCallsDays); err != nil {
+		return nil, err
+	}
 
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -87,6 +120,9 @@ func (c *Config) validate() error {
 	case "FULL", "NORMAL":
 	default:
 		return fmt.Errorf("%s: database.synchronous %q (want FULL|NORMAL)", RuleEnum, c.Database.Synchronous)
+	}
+	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 {
+		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d (each must be at least 1)", RuleRetention, c.Retention.ChangeLogDays, c.Retention.ToolCallsDays)
 	}
 	if strings.Contains(c.Database.URL, "://") && c.Engine() != EnginePostgres {
 		return fmt.Errorf("%s: database.url %q is neither a file path nor a postgres:// URL", RuleDatabaseURL, c.Database.URL)
