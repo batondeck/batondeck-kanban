@@ -51,8 +51,10 @@ func tkCode(err error) domain.Code {
 	return ""
 }
 
-// AC1: all 36 (from, to) pairs through Move: the 15 legal ones (6 same-status) land on to, the 21
-// illegal ones are INVALID_TRANSITION carrying allowed and the shortest path.
+// AC1: all 36 (from, to) pairs through Move: the 17 legal ones (11 table edges + 6 same-status)
+// land on to, the 19 illegal ones are INVALID_TRANSITION carrying allowed and the shortest path.
+// DEVIATION: the task's AC1 says 15 and 21; plan §Ticket states' table has 11 edges (1+2+3+2+2+1),
+// so 17 and 19 are its counts.
 func TestMoveTheSixBySixTable(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		var legal, same, illegal int
@@ -80,8 +82,8 @@ func TestMoveTheSixBySixTable(t *testing.T) {
 			}
 		}
 		t.Logf("36 moves: %d legal (%d same-status), %d INVALID_TRANSITION with allowed and path", legal, same, illegal)
-		if legal != 15 || same != 6 || illegal != 21 {
-			t.Fatalf("%d legal (%d same), %d illegal; want 15 (6), 21", legal, same, illegal)
+		if legal != 17 || same != 6 || illegal != 19 {
+			t.Fatalf("%d legal (%d same), %d illegal; want 17 (6), 19", legal, same, illegal)
 		}
 	})
 }
