@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
+	"reflect"
 )
 
 // Optional is a request field that is absent or a value, for a field whose zero value means
@@ -32,8 +32,6 @@ func Value[T any](v T) Nullable[T] { return Nullable[T]{Set: true, V: v} }
 // Null is a Nullable that was sent as null.
 func Null[T any]() Nullable[T] { return Nullable[T]{Set: true, Null: true} }
 
-var errOptionalNull = errors.New("null is not a value of this field")
-
 // IsZero is true when the field was absent, which is what omitzero leaves out.
 func (o Optional[T]) IsZero() bool { return !o.Set }
 
@@ -41,7 +39,8 @@ func (o Optional[T]) MarshalJSON() ([]byte, error) { return json.Marshal(o.V) }
 
 func (o *Optional[T]) UnmarshalJSON(b []byte) error {
 	if bytes.Equal(bytes.TrimSpace(b), []byte("null")) {
-		return errOptionalNull
+		// An UnmarshalTypeError, so encoding/json names the field and a caller maps it as any type error.
+		return &json.UnmarshalTypeError{Value: "null", Type: reflect.TypeFor[T]()}
 	}
 	var v T
 	if err := json.Unmarshal(b, &v); err != nil {

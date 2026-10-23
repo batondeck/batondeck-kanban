@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -68,9 +69,12 @@ func TestOptionalRoundTrip(t *testing.T) {
 // Optional is conductor's .optional(): null is not one of its values.
 func TestOptionalRefusesNull(t *testing.T) {
 	var req UpdateSettingsReq
-	if err := json.Unmarshal([]byte(`{"projectId":"P-1","reviewEnabled":null}`), &req); err == nil {
-		t.Fatalf("reviewEnabled:null decoded to %+v, want an error", req.ReviewEnabled)
+	err := json.Unmarshal([]byte(`{"projectId":"P-1","reviewEnabled":null}`), &req)
+	var te *json.UnmarshalTypeError
+	if !errors.As(err, &te) || te.Field != "reviewEnabled" {
+		t.Fatalf("reviewEnabled:null decoded to %+v (err %v), want a type error naming reviewEnabled", req.ReviewEnabled, err)
 	}
+	t.Logf("reviewEnabled:null -> %v", err)
 	var col UpdateColumnReq
 	if err := json.Unmarshal([]byte(`{"order":"1"}`), &col); err == nil {
 		t.Fatalf(`order:"1" decoded to %+v, want an error`, col.Order)
