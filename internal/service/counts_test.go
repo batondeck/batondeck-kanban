@@ -87,7 +87,7 @@ func TestEveryMutationWritesItsRowsOnce(t *testing.T) {
 			return err
 		}},
 		{"update_column", rows{0, 0, 1}, true, func() error {
-			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: made.board.ID, ColumnID: made.column.ID, WIPLimit: ptr(int64(4))})
+			_, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: made.board.ID, ColumnID: made.column.ID, WIPLimit: Value(int64(4))})
 			return err
 		}},
 		{"remove_column", rows{0, 0, 1}, true, func() error {

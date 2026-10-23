@@ -152,18 +152,21 @@ func (p projects) UpdateSettings(ctx context.Context, caller domain.Caller, req 
 }
 
 // settingsPatch validates the request as conductor's update_settings schema does and turns each
-// present field into the store's patch. A field is present when it is not its zero value (the DTO's
-// omitzero), so false, 0 and null cannot be sent.
+// present field into the store's patch. reviewEnabled, color and defaultReviewer are tri-state
+// (Optional, Nullable): false and null are sent, and a null removes the setting. The other fields
+// are present when not their zero value (the DTO's omitzero), which conductor's bounds make invalid.
 func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsPatch, error) {
 	bad := func(field, msg string) error {
 		return domain.Validation(field+" "+msg, map[string]any{"field": field})
 	}
-	if req.QuotaEnabled || req.TxnCap != nil {
+	if req.QuotaEnabled.Set || req.TxnCap.Set {
 		if !caller.WorkspaceAdmin {
 			return nil, forbidden("quotaEnabled/txnCap are workspace-admin only", map[string]any{"requiredCapability": "workspace-admin"})
 		}
 		// Metering and quota are dropped (plan §Target surface): a cap would be recorded and bind
 		// nothing, which conductor refuses when its deployment does not enforce quotas.
+		// DEVIATION: conductor refuses only turning quota on; quotaEnabled:false and txnCap:null are
+		// refused here too, since this deployment keeps no quota to turn off (R1.16 review ruling 7).
 		return nil, domain.Validation("Quota enforcement is not part of this deployment, so a txnCap would be recorded and never enforced", map[string]any{"quotaEnabled": false})
 	}
 	if req.AgingCeilingMs < 0 {
@@ -180,10 +183,10 @@ func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsP
 			return nil, bad(field, "must be one of off, warn, enforce")
 		}
 	}
-	if req.Color != nil && !colorPattern.MatchString(*req.Color) {
+	if req.Color.Set && !req.Color.Null && !colorPattern.MatchString(req.Color.V) {
 		return nil, bad("color", "must be a #rrggbb hex colour")
 	}
-	if req.DefaultReviewer != nil && (*req.DefaultReviewer == "" || len(*req.DefaultReviewer) > 320) {
+	if dr := req.DefaultReviewer; dr.Set && !dr.Null && (dr.V == "" || len(dr.V) > 320) {
 		return nil, bad("defaultReviewer", "must be 1 to 320 characters")
 	}
 	ap := req.AnomalyPolicy
@@ -222,14 +225,14 @@ func settingsPatch(caller domain.Caller, req UpdateSettingsReq) (store.SettingsP
 			err = set(key, v)
 		}
 	}
-	add(req.ReviewEnabled, "reviewEnabled", true)
+	add(req.ReviewEnabled.Set, "reviewEnabled", req.ReviewEnabled.V)
 	add(req.AgingCeilingMs != 0, "agingCeilingMs", req.AgingCeilingMs)
 	add(ap != (AnomalyPolicyPatch{}), "anomalyPolicy", ap)
 	add(req.ArtifactPolicy != "", "artifactPolicy", req.ArtifactPolicy)
 	add(len(req.CapabilityAliases) > 0, "capabilityAliases", req.CapabilityAliases)
 	add(req.CheckpointPolicy != "", "checkpointPolicy", req.CheckpointPolicy)
-	add(req.Color != nil, "color", req.Color)
-	add(req.DefaultReviewer != nil, "defaultReviewer", req.DefaultReviewer)
+	add(req.Color.Set, "color", req.Color)
+	add(req.DefaultReviewer.Set, "defaultReviewer", req.DefaultReviewer)
 	add(req.MaxRunsPerTask != 0, "maxRunsPerTask", req.MaxRunsPerTask)
 	add(req.MaxTicketTokens != 0, "maxTicketTokens", req.MaxTicketTokens)
 	add(rp != (RetryPolicyPatch{}), "retryPolicy", domain.RetryPolicy{BaseDelayMs: rp.BaseDelayMs, MaxDelayMs: rp.MaxDelayMs, Jitter: rp.Jitter, PoisonAfterAttempts: int(rp.PoisonAfterAttempts)})

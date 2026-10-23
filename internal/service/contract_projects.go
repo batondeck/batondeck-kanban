@@ -78,17 +78,17 @@ type UpdateSettingsReq struct {
 	ArtifactPolicy     PolicyMode            `json:"artifactPolicy,omitzero"`
 	CapabilityAliases  map[string]string     `json:"capabilityAliases,omitzero"`
 	CheckpointPolicy   PolicyMode            `json:"checkpointPolicy,omitzero"`
-	Color              *string               `json:"color,omitzero"`
-	DefaultReviewer    *string               `json:"defaultReviewer,omitzero"`
+	Color              Nullable[string]      `json:"color,omitzero"`
+	DefaultReviewer    Nullable[string]      `json:"defaultReviewer,omitzero"`
 	MaxRunsPerTask     int64                 `json:"maxRunsPerTask,omitzero"`
 	MaxTicketTokens    int64                 `json:"maxTicketTokens,omitzero"`
-	QuotaEnabled       bool                  `json:"quotaEnabled,omitzero"`
+	QuotaEnabled       Optional[bool]        `json:"quotaEnabled,omitzero"`
 	RetryPolicy        RetryPolicyPatch      `json:"retryPolicy,omitzero"`
-	ReviewEnabled      bool                  `json:"reviewEnabled,omitzero"`
+	ReviewEnabled      Optional[bool]        `json:"reviewEnabled,omitzero"`
 	SelectionWeights   SelectionWeightsPatch `json:"selectionWeights,omitzero"`
 	SelfApprovalPolicy PolicyMode            `json:"selfApprovalPolicy,omitzero"`
 	TokenPolicy        PolicyMode            `json:"tokenPolicy,omitzero"`
-	TxnCap             *int64                `json:"txnCap,omitzero"`
+	TxnCap             Nullable[int64]       `json:"txnCap,omitzero"`
 }
 
 // UpdateSettingsResp is update_settings's output.

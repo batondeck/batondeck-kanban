@@ -96,8 +96,20 @@ func enumSchema[T ~string](values []T) *jsonschema.Schema {
 	return s
 }
 
+// optionals are the tri-state request fields' instantiations (service.Optional, service.Nullable).
+// Each is typed as its value: Optional[T] as T, Nullable[T] as *T (T or null), so a field keeps the
+// schema it had as a value or a pointer while carrying absent apart from false, 0 and null.
+var optionals = []reflect.Type{
+	reflect.TypeFor[service.Optional[bool]](),
+	reflect.TypeFor[service.Optional[float64]](),
+	reflect.TypeFor[service.Nullable[string]](),
+	reflect.TypeFor[service.Nullable[int64]](),
+	reflect.TypeFor[service.Nullable[float64]](),
+}
+
 // dtoSchemaOptions is the inference recipe for the DTOs: the enums from their Go values, a custom
-// field's value as string|number|boolean, True as const true, and the open objects. Slices are
+// field's value as string|number|boolean, True as const true, the tri-state optionals, and the open
+// objects. Slices are
 // fixed after inference (dtoSchema), since jsonschema-go types every Go slice as [null, array].
 func dtoSchemaOptions(t *testing.T) *jsonschema.ForOptions {
 	t.Helper()
@@ -126,6 +138,18 @@ func dtoSchemaOptions(t *testing.T) *jsonschema.ForOptions {
 		reflect.TypeFor[service.FieldValue]():          {Types: []string{"string", "number", "boolean"}},
 		reflect.TypeFor[service.True]():                {Type: "boolean", Const: &isTrue},
 	}}
+	for _, typ := range optionals {
+		v, _ := typ.FieldByName("V")
+		elem := v.Type
+		if _, nullable := typ.FieldByName("Null"); nullable {
+			elem = reflect.PointerTo(elem)
+		}
+		s, err := jsonschema.ForType(elem, opts)
+		if err != nil {
+			t.Fatalf("infer %s: %v", typ, err)
+		}
+		opts.TypeSchemas[typ] = s
+	}
 	for _, typ := range openObjects {
 		s, err := jsonschema.ForType(typ, opts)
 		if err != nil {
