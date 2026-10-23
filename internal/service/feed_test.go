@@ -14,7 +14,7 @@ import (
 // in the change log, and this process learns of it only from the bus (ObserveChange).
 func otherWriter(t *testing.T, f *fixture, boardID string) store.Change {
 	t.Helper()
-	f.task(t, domain.Ready, nil)
+	f.task(t, domain.Todo, nil)
 	payload, _ := json.Marshal(map[string]string{"kind": ChangeKindChanged, "projectId": f.project.ID, "boardId": boardID})
 	if _, err := f.st.AppendChange(f.ctx, store.ChangeInput{Scope: BroadcastScope(f.project.ID), ProjectID: f.project.ID, Kind: ChangeKindChanged, Payload: payload, Ts: 1}); err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func (f *fixture) snapshot(t *testing.T) BoardSnapshotResp {
 func TestBoardSnapshotCachedUntilAChangeRow(t *testing.T) {
 	f, n := counted(t)
 	f.wire()
-	ready := f.column(t, domain.Ready)
+	ready := f.column(t, domain.Todo)
 	f.snapshot(t) // the miss; also warms alice's access entry
 	n.take()
 
@@ -54,13 +54,13 @@ func TestBoardSnapshotCachedUntilAChangeRow(t *testing.T) {
 	f.c.ObserveChange(ch)
 	fresh := f.snapshot(t)
 	freshReads := n.take()
-	t.Logf("cached read: %v (READY %v); after the store write, before the row is observed: %v (READY %v); after ObserveChange(#%d): %v (READY %v, cursor %d)",
+	t.Logf("cached read: %v (TODO %v); after the store write, before the row is observed: %v (TODO %v); after ObserveChange(#%d): %v (TODO %v, cursor %d)",
 		hitReads, hit.TaskCounts[ready], staleReads, stale.TaskCounts[ready], ch.ID, freshReads, fresh.TaskCounts[ready], fresh.Cursor)
 	if hitReads["GetBoard"] != 0 || staleReads["GetBoard"] != 0 {
 		t.Fatalf("a cached snapshot read the store: %v, %v", hitReads, staleReads)
 	}
 	if freshReads["GetBoard"] != 1 || fresh.TaskCounts[ready] != 1 || fresh.Cursor != ch.ID {
-		t.Fatalf("after the change row: reads %v, READY %v, cursor %d (row %d)", freshReads, fresh.TaskCounts[ready], fresh.Cursor, ch.ID)
+		t.Fatalf("after the change row: reads %v, TODO %v, cursor %d (row %d)", freshReads, fresh.TaskCounts[ready], fresh.Cursor, ch.ID)
 	}
 	f.snapshot(t)
 	if again := n.take(); again["GetBoard"] != 0 {
@@ -134,15 +134,15 @@ func TestBoardSnapshotReadsItsOwnWrites(t *testing.T) {
 // another lane's mutation shows at once.
 func TestBoardSnapshotUncachedUntilTheBusDelivers(t *testing.T) {
 	f, n := counted(t)
-	ready := f.column(t, domain.Ready)
+	ready := f.column(t, domain.Todo)
 	f.snapshot(t)
-	f.task(t, domain.Ready, nil)
+	f.task(t, domain.Todo, nil)
 	n.take()
 	got := f.snapshot(t)
 	reads := n.take()
-	t.Logf("unwired: read after a store write: %v, READY %v", reads, got.TaskCounts[ready])
+	t.Logf("unwired: read after a store write: %v, TODO %v", reads, got.TaskCounts[ready])
 	if reads["GetBoard"] != 1 || got.TaskCounts[ready] != 1 {
-		t.Fatalf("an unwired cache served a snapshot: reads %v, READY %v", reads, got.TaskCounts[ready])
+		t.Fatalf("an unwired cache served a snapshot: reads %v, TODO %v", reads, got.TaskCounts[ready])
 	}
 }
 
@@ -179,8 +179,8 @@ func TestBoardSnapshotIsACopy(t *testing.T) {
 		got.TaskCounts["x"] = 9
 		got.Board.Columns[0].Name = "changed"
 		*got.Board.Columns[0].WIPLimit = 999
-		got.Board.Transitions["READY"][0] = domain.Done
-		got.Board.Transitions["BACKLOG"] = nil
+		got.Board.Transitions["TODO"][0] = domain.Done
+		got.Board.Transitions["DONE"] = nil
 		again := f.snapshot(t)
 		if _, ok := again.TaskCounts["x"]; ok || again.Board.Columns[0].Name == "changed" || *again.Board.Columns[0].WIPLimit != 3 || !reflect.DeepEqual(again.Board.Transitions, fixedTable) {
 			t.Fatalf("read %d: the cached snapshot was changed through a returned copy: wipLimit %v, transitions %v", i, *again.Board.Columns[0].WIPLimit, again.Board.Transitions)

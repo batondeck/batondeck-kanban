@@ -87,7 +87,7 @@ type FailureOutcome struct {
 	EventData      map[string]any
 }
 
-// ApplyFailure counts the failure, then either schedules a backed-off retry (READY, NextEligibleAt in
+// ApplyFailure counts the failure, then either schedules a backed-off retry (TODO, NextEligibleAt in
 // the future) or poisons the task (BLOCKED, reason "poison", the poisoned label, no backoff) once it
 // is not retryable or has reached poisonAfterAttempts. There is no third outcome. The count is kept
 // on poison, not reset: resetting it is un-poison's job.
@@ -105,7 +105,7 @@ func ApplyFailure(f Failure, p RetryPolicy, now time.Time, rand float64) Failure
 	}
 	at := NextEligibleAt(attempts, p, now, rand)
 	return FailureOutcome{
-		Status:         Ready,
+		Status:         Todo,
 		ClaimAttempts:  attempts,
 		NextEligibleAt: at,
 		Labels:         append([]string(nil), f.Labels...),

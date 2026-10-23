@@ -63,7 +63,7 @@ func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req
 // blocker from the dependent's blockedBy (and the dependent from the blocker's blocks); each of the
 // two tasks is then bumped once. The edge's removal clears its blocker, so the dependent goes
 // through domain.DecideUnblock: when that is AutoReady (blockedBy now empty, BLOCKED, not poison) it
-// is moved to READY by unblockDependent, with its task.dependency_cleared event and doorbell; a
+// is moved to TODO by unblockDependent, with its task.dependency_cleared event and doorbell; a
 // poisoned dependent stays BLOCKED. Event dependency.removed {edgeId} on the dependent. Serialised
 // per project (mutation.LockProject). The dependent is unknown until the edge is read, so mutate
 // loads no task and its pending grant check is finished here, against the dependent.
@@ -156,7 +156,7 @@ func (t *txn) bumpOther(taskID string) error {
 // blocker. dep is the dependent as read inside the transaction (never mutate's loaded task) and d
 // is domain.DecideUnblock over its blockedBy with clearedID; d.Cleared must be true. It writes d's
 // blockedBy when dep's cache still names clearedID (Dependencies.SetCaches), then on d.AutoReady
-// moves dep to READY in its board's READY column (the column it is in when the board has none),
+// moves dep to TODO in its board's TODO column (the column it is in when the board has none),
 // else bumps it; appends task.dependency_cleared {clearedBy, autoReady} on dep; and records the
 // task and its doorbell (RingFor, unblocked: an assignee is rung assigned, no assignee broadcast).
 // It returns dep after. A caller holding the project lock (mutation.LockProject) took it first.
@@ -180,7 +180,7 @@ func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.Unbloc
 			return store.Task{}, err
 		}
 		after, err = t.Tx.SetStatus(t.ctx, dep.ProjectID, dep.ID, dep.Version, store.StatusChange{
-			Status: domain.Ready, ColumnID: readyColumn(board), UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
+			Status: domain.Todo, ColumnID: todoColumn(board), UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
 		})
 		if err != nil {
 			return store.Task{}, err
@@ -203,11 +203,11 @@ func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.Unbloc
 	return after, nil
 }
 
-// readyColumn is the board's first READY column, or "" (the task keeps its column), conductor's
+// todoColumn is the board's first TODO column, or "" (the task keeps its column), conductor's
 // columnIdForStatus.
-func readyColumn(b store.Board) string {
+func todoColumn(b store.Board) string {
 	for _, c := range b.Columns {
-		if c.Status == domain.Ready {
+		if c.Status == domain.Todo {
 			return c.ID
 		}
 	}

@@ -50,122 +50,414 @@
     "/tools/update_settings/output/properties/settings/properties/transitionTable"
   ],
   "removedEnumValues": [
+    "/tools/add_artifact/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/add_artifact/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/add_artifact/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/add_column/input/properties/status/enum/BACKLOG",
     "/tools/add_column/input/properties/status/enum/CANCELLED",
     "/tools/add_column/input/properties/status/enum/DEAD_LETTER",
+    "/tools/add_column/output/properties/column/properties/status/enum/BACKLOG",
     "/tools/add_column/output/properties/column/properties/status/enum/CANCELLED",
     "/tools/add_column/output/properties/column/properties/status/enum/DEAD_LETTER",
+    "/tools/add_follow_up/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/add_follow_up/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/add_follow_up/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/add_subtask/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/add_subtask/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/add_subtask/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/block_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/block_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/block_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/cancel_runs/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/cancel_runs/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/cancel_runs/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/claim_next/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/claim_next/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/claim_next/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/claim_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/claim_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/claim_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/complete_task/output/properties/handover/properties/status/enum/BACKLOG",
     "/tools/complete_task/output/properties/handover/properties/status/enum/CANCELLED",
     "/tools/complete_task/output/properties/handover/properties/status/enum/DEAD_LETTER",
+    "/tools/complete_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/complete_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/complete_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/input/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/create_board/input/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/create_board/input/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/create_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/create_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/create_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/fail_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/fail_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/fail_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/BACKLOG",
     "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/CANCELLED",
     "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/BACKLOG",
     "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/CANCELLED",
     "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/BACKLOG",
     "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/CANCELLED",
     "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/get_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/get_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/get_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/BACKLOG",
     "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/CANCELLED",
     "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/BACKLOG",
     "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/CANCELLED",
     "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/DEAD_LETTER",
+    "/tools/get_task_context/output/properties/workflow/properties/status/enum/BACKLOG",
     "/tools/get_task_context/output/properties/workflow/properties/status/enum/CANCELLED",
     "/tools/get_task_context/output/properties/workflow/properties/status/enum/DEAD_LETTER",
+    "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/BACKLOG",
     "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/CANCELLED",
     "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/BACKLOG",
     "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/CANCELLED",
     "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/DEAD_LETTER",
+    "/tools/handoff_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/handoff_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/handoff_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/list_runs/output/properties/runs/items/properties/status/enum/BACKLOG",
     "/tools/list_runs/output/properties/runs/items/properties/status/enum/CANCELLED",
     "/tools/list_runs/output/properties/runs/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/BACKLOG",
     "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/CANCELLED",
     "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/list_tasks/input/properties/status/enum/BACKLOG",
     "/tools/list_tasks/input/properties/status/enum/CANCELLED",
     "/tools/list_tasks/input/properties/status/enum/DEAD_LETTER",
+    "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/BACKLOG",
     "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/CANCELLED",
     "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/DEAD_LETTER",
+    "/tools/move_task/input/properties/toStatus/enum/BACKLOG",
     "/tools/move_task/input/properties/toStatus/enum/CANCELLED",
     "/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER",
+    "/tools/move_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/move_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/move_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/BACKLOG",
     "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/CANCELLED",
     "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/BACKLOG",
     "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/CANCELLED",
     "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/DEAD_LETTER",
+    "/tools/next_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/next_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/next_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/open_run/output/properties/run/properties/status/enum/BACKLOG",
     "/tools/open_run/output/properties/run/properties/status/enum/CANCELLED",
     "/tools/open_run/output/properties/run/properties/status/enum/DEAD_LETTER",
+    "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/BACKLOG",
     "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/CANCELLED",
     "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/DEAD_LETTER",
+    "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/BACKLOG",
     "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/CANCELLED",
     "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/DEAD_LETTER",
+    "/tools/pick_run/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/pick_run/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/pick_run/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/BACKLOG",
     "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/CANCELLED",
     "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/release_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/release_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/release_task/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/retract_artifact/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/retract_artifact/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/retract_artifact/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/BACKLOG",
     "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/CANCELLED",
     "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/set_sprint/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/set_sprint/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/set_sprint/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/set_summary/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/set_summary/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/set_summary/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/start_runs/output/properties/runs/items/properties/status/enum/BACKLOG",
     "/tools/start_runs/output/properties/runs/items/properties/status/enum/CANCELLED",
     "/tools/start_runs/output/properties/runs/items/properties/status/enum/DEAD_LETTER",
+    "/tools/start_runs/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/start_runs/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/start_runs/output/properties/task/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/input/properties/status/enum/BACKLOG",
     "/tools/update_column/input/properties/status/enum/CANCELLED",
     "/tools/update_column/input/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/BACKLOG",
     "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/CANCELLED",
     "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/DEAD_LETTER",
+    "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/BACKLOG",
     "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/CANCELLED",
     "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/DEAD_LETTER",
+    "/tools/update_task/output/properties/task/properties/status/enum/BACKLOG",
     "/tools/update_task/output/properties/task/properties/status/enum/CANCELLED",
     "/tools/update_task/output/properties/task/properties/status/enum/DEAD_LETTER"
+  ],
+  "renamedEnumValues": [
+    {
+      "pointer": "/tools/add_artifact/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/add_column/input/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/add_column/output/properties/column/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/add_follow_up/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/add_subtask/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/block_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/cancel_runs/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/claim_next/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/claim_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/complete_task/output/properties/handover/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/complete_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/create_board/input/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/create_board/output/properties/board/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/create_board/output/properties/board/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/create_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/fail_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_board/output/properties/board/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_board/output/properties/board/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_project/output/properties/project/properties/grants/additionalProperties/properties/statuses/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_sprint/output/properties/tasks/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_sprint/output/properties/workflow/properties/lanes/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_sprint/output/properties/workflow/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/workflow/properties/allowedMoves/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/workflow/properties/lanes/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/workflow/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/grant_capabilities/input/properties/scope/properties/statuses/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/grant_capabilities/output/properties/grant/properties/statuses/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/handoff_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_boards/output/properties/boards/items/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_boards/output/properties/boards/items/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_runs/output/properties/runs/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_subtasks/output/properties/tasks/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_tasks/input/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/list_tasks/output/properties/tasks/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/move_task/input/properties/toStatus/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/move_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/next_task/output/properties/inbox/properties/blocked/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/next_task/output/properties/inbox/properties/review/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/next_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/open_run/output/properties/run/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/orchestrate_subtasks/output/properties/children/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/orchestrate_subtasks/output/properties/parent/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/pick_run/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/rank_tasks/output/properties/ranked/items/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/release_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/remove_column/output/properties/board/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/remove_column/output/properties/board/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/retract_artifact/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/search_tasks/output/properties/results/items/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/set_sprint/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/set_summary/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/start_runs/output/properties/runs/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/start_runs/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/update_column/input/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/update_column/output/properties/board/properties/columns/items/properties/status/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/update_column/output/properties/board/properties/transitions/additionalProperties/items/enum/READY",
+      "to": "TODO"
+    },
+    {
+      "pointer": "/tools/update_task/output/properties/task/properties/status/enum/READY",
+      "to": "TODO"
+    }
   ],
   "addedTools": [
     {
@@ -227,8 +519,7 @@
               "status": {
                 "type": "string",
                 "enum": [
-                  "BACKLOG",
-                  "READY",
+                  "TODO",
                   "IN_PROGRESS",
                   "BLOCKED",
                   "REVIEW",
@@ -758,8 +1049,7 @@
               "status": {
                 "type": "string",
                 "enum": [
-                  "BACKLOG",
-                  "READY",
+                  "TODO",
                   "IN_PROGRESS",
                   "BLOCKED",
                   "REVIEW",
@@ -871,8 +1161,7 @@
             "status": {
               "type": "string",
               "enum": [
-                "BACKLOG",
-                "READY",
+                "TODO",
                 "IN_PROGRESS",
                 "BLOCKED",
                 "REVIEW",

@@ -99,12 +99,12 @@ func reasonIs(task store.Task, r string) bool { return reasonOf(task) == r }
 
 // AC1: three failures under poisonAfterAttempts 3 poison the task (BLOCKED, reason poison,
 // claimAttempts 3, label poisoned, one task.poisoned event), and ClaimNext never returns it while it
-// returns the other READY task (the control). retryable:false poisons at the first failure.
+// returns the other TODO task (the control). retryable:false poisons at the first failure.
 func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		e.settings(t, map[string]any{"retryPolicy": policy3})
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		for i := 1; i <= 3; i++ {
 			c := e.claim(t, e.alice, task.ID, 0)
 			r, err := lc.Fail(e.ctx, e.alice, FailTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reason: "boom"})
@@ -115,8 +115,8 @@ func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 			t.Logf("fail %d: status %s reason %q attempts %d nextEligibleAt %v labels %v", i, got.Status, reasonOf(got), got.ClaimAttempts, got.NextEligibleAt, got.Labels)
 			if i < 3 {
 				want := e.clock.now().UnixMilli() + 1000<<(i-1)
-				if got.Status != domain.Ready || got.ClaimAttempts != int64(i) || got.NextEligibleAt == nil || *got.NextEligibleAt != want || got.Claim != nil {
-					t.Fatalf("fail %d: %+v, want READY attempts %d nextEligibleAt %d", i, got, i, want)
+				if got.Status != domain.Todo || got.ClaimAttempts != int64(i) || got.NextEligibleAt == nil || *got.NextEligibleAt != want || got.Claim != nil {
+					t.Fatalf("fail %d: %+v, want TODO attempts %d nextEligibleAt %d", i, got, i, want)
 				}
 				continue
 			}
@@ -132,7 +132,7 @@ func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 		if n, f := len(ofType(evs, domain.EventTaskPoisoned)), len(ofType(evs, domain.EventTaskFailed)); n != 1 || f != 2 {
 			t.Fatalf("task.poisoned %d task.failed %d, want 1 and 2", n, f)
 		}
-		other := e.task(t, domain.Ready)
+		other := e.task(t, domain.Todo)
 		next, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 		t.Logf("claim_next: control %s won, then no task (poisoned %s skipped)", other.ID, task.ID)
 
 		// retryable:false poisons at once.
-		once := e.task(t, domain.Ready)
+		once := e.task(t, domain.Todo)
 		c := e.claim(t, e.alice, once.ID, 0)
 		if _, err := lc.Fail(e.ctx, e.alice, FailTaskReq{ProjectID: e.project, TaskID: once.ID, LeaseID: c.LeaseID, Reason: "fatal", Retryable: Some(false)}); err != nil {
 			t.Fatal(err)
@@ -172,18 +172,18 @@ func TestUnpoisonedTaskIsClaimableAgain(t *testing.T) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
 		carol := e.member(t, e.project, "carol", domain.RoleMaster)
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		c := e.claim(t, bob, task.ID, 0)
 		if _, err := lc.Fail(e.ctx, bob, FailTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reason: "x", Retryable: Some(false)}); err != nil {
 			t.Fatal(err)
 		}
-		_, err := e.c.authorize(e.ctx, bob, e.project, "move_task", domain.GrantSubject{ToStatus: domain.Ready}, true)
+		_, err := e.c.authorize(e.ctx, bob, e.project, "move_task", domain.GrantSubject{ToStatus: domain.Todo}, true)
 		wantCode(t, err, domain.CodeForbidden)
-		if _, err := e.c.authorize(e.ctx, carol, e.project, "move_task", domain.GrantSubject{ToStatus: domain.Ready}, true); err != nil {
+		if _, err := e.c.authorize(e.ctx, carol, e.project, "move_task", domain.GrantSubject{ToStatus: domain.Todo}, true); err != nil {
 			t.Fatalf("master move_task posture: %v", err)
 		}
 		poisoned := e.get(t, task.ID)
-		if _, err := e.st.SetStatus(e.ctx, e.project, task.ID, poisoned.Version, store.StatusChange{Status: domain.Ready, ColumnID: e.column(t, domain.Ready), Unpoison: true, UpdatedBy: "carol", UpdatedAt: time.Now().UnixMilli()}); err != nil {
+		if _, err := e.st.SetStatus(e.ctx, e.project, task.ID, poisoned.Version, store.StatusChange{Status: domain.Todo, ColumnID: e.column(t, domain.Todo), Unpoison: true, UpdatedBy: "carol", UpdatedAt: time.Now().UnixMilli()}); err != nil {
 			t.Fatal(err)
 		}
 		next, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
@@ -195,11 +195,11 @@ func TestUnpoisonedTaskIsClaimableAgain(t *testing.T) {
 }
 
 // AC3: the last dependency completing through Complete leaves a poisoned dependent BLOCKED with its
-// reason (the refusal) and moves a plain blocked one to READY (the control).
+// reason (the refusal) and moves a plain blocked one to TODO (the control).
 func TestCompleteUnblocksDependentsButNeverAPoisonedOne(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		e.settings(t, map[string]any{"reviewEnabled": false})
-		blocker := e.task(t, domain.Ready)
+		blocker := e.task(t, domain.Todo)
 		poisoned := e.blocked(t, domain.BlockedReasonPoison)
 		plain := e.blocked(t, "waiting")
 		e.dependOn(t, blocker.ID, poisoned.ID)
@@ -217,7 +217,7 @@ func TestCompleteUnblocksDependentsButNeverAPoisonedOne(t *testing.T) {
 		if p.Status != domain.Blocked || !reasonIs(p, domain.BlockedReasonPoison) || len(p.BlockedBy) != 0 {
 			t.Fatalf("poison refusal: %+v", p)
 		}
-		if n.Status != domain.Ready || len(n.BlockedBy) != 0 || n.ColumnID != e.column(t, domain.Ready) {
+		if n.Status != domain.Todo || len(n.BlockedBy) != 0 || n.ColumnID != e.column(t, domain.Todo) {
 			t.Fatalf("control: %+v", n)
 		}
 		for id, auto := range map[string]bool{poisoned.ID: false, plain.ID: true} {
@@ -235,7 +235,7 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		carol := e.member(t, e.project, "carol", domain.RoleMaster)
 		lc := e.c.Lifecycle()
-		blocker, dep := e.task(t, domain.Ready), e.blocked(t, "")
+		blocker, dep := e.task(t, domain.Todo), e.blocked(t, "")
 		e.dependOn(t, blocker.ID, dep.ID)
 		c := e.claim(t, e.alice, blocker.ID, 0)
 		r, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: blocker.ID, LeaseID: c.LeaseID, Reviewer: carol.Identity})
@@ -263,7 +263,7 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 		}
 
 		e.settings(t, map[string]any{"reviewEnabled": false})
-		b2, d2 := e.task(t, domain.Ready), e.blocked(t, "")
+		b2, d2 := e.task(t, domain.Todo), e.blocked(t, "")
 		e.dependOn(t, b2.ID, d2.ID)
 		c2 := e.claim(t, e.alice, b2.ID, 0)
 		r2, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: b2.ID, LeaseID: c2.LeaseID})
@@ -272,7 +272,7 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 		}
 		got := e.get(t, d2.ID)
 		t.Logf("reviewEnabled off: %s; dependent %s", r2.Task.Status, got.Status)
-		if r2.Task.Status != domain.Done || got.Status != domain.Ready || r2.Handover != (Handover{}) {
+		if r2.Task.Status != domain.Done || got.Status != domain.Todo || r2.Handover != (Handover{}) {
 			t.Fatalf("done landing %s, dependent %s, handover %+v", r2.Task.Status, got.Status, r2.Handover)
 		}
 	})
@@ -282,7 +282,7 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 // recorded handover, and a warning says so; the doorbell rings the agent scope.
 func TestCompleteWithANonMemberReviewerWarns(t *testing.T) {
 	e := newLC(t, engineCases[0].open(t))
-	task := e.task(t, domain.Ready)
+	task := e.task(t, domain.Todo)
 	c := e.claim(t, e.alice, task.ID, 0)
 	r, err := e.c.Lifecycle().Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reviewer: "qa-bot"})
 	if err != nil {
@@ -294,14 +294,14 @@ func TestCompleteWithANonMemberReviewerWarns(t *testing.T) {
 	}
 }
 
-// AC5: Reap on two expired leases, one past the poison threshold, yields one READY-with-backoff and
+// AC5: Reap on two expired leases, one past the poison threshold, yields one TODO-with-backoff and
 // one BLOCKED-poison; the summary's bucket is "poisoned", and so is next_task's inbox bucket.
 func TestReapRetriesOneAndPoisonsTheOther(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		e.settings(t, map[string]any{"retryPolicy": policy3})
-		near, fresh := e.task(t, domain.Ready), e.task(t, domain.Ready)
+		near, fresh := e.task(t, domain.Todo), e.task(t, domain.Todo)
 		two := int64(2)
-		if _, err := e.st.SetStatus(e.ctx, e.project, near.ID, near.Version, store.StatusChange{Status: domain.Ready, ClaimAttempts: &two, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli()}); err != nil {
+		if _, err := e.st.SetStatus(e.ctx, e.project, near.ID, near.Version, store.StatusChange{Status: domain.Todo, ClaimAttempts: &two, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli()}); err != nil {
 			t.Fatal(err)
 		}
 		e.claim(t, e.alice, near.ID, 1)
@@ -325,7 +325,7 @@ func TestReapRetriesOneAndPoisonsTheOther(t *testing.T) {
 		if !domain.IsPoisoned(n.Status, reasonOf(n)) || n.ClaimAttempts != 3 || !slices.Contains(n.Labels, domain.LabelPoisoned) {
 			t.Fatalf("poisoned: %+v", n)
 		}
-		if f.Status != domain.Ready || f.ClaimAttempts != 1 || f.NextEligibleAt == nil || *f.NextEligibleAt <= e.clock.now().UnixMilli() || f.Claim != nil {
+		if f.Status != domain.Todo || f.ClaimAttempts != 1 || f.NextEligibleAt == nil || *f.NextEligibleAt <= e.clock.now().UnixMilli() || f.Claim != nil {
 			t.Fatalf("retried: %+v", f)
 		}
 		if len(ofType(e.events(t, fresh.ID), domain.EventTaskLeaseReaped)) != 1 || len(ofType(e.events(t, near.ID), domain.EventTaskPoisoned)) != 1 {
@@ -356,7 +356,7 @@ func TestCancel(t *testing.T) {
 		dave := e.member(t, e.project, "dave", domain.RoleWorker)
 		carol := e.member(t, e.project, "carol", domain.RoleMaster)
 		lc := e.c.Lifecycle()
-		task, dep := e.task(t, domain.Ready), e.blocked(t, "")
+		task, dep := e.task(t, domain.Todo), e.blocked(t, "")
 		e.dependOn(t, task.ID, dep.ID)
 		e.claim(t, bob, task.ID, 0)
 		cur := e.get(t, task.ID)
@@ -383,10 +383,10 @@ func TestCancel(t *testing.T) {
 		if len(moved) != 1 || !strings.Contains(string(moved[0].Data), `"cancelled":true`) {
 			t.Fatalf("task.moved %v", moved)
 		}
-		if got := e.get(t, dep.ID); got.Status != domain.Ready {
+		if got := e.get(t, dep.ID); got.Status != domain.Todo {
 			t.Fatalf("cancel did not unblock the dependent: %s", got.Status)
 		}
-		idle := e.task(t, domain.Ready)
+		idle := e.task(t, domain.Todo)
 		if _, err := lc.Cancel(e.ctx, carol, CancelTaskReq{ProjectID: e.project, TaskID: idle.ID, Version: idle.Version, Reason: "dup"}); err != nil {
 			t.Fatalf("master cancel: %v", err)
 		}
@@ -403,7 +403,7 @@ func TestExpiredLeaseIsFreeOnTheNextClaim(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		c := e.claim(t, e.alice, task.ID, 1)
 		hb, err := lc.Heartbeat(e.ctx, e.alice, HeartbeatTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, LeaseSeconds: 1})
 		if err != nil {
@@ -476,7 +476,7 @@ func TestConcurrentClaimHasOneWinner(t *testing.T) {
 			st := ec.open(t)
 			e := newLC(t, st)
 			bob := e.member(t, e.project, "bob", domain.RoleWorker)
-			task := e.task(t, domain.Ready)
+			task := e.task(t, domain.Todo)
 			g := &claimGate{Store: st, n: &atomic.Int32{}, arrived: make(chan struct{}, 2), release: make(chan struct{})}
 			c := New(g, Options{Logger: log.New(&logBuf{}, "", 0), Now: e.clock.now, ToolCallFlush: -1})
 			t.Cleanup(func() { _ = c.Close(context.Background()) })
@@ -511,11 +511,11 @@ func TestConcurrentClaimHasOneWinner(t *testing.T) {
 	}
 }
 
-// Two concurrent claim_next on a board with one READY task: one winner, the other no task.
+// Two concurrent claim_next on a board with one TODO task: one winner, the other no task.
 func TestConcurrentClaimNextHasOneWinner(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
-		e.task(t, domain.Ready)
+		e.task(t, domain.Todo)
 		got := make([]ClaimNextResp, 2)
 		errs := make([]error, 2)
 		var wg sync.WaitGroup
@@ -541,7 +541,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 		e.settings(t, map[string]any{"retryPolicy": policy3})
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		next, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
 		if err != nil || next.Task == nil {
 			t.Fatal(err)
@@ -569,7 +569,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 			t.Fatal(err)
 		}
 		ch, p = e.lastChange(t)
-		if p.Kind != DoorbellAssigned || ch.Scope != AgentScope("reviewer-bot") || h.Task.Status != domain.Ready || *h.Task.Assignee != "reviewer-bot" || h.Task.Claim != nil {
+		if p.Kind != DoorbellAssigned || ch.Scope != AgentScope("reviewer-bot") || h.Task.Status != domain.Todo || *h.Task.Assignee != "reviewer-bot" || h.Task.Claim != nil {
 			t.Fatalf("handoff %+v doorbell %+v scope %s", h.Task, p, ch.Scope)
 		}
 		mem, err := e.st.ReadMemory(e.ctx, e.project, task.ID, store.ReadMemoryQuery{Key: "handoff", Identity: "bob"})
@@ -585,7 +585,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 func TestBlockWritesEdgesAtomically(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		lc := e.c.Lifecycle()
-		a, b := e.task(t, domain.Ready), e.task(t, domain.Ready)
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
 		e.dependOn(t, a.ID, b.ID) // a blocks b
 		c := e.claim(t, e.alice, a.ID, 0)
 		_, err := lc.Block(e.ctx, e.alice, BlockTaskReq{ProjectID: e.project, TaskID: a.ID, LeaseID: c.LeaseID, Reason: "wait", BlockedBy: []string{b.ID}})
@@ -595,7 +595,7 @@ func TestBlockWritesEdgesAtomically(t *testing.T) {
 		if got := e.get(t, a.ID); got.Status != domain.InProgress || got.Claim == nil || len(got.BlockedBy) != 0 || len(e.edges(t)) != 1 {
 			t.Fatalf("a refused block wrote: %+v edges %d", got, len(e.edges(t)))
 		}
-		x := e.task(t, domain.Ready)
+		x := e.task(t, domain.Todo)
 		r, err := lc.Block(e.ctx, e.alice, BlockTaskReq{ProjectID: e.project, TaskID: a.ID, LeaseID: c.LeaseID, Reason: "needs x", BlockedBy: []string{x.ID, x.ID, a.ID}})
 		if err != nil {
 			t.Fatal(err)
@@ -618,7 +618,7 @@ func TestConcurrentBlockClosesNoCycle(t *testing.T) {
 		t.Run(ec.name, func(t *testing.T) {
 			st := ec.open(t)
 			e := newLC(t, st)
-			A, B, C, D := e.task(t, domain.Ready), e.task(t, domain.Ready), e.task(t, domain.Ready), e.task(t, domain.Ready)
+			A, B, C, D := e.task(t, domain.Todo), e.task(t, domain.Todo), e.task(t, domain.Todo), e.task(t, domain.Todo)
 			e.dependOn(t, B.ID, C.ID)
 			e.dependOn(t, D.ID, A.ID)
 			cb, cd := e.claim(t, e.alice, B.ID, 0), e.claim(t, e.alice, D.ID, 0)
@@ -667,7 +667,7 @@ func TestLifecycleRefusals(t *testing.T) {
 		vic := e.member(t, e.project, "vic", domain.RoleViewer)
 		outsider := domain.Caller{Identity: "mallory", TokenScope: "mallory"}
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		c := e.claim(t, e.alice, task.ID, 60)
 		p, id := e.project, task.ID
 		lease := func(l string) []func() error {
@@ -735,8 +735,8 @@ func TestLifecycleRefusals(t *testing.T) {
 		wantCode(t, err, domain.CodeForbidden)
 		_, err = lc.Reap(e.ctx, vic, ReapStaleLeasesReq{ProjectID: p, BoardID: e.board.ID})
 		wantCode(t, err, domain.CodeForbidden)
-		backlog := e.task(t, domain.Backlog)
-		_, err = lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: p, TaskID: backlog.ID})
+		done := e.task(t, domain.Done)
+		_, err = lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: p, TaskID: done.ID})
 		wantCode(t, err, domain.CodeInvalidTransition)
 		for name, f := range map[string]func() error{
 			"poison reason": func() error {
@@ -804,7 +804,7 @@ func TestClaimHonoursTheWIPLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 		lc := e.c.Lifecycle()
-		a, b := e.task(t, domain.Ready), e.task(t, domain.Ready)
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
 		ca := e.claim(t, e.alice, a.ID, 0)
 		_, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: b.ID})
 		wantCode(t, err, domain.CodeWIPExceeded)
@@ -822,7 +822,7 @@ func TestClaimHonoursTheWIPLimit(t *testing.T) {
 func TestClaimReplay(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		lc := e.c.Lifecycle()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		req := ClaimTaskReq{ProjectID: e.project, TaskID: task.ID, IdempotencyKey: "k", LeaseSeconds: 5}
 		first, err := lc.Claim(e.ctx, e.alice, req)
 		if err != nil {
@@ -835,7 +835,7 @@ func TestClaimReplay(t *testing.T) {
 		e.clock.advance(6 * time.Second)
 		_, err = lc.Claim(e.ctx, e.alice, req)
 		wantCode(t, err, domain.CodeLeaseExpired)
-		e.task(t, domain.Ready)
+		e.task(t, domain.Todo)
 		nreq := ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, IdempotencyKey: "n"}
 		n1, err := lc.ClaimNext(e.ctx, e.alice, nreq)
 		if err != nil || n1.Task == nil {
@@ -854,7 +854,7 @@ func TestCompleteCheckpointPolicy(t *testing.T) {
 	e := newLC(t, engineCases[0].open(t))
 	lc := e.c.Lifecycle()
 	e.settings(t, map[string]any{"checkpointPolicy": "enforce", "reviewEnabled": false})
-	task := e.task(t, domain.Ready)
+	task := e.task(t, domain.Todo)
 	c := e.claim(t, e.alice, task.ID, 0)
 	_, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID})
 	wantCode(t, err, domain.CodeValidation)
@@ -865,7 +865,7 @@ func TestCompleteCheckpointPolicy(t *testing.T) {
 		t.Fatalf("with REJECTED: %v", err)
 	}
 	e.settings(t, map[string]any{"checkpointPolicy": "warn"})
-	w := e.task(t, domain.Ready)
+	w := e.task(t, domain.Todo)
 	cw := e.claim(t, e.alice, w.ID, 0)
 	r, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: w.ID, LeaseID: cw.LeaseID})
 	if err != nil || len(r.Warnings) != 1 || len(ofType(e.events(t, w.ID), domain.EventTaskCheckpointMissing)) != 1 {
@@ -958,7 +958,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 	}
 	lc := f.c.Lifecycle()
 	for range 3 {
-		f.task(t, domain.Ready, nil)
+		f.task(t, domain.Todo, nil)
 	}
 	nreq := NextTaskReq{ProjectID: f.project.ID, BoardID: f.board.ID}
 	if _, err := lc.Next(f.ctx, f.alice, nreq); err != nil { // warms the membership
@@ -1040,7 +1040,7 @@ func TestAClaimOrASelfAssignmentRingsNobody(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
 		lc := e.c.Lifecycle()
-		a, b := e.task(t, domain.Ready), e.task(t, domain.Ready)
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
 		before := e.changeCount(t)
 		ca := e.claim(t, bob, a.ID, 0)
 		next, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
@@ -1081,7 +1081,7 @@ func TestRingForSkipsASelfAssignment(t *testing.T) {
 		unblocked bool
 		want      int
 	}{{"alice", false, 0}, {"bob", false, 1}, {"alice", true, 1}} {
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		before := len(e.assignedRows(t))
 		_, err := mutate(e.ctx, e.c, e.alice, mutation{Tool: "update_task", ProjectID: e.project, TaskID: task.ID}, func(tx *txn) (struct{}, error) {
 			after := *tx.Task

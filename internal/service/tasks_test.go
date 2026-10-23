@@ -53,11 +53,50 @@ func tkCode(err error) domain.Code {
 	return ""
 }
 
-// AC1: all 36 (from, to) pairs through Move: the 17 legal ones (11 table edges + 6 same-status)
-// land on to, the 19 illegal ones are INVALID_TRANSITION carrying allowed and the shortest path.
-// DEVIATION: the task's AC1 says 15 and 21; plan §Ticket states' table has 11 edges (1+2+3+2+2+1),
-// so 17 and 19 are its counts.
-func TestMoveTheSixBySixTable(t *testing.T) {
+// ADR-0005 for add_subtask, and the no-TODO refusal of both creating tools: the child lands TODO in
+// its board's first TODO column whatever the first column is, and a board with no TODO column refuses
+// create_task and add_subtask with VALIDATION, writing nothing.
+func TestCreatedTasksLandTodo(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		doneFirst, err := e.c.Boards().Create(e.ctx, e.alice, CreateBoardReq{ProjectID: e.project, Name: "done first", Columns: []ColumnSpec{{Name: "Done", Status: domain.Done}, {Name: "To do", Status: domain.Todo}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: doneFirst.Board.ID, Title: "parent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: parent.Task.ID, Title: "child"})
+		if err != nil || child.Task.Status != domain.Todo || child.Task.ColumnID != doneFirst.Board.Columns[1].ID {
+			t.Fatalf("add_subtask on a board whose first column is DONE: %+v, %v; want TODO in its To do column", child.Task, err)
+		}
+
+		noTodo, err := e.c.Boards().Create(e.ctx, e.alice, CreateBoardReq{ProjectID: e.project, Name: "no todo", Columns: []ColumnSpec{{Name: "In progress", Status: domain.InProgress}, {Name: "Done", Status: domain.Done}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: noTodo.Board.ID, Title: "x"})
+		wantCode(t, err, domain.CodeValidation)
+		held, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{
+			ProjectID: e.project, BoardID: noTodo.Board.ID, ColumnID: noTodo.Board.Columns[1].ID, Title: "held", Status: domain.Done,
+			OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: held.ID, Title: "x"})
+		wantCode(t, err, domain.CodeValidation)
+		page, err := e.st.ListTasks(e.ctx, e.project, store.TaskFilter{BoardID: noTodo.Board.ID}, "", 50)
+		if err != nil || len(page.Tasks) != 1 {
+			t.Fatalf("the no-TODO board holds %d tasks (%v), want only the seeded parent", len(page.Tasks), err)
+		}
+	})
+}
+
+// AC1: all 25 (from, to) pairs through Move: the 14 legal ones (9 table edges + 5 same-status)
+// land on to, the 11 illegal ones are INVALID_TRANSITION carrying allowed and the shortest path
+// (ADR-0005's table: 1+3+2+2+1 edges).
+func TestMoveTheFiveByFiveTable(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		var legal, same, illegal int
 		for _, from := range domain.AllStatuses() {
@@ -83,9 +122,9 @@ func TestMoveTheSixBySixTable(t *testing.T) {
 				illegal++
 			}
 		}
-		t.Logf("36 moves: %d legal (%d same-status), %d INVALID_TRANSITION with allowed and path", legal, same, illegal)
-		if legal != 17 || same != 6 || illegal != 19 {
-			t.Fatalf("%d legal (%d same), %d illegal; want 17 (6), 19", legal, same, illegal)
+		t.Logf("25 moves: %d legal (%d same-status), %d INVALID_TRANSITION with allowed and path", legal, same, illegal)
+		if legal != 14 || same != 5 || illegal != 11 {
+			t.Fatalf("%d legal (%d same), %d illegal; want 14 (5), 11", legal, same, illegal)
 		}
 	})
 }
@@ -93,21 +132,21 @@ func TestMoveTheSixBySixTable(t *testing.T) {
 // AC2: CANCELLED and DEAD_LETTER are not statuses: VALIDATION, and nothing moved.
 func TestMoveRefusesCancelledAndDeadLetter(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task := e.tkSeed(t, domain.Ready, "", 0, nil)
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
 		for _, s := range []domain.Status{"CANCELLED", "DEAD_LETTER"} {
 			_, err := e.tkMove(t, e.alice, task, s)
 			wantCode(t, err, domain.CodeValidation)
 		}
-		if got := e.get(t, task.ID); got.Version != task.Version || got.Status != domain.Ready {
-			t.Fatalf("after the refusals the task is %s v%d, want READY v%d", got.Status, got.Version, task.Version)
+		if got := e.get(t, task.ID); got.Version != task.Version || got.Status != domain.Todo {
+			t.Fatalf("after the refusals the task is %s v%d, want TODO v%d", got.Status, got.Version, task.Version)
 		}
 	})
 }
 
 // AC3: un-poisoning is master-only. A worker's move of a poisoned task is FORBIDDEN; a master's lands
-// READY with claimAttempts 0, the reason and the poisoned label gone; with an open blocker the same
+// TODO with claimAttempts 0, the reason and the poisoned label gone; with an open blocker the same
 // move lands BLOCKED, un-poisoned (P-42). The control on a dependency-blocked task: a master's move
-// to READY keeps claimAttempts. DEVIATION: a worker's move of a dependency-blocked task is FORBIDDEN
+// to TODO keeps claimAttempts. DEVIATION: a worker's move of a dependency-blocked task is FORBIDDEN
 // too, not the brief's writer-tier success: move_task is master tier (domain grants.go, pinned by
 // grants_test.go), so authorize refuses every worker move before the poison is read.
 func TestUnpoisonIsMasterOnly(t *testing.T) {
@@ -119,7 +158,7 @@ func TestUnpoisonIsMasterOnly(t *testing.T) {
 		}
 		t.Run("WorkerIsForbidden", func(t *testing.T) {
 			task := poisoned(t)
-			_, err := e.tkMove(t, worker, task, domain.Ready)
+			_, err := e.tkMove(t, worker, task, domain.Todo)
 			wantCode(t, err, domain.CodeForbidden)
 			if got := e.get(t, task.ID); got.Status != domain.Blocked || reasonOf(got) != domain.BlockedReasonPoison || got.ClaimAttempts != 3 {
 				t.Fatalf("after the refusal %s %q attempts %d, want it still poisoned", got.Status, reasonOf(got), got.ClaimAttempts)
@@ -127,21 +166,21 @@ func TestUnpoisonIsMasterOnly(t *testing.T) {
 		})
 		t.Run("MasterUnpoisons", func(t *testing.T) {
 			task := poisoned(t)
-			got, err := e.tkMove(t, master, task, domain.Ready)
+			got, err := e.tkMove(t, master, task, domain.Todo)
 			if err != nil {
 				t.Fatal(err)
 			}
 			st := e.get(t, task.ID)
-			if got.Task.Status != domain.Ready || st.ClaimAttempts != 0 || st.BlockedReason != nil || slices.Contains(st.Labels, domain.LabelPoisoned) || !slices.Contains(st.Labels, "x") {
-				t.Fatalf("un-poisoned task %s attempts %d reason %v labels %v, want READY, 0, nil, [x]", st.Status, st.ClaimAttempts, st.BlockedReason, st.Labels)
+			if got.Task.Status != domain.Todo || st.ClaimAttempts != 0 || st.BlockedReason != nil || slices.Contains(st.Labels, domain.LabelPoisoned) || !slices.Contains(st.Labels, "x") {
+				t.Fatalf("un-poisoned task %s attempts %d reason %v labels %v, want TODO, 0, nil, [x]", st.Status, st.ClaimAttempts, st.BlockedReason, st.Labels)
 			}
 		})
 		t.Run("MasterUnpoisonWithABlockerLandsBlocked", func(t *testing.T) {
-			task, blocker := poisoned(t), e.tkSeed(t, domain.Ready, "", 0, nil)
+			task, blocker := poisoned(t), e.tkSeed(t, domain.Todo, "", 0, nil)
 			if _, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: task.ID}); err != nil {
 				t.Fatal(err)
 			}
-			got, err := e.tkMove(t, master, e.get(t, task.ID), domain.Ready)
+			got, err := e.tkMove(t, master, e.get(t, task.ID), domain.Todo)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,14 +191,14 @@ func TestUnpoisonIsMasterOnly(t *testing.T) {
 		})
 		t.Run("ControlDependencyBlocked", func(t *testing.T) {
 			task := e.tkSeed(t, domain.Blocked, "", 2, nil)
-			_, err := e.tkMove(t, worker, task, domain.Ready)
+			_, err := e.tkMove(t, worker, task, domain.Todo)
 			wantCode(t, err, domain.CodeForbidden) // DEVIATION above: the tier, not the poison
-			got, err := e.tkMove(t, master, task, domain.Ready)
+			got, err := e.tkMove(t, master, task, domain.Todo)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Task.Status != domain.Ready || got.Task.ClaimAttempts != 2 {
-				t.Fatalf("dependency-blocked → %s attempts %v, want READY keeping its 2 attempts", got.Task.Status, got.Task.ClaimAttempts)
+			if got.Task.Status != domain.Todo || got.Task.ClaimAttempts != 2 {
+				t.Fatalf("dependency-blocked → %s attempts %v, want TODO keeping its 2 attempts", got.Task.Status, got.Task.ClaimAttempts)
 			}
 		})
 		t.Run("ReorderInTheLaneKeepsPoison", func(t *testing.T) {
@@ -183,7 +222,7 @@ func TestMoveWIPExceeded(t *testing.T) {
 		if _, err := e.st.UpdateColumn(e.ctx, e.project, e.board.ID, e.column(t, domain.InProgress), store.ColumnPatch{SetWIPLimit: true, WIPLimit: &limit}); err != nil {
 			t.Fatal(err)
 		}
-		first, second := e.tkSeed(t, domain.InProgress, "", 0, nil), e.tkSeed(t, domain.Ready, "", 0, nil)
+		first, second := e.tkSeed(t, domain.InProgress, "", 0, nil), e.tkSeed(t, domain.Todo, "", 0, nil)
 		_, err := e.tkMove(t, e.alice, second, domain.InProgress)
 		be := wantCode(t, err, domain.CodeWIPExceeded)
 		t.Logf("second move in: %s %v", be.Code, be.Details)
@@ -196,15 +235,15 @@ func TestMoveWIPExceeded(t *testing.T) {
 	})
 }
 
-// Promote-with-dependencies: a task with an open blocker moved to READY (or IN_PROGRESS) lands in
+// Promote-with-dependencies: a task with an open blocker moved to TODO (or IN_PROGRESS) lands in
 // the Blocked column; dropping the blocker's edge is then what frees it.
 func TestMovePromoteWithDependenciesLandsBlocked(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task, blocker := e.tkSeed(t, domain.Backlog, "", 0, nil), e.tkSeed(t, domain.Ready, "", 0, nil)
+		task, blocker := e.tkSeed(t, domain.InProgress, "", 0, nil), e.tkSeed(t, domain.Todo, "", 0, nil)
 		if _, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: task.ID}); err != nil {
 			t.Fatal(err)
 		}
-		got, err := e.tkMove(t, e.alice, e.get(t, task.ID), domain.Ready)
+		got, err := e.tkMove(t, e.alice, e.get(t, task.ID), domain.Todo)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +253,7 @@ func TestMovePromoteWithDependenciesLandsBlocked(t *testing.T) {
 	})
 }
 
-// A move to DONE clears its id from each dependent: the non-poison one goes READY with one
+// A move to DONE clears its id from each dependent: the non-poison one goes TODO with one
 // task.dependency_cleared and a broadcast; the poisoned one keeps BLOCKED and its reason.
 func TestMoveToDoneUnblocksDependents(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
@@ -229,8 +268,8 @@ func TestMoveToDoneUnblocksDependents(t *testing.T) {
 		if _, err := e.tkMove(t, e.alice, e.get(t, blocker.ID), domain.Done); err != nil {
 			t.Fatal(err)
 		}
-		if got := e.get(t, plain.ID); got.Status != domain.Ready || len(got.BlockedBy) != 0 || len(ofType(e.events(t, plain.ID), domain.EventTaskDependencyCleared)) != 1 {
-			t.Fatalf("plain dependent %s blockedBy %v, want READY, [] and one dependency_cleared", got.Status, got.BlockedBy)
+		if got := e.get(t, plain.ID); got.Status != domain.Todo || len(got.BlockedBy) != 0 || len(ofType(e.events(t, plain.ID), domain.EventTaskDependencyCleared)) != 1 {
+			t.Fatalf("plain dependent %s blockedBy %v, want TODO, [] and one dependency_cleared", got.Status, got.BlockedBy)
 		}
 		if got := e.get(t, poison.ID); got.Status != domain.Blocked || reasonOf(got) != domain.BlockedReasonPoison || len(got.BlockedBy) != 0 {
 			t.Fatalf("poisoned dependent %s %q blockedBy %v, want BLOCKED poison with the cache cleared", got.Status, reasonOf(got), got.BlockedBy)
@@ -272,18 +311,18 @@ func (e *env) changeKinds(t *testing.T, skip int) []string {
 // Every declared error of move_task besides the table's and WIP's.
 func TestMoveRefusals(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task := e.tkSeed(t, domain.Ready, "", 0, nil)
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
 		mv := func(req MoveTaskReq) error {
 			req.ProjectID = cmpOr(req.ProjectID, e.project)
 			_, err := e.c.Tasks().Move(e.ctx, e.alice, req)
 			return err
 		}
-		wantCode(t, mv(MoveTaskReq{TaskID: task.ID, Version: task.Version + 1, ToStatus: domain.Backlog}), domain.CodeStale)
-		wantCode(t, mv(MoveTaskReq{TaskID: "T-404", Version: 1, ToStatus: domain.Backlog}), domain.CodeNotFound)
+		wantCode(t, mv(MoveTaskReq{TaskID: task.ID, Version: task.Version + 1, ToStatus: domain.Todo}), domain.CodeStale)
+		wantCode(t, mv(MoveTaskReq{TaskID: "T-404", Version: 1, ToStatus: domain.Todo}), domain.CodeNotFound)
 		wantCode(t, mv(MoveTaskReq{TaskID: task.ID, Version: task.Version, ToColumnID: "C-404"}), domain.CodeNotFound)
 		wantCode(t, mv(MoveTaskReq{TaskID: task.ID, Version: task.Version, Order: "!"}), domain.CodeValidation)
 		wantCode(t, mv(MoveTaskReq{TaskID: task.ID, Version: task.Version}), domain.CodeValidation)
-		wantCode(t, mv(MoveTaskReq{ProjectID: "P-other", TaskID: task.ID, Version: task.Version, ToStatus: domain.Backlog}), domain.CodeForbidden)
+		wantCode(t, mv(MoveTaskReq{ProjectID: "P-other", TaskID: task.ID, Version: task.Version, ToStatus: domain.Todo}), domain.CodeForbidden)
 
 		now := time.Now()
 		held, err := e.st.ClaimTask(e.ctx, e.project, task.ID, task.Version, store.ClaimInput{
@@ -294,13 +333,13 @@ func TestMoveRefusals(t *testing.T) {
 		}
 		wantCode(t, mv(MoveTaskReq{TaskID: held.ID, Version: held.Version, ToStatus: domain.Review}), domain.CodeConflictLocked)
 
-		racing := e.tkSeed(t, domain.Ready, "", 0, nil)
+		racing := e.tkSeed(t, domain.Todo, "", 0, nil)
 		on := true
 		racing, err = e.st.UpdateTask(e.ctx, e.project, racing.ID, racing.Version, store.TaskPatch{Racing: &on, UpdatedBy: "alice", UpdatedAt: now.UnixMilli()})
 		if err != nil {
 			t.Fatal(err)
 		}
-		be := wantCode(t, mv(MoveTaskReq{TaskID: racing.ID, Version: racing.Version, ToStatus: domain.Backlog}), domain.CodeConflictLocked)
+		be := wantCode(t, mv(MoveTaskReq{TaskID: racing.ID, Version: racing.Version, ToStatus: domain.Todo}), domain.CodeConflictLocked)
 		if be.Details["reason"] != "race" {
 			t.Fatalf("racing refusal details %v, want reason race", be.Details)
 		}
@@ -321,7 +360,7 @@ func cmpOr(a, b string) string {
 }
 
 // create_task: the first column's status, T-n from the counter, the idempotency replay, columnId,
-// the event and the READY broadcast; and its refusals.
+// the event and the TODO broadcast; and its refusals.
 func TestCreateTask(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		tk := e.c.Tasks()
@@ -329,26 +368,45 @@ func TestCreateTask(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if a.Task.Status != domain.Backlog || a.Task.ColumnID != e.column(t, domain.Backlog) || a.Task.Priority != domain.PriorityNormal || a.Task.CustomFields["n"] != 1.0 {
-			t.Fatalf("create landed %+v, want BACKLOG in the first column, normal, its fields", a.Task)
+		if a.Task.Status != domain.Todo || a.Task.ColumnID != e.column(t, domain.Todo) || a.Task.Priority != domain.PriorityNormal || a.Task.CustomFields["n"] != 1.0 {
+			t.Fatalf("create landed %+v, want TODO in the To do column, normal, its fields", a.Task)
 		}
 		again, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "first", IdempotencyKey: "k"})
 		if err != nil || again.Task.ID != a.Task.ID {
 			t.Fatalf("replay %v %s, want %s", err, again.Task.ID, a.Task.ID)
 		}
 		before := e.changeCount(t)
-		b, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "second", ColumnID: e.column(t, domain.Ready)})
+		b, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "second", ColumnID: e.column(t, domain.Todo)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if b.Task.Status != domain.Ready || tkNum(t, b.Task.ID) != tkNum(t, a.Task.ID)+1 {
-			t.Fatalf("second %s %s after %s, want READY and the next T-n", b.Task.ID, b.Task.Status, a.Task.ID)
+		if b.Task.Status != domain.Todo || tkNum(t, b.Task.ID) != tkNum(t, a.Task.ID)+1 {
+			t.Fatalf("second %s %s after %s, want TODO and the next T-n", b.Task.ID, b.Task.Status, a.Task.ID)
 		}
 		if kinds := e.changeKinds(t, before); !slices.Equal(kinds, []string{DoorbellBroadcast + ":" + b.Task.ID}) {
 			t.Fatalf("change rows %v, want one broadcast", kinds)
 		}
 		if n := len(ofType(e.events(t, b.Task.ID), domain.EventTaskCreated)); n != 1 {
 			t.Fatalf("%d task.created events", n)
+		}
+		// ADR-0005: no created task is a draft. It lands TODO, in the board's first TODO column when
+		// no column is named, and a named column of any other status is VALIDATION.
+		doneFirst, err := e.c.Boards().Create(e.ctx, e.alice, CreateBoardReq{ProjectID: e.project, Name: "done first", Columns: []ColumnSpec{{Name: "Done", Status: domain.Done}, {Name: "To do", Status: domain.Todo}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: doneFirst.Board.ID, Title: "lands todo"})
+		if err != nil || c.Task.Status != domain.Todo || c.Task.ColumnID != doneFirst.Board.Columns[1].ID {
+			t.Fatalf("create on a board whose first column is DONE: %+v, %v; want TODO in its To do column", c.Task, err)
+		}
+		for _, st := range domain.AllStatuses() {
+			if st == domain.Todo {
+				continue
+			}
+			_, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "x", ColumnID: e.column(t, st)})
+			if tkCode(err) != domain.CodeValidation {
+				t.Errorf("create into the %s column: %v, want VALIDATION", st, err)
+			}
 		}
 		worker := e.member(t, e.project, "will", domain.RoleWorker)
 		_, err = tk.Create(e.ctx, worker, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "w"})
@@ -402,7 +460,7 @@ func TestGetTask(t *testing.T) {
 	if err := old.Close(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	task := f.task(t, domain.Ready, nil)
+	task := f.task(t, domain.Todo, nil)
 	if _, err := f.c.Context().SetSummary(f.ctx, f.alice, SetSummaryReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version, Summary: "so far"}); err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +488,7 @@ func TestGetTask(t *testing.T) {
 // dueAt, reviewer, estimate and modelHint; description is absent or a value ("" included).
 func TestUpdateTaskTriState(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task := e.tkSeed(t, domain.Ready, "", 0, nil)
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
 		up := func(t *testing.T, p TaskPatch) store.Task {
 			t.Helper()
 			cur := e.get(t, task.ID)
@@ -462,11 +520,11 @@ func TestUpdateTaskTriState(t *testing.T) {
 	})
 }
 
-// update_task: the doorbell on a new assignee, the broadcast when a READY task loses it; STALE; the
+// update_task: the doorbell on a new assignee, the broadcast when a TODO task loses it; STALE; the
 // system-label and autoAssign refusals.
 func TestUpdateTaskDoorbellsAndRefusals(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task := e.tkSeed(t, domain.Ready, "", 0, []string{domain.LabelPoisoned})
+		task := e.tkSeed(t, domain.Todo, "", 0, []string{domain.LabelPoisoned})
 		before := e.changeCount(t)
 		got, err := e.c.Tasks().Update(e.ctx, e.alice, UpdateTaskReq{ProjectID: e.project, TaskID: task.ID, Version: task.Version, Patch: TaskPatch{Assignee: Value("ann")}})
 		if err != nil {
@@ -506,7 +564,7 @@ func TestListTasks(t *testing.T) {
 		ann := "ann"
 		var ids []string
 		for i := range 5 {
-			task, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: fmt.Sprint("t", i), ColumnID: e.column(t, domain.Ready), Labels: []string{fmt.Sprint("l", i%2)}})
+			task, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: fmt.Sprint("t", i), ColumnID: e.column(t, domain.Todo), Labels: []string{fmt.Sprint("l", i%2)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -516,7 +574,7 @@ func TestListTasks(t *testing.T) {
 		if _, err := e.c.Tasks().Update(e.ctx, e.alice, UpdateTaskReq{ProjectID: e.project, TaskID: ids[0], Version: cur.Version, Patch: TaskPatch{Assignee: Value(ann)}}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: ids[1], Version: e.get(t, ids[1]).Version, ToStatus: domain.Backlog}); err != nil {
+		if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: ids[1], Version: e.get(t, ids[1]).Version, ToStatus: domain.InProgress}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: ids[3], ToTaskID: ids[2]}); err != nil {
@@ -542,7 +600,7 @@ func TestListTasks(t *testing.T) {
 			want []string
 		}{
 			"all":              {ListTasksReq{}, sorted(ids...)},
-			"status":           {ListTasksReq{Status: domain.Backlog}, []string{ids[1]}},
+			"status":           {ListTasksReq{Status: domain.InProgress}, []string{ids[1]}},
 			"assignee value":   {ListTasksReq{Assignee: Value(ann)}, []string{ids[0]}},
 			"assignee null":    {ListTasksReq{Assignee: Null[string]()}, sorted(ids[1:]...)},
 			"label":            {ListTasksReq{Label: "l1"}, sorted(ids[1], ids[3])},
@@ -589,7 +647,7 @@ func TestListTasks(t *testing.T) {
 // list_tasks is one statement once the membership is cached (the pin is two).
 func TestListTasksCostsOneStatement(t *testing.T) {
 	f, n := counted(t)
-	f.task(t, domain.Ready, nil)
+	f.task(t, domain.Todo, nil)
 	req := ListTasksReq{ProjectID: f.project.ID, BoardID: f.board.ID}
 	if _, err := f.c.Tasks().List(f.ctx, f.alice, req); err != nil {
 		t.Fatal(err)
@@ -612,7 +670,7 @@ func pgOnly(t *testing.T) *env {
 	return newEnv(t, storetest.Postgres(t))
 }
 
-// P-146 (review round 1, the reviewer's TestProbeMoveWIPRace): two concurrent moves of two READY
+// P-146 (review round 1, the reviewer's TestProbeMoveWIPRace): two concurrent moves of two TODO
 // tasks into a wipLimit-1 In progress admit exactly one, 40 runs out of 40; without the project lock
 // both were admitted in 40 of 40.
 func TestMoveWIPRaceAdmitsOne(t *testing.T) {
@@ -623,7 +681,7 @@ func TestMoveWIPRaceAdmitsOne(t *testing.T) {
 	}
 	over, runs := 0, 40
 	for i := range runs {
-		pair := []store.Task{e.tkSeed(t, domain.Ready, "", 0, nil), e.tkSeed(t, domain.Ready, "", 0, nil)}
+		pair := []store.Task{e.tkSeed(t, domain.Todo, "", 0, nil), e.tkSeed(t, domain.Todo, "", 0, nil)}
 		errs := make([]error, 2)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
@@ -724,9 +782,9 @@ func TestMoveIntoInProgressClearsTheBackoff(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		later := time.Now().Add(time.Hour).UnixMilli()
 		seed := func(t *testing.T) store.Task {
-			task := e.tkSeed(t, domain.Ready, "", 0, nil)
+			task := e.tkSeed(t, domain.Todo, "", 0, nil)
 			got, err := e.st.SetStatus(e.ctx, e.project, task.ID, task.Version, store.StatusChange{
-				Status: domain.Ready, NextEligibleAt: &store.Nullable[int64]{Value: &later}, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli(),
+				Status: domain.Todo, NextEligibleAt: &store.Nullable[int64]{Value: &later}, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli(),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -741,11 +799,11 @@ func TestMoveIntoInProgressClearsTheBackoff(t *testing.T) {
 			t.Fatalf("after the move into IN_PROGRESS nextEligibleAt is %d, want cleared", *got.NextEligibleAt)
 		}
 		kept := seed(t)
-		if _, err := e.tkMove(t, e.alice, kept, domain.Backlog); err != nil {
+		if _, err := e.tkMove(t, e.alice, kept, domain.Todo); err != nil {
 			t.Fatal(err)
 		}
 		if got := e.get(t, kept.ID); got.NextEligibleAt == nil || *got.NextEligibleAt != later {
-			t.Fatalf("a move to BACKLOG left nextEligibleAt %v, want %d kept", got.NextEligibleAt, later)
+			t.Fatalf("a reorder within TODO left nextEligibleAt %v, want %d kept", got.NextEligibleAt, later)
 		}
 	})
 }

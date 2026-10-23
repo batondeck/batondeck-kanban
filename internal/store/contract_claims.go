@@ -21,7 +21,7 @@ type ClaimInput struct {
 }
 
 // FrontierQuery is the claim frontier of one board: its claimable tasks (domain.IsClaimable at Now:
-// READY, nothing in BlockedBy, not poisoned, not racing, no live lease, past NextEligibleAt), with
+// TODO, nothing in BlockedBy, not poisoned, not racing, no live lease, past NextEligibleAt), with
 // Assignee set only those assigned to it, and with Capabilities not empty only those whose
 // RequiredCapabilities are all among them. The frontier is best first: Score descending, then
 // priority (urgent, high, normal, low), then order key, then id, the two keys compared as bytes
@@ -43,7 +43,7 @@ type FrontierQuery struct {
 // and a racing parent ConflictLocked(taskID, "race"); a lease that is missing, not the caller's
 // LeaseID or past its ExpiresAt is LeaseExpired(taskID) (code LEASE_EXPIRED, details {taskId}); a
 // task that cannot be claimed is domain.InvalidTransition(status, IN_PROGRESS, nil, nil). Where the
-// task lands after a failure or reap (READY with a backoff, or BLOCKED poison) is the service's
+// task lands after a failure or reap (TODO with a backoff, or BLOCKED poison) is the service's
 // SetStatus, not written here. WIP limits are the service's (CountTasks inside Atomically). An
 // empty owner or lease id, ExpiresAt not after Now, or an empty board id is domain.Validation; a
 // ColumnID not on the task's board is domain.NotFound("Column", id).
@@ -53,7 +53,7 @@ type Claims interface {
 	// board for its column). Concurrent callers never win the same task.
 	ClaimNext(ctx context.Context, q FrontierQuery, in ClaimInput) (task Task, ok bool, err error)
 	// ClaimTask claims one task at expectedVersion. A task with BlockedBy not empty, or neither
-	// READY nor IN_PROGRESS with an expired lease or the caller's own, is INVALID_TRANSITION;
+	// TODO nor IN_PROGRESS with an expired lease or the caller's own, is INVALID_TRANSITION;
 	// re-claiming one's own live lease replaces it. A version that is not the task's is STALE.
 	ClaimTask(ctx context.Context, projectID, taskID string, expectedVersion int64, in ClaimInput) (Task, error)
 	// Heartbeat moves the lease's expiry to expiresAt and returns the task. The lease must be

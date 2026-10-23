@@ -42,12 +42,12 @@ func (e *env) feed(t *testing.T) []store.Event {
 }
 
 // AC5, the R0.10 handoff: deleting a blocker strips its id from every dependent's blockedBy BEFORE
-// the store drops the edges. The non-poison dependent goes READY with one task.dependency_cleared
+// the store drops the edges. The non-poison dependent goes TODO with one task.dependency_cleared
 // (autoReady); the poisoned one stays BLOCKED with its reason (the refusal); neither cache names the
 // deleted task.
 func TestDeleteBlockerUnblocksPoisonAware(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		blocker := e.tkSeed(t, domain.Ready, "", 0, nil)
+		blocker := e.tkSeed(t, domain.Todo, "", 0, nil)
 		plain, poison := e.tkSeed(t, domain.Blocked, "", 0, nil), e.tkSeed(t, domain.Blocked, domain.BlockedReasonPoison, 3, []string{domain.LabelPoisoned})
 		e.tkDepend(t, blocker.ID, plain.ID)
 		e.tkDepend(t, blocker.ID, poison.ID)
@@ -56,8 +56,8 @@ func TestDeleteBlockerUnblocksPoisonAware(t *testing.T) {
 		}
 		got := e.get(t, plain.ID)
 		cleared := ofType(e.events(t, plain.ID), domain.EventTaskDependencyCleared)
-		if got.Status != domain.Ready || len(got.BlockedBy) != 0 || len(cleared) != 1 || !json.Valid(cleared[0].Data) || !slices.Contains([]string{`{"autoReady":true,"clearedBy":"` + blocker.ID + `"}`}, compact(t, cleared[0].Data)) {
-			t.Fatalf("plain dependent %s blockedBy %v events %d, want READY, [] and one dependency_cleared autoReady", got.Status, got.BlockedBy, len(cleared))
+		if got.Status != domain.Todo || len(got.BlockedBy) != 0 || len(cleared) != 1 || !json.Valid(cleared[0].Data) || !slices.Contains([]string{`{"autoReady":true,"clearedBy":"` + blocker.ID + `"}`}, compact(t, cleared[0].Data)) {
+			t.Fatalf("plain dependent %s blockedBy %v events %d, want TODO, [] and one dependency_cleared autoReady", got.Status, got.BlockedBy, len(cleared))
 		}
 		p := e.get(t, poison.ID)
 		if p.Status != domain.Blocked || reasonOf(p) != domain.BlockedReasonPoison || slices.Contains(p.BlockedBy, blocker.ID) {
@@ -84,7 +84,7 @@ func compact(t *testing.T, raw json.RawMessage) string {
 // subtask its parent waits on (a blockedBy entry with no edge) unblocks the parent.
 func TestDeleteStripsBlockersAndUnblocksTheParent(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		blocker, dep := e.tkSeed(t, domain.Ready, "", 0, nil), e.tkSeed(t, domain.Backlog, "", 0, nil)
+		blocker, dep := e.tkSeed(t, domain.Todo, "", 0, nil), e.tkSeed(t, domain.Done, "", 0, nil)
 		e.tkDepend(t, blocker.ID, dep.ID)
 		b := e.get(t, blocker.ID)
 		if err := e.tkDelete(e.alice, e.get(t, dep.ID)); err != nil {
@@ -104,22 +104,22 @@ func TestDeleteStripsBlockersAndUnblocksTheParent(t *testing.T) {
 		if err := e.tkDelete(e.alice, e.get(t, child.Task.ID)); err != nil {
 			t.Fatal(err)
 		}
-		if p := e.get(t, parent.ID); p.Status != domain.Ready || len(p.BlockedBy) != 0 {
-			t.Fatalf("parent %s blockedBy %v after its last child went, want READY []", p.Status, p.BlockedBy)
+		if p := e.get(t, parent.ID); p.Status != domain.Todo || len(p.BlockedBy) != 0 {
+			t.Fatalf("parent %s blockedBy %v after its last child went, want TODO []", p.Status, p.BlockedBy)
 		}
 	})
 }
 
 // AC6: a run X of a racing parent P, X itself racing with two runs and holding two subtasks, one
 // with a context item and task memory. Deleting X leaves no row for X, its subtasks or its runs in
-// tasks, events, context items, memory, dependencies or runs; P (its last run gone) is READY with
+// tasks, events, context items, memory, dependencies or runs; P (its last run gone) is TODO with
 // racing false.
 func TestDeleteCascadesSubtasksAndRuns(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		on := true
 		now := time.Now().UnixMilli()
 		run := func(t *testing.T, of string) store.Task {
-			r, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Ready), Title: "run", Status: domain.Ready, OrderKey: "a0", RunOf: &of, CreatedBy: "alice", CreatedAt: now})
+			r, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "run", Status: domain.Todo, OrderKey: "a0", RunOf: &of, CreatedBy: "alice", CreatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,7 +132,7 @@ func TestDeleteCascadesSubtasksAndRuns(t *testing.T) {
 			}
 			return x
 		}
-		p := racing(t, e.tkSeed(t, domain.Ready, "", 0, nil))
+		p := racing(t, e.tkSeed(t, domain.Todo, "", 0, nil))
 		x := racing(t, run(t, p.ID))
 		r1, r2 := run(t, x.ID), run(t, x.ID)
 		var subs []string
@@ -143,7 +143,7 @@ func TestDeleteCascadesSubtasksAndRuns(t *testing.T) {
 			}
 			subs = append(subs, s.Task.ID)
 		}
-		other := e.tkSeed(t, domain.Ready, "", 0, nil)
+		other := e.tkSeed(t, domain.Todo, "", 0, nil)
 		e.tkDepend(t, other.ID, subs[0])
 		if _, err := e.c.Context().AddItem(e.ctx, e.alice, AddContextItemReq{ProjectID: e.project, TaskID: subs[0], Kind: "note", Body: "n"}); err != nil {
 			t.Fatal(err)
@@ -184,8 +184,8 @@ func TestDeleteCascadesSubtasksAndRuns(t *testing.T) {
 			}
 		}
 		pa := e.get(t, p.ID)
-		if pa.Status != domain.Ready || pa.Racing || pa.RaceOpenedAt != nil || len(ofType(e.events(t, p.ID), domain.EventRunDiscarded)) != 1 {
-			t.Fatalf("parent %s racing %v raceOpenedAt %v, want READY, false, nil and one run.discarded", pa.Status, pa.Racing, pa.RaceOpenedAt)
+		if pa.Status != domain.Todo || pa.Racing || pa.RaceOpenedAt != nil || len(ofType(e.events(t, p.ID), domain.EventRunDiscarded)) != 1 {
+			t.Fatalf("parent %s racing %v raceOpenedAt %v, want TODO, false, nil and one run.discarded", pa.Status, pa.Racing, pa.RaceOpenedAt)
 		}
 		t.Logf("deleted %v; parent %s %s racing=%v", gone, pa.ID, pa.Status, pa.Racing)
 	})
@@ -209,7 +209,7 @@ func TestDeleteWritesItsTraceOnceAndNeverReusesTheID(t *testing.T) {
 			t.Fatal(err)
 		}
 		deleted := ofType(e.feed(t), domain.EventTaskDeleted)
-		if len(deleted) != 1 || deleted[0].TaskID != nil || compact(t, deleted[0].Data) != `{"id":"`+last.ID+`","status":"BACKLOG","title":"t"}` {
+		if len(deleted) != 1 || deleted[0].TaskID != nil || compact(t, deleted[0].Data) != `{"id":"`+last.ID+`","status":"TODO","title":"t"}` {
 			t.Fatalf("task.deleted events %+v, want one board event {id,title,status}", deleted)
 		}
 		rows := e.auditRows(t)[auditBefore:]
@@ -248,7 +248,7 @@ func (e *env) auditCount(t *testing.T) int { return len(e.auditRows(t)) }
 // the control), a worker FORBIDDEN (a master is the control), another project FORBIDDEN.
 func TestDeleteRefusals(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task := e.tkSeed(t, domain.Ready, "", 0, nil)
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
 		wantCode(t, e.tkDelete(e.alice, store.Task{ID: task.ID, Version: task.Version + 1}), domain.CodeStale)
 		worker := e.member(t, e.project, "will", domain.RoleWorker)
 		wantCode(t, e.tkDelete(worker, task), domain.CodeForbidden)
@@ -267,7 +267,7 @@ func TestDeleteRefusals(t *testing.T) {
 			t.Fatalf("the holder's own delete: %v", err)
 		}
 		master := e.member(t, e.project, "mia", domain.RoleMaster)
-		if err := e.tkDelete(master, e.tkSeed(t, domain.Ready, "", 0, nil)); err != nil {
+		if err := e.tkDelete(master, e.tkSeed(t, domain.Todo, "", 0, nil)); err != nil {
 			t.Fatalf("a master's delete: %v", err)
 		}
 	})
@@ -288,7 +288,7 @@ func TestDeleteCallsTheBlobHook(t *testing.T) {
 	if err := old.Close(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	task := f.task(t, domain.Ready, nil)
+	task := f.task(t, domain.Todo, nil)
 	if _, err := f.st.CreateAttachment(f.ctx, store.CreateAttachmentInput{ProjectID: f.project.ID, TaskID: task.ID, MimeType: "text/plain", Bytes: 1, Kind: store.AttachmentFile, CreatedBy: "alice"}); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestDeleteCallsTheBlobHook(t *testing.T) {
 // (skip ignored in stripFromBlockers).
 func TestDeleteCascadeIntraSetEdges(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		root := e.tkSeed(t, domain.Ready, "", 0, nil)
+		root := e.tkSeed(t, domain.Todo, "", 0, nil)
 		var subs []string
 		for range 2 {
 			s, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: root.ID, Title: "s"})
@@ -325,7 +325,7 @@ func TestDeleteCascadeIntraSetEdges(t *testing.T) {
 		}
 		e.tkDepend(t, subs[0], subs[1])
 		e.tkDepend(t, subs[1], root.ID)
-		outside := e.tkSeed(t, domain.Ready, "", 0, nil)
+		outside := e.tkSeed(t, domain.Todo, "", 0, nil)
 		e.tkDepend(t, outside.ID, subs[0])
 		if err := e.tkDelete(e.alice, e.get(t, root.ID)); err != nil {
 			t.Fatalf("delete: %v", err)
@@ -343,12 +343,12 @@ func TestDeleteCascadeIntraSetEdges(t *testing.T) {
 // (200). Kills O5 (one page only).
 func TestDeleteCascadeOver200Runs(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		root := e.tkSeed(t, domain.Ready, "", 0, nil)
+		root := e.tkSeed(t, domain.Todo, "", 0, nil)
 		now := time.Now().UnixMilli()
 		var ids []string
 		for range 250 {
 			of := root.ID
-			r, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Ready), Title: "run", Status: domain.Ready, OrderKey: "a0", RunOf: &of, CreatedBy: "alice", CreatedAt: now})
+			r, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "run", Status: domain.Todo, OrderKey: "a0", RunOf: &of, CreatedBy: "alice", CreatedAt: now})
 			if err != nil {
 				t.Fatal(err)
 			}

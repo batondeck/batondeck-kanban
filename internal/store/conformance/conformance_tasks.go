@@ -46,11 +46,11 @@ func taskBoardOn(t *testing.T, s store.Store) taskBoard {
 	return taskBoard{s: s, project: p.ID, board: b.ID, col: col}
 }
 
-// input is a READY task titled title, at order key "a0", created by alice at taskClock.
+// input is a TODO task titled title, at order key "a0", created by alice at taskClock.
 func (f taskBoard) input(title string) store.CreateTaskInput {
 	return store.CreateTaskInput{
-		ProjectID: f.project, BoardID: f.board, ColumnID: f.col[domain.Ready], Title: title,
-		Status: domain.Ready, OrderKey: "a0", CreatedBy: "alice", CreatedAt: taskClock,
+		ProjectID: f.project, BoardID: f.board, ColumnID: f.col[domain.Todo], Title: title,
+		Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: taskClock,
 	}
 }
 
@@ -141,8 +141,8 @@ func tasks(t *testing.T, newStore Factory) {
 		first, err := f.s.CreateTask(ctx, in)
 		mustOK(t, err)
 		want := store.Task{
-			ProjectID: f.project, ID: "T-1", BoardID: f.board, ColumnID: f.col[domain.Ready], Title: "first",
-			Description: "the description", Status: domain.Ready, Priority: domain.PriorityHigh, Assignee: ptr("bob"),
+			ProjectID: f.project, ID: "T-1", BoardID: f.board, ColumnID: f.col[domain.Todo], Title: "first",
+			Description: "the description", Status: domain.Todo, Priority: domain.PriorityHigh, Assignee: ptr("bob"),
 			Labels: []string{"x", "y"}, RequiredCapabilities: []string{"go"}, OrderKey: "a0",
 			CustomFields: json.RawMessage(`{"points":3}`), BlockedBy: []string{}, Blocks: []string{},
 			ModelHint: json.RawMessage(`{"model":"m"}`), SprintIDs: []string{"S-1"}, Version: 1,
@@ -344,9 +344,9 @@ func tasks(t *testing.T, newStore Factory) {
 			t.Fatalf("blocked: %+v", blocked)
 		}
 		// Leaving BLOCKED clears the reason; ColumnID "" keeps the column; nil keeps the retry state.
-		ready, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Ready, BlockedReason: "ignored", UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		ready, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Todo, BlockedReason: "ignored", UpdatedBy: "bob", UpdatedAt: taskClock + 2})
 		mustOK(t, err)
-		if ready.Status != domain.Ready || ready.BlockedReason != nil || ready.ColumnID != f.col[domain.Blocked] ||
+		if ready.Status != domain.Todo || ready.BlockedReason != nil || ready.ColumnID != f.col[domain.Blocked] ||
 			ready.ClaimAttempts != 2 || ready.NextEligibleAt == nil || ready.Version != 3 {
 			t.Fatalf("ready: %+v", ready)
 		}
@@ -366,14 +366,14 @@ func tasks(t *testing.T, newStore Factory) {
 		if !domain.IsPoisoned(poisoned.Status, *poisoned.BlockedReason) {
 			t.Fatalf("not poisoned: %+v", poisoned)
 		}
-		back, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Ready, ColumnID: f.col[domain.Ready], Unpoison: true, UpdatedBy: "master", UpdatedAt: taskClock + 2})
+		back, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Todo, ColumnID: f.col[domain.Todo], Unpoison: true, UpdatedBy: "master", UpdatedAt: taskClock + 2})
 		mustOK(t, err)
-		if back.Status != domain.Ready || back.BlockedReason != nil || back.ClaimAttempts != 0 || back.NextEligibleAt != nil ||
+		if back.Status != domain.Todo || back.BlockedReason != nil || back.ClaimAttempts != 0 || back.NextEligibleAt != nil ||
 			!reflect.DeepEqual(back.Labels, []string{"keep"}) || back.Version != 3 {
 			t.Fatalf("un-poisoned: %+v", back)
 		}
 		// Refusal: Unpoison on a task that is not poisoned.
-		_, err = f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.Ready, Unpoison: true, UpdatedBy: "master", UpdatedAt: taskClock + 3})
+		_, err = f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.Todo, Unpoison: true, UpdatedBy: "master", UpdatedAt: taskClock + 3})
 		wantCode(t, err, domain.CodeValidation, "")
 	})
 
@@ -415,7 +415,7 @@ func tasks(t *testing.T, newStore Factory) {
 	t.Run("SetStatusAtAnotherVersionIsStale", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", nil)
-		_, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Backlog, UpdatedBy: "bob", UpdatedAt: taskClock})
+		_, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Blocked, UpdatedBy: "bob", UpdatedAt: taskClock})
 		wantStale(t, err, 2, 1)
 		got, _ := f.s.GetTask(ctx, f.project, task.ID)
 		sameTask(t, got, task)
@@ -425,13 +425,13 @@ func tasks(t *testing.T, newStore Factory) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", nil)
 		other := newBoard(t, f.s, f.project, nil)
-		_, err := f.s.SetStatus(ctx, f.project, "T-9", 1, store.StatusChange{Status: domain.Backlog, UpdatedBy: "bob", UpdatedAt: taskClock})
+		_, err := f.s.SetStatus(ctx, f.project, "T-9", 1, store.StatusChange{Status: domain.Blocked, UpdatedBy: "bob", UpdatedAt: taskClock})
 		wantCode(t, err, domain.CodeNotFound, "Task")
 		_, err = f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: "DEAD_LETTER", UpdatedBy: "bob", UpdatedAt: taskClock})
 		wantCode(t, err, domain.CodeValidation, "")
-		_, err = f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Backlog, UpdatedAt: taskClock})
+		_, err = f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Blocked, UpdatedAt: taskClock})
 		wantCode(t, err, domain.CodeValidation, "")
-		_, err = f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Backlog, ColumnID: other.Columns[0].ID, UpdatedBy: "bob", UpdatedAt: taskClock})
+		_, err = f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Blocked, ColumnID: other.Columns[0].ID, UpdatedBy: "bob", UpdatedAt: taskClock})
 		wantCode(t, err, domain.CodeNotFound, "Column")
 		if got, _ := f.s.GetTask(ctx, f.project, task.ID); got.Version != 1 {
 			t.Fatalf("a refused status write moved the version to %d", got.Version)
@@ -446,9 +446,9 @@ func tasks(t *testing.T, newStore Factory) {
 		if got.OrderKey != "a5" || got.ColumnID != task.ColumnID || got.Version != 2 || got.UpdatedBy != "bob" {
 			t.Fatalf("reordered: %+v", got)
 		}
-		got, err = f.s.SetOrderKey(ctx, f.project, task.ID, 2, "a6", f.col[domain.Backlog], "bob", taskClock+2)
+		got, err = f.s.SetOrderKey(ctx, f.project, task.ID, 2, "a6", f.col[domain.Blocked], "bob", taskClock+2)
 		mustOK(t, err)
-		if got.OrderKey != "a6" || got.ColumnID != f.col[domain.Backlog] || got.Version != 3 {
+		if got.OrderKey != "a6" || got.ColumnID != f.col[domain.Blocked] || got.Version != 3 {
 			t.Fatalf("moved: %+v", got)
 		}
 	})
@@ -479,8 +479,8 @@ func tasks(t *testing.T, newStore Factory) {
 		f.add(t, "a", func(in *store.CreateTaskInput) { in.OrderKey = "a0"; in.Assignee = ptr("bob") })
 		f.add(t, "b", func(in *store.CreateTaskInput) {
 			in.OrderKey = "a1"
-			in.Status = domain.Backlog
-			in.ColumnID = f.col[domain.Backlog]
+			in.Status = domain.Blocked
+			in.ColumnID = f.col[domain.Blocked]
 		})
 		f.add(t, "b2", func(in *store.CreateTaskInput) { in.OrderKey = "a1"; in.RunOf = ptr("T-1") })
 		f.add(t, "d", func(in *store.CreateTaskInput) {
@@ -514,8 +514,8 @@ func tasks(t *testing.T, newStore Factory) {
 			f    store.TaskFilter
 			want []string
 		}{
-			"status":     {store.TaskFilter{BoardID: f.board, Status: ptr(domain.Backlog)}, []string{"T-3"}},
-			"column":     {store.TaskFilter{BoardID: f.board, ColumnID: f.col[domain.Ready]}, []string{"T-2", "T-4", "T-1", "T-5"}},
+			"status":     {store.TaskFilter{BoardID: f.board, Status: ptr(domain.Blocked)}, []string{"T-3"}},
+			"column":     {store.TaskFilter{BoardID: f.board, ColumnID: f.col[domain.Todo]}, []string{"T-2", "T-4", "T-1", "T-5"}},
 			"assignee":   {store.TaskFilter{BoardID: f.board, Assignee: ptr("bob")}, []string{"T-2", "T-5"}},
 			"unassigned": {store.TaskFilter{BoardID: f.board, Unassigned: true}, []string{"T-3", "T-4", "T-1"}},
 			"label":      {store.TaskFilter{BoardID: f.board, Label: "red"}, []string{"T-1", "T-5"}},
@@ -640,13 +640,13 @@ func tasks(t *testing.T, newStore Factory) {
 		f.add(t, "3", func(in *store.CreateTaskInput) { in.Status = domain.Done; in.ColumnID = f.col[domain.Done] })
 		_, counts, err := f.s.GetBoard(ctx, f.project, f.board)
 		mustOK(t, err)
-		if counts[f.col[domain.Ready]] != 2 || counts[f.col[domain.Done]] != 1 || counts[f.col[domain.Backlog]] != 0 {
+		if counts[f.col[domain.Todo]] != 2 || counts[f.col[domain.Done]] != 1 || counts[f.col[domain.Blocked]] != 0 {
 			t.Fatalf("counts %v", counts)
 		}
 		_, err = f.s.RemoveColumn(ctx, f.project, f.board, f.col[domain.Done])
 		wantCode(t, err, domain.CodeValidation, "")
 		// Positive control: an empty column goes.
-		_, err = f.s.RemoveColumn(ctx, f.project, f.board, f.col[domain.Backlog])
+		_, err = f.s.RemoveColumn(ctx, f.project, f.board, f.col[domain.Blocked])
 		mustOK(t, err)
 	})
 }

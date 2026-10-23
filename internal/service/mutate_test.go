@@ -47,7 +47,7 @@ func retitle(f *fixture, task store.Task, version int64, title string) (store.Ta
 // AC1: one mutation writes exactly one task_events, one audit_log and one change_log row.
 func TestMutateWritesOneEventOneAuditOneChange(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	if err := deleteTask(f, task, task.Version); err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestMutateWritesOneEventOneAuditOneChange(t *testing.T) {
 // and bumps the version exactly once.
 func TestMutateUnauditedWritesNoAuditAndBumpsOnce(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	got, err := retitle(f, task, task.Version, "renamed")
 	if err != nil {
@@ -86,7 +86,7 @@ func TestMutateUnauditedWritesNoAuditAndBumpsOnce(t *testing.T) {
 // mutate bumps the version itself when fn wrote nothing versioned (a context item, a heartbeat).
 func TestMutateBumpsWhenFnDoesNot(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "add_context_item", ProjectID: f.project.ID, TaskID: task.ID}, func(t *txn) (int, error) {
 		t.Event(store.EventInput{Type: domain.EventContextAdded})
 		return 0, nil
@@ -103,7 +103,7 @@ func TestMutateBumpsWhenFnDoesNot(t *testing.T) {
 // A second versioned write in one mutation is a bug mutate refuses, rolled back.
 func TestMutateRefusesTwoBumps(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID}, func(t *txn) (int, error) {
 		if _, err := t.Bump(); err != nil {
@@ -122,7 +122,7 @@ func TestMutateRefusesTwoBumps(t *testing.T) {
 // AC2: a stale expectedVersion is STALE with expected and actual, and writes nothing.
 func TestMutateStaleWritesNothing(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	ran := false
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: ptr(task.Version + 7)}, func(t *txn) (int, error) {
@@ -146,12 +146,12 @@ func createTask(f *fixture, key, title string) (store.Task, error) {
 	return mutate(f.ctx, f.c, f.alice, mutation{Tool: "create_task", ProjectID: f.project.ID, IdempotencyKey: key}, func(t *txn) (store.Task, error) {
 		col := ""
 		for _, c := range f.board.Columns {
-			if c.Status == domain.Ready {
+			if c.Status == domain.Todo {
 				col = c.ID
 			}
 		}
 		task, err := t.Tx.CreateTask(f.ctx, store.CreateTaskInput{
-			ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col, Title: title, Status: domain.Ready,
+			ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col, Title: title, Status: domain.Todo,
 			OrderKey: "a0", CreatedBy: t.Caller.Identity, CreatedAt: t.Now.UnixMilli(),
 		})
 		if err != nil {
@@ -210,7 +210,7 @@ func TestMutateIdempotencyExpires(t *testing.T) {
 	}
 }
 
-// A create that lands READY with no assignee rings broadcast, in the project's scope.
+// A create that lands TODO with no assignee rings broadcast, in the project's scope.
 func TestMutateCreateRingsBroadcast(t *testing.T) {
 	f := newFixture(t, Options{})
 	task, err := createTask(f, "", "t")
@@ -231,7 +231,7 @@ func TestMutateCreateRingsBroadcast(t *testing.T) {
 func TestMutateAssignRingsTheAssignee(t *testing.T) {
 	f := newFixture(t, Options{})
 	f.member(t, "bob", domain.RoleWorker)
-	task := f.task(t, domain.Ready, nil)
+	task := f.task(t, domain.Todo, nil)
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID, Version: &task.Version}, func(t *txn) (store.Task, error) {
 		got, err := t.Tx.UpdateTask(f.ctx, f.project.ID, task.ID, task.Version, store.TaskPatch{Assignee: &store.Nullable[string]{Value: ptr("bob")}, UpdatedBy: "alice", UpdatedAt: t.Now.UnixMilli()})
 		if err != nil {
@@ -263,7 +263,7 @@ func TestDoorbellsFor(t *testing.T) {
 		}
 		return out
 	}
-	readyBob, readyNone := task(domain.Ready, ptr("bob")), task(domain.Ready, nil)
+	todoBob, todoNone := task(domain.Todo, ptr("bob")), task(domain.Todo, nil)
 	blockedBob, blockedNone := task(domain.Blocked, ptr("bob")), task(domain.Blocked, nil)
 	for _, c := range []struct {
 		name      string
@@ -272,18 +272,18 @@ func TestDoorbellsFor(t *testing.T) {
 		unblocked bool
 		want      []string
 	}{
-		{"create READY unassigned", nil, readyNone, false, []string{"broadcast:"}},
-		{"create BACKLOG", nil, task(domain.Backlog, nil), false, []string{}},
-		{"gains an assignee", &readyNone, readyBob, false, []string{"assigned:bob"}},
-		{"assignee changes", &readyBob, task(domain.Ready, ptr("carol")), false, []string{"assigned:carol"}},
-		{"claim (IN_PROGRESS, gains caller)", &readyNone, task(domain.InProgress, ptr("bob")), false, []string{"assigned:bob"}},
-		{"release to READY unassigned", ptr(task(domain.InProgress, ptr("bob"))), readyNone, false, []string{"broadcast:"}},
-		{"READY loses its assignee", &readyBob, readyNone, false, []string{"broadcast:"}},
-		{"auto-unblock, assigned", &blockedBob, readyBob, true, []string{"assigned:bob"}},
-		{"auto-unblock, unassigned", &blockedNone, readyNone, true, []string{"broadcast:"}},
-		{"READY by a move, assigned: no ring", &blockedBob, readyBob, false, []string{}},
-		{"no change", &readyBob, readyBob, true, []string{}},
-		{"to BLOCKED", &readyNone, blockedNone, false, []string{}},
+		{"create TODO unassigned", nil, todoNone, false, []string{"broadcast:"}},
+		{"a landing outside TODO rings nothing", nil, task(domain.Blocked, nil), false, []string{}},
+		{"gains an assignee", &todoNone, todoBob, false, []string{"assigned:bob"}},
+		{"assignee changes", &todoBob, task(domain.Todo, ptr("carol")), false, []string{"assigned:carol"}},
+		{"claim (IN_PROGRESS, gains caller)", &todoNone, task(domain.InProgress, ptr("bob")), false, []string{"assigned:bob"}},
+		{"release to TODO unassigned", ptr(task(domain.InProgress, ptr("bob"))), todoNone, false, []string{"broadcast:"}},
+		{"TODO loses its assignee", &todoBob, todoNone, false, []string{"broadcast:"}},
+		{"auto-unblock, assigned", &blockedBob, todoBob, true, []string{"assigned:bob"}},
+		{"auto-unblock, unassigned", &blockedNone, todoNone, true, []string{"broadcast:"}},
+		{"TODO by a move, assigned: no ring", &blockedBob, todoBob, false, []string{}},
+		{"no change", &todoBob, todoBob, true, []string{}},
+		{"to BLOCKED", &todoNone, blockedNone, false, []string{}},
 	} {
 		if got := kinds(doorbellsFor(c.before, c.after, c.unblocked)); !slices.Equal(got, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
@@ -294,7 +294,7 @@ func TestDoorbellsFor(t *testing.T) {
 // Every domain code passes through unchanged, and the failed mutation writes nothing.
 func TestMutateEveryCodePassesThrough(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	for _, code := range domain.AllCodes() {
 		_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID}, func(t *txn) (int, error) {
@@ -318,7 +318,7 @@ func TestMutateEveryCodePassesThrough(t *testing.T) {
 // A non-domain error is INTERNAL, logged whole; its text stays out of the client's message.
 func TestMutateForeignErrorIsInternal(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID}, func(t *txn) (int, error) {
 		return 0, errors.New("disk on fire")
 	})
@@ -331,7 +331,7 @@ func TestMutateForeignErrorIsInternal(t *testing.T) {
 // A panic in fn is INTERNAL with the stack logged, and what fn wrote before it is rolled back.
 func TestMutatePanicIsInternalAndRollsBack(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	before := f.count(t)
 	_, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "update_task", ProjectID: f.project.ID, TaskID: task.ID}, func(t *txn) (int, error) {
 		if _, err := t.Bump(); err != nil {

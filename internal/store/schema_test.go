@@ -272,7 +272,7 @@ const (
 	fixtureProject = `INSERT INTO projects (id, name, created_by, created_at) VALUES ('P-1', 'p', 'u', 1)`
 	fixtureBoard   = `INSERT INTO boards (project_id, id, name, created_by, created_at) VALUES ('P-1', 'B-1', 'b', 'u', 1)`
 	fixtureTask    = `INSERT INTO tasks (project_id, id, board_id, column_id, title, description, status, order_key, search_tokens, created_by, created_at, updated_by, updated_at)
-		VALUES ('P-1', 'T-1', 'B-1', 'C-1', 'Rotate the frobnicator', 'quuxly described', 'READY', 'a0', 'zorblat', 'u', 1, 'u', 1)`
+		VALUES ('P-1', 'T-1', 'B-1', 'C-1', 'Rotate the frobnicator', 'quuxly described', 'TODO', 'a0', 'zorblat', 'u', 1, 'u', 1)`
 )
 
 // On SQLite the FTS5 index over tasks.search_body finds a task, through the generated SearchTasks,

@@ -28,7 +28,7 @@ func TestMutateIdempotencyKeyIsPerTool(t *testing.T) {
 // Review round 1, B2: a supplied version 0 is checked, and STALE (versions start at 1).
 func TestMutateVersionZeroIsStale(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Backlog, nil)
+	task := f.task(t, domain.Done, nil)
 	task, err := retitle(f, task, task.Version, "v2")
 	if err != nil {
 		t.Fatal(err)
@@ -65,8 +65,8 @@ func (f *fixture) assign(t *testing.T, task store.Task, to string) store.Change 
 func TestMutateAssignedScopeResolvesTheAssignee(t *testing.T) {
 	f := newFixture(t, Options{})
 	f.member(t, "bob", domain.RoleWorker)
-	member := f.assign(t, f.task(t, domain.Ready, nil), "bob")
-	label := f.assign(t, f.task(t, domain.Ready, nil), "builder-R0-21")
+	member := f.assign(t, f.task(t, domain.Todo, nil), "bob")
+	label := f.assign(t, f.task(t, domain.Todo, nil), "builder-R0-21")
 	t.Logf("member assignee -> scope %q; label assignee -> scope %q", member.Scope, label.Scope)
 	if member.Kind != DoorbellAssigned || member.Scope != "bob" {
 		t.Fatalf("member assignee row %+v, want scope bob", member)
@@ -79,10 +79,10 @@ func TestMutateAssignedScopeResolvesTheAssignee(t *testing.T) {
 // Review round 1, B4: a create that rings nobody still names its task and board.
 func TestMutateChangedRowNamesTheCreatedTask(t *testing.T) {
 	f := newFixture(t, Options{})
-	backlog := f.column(t, domain.Backlog)
+	done := f.column(t, domain.Done)
 	task, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "create_task", ProjectID: f.project.ID}, func(t *txn) (store.Task, error) {
 		task, err := t.Tx.CreateTask(f.ctx, store.CreateTaskInput{
-			ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: backlog, Title: "b", Status: domain.Backlog,
+			ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: done, Title: "b", Status: domain.Done,
 			OrderKey: "a0", CreatedBy: "alice", CreatedAt: t.Now.UnixMilli(),
 		})
 		if err != nil {
@@ -101,7 +101,7 @@ func TestMutateChangedRowNamesTheCreatedTask(t *testing.T) {
 	if len(ch) != 1 || json.Unmarshal(ch[0].Payload, &p) != nil {
 		t.Fatalf("changes %+v", ch)
 	}
-	t.Logf("BACKLOG create change row: kind %s payload %s", ch[0].Kind, ch[0].Payload)
+	t.Logf("DONE create change row: kind %s payload %s", ch[0].Kind, ch[0].Payload)
 	if ch[0].Kind != ChangeKindChanged || p.TaskID != task.ID || p.BoardID != f.board.ID {
 		t.Fatalf("changed row %s, want taskId %s and boardId %s", ch[0].Payload, task.ID, f.board.ID)
 	}

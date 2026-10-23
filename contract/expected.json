@@ -670,12 +670,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -772,12 +771,11 @@
               "string"
             ],
             "enum": [
-              "BACKLOG",
               "BLOCKED",
               "DONE",
               "IN_PROGRESS",
-              "READY",
-              "REVIEW"
+              "REVIEW",
+              "TODO"
             ]
           },
           "wipLimit": {
@@ -825,12 +823,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "wipLimit": {
@@ -1792,12 +1789,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -2461,12 +2457,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -3141,12 +3136,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -3713,12 +3707,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -3834,12 +3827,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               }
             },
@@ -4322,12 +4314,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -5077,12 +5068,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -5768,12 +5758,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -5949,12 +5938,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               }
             },
@@ -6437,12 +6425,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -6537,12 +6524,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "wipLimit": {
@@ -6619,12 +6605,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -6672,12 +6657,11 @@
                       "string"
                     ],
                     "enum": [
-                      "BACKLOG",
                       "BLOCKED",
                       "DONE",
                       "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
+                      "REVIEW",
+                      "TODO"
                     ]
                   }
                 }
@@ -8442,12 +8426,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -9798,12 +9781,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -9978,12 +9960,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -10031,12 +10012,11 @@
                       "string"
                     ],
                     "enum": [
-                      "BACKLOG",
                       "BLOCKED",
                       "DONE",
                       "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
+                      "REVIEW",
+                      "TODO"
                     ]
                   }
                 }
@@ -10282,12 +10262,11 @@
                           "string"
                         ],
                         "enum": [
-                          "BACKLOG",
                           "BLOCKED",
                           "DONE",
                           "IN_PROGRESS",
-                          "READY",
-                          "REVIEW"
+                          "REVIEW",
+                          "TODO"
                         ]
                       }
                     },
@@ -11376,12 +11355,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "title": {
@@ -11443,12 +11421,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -11481,12 +11458,11 @@
                       "string"
                     ],
                     "enum": [
-                      "BACKLOG",
                       "BLOCKED",
                       "DONE",
                       "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
+                      "REVIEW",
+                      "TODO"
                     ]
                   }
                 }
@@ -12014,12 +11990,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -12976,12 +12951,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 }
               },
@@ -13014,12 +12988,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -13044,12 +13017,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               }
             },
@@ -13230,12 +13202,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 }
               },
@@ -13337,12 +13308,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 }
               },
@@ -13891,12 +13861,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -14772,12 +14741,11 @@
                           "string"
                         ],
                         "enum": [
-                          "BACKLOG",
                           "BLOCKED",
                           "DONE",
                           "IN_PROGRESS",
-                          "READY",
-                          "REVIEW"
+                          "REVIEW",
+                          "TODO"
                         ]
                       },
                       "wipLimit": {
@@ -14825,12 +14793,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     }
                   }
@@ -15892,12 +15859,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "taskId": {
@@ -16635,12 +16601,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "title": {
@@ -16753,12 +16718,11 @@
               "string"
             ],
             "enum": [
-              "BACKLOG",
               "BLOCKED",
               "DONE",
               "IN_PROGRESS",
-              "READY",
-              "REVIEW"
+              "REVIEW",
+              "TODO"
             ]
           },
           "unblockedOnly": {
@@ -17265,12 +17229,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "title": {
@@ -17403,12 +17366,11 @@
               "string"
             ],
             "enum": [
-              "BACKLOG",
               "BLOCKED",
               "DONE",
               "IN_PROGRESS",
-              "READY",
-              "REVIEW"
+              "REVIEW",
+              "TODO"
             ]
           },
           "version": {
@@ -17902,12 +17864,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -18766,12 +18727,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "title": {
@@ -19302,12 +19262,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "title": {
@@ -19838,12 +19797,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "title": {
@@ -20450,12 +20408,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -21032,12 +20989,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -21661,12 +21617,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "title": {
@@ -22193,12 +22148,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -22772,12 +22726,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -23593,12 +23546,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "title": {
@@ -24744,12 +24696,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -24877,12 +24828,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -24930,12 +24880,11 @@
                       "string"
                     ],
                     "enum": [
-                      "BACKLOG",
                       "BLOCKED",
                       "DONE",
                       "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
+                      "REVIEW",
+                      "TODO"
                     ]
                   }
                 }
@@ -25662,12 +25611,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -26647,12 +26595,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "title": {
@@ -27432,12 +27379,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -28010,12 +27956,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -28611,12 +28556,11 @@
                     "string"
                   ],
                   "enum": [
-                    "BACKLOG",
                     "BLOCKED",
                     "DONE",
                     "IN_PROGRESS",
-                    "READY",
-                    "REVIEW"
+                    "REVIEW",
+                    "TODO"
                   ]
                 },
                 "title": {
@@ -29143,12 +29087,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {
@@ -29245,12 +29188,11 @@
               "string"
             ],
             "enum": [
-              "BACKLOG",
               "BLOCKED",
               "DONE",
               "IN_PROGRESS",
-              "READY",
-              "REVIEW"
+              "REVIEW",
+              "TODO"
             ]
           },
           "wipLimit": {
@@ -29306,12 +29248,11 @@
                         "string"
                       ],
                       "enum": [
-                        "BACKLOG",
                         "BLOCKED",
                         "DONE",
                         "IN_PROGRESS",
-                        "READY",
-                        "REVIEW"
+                        "REVIEW",
+                        "TODO"
                       ]
                     },
                     "wipLimit": {
@@ -29359,12 +29300,11 @@
                       "string"
                     ],
                     "enum": [
-                      "BACKLOG",
                       "BLOCKED",
                       "DONE",
                       "IN_PROGRESS",
-                      "READY",
-                      "REVIEW"
+                      "REVIEW",
+                      "TODO"
                     ]
                   }
                 }
@@ -31351,12 +31291,11 @@
                   "string"
                 ],
                 "enum": [
-                  "BACKLOG",
                   "BLOCKED",
                   "DONE",
                   "IN_PROGRESS",
-                  "READY",
-                  "REVIEW"
+                  "REVIEW",
+                  "TODO"
                 ]
               },
               "title": {

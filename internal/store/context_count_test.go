@@ -28,7 +28,7 @@ func taskContextStatements(t *testing.T, s Store) {
 	task := func(title string) Task {
 		t.Helper()
 		tk, err := s.CreateTask(ctx, CreateTaskInput{ProjectID: p.ID, BoardID: b.ID, ColumnID: b.Columns[1].ID, Title: title,
-			Status: domain.Ready, OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+			Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
 		if err != nil {
 			t.Fatal(err)
 		}

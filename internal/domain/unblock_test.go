@@ -15,9 +15,9 @@ func TestUnblock(t *testing.T) {
 			t.Fatal("a poisoned task whose last dependency cleared must stay BLOCKED")
 		}
 	})
-	t.Run("control: non-poison with empty blockedBy becomes READY", func(t *testing.T) {
+	t.Run("control: non-poison with empty blockedBy becomes TODO", func(t *testing.T) {
 		if !AutoReady(nil, Blocked, "dependency") || !AutoReady([]string{}, Blocked, "") {
-			t.Fatal("a dependency-blocked task whose last blocker cleared must become READY")
+			t.Fatal("a dependency-blocked task whose last blocker cleared must become TODO")
 		}
 	})
 	t.Run("still blocked by another task", func(t *testing.T) {

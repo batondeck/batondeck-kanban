@@ -64,7 +64,7 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 //  4. root's parent: root stripped from its blockedBy and the same unblock;
 //  5. each member's task-scope memory and attachments, then the task (its events, context items,
 //     summary, edges, comments and follow-ups go with it: the schema cascades);
-//  6. a run's parent: if no run is left and it is racing, racing:false and READY (cancel_runs);
+//  6. a run's parent: if no run is left and it is racing, racing:false and TODO (cancel_runs);
 //  7. the board-level task.deleted {id, title, status} on root, a change-log row per deleted task.
 //
 // It returns the blob hashes the deleted attachments held. Idempotency keys are kept: they are keyed
@@ -230,9 +230,9 @@ func (t *txn) deleteAttachments(x store.Task) ([]string, error) {
 }
 
 // settleRace is cancel_runs's parent write (conductor runs.ts:540-555) when a run of parentID was
-// deleted and none is left: racing false, raceOpenedAt cleared, READY in the board's READY column,
+// deleted and none is left: racing false, raceOpenedAt cleared, TODO in the board's TODO column,
 // the lease dropped. Event run.discarded {runId, reason: "deleted"} on the parent whenever it is
-// racing. The parent moves two versions when it was not READY (UpdateTask, then SetStatus): no store
+// racing. The parent moves two versions when it was not TODO (UpdateTask, then SetStatus): no store
 // call writes racing and status together.
 func (t *txn) settleRace(parentID, runID string) error {
 	p, err := t.Tx.GetTask(t.ctx, t.ProjectID, parentID)
@@ -262,19 +262,19 @@ func (t *txn) settleRace(parentID, runID string) error {
 	if err != nil {
 		return err
 	}
-	if after.Status != domain.Ready || after.Claim != nil {
+	if after.Status != domain.Todo || after.Claim != nil {
 		board, _, err := t.Tx.GetBoard(t.ctx, p.ProjectID, p.BoardID)
 		if err != nil {
 			return err
 		}
 		if after, err = t.Tx.SetStatus(t.ctx, p.ProjectID, p.ID, after.Version, store.StatusChange{
-			Status: domain.Ready, ColumnID: readyColumn(board), ClearClaim: true, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
+			Status: domain.Todo, ColumnID: todoColumn(board), ClearClaim: true, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
 		}); err != nil {
 			return err
 		}
 	}
 	bells := doorbellsFor(&p, after, false)
-	if len(bells) == 0 && after.Status == domain.Ready && after.Assignee == nil {
+	if len(bells) == 0 && after.Status == domain.Todo && after.Assignee == nil {
 		// Back in the claim pool with nobody named: cancel_runs's frontier signal (runs.ts:556-558).
 		bells = []Doorbell{{Kind: DoorbellBroadcast, TaskID: p.ID, BoardID: p.BoardID}}
 	}

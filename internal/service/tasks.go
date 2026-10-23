@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"time"
 
@@ -138,9 +139,10 @@ func callerAgent(c domain.Caller) *string {
 	return &a
 }
 
-// Create is create_task (conductor tasks.ts:102-160): the task lands in columnId, or the board's
-// first column, with that column's status; its T-n is the project's next (the store's counter, never
-// reused). Event task.created {title}; a READY landing rings broadcast (it has no assignee).
+// Create is create_task (conductor tasks.ts:102-160): the task lands TODO (ADR-0005), in columnId,
+// which must be a TODO column, or the board's first TODO column; its T-n is the project's next (the
+// store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
+// assignee).
 func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels}, false)
 	if err != nil {
@@ -206,13 +208,17 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 		}
 		var col *store.Column
 		for i := range board.Columns { // the store keeps them in (order, id)
-			if req.ColumnID == "" || board.Columns[i].ID == req.ColumnID {
+			if req.ColumnID == "" && board.Columns[i].Status == domain.Todo || req.ColumnID != "" && board.Columns[i].ID == req.ColumnID {
 				col = &board.Columns[i]
 				break
 			}
 		}
 		if col == nil {
-			return CreateTaskResp{}, domain.Validation("Board has no columns / column not found", map[string]any{"columnId": req.ColumnID})
+			return CreateTaskResp{}, domain.Validation("Board has no TODO column / column not found", map[string]any{"columnId": req.ColumnID})
+		}
+		// ADR-0005: a created task is never a draft, so it lands TODO and nowhere else.
+		if col.Status != domain.Todo {
+			return CreateTaskResp{}, domain.Validation(fmt.Sprintf("A task is created in a TODO column; column %s is %s", col.ID, col.Status), map[string]any{"columnId": col.ID, "status": col.Status})
 		}
 		if req.ParentTaskID != nil {
 			if _, err := t.Tx.GetTask(ctx, req.ProjectID, *req.ParentTaskID); err != nil {
@@ -274,7 +280,7 @@ func (s tasksSvc) Get(ctx context.Context, caller domain.Caller, req GetTaskReq)
 // Update is update_task (conductor tasks.ts:258-343): version-checked by mutate (STALE), the named
 // patch fields written, absent ones kept, a null clearing a nullable one. customFields replaces the
 // map whole, as conductor's txn.set does. Event task.updated {fields}, the fields in conductor's
-// order. Doorbell: assigned on a new assignee; broadcast when a READY task loses its assignee.
+// order. Doorbell: assigned on a new assignee; broadcast when a TODO task loses its assignee.
 // autoAssign's resolution is not carried (no agent-profile store): autoAssign beside patch.assignee
 // is conductor's VALIDATION, and autoAssign alone is VALIDATION too.
 func (s tasksSvc) Update(ctx context.Context, caller domain.Caller, req UpdateTaskReq) (UpdateTaskResp, error) {

@@ -40,7 +40,7 @@ func claims(t *testing.T, newStore Factory) {
 	t.Run("ClaimTaskTakesTheLeaseMovesToInProgressAndBumps", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", nil)
-		task, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Ready, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock - 1)}, UpdatedBy: "alice", UpdatedAt: taskClock})
+		task, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.Todo, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock - 1)}, UpdatedBy: "alice", UpdatedAt: taskClock})
 		mustOK(t, err)
 		got, err := f.s.ClaimTask(ctx, f.project, task.ID, 2, f.leaseFor("bob", "a1", "L-1"))
 		mustOK(t, err)
@@ -96,7 +96,7 @@ func claims(t *testing.T, newStore Factory) {
 			t.Fatalf("a racing parent: %v", e.Details)
 		}
 
-		for _, status := range []domain.Status{domain.Backlog, domain.Blocked, domain.Review, domain.Done} {
+		for _, status := range []domain.Status{domain.Blocked, domain.Review, domain.Done} {
 			task := f.add(t, string(status), func(in *store.CreateTaskInput) { in.Status = status })
 			_, err := f.s.ClaimTask(ctx, f.project, task.ID, 1, f.leaseFor("bob", "a1", "L-4"))
 			wantCode(t, err, domain.CodeInvalidTransition, "")
@@ -238,15 +238,15 @@ func claims(t *testing.T, newStore Factory) {
 		scored := add("scored", func(in *store.CreateTaskInput) { in.Priority = domain.PriorityLow; in.OrderKey = "a9" })    // T-5
 		_, err := f.s.UpdateTask(ctx, f.project, scored.ID, 1, store.TaskPatch{Score: ptr(5.0), UpdatedBy: "alice", UpdatedAt: taskClock})
 		mustOK(t, err)
-		// Not claimable: backlog, a live lease, a backoff ahead, poisoned, racing.
-		add("backlog", func(in *store.CreateTaskInput) { in.Status = domain.Backlog }) // T-6
-		held := add("held", nil)                                                       // T-7: READY again, its lease still live
+		// Not claimable: in review, a live lease, a backoff ahead, poisoned, racing.
+		add("in review", func(in *store.CreateTaskInput) { in.Status = domain.Review }) // T-6
+		held := add("held", nil)                                                        // T-7: TODO again, its lease still live
 		_, err = f.s.ClaimTask(ctx, f.project, held.ID, 1, f.leaseFor("bob", "a1", "L-1"))
 		mustOK(t, err)
-		_, err = f.s.SetStatus(ctx, f.project, held.ID, 2, store.StatusChange{Status: domain.Ready, ColumnID: f.col[domain.Ready], UpdatedBy: "alice", UpdatedAt: taskClock})
+		_, err = f.s.SetStatus(ctx, f.project, held.ID, 2, store.StatusChange{Status: domain.Todo, ColumnID: f.col[domain.Todo], UpdatedBy: "alice", UpdatedAt: taskClock})
 		mustOK(t, err)
 		backoff := add("backoff", nil) // T-8
-		_, err = f.s.SetStatus(ctx, f.project, backoff.ID, 1, store.StatusChange{Status: domain.Ready, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock + 1)}, UpdatedBy: "alice", UpdatedAt: taskClock})
+		_, err = f.s.SetStatus(ctx, f.project, backoff.ID, 1, store.StatusChange{Status: domain.Todo, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock + 1)}, UpdatedBy: "alice", UpdatedAt: taskClock})
 		mustOK(t, err)
 		poison := add("poison", nil) // T-9
 		_, err = f.s.SetStatus(ctx, f.project, poison.ID, 1, store.StatusChange{Status: domain.Blocked, BlockedReason: domain.BlockedReasonPoison, UpdatedBy: "alice", UpdatedAt: taskClock})
@@ -256,7 +256,7 @@ func claims(t *testing.T, newStore Factory) {
 		mustOK(t, err)
 		// A backoff that has passed does not hold a task back.
 		past := add("past backoff", func(in *store.CreateTaskInput) { in.OrderKey = "a3" }) // T-11
-		_, err = f.s.SetStatus(ctx, f.project, past.ID, 1, store.StatusChange{Status: domain.Ready, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock)}, UpdatedBy: "alice", UpdatedAt: taskClock})
+		_, err = f.s.SetStatus(ctx, f.project, past.ID, 1, store.StatusChange{Status: domain.Todo, NextEligibleAt: &store.Nullable[int64]{Value: ptr(taskClock)}, UpdatedBy: "alice", UpdatedAt: taskClock})
 		mustOK(t, err)
 
 		want := []string{scored.ID, urgent.ID, normalA.ID, normalB.ID, past.ID, lowFirst.ID}
@@ -338,7 +338,7 @@ func claims(t *testing.T, newStore Factory) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "second", func(in *store.CreateTaskInput) { in.OrderKey = "a2" })
 		f.add(t, "first", func(in *store.CreateTaskInput) { in.OrderKey = "a1" })
-		f.add(t, "skipped", func(in *store.CreateTaskInput) { in.Status = domain.Backlog })
+		f.add(t, "skipped", func(in *store.CreateTaskInput) { in.Status = domain.Review })
 		var won []string
 		for i := range 3 {
 			task, ok, err := f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("bob", fmt.Sprint("a", i), fmt.Sprint("L-", i)))

@@ -11,7 +11,7 @@ func init() { register("boards", RegisterBoards) }
 func RegisterBoards(s *mcp.Server, svc service.Services) {
 	b := svc.Boards
 	mcp.Tool(s, "boards", "create_board",
-		"Create a board in a project. Without `columns` it gets one column per status (Backlog, Ready, In progress, Blocked, Review, Done), Review left out when the project's review is off.",
+		"Create a board in a project. Without `columns` it gets one column per status (To do, In progress, Blocked, Review, Done), Review left out when the project's review is off.",
 		b.Create)
 	mcp.Tool(s, "boards", "list_boards",
 		"List the boards in a project.",
