@@ -41,6 +41,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The ten context MCP tools (R1.6): `add_context_item`, `get_task_context`, `set_summary`,
+  `write_memory`, `read_memory`, `recall_memory`, `add_dependency`, `remove_dependency`,
+  `add_subtask` and `list_subtasks`, registered in `internal/mcp/tools/context.go`, each one
+  `service.Context` call (R1.17's semantics), wired in `serve`'s composition. Their input and output schemas equal
+  `contract/expected.json`; each description is at most 200 characters. `get_task_context`'s
+  `resume` is always `null` until the resume scan is ported (P-117), and its description says so
+  and that `null` is not permission to start a fresh branch, where conductor's text says it is.
 - The six task tools (R1.2): `create_task`, `get_task`, `update_task`, `move_task`, `list_tasks` and
   `delete_task`, registered in `internal/mcp/tools/tasks.go`, each one `service.Tasks` call; `serve`
   wires `Tasks` into the MCP services. Their schemas equal `contract/expected.json`; `create_task` takes
