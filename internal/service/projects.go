@@ -40,8 +40,7 @@ func (p projects) Create(ctx context.Context, caller domain.Caller, req CreatePr
 			return CreateProjectResp{}, err
 		}
 		t.ProjectID = pr.ID
-		// DEVIATION: the contract names a project.created event; the store's Events area appends only
-		// task and board events (AppendBoardEvent requires a board), so none is written.
+		// No event, as conductor's create_project appends none.
 		return CreateProjectResp{ProjectID: pr.ID}, nil
 	})
 }

@@ -10,7 +10,8 @@ import (
 type Projects interface {
 	// Create is create_project.
 	// Tier: any authenticated caller (not tenant-scoped); the caller becomes the project's admin.
-	// Event: project.created. Audit: none. Doorbell: none. Replays on idempotencyKey.
+	// Event: none (conductor's create_project appends none). Audit: none. Doorbell: none. Replays on
+	// idempotencyKey.
 	Create(ctx context.Context, caller domain.Caller, req CreateProjectReq) (CreateProjectResp, error)
 
 	// Get is get_project.

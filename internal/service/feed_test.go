@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -203,6 +204,7 @@ func TestBoardFeed(t *testing.T) {
 	}
 	e := page.Events[0]
 	// Newest first, the store's order (P-99): a later event leads, and the cursor pages older.
+	// Equal timestamps order by ts DESC, id DESC over random ids, not by insertion, so this event is a minute later.
 	later, err := f.st.AppendBoardEvent(f.ctx, store.EventInput{ProjectID: f.project.ID, BoardID: got.Board.ID, Actor: "alice", Type: domain.EventTaskDeleted, Ts: f.clock.now().UnixMilli() + 60_000})
 	if err != nil {
 		t.Fatal(err)
@@ -232,5 +234,106 @@ func TestBoardFeed(t *testing.T) {
 	empty, err := f.c.Feed().BoardFeed(f.ctx, f.alice, BoardFeedReq{ProjectID: f.project.ID, BoardID: f.board.ID})
 	if err != nil || empty.Events == nil || len(empty.Events) != 0 {
 		t.Fatalf("a board with no events: %+v (err %v)", empty, err)
+	}
+}
+
+// fillAll gives every pointer, slice, map and scalar reachable from v a non-zero value, so a walk
+// over it is never vacuous: a field added to the cached type later is filled with no edit here.
+func fillAll(t *testing.T, path string, v reflect.Value) {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		fillAll(t, path+".*", v.Elem())
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 2, 2))
+		for i := range 2 {
+			fillAll(t, fmt.Sprintf("%s[%d]", path, i), v.Index(i))
+		}
+	case reflect.Map:
+		v.Set(reflect.MakeMap(v.Type()))
+		k, e := reflect.New(v.Type().Key()).Elem(), reflect.New(v.Type().Elem()).Elem()
+		fillAll(t, path+"[key]", k)
+		fillAll(t, path+"[]", e)
+		v.SetMapIndex(k, e)
+	case reflect.Struct:
+		for i := range v.NumField() {
+			if !v.Type().Field(i).IsExported() {
+				t.Fatalf("%s.%s is unexported: fillAll cannot populate it", path, v.Type().Field(i).Name)
+			}
+			fillAll(t, path+"."+v.Type().Field(i).Name, v.Field(i))
+		}
+	case reflect.String:
+		v.SetString("x")
+	case reflect.Bool:
+		v.SetBool(true)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		v.SetFloat(1)
+	default:
+		t.Fatalf("%s is a %s: fillAll cannot populate it, so the alias walk cannot judge it", path, v.Kind())
+	}
+}
+
+// aliasWalk reports every pointer, slice or map backing store a and b share at any depth, and every
+// reference a holds empty where b does not (a copy that dropped it).
+func aliasWalk(path string, a, b reflect.Value, shared, dropped *[]string) {
+	switch a.Kind() {
+	case reflect.Pointer:
+		if a.IsNil() != b.IsNil() {
+			*dropped = append(*dropped, path)
+			return
+		}
+		if a.IsNil() {
+			return
+		}
+		if a.Pointer() == b.Pointer() {
+			*shared = append(*shared, path)
+		}
+		aliasWalk(path+".*", a.Elem(), b.Elem(), shared, dropped)
+	case reflect.Slice, reflect.Map:
+		if a.Len() != b.Len() {
+			*dropped = append(*dropped, path)
+			return
+		}
+		if a.Len() > 0 && a.Pointer() == b.Pointer() {
+			*shared = append(*shared, path)
+		}
+		if a.Kind() == reflect.Slice {
+			for i := range a.Len() {
+				aliasWalk(fmt.Sprintf("%s[%d]", path, i), a.Index(i), b.Index(i), shared, dropped)
+			}
+			return
+		}
+		for _, k := range a.MapKeys() {
+			if bv := b.MapIndex(k); bv.IsValid() {
+				aliasWalk(fmt.Sprintf("%s[%v]", path, k), a.MapIndex(k), bv, shared, dropped)
+			} else {
+				*dropped = append(*dropped, fmt.Sprintf("%s[%v]", path, k))
+			}
+		}
+	case reflect.Struct:
+		for i := range a.NumField() {
+			aliasWalk(path+"."+a.Type().Field(i).Name, a.Field(i), b.Field(i), shared, dropped)
+		}
+	}
+}
+
+// cloneSnapshot shares no pointer, slice or map with what it copied, at any depth of the cached
+// type: a reference field added to it later is filled by fillAll and judged with no edit here.
+func TestCloneSnapshotSharesNothing(t *testing.T) {
+	var orig BoardSnapshotResp
+	fillAll(t, "snap", reflect.ValueOf(&orig).Elem())
+	clone := cloneSnapshot(orig)
+	if !reflect.DeepEqual(clone, orig) {
+		t.Fatalf("the copy differs from what it copied:\n got %+v\nwant %+v", clone, orig)
+	}
+	var shared, dropped []string
+	aliasWalk("snap", reflect.ValueOf(clone), reflect.ValueOf(orig), &shared, &dropped)
+	if len(shared) > 0 || len(dropped) > 0 {
+		t.Fatalf("cloneSnapshot shares %v and drops %v", shared, dropped)
 	}
 }
