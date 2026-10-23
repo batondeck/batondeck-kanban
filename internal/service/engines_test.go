@@ -31,19 +31,20 @@ func TestProjectMutationsOverTheEnginesWriteTheirAuditRows(t *testing.T) {
 			if err != nil {
 				t.Fatalf("create_project: %v", err)
 			}
-			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: p.ProjectID, IdentityID: "dave", Role: domain.RoleAdmin}); err != nil {
+			id := p.ProjectID
+			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "dave", Role: domain.RoleAdmin}); err != nil {
 				t.Fatalf("add_member: %v", err)
 			}
-			if _, err := c.Boards().Create(ctx, carol, CreateBoardReq{ProjectID: p.ProjectID, Name: "B"}); err != nil {
+			if _, err := c.Boards().Create(ctx, carol, CreateBoardReq{ProjectID: id, Name: "B"}); err != nil {
 				t.Fatalf("create_board: %v", err)
 			}
-			if _, err := c.Projects().UpdateSettings(ctx, carol, UpdateSettingsReq{ProjectID: p.ProjectID, MaxRunsPerTask: 7}); err != nil {
+			if _, err := c.Projects().UpdateSettings(ctx, carol, UpdateSettingsReq{ProjectID: id, MaxRunsPerTask: 7}); err != nil {
 				t.Fatalf("update_settings: %v", err)
 			}
-			if _, err := c.Projects().RemoveMember(ctx, carol, RemoveMemberReq{ProjectID: p.ProjectID, IdentityID: "dave"}); err != nil {
+			if _, err := c.Projects().RemoveMember(ctx, carol, RemoveMemberReq{ProjectID: id, IdentityID: "dave"}); err != nil {
 				t.Fatalf("remove_member: %v", err)
 			}
-			if _, err := c.Projects().Delete(ctx, carol, DeleteProjectReq{ProjectID: p.ProjectID}); err != nil {
+			if _, err := c.Projects().Delete(ctx, carol, DeleteProjectReq{ProjectID: id}); err != nil {
 				t.Fatalf("delete_project: %v", err)
 			}
 			audit, err := st.ListAuditLog(ctx, store.AuditFilter{}, "", 50)
