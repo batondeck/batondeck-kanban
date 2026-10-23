@@ -289,7 +289,7 @@ func TestSearchIndexSQLite(t *testing.T) {
 	q := sqlitedb.New(db)
 	search := func(word string) []string {
 		t.Helper()
-		rows, err := q.SearchTasks(ctx, sqlitedb.SearchTasksParams{SearchBody: word, ProjectID: "P-1"})
+		rows, err := q.SearchTasks(ctx, sqlitedb.SearchTasksParams{Match: `"` + word + `"`, ProjectID: "P-1", Statuses: "[]", PageLimit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,7 +334,7 @@ func TestSearchIndexPostgres(t *testing.T) {
 	q := pgdb.New(c)
 	search := func(word string) []string {
 		t.Helper()
-		rows, err := q.SearchTasks(ctx, pgdb.SearchTasksParams{PlaintoTsquery: word, ProjectID: "P-1"})
+		rows, err := q.SearchTasks(ctx, pgdb.SearchTasksParams{Match: "'" + word + "'", ProjectID: "P-1", Statuses: "[]", PageLimit: 10})
 		if err != nil {
 			t.Fatal(err)
 		}
