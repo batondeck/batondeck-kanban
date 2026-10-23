@@ -1,9 +1,11 @@
 package mcp_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	bk "github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
 )
 
@@ -32,6 +34,19 @@ var expectedPosture = map[string]pinnedPosture{
 	"remove_column":    {tier: domain.TierStructural, tenantScoped: true},
 	"attach_file":      {tier: domain.TierWrite, tenantScoped: true},
 	"list_attachments": {tier: domain.TierRead, tenantScoped: true},
+	// The lease-guarded outcomes and cancel_task carry no tier: the held lease (or, for
+	// cancel_task, the master role or the live lease) is the guard.
+	"claim_task":        {tier: domain.TierWrite, tenantScoped: true},
+	"claim_next":        {tier: domain.TierWrite, tenantScoped: true},
+	"heartbeat_task":    {tier: "", tenantScoped: true},
+	"release_task":      {tier: "", tenantScoped: true},
+	"next_task":         {tier: domain.TierRead, tenantScoped: true},
+	"complete_task":     {tier: "", tenantScoped: true},
+	"block_task":        {tier: "", tenantScoped: true},
+	"fail_task":         {tier: "", tenantScoped: true},
+	"reap_stale_leases": {tier: domain.TierWrite, tenantScoped: true},
+	"handoff_task":      {tier: "", tenantScoped: true},
+	"cancel_task":       {tier: "", tenantScoped: true},
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the
@@ -72,4 +87,86 @@ func TestAuthzMatrix(t *testing.T) {
 		}
 	}
 	t.Logf("%d tools pinned", len(registered))
+}
+
+// landingCase is one call's facts and the statuses the tool must say it lands its task in; ok false
+// is a landing a statuses grant cannot decide from the call.
+type landingCase struct {
+	facts    domain.LandingFacts
+	statuses []domain.Status
+	ok       bool
+}
+
+// expectedLanding pins where each lifecycle tool that moves a task leaves it (domain.Posture.Landing,
+// which a capability grant's statuses are judged against): five states, so a release, a reap, a
+// retry and a handoff land on TODO (ADR-0005). next_task moves nothing and is grant-exempt.
+var expectedLanding = func() map[string][]landingCase {
+	on, off := true, false
+	fixed := func(s ...domain.Status) []landingCase {
+		return []landingCase{{statuses: s, ok: true}}
+	}
+	return map[string][]landingCase{
+		"claim_task":     fixed(domain.InProgress),
+		"claim_next":     fixed(domain.InProgress),
+		"heartbeat_task": fixed(),
+		"release_task":   fixed(domain.Todo),
+		"complete_task": {
+			{facts: domain.LandingFacts{ReviewEnabled: &on}, statuses: []domain.Status{domain.Review}, ok: true},
+			{facts: domain.LandingFacts{ReviewEnabled: &off}, statuses: []domain.Status{domain.Done}, ok: true},
+			{facts: domain.LandingFacts{}, ok: false},
+		},
+		"block_task":        fixed(domain.Blocked),
+		"fail_task":         fixed(domain.Todo, domain.Blocked),
+		"reap_stale_leases": fixed(domain.Todo, domain.Blocked),
+		"handoff_task":      fixed(domain.Todo),
+		"cancel_task":       fixed(domain.Done),
+	}
+}()
+
+// TestLifecycleLandingPinned: each lifecycle tool's landing, read through the manifest, equals its
+// pin; next_task is grant-exempt with no landing; and no landing of any registered tool names a
+// status outside the five (no READY, no BACKLOG).
+func TestLifecycleLandingPinned(t *testing.T) {
+	h := bootTools(t, servicefake.New().Services())
+	byName := map[string]bk.ManifestEntry{}
+	for _, e := range h.Server().Manifest() {
+		byName[e.Name] = e
+	}
+	for name, cases := range expectedLanding {
+		e, ok := byName[name]
+		if !ok || e.Landing == nil || e.GrantExempt {
+			t.Errorf("%s: registered %v, landing set %v, exempt %v; want a governed tool with a landing", name, ok, ok && e.Landing != nil, e.GrantExempt)
+			continue
+		}
+		for _, c := range cases {
+			got, ok := e.Landing(c.facts)
+			if ok != c.ok || !slices.Equal(got, c.statuses) {
+				t.Errorf("%s with %+v lands %v (decidable %v), pinned %v (%v)", name, c.facts, got, ok, c.statuses, c.ok)
+			}
+		}
+	}
+	if e, ok := byName["next_task"]; !ok || !e.GrantExempt || e.Landing != nil {
+		t.Errorf("next_task: registered %v, exempt %v, landing set %v; want grant-exempt with no landing", ok, e.GrantExempt, e.Landing != nil)
+	}
+	on, off := true, false
+	probes := []domain.LandingFacts{{}, {ReviewEnabled: &on}, {ReviewEnabled: &off}}
+	for _, s := range domain.AllStatuses() {
+		probes = append(probes, domain.LandingFacts{ToStatus: s})
+	}
+	seen := map[domain.Status]bool{}
+	for _, e := range byName {
+		if e.Landing == nil {
+			continue
+		}
+		for _, f := range probes {
+			got, _ := e.Landing(f)
+			for _, s := range got {
+				seen[s] = true
+				if !slices.Contains(domain.AllStatuses(), s) || s == "READY" || s == "BACKLOG" {
+					t.Errorf("%s lands %q, not one of the five states %v", e.Name, s, domain.AllStatuses())
+				}
+			}
+		}
+	}
+	t.Logf("%d lifecycle landings pinned; statuses landed on by the registered tools: %v", len(expectedLanding), seen)
 }
