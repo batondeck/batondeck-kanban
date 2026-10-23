@@ -1,7 +1,8 @@
 // Package retention is the retention sweep (plan §Performance "Retention is a job, not a request
 // path"), ported from hdtp's services/retention: a timer, never a request, deletes what has
 // outlived its window — memory past its own expiry, change-log rows past ChangeLog, tool_calls rows
-// past ToolCalls. Task events are kept. Each table's delete is bounded per statement and per tick,
+// past ToolCalls, and the blobs no attachment or memory entry references any more. Task events are
+// kept. Each table's delete is bounded per statement and per tick,
 // so one sweep never holds the write lock for long: what a tick leaves, the next one takes.
 //
 // Deliveries and raw webhook bodies are not swept here yet: their Store methods belong to the
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 	Batch = 500
 	// MaxPerTick is the most rows one table loses in one sweep.
 	MaxPerTick = 50_000
+	// BlobGrace is how old an unreferenced blob is before a sweep collects it.
+	BlobGrace = time.Hour
 )
 
 // Store is the slice of the store a sweep deletes through.
@@ -30,6 +34,7 @@ type Store interface {
 	DeleteExpiredMemory(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
+	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
 }
 
 // Windows is how long each table swept by age keeps a row.
@@ -47,19 +52,22 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls int64
+	Memory, ChangeLog, ToolCalls, Blobs int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
-// drops it), and the sweep goes on to the next step.
+// drops it), and the sweep goes on to the next step. CollectBlobs deletes the unreferenced blobs a
+// sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob.
 type Sweeper struct {
-	Store   Store
-	Windows Windows
-	Now     func() time.Time
-	Report  func(step string, err error)
+	Store        Store
+	Windows      Windows
+	Now          func() time.Time
+	Report       func(step string, err error)
+	CollectBlobs func(ctx context.Context, sha256s []string)
 }
 
-// Sweep runs one pass: memory, then the change log, then tool calls.
+// Sweep runs one pass: memory, then the change log, then tool calls, then one Batch of the blobs
+// unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	now := time.Now
 	if s.Now != nil {
@@ -91,6 +99,20 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.ToolCalls = step("tool calls", func(limit int) (int64, error) {
 		return s.Store.DeleteToolCallsOlderThan(ctx, ms-s.Windows.ToolCalls.Milliseconds(), limit)
 	})
+	if s.CollectBlobs != nil {
+		bs, err := s.Store.ListUnreferencedBlobs(ctx, ms-BlobGrace.Milliseconds(), Batch)
+		if err != nil && s.Report != nil && ctx.Err() == nil {
+			s.Report("blobs", err)
+		}
+		hashes := make([]string, len(bs))
+		for i, b := range bs {
+			hashes[i] = b.SHA256
+		}
+		if len(hashes) > 0 {
+			s.CollectBlobs(ctx, hashes)
+		}
+		out.Blobs = int64(len(hashes))
+	}
 	return out
 }
 

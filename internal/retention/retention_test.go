@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,10 @@ func (f *fake) DeleteToolCallsOlderThan(_ context.Context, _ int64, limit int) (
 	return f.del("tool calls", limit)
 }
 
+func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
+	return nil, nil
+}
+
 // Each table loses at most MaxPerTick rows a sweep, Batch per statement; a step that fails is
 // reported and the next one still runs.
 func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
@@ -138,5 +143,58 @@ func TestRunSweepsAtOnceThenOnTheTimer(t *testing.T) {
 	<-done
 	if n := f.calls["tool calls"] / (MaxPerTick / Batch); n < 3 {
 		t.Fatalf("%d sweeps in 70 ms at a 20 ms interval, want at least 3", n)
+	}
+}
+
+// The blob step, on memstore and both engines: one sweep hands CollectBlobs the blob unreferenced for
+// BlobGrace, and neither a younger unreferenced one nor an old one an attachment holds; with no
+// CollectBlobs no blob is listed.
+func TestASweepCollectsTheUnreferencedBlobs(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			hash := func(c string) string { return strings.Repeat(c, 64) }
+			for _, c := range []string{"a", "b"} {
+				if _, err := s.PutBlob(ctx, hash(c), 1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bd, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "B", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := s.CreateTask(ctx, store.CreateTaskInput{ProjectID: p.ID, BoardID: bd.ID, ColumnID: bd.Columns[0].ID, Status: bd.Columns[0].Status, Title: "t", OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			att, err := s.CreateAttachment(ctx, store.CreateAttachmentInput{ProjectID: p.ID, TaskID: task.ID, MimeType: "text/plain", Bytes: 1, Kind: store.AttachmentFile, CreatedBy: "alice"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetAttachmentReady(ctx, p.ID, task.ID, att.ID, hash("b")); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().Add(BlobGrace + time.Minute)
+			var got [][]string
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }, CollectBlobs: func(_ context.Context, h []string) { got = append(got, h) }}
+			if swept := sw.Sweep(ctx); swept.Blobs != 1 || len(got) != 1 || !slices.Equal(got[0], []string{hash("a")}) {
+				t.Fatalf("swept %+v, collected %v, want the one unreferenced blob", swept, got)
+			}
+			got = nil
+			sw.Now = time.Now
+			if swept := sw.Sweep(ctx); swept.Blobs != 0 || got != nil {
+				t.Fatalf("within the grace: swept %+v, collected %v", swept, got)
+			}
+			sw.Now, sw.CollectBlobs = func() time.Time { return now }, nil
+			if swept := sw.Sweep(ctx); swept.Blobs != 0 {
+				t.Fatalf("with no CollectBlobs: swept %+v", swept)
+			}
+		})
 	}
 }
