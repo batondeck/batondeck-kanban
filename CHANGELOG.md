@@ -48,6 +48,30 @@ Notable changes to batondeck-kanban. The format follows
   `contract/dto_test.go` (`TestDTOCanonical`) infers each tool's DTO pair with jsonschema-go v0.4.3
   (a test-only dependency) and holds it to `contract/expected.json` exactly, for 44 tools: the 42
   CORE tools, `cancel_task` and `list_agent_sessions`. No implementation yet.
+- The service core (`internal/service`, ADR-0003 layer 2): `service.New(store, Options)` returns
+  a `*service.Core` holding the one transaction shape and the one access check every service
+  method runs through. `mutate` (unexported, for the service lanes) runs inside `store.Atomically`
+  (or `WithIdempotency` under a key): the replay, load, STALE with `expected`/`actual` before any
+  write, the pending grant check, fn, exactly one version bump, the `task_events` rows, the audit
+  row when `domain.DescribeAudit` names the tool, and the change-log rows; a panic is INTERNAL with
+  its stack logged, a domain code passes unchanged, any other error is INTERNAL. Every mutation
+  writes at least one change-log row: one per doorbell (`assigned`, scoped to the assignee's
+  identity when it is a project member, else to `service.AgentScope(label)` = `agent:<label>`, since
+  an assignee may be a free-text agent label; `broadcast`, scoped to
+  `service.BroadcastScope(projectID)` = `project:<id>`), else one `changed` row in the project's
+  scope naming the task it wrote. An idempotency key is kept per tool (`<tool>:<key>`), and a
+  supplied expected version 0 is STALE; only the lease-guarded paths pass no version. `authorize` checks the tool's posture (an unclassified
+  tool is FORBIDDEN), workspace admin for AdminOnly "only", membership (a non-member or a missing
+  project is FORBIDDEN), the tier against the member's role capped by the token's, and the
+  capability grant through `domain.CheckGrant`, finishing a task-attribute grant inside `mutate`
+  against the loaded task; membership and grant are cached per (project, identity) for 60 s
+  (`Options.AccessTTL`), dropped at once by `Core.InvalidateAccess`. The grant reader is
+  `Options.Grants` until the store has one. `Core.ToolCalls()` buffers `tool_calls` rows and writes
+  them in batches (100 rows or 1 s), never failing the call it records; `Core.FlushToolCalls` and
+  `Core.Close` drain it. `Core.Sessions()` is `service.Sessions` over the agent- and wake-session
+  areas, with `service.SessionKey` and `service.AgentID`. memstore now implements `store.Audit`,
+  `ToolCalls`, `AgentSessions` and `WakeSessions` and passes their batteries
+  (`TestMemstoreConformance`).
 - The web UI in `web/`: the hosted BatonDeck's React SPA, relicensed by its owner (NOTICE), copied
   and trimmed. Kept: projects, board, task page and drawer, agents, chronicle (index, new, page,
   history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
