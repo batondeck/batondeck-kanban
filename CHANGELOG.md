@@ -54,6 +54,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The Chronicle (R2.6): `create_chronicle_page`, `ingest_chronicle_page`, `edit_chronicle_page` and
+  `delete_chronicle_page` (tier write, grant-governed), and the six chronicle resource templates
+  (`chronicle`, `chronicle-cursor`, `chronicle-page`, `chronicle-history`, `chronicle-history-cursor`,
+  `chronicle-version`), all leaving `contract/pending.json`. `store.Chronicle` is conductor's eleven
+  chronicle Store methods on SQLite, Postgres and memstore, judged by `conformance_chronicle.go`.
+  A version is immutable; a page's head moves only from the version the writer read (`STALE` with
+  `expectedVersionId`/`actualVersionId`, in the statement too, so racing writers land one). A
+  re-ingest is conductor's three-way merge (`domain.MergeVersions`) in one transaction with one
+  idempotency key. Bodies are `chronicle_blobs` rows keyed `<pageId>/<sha256>`, written and deleted in
+  the page's own transaction; they are never files and never signed URLs. A body over
+  `blob.max_bytes` is `VALIDATION` on every write. `delete_chronicle_page` leaves no version and no
+  body of the page. New: `service.Chronicle` (the four tools and the four reads R2.7's routes need).
 - The contract against the live server and the per-call statement pins (R1.10).
   `internal/cli/contract_live_test.go` boots `serve`'s composition (`compose`, `serveUntil`) on every
   engine and reads it with a workspace admin's go-sdk client: `TestLiveContract` holds tools/list,
