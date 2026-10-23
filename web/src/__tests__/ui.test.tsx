@@ -8,6 +8,7 @@ import {
   Section, Spacer, Tag, Tile, roleColor, roleOf,
 } from '../ui.js';
 import type { Status } from '../types.js';
+import { STATUSES } from '../types.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -241,21 +242,20 @@ describe('App shell', () => {
 describe('roleOf — the status → role map (PRD P-3)', () => {
   // Roles exist so analytics never key on a column name or ordinal. If someone adds a status and
   // forgets a role, every derived measure silently loses those tickets — so assert TOTALITY.
-  const ALL: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'REVIEW', 'BLOCKED', 'DONE', 'CANCELLED'];
+  const ALL: readonly Status[] = STATUSES;
 
   it('maps every status to a role', () => {
     for (const s of ALL) expect(roleOf(s), `no role for ${s}`).toBeTruthy();
   });
 
   it('maps the lifecycle statuses to their PRD roles', () => {
-    expect(roleOf('READY')).toBe('ready');
+    expect(roleOf('TODO')).toBe('ready');
     expect(roleOf('IN_PROGRESS')).toBe('doing');
     expect(roleOf('REVIEW')).toBe('handover');
     // BLOCKED → `parked` is the role EXCLUDED from the cost clock. Getting this wrong silently
     // inflates every cycle-time and cost figure in the product.
     expect(roleOf('BLOCKED')).toBe('parked');
     expect(roleOf('DONE')).toBe('accepted');
-    expect(roleOf('CANCELLED')).toBe('rejected');
   });
 });
 

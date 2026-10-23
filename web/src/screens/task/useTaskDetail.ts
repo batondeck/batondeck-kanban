@@ -7,24 +7,27 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../api.js';
+import * as agentsApi from '../../api/agents.js';
+import * as boardsApi from '../../api/boards.js';
+import * as contextApi from '../../api/context.js';
+import * as feedApi from '../../api/feed.js';
+import * as mediaApi from '../../api/media.js';
+import * as projectsApi from '../../api/projects.js';
+import * as tasksApi from '../../api/tasks.js';
 import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
 import type { ActivityEvent, Status, Task } from '../../types.js';
 
-// Default fallback mirroring the core DEFAULT_TRANSITION_TABLE (src/domain/status.ts). The move
-// buttons prefer the project's own settings.transitionTable (per-project overrides) and fall back to
-// this when none is set — so they always offer exactly the transitions the server accepts.
-const NEXT: Record<string, Status[]> = {
-  BACKLOG: ['READY', 'CANCELLED'],
-  READY: ['IN_PROGRESS', 'BACKLOG', 'CANCELLED'],
-  IN_PROGRESS: ['REVIEW', 'BLOCKED', 'READY', 'CANCELLED'],
-  BLOCKED: ['IN_PROGRESS', 'READY'],
+// The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
+// get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
+const NEXT: Record<Status, Status[]> = {
+  TODO: ['IN_PROGRESS'],
+  IN_PROGRESS: ['REVIEW', 'BLOCKED', 'TODO'],
+  BLOCKED: ['IN_PROGRESS', 'TODO'],
   REVIEW: ['DONE', 'IN_PROGRESS'],
   DONE: ['IN_PROGRESS'],
-  CANCELLED: [],
 };
 
 /** Fire a write, refresh the ticket's caches, surface the error instead of throwing. */
@@ -61,34 +64,34 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // a stateful MCP session even under STATELESS_MCP=true, so resource subscriptions fire), keeping
   // task.version fresh for version-checked actions (Pick, Cancel race, follow-ups, moves). This 30s poll
   // is just a backstop for a dropped stream.
-  const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => api.getTask(projectId, taskId), refetchInterval: 30000 });
-  const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => api.getProject(projectId) });
+  const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => tasksApi.getTask(projectId, taskId), refetchInterval: 30000 });
+  const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId) });
   // Known agent names (for the Assignee picker) — assigning a task to one of these routes it to that
   // agent's `wait_for_task { assignee }` loop. Best-effort; the field still accepts any string.
   // Same tunable as Board's fetch — these share the ['agentsessions'] cache key, so the queryFns must
   // agree or the entry flaps between differently-sized lists.
-  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => api.agentSessions(uiSettings().sessionsLimit), staleTime: 60_000 });
+  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit), staleTime: 60_000 });
   const task = taskQ.data?.task;
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [
-      { queryKey: ['ctx', projectId, taskId], queryFn: () => api.taskContext(projectId, taskId) },
-      { queryKey: ['subs', projectId, taskId], queryFn: () => api.listSubtasks(projectId, taskId) },
-      { queryKey: ['mem', projectId, taskId], queryFn: () => api.readMemory(projectId, taskId) },
-      { queryKey: ['att', projectId, taskId], queryFn: () => api.listAttachments(projectId, taskId) },
+      { queryKey: ['ctx', projectId, taskId], queryFn: () => contextApi.taskContext(projectId, taskId) },
+      { queryKey: ['subs', projectId, taskId], queryFn: () => contextApi.listSubtasks(projectId, taskId) },
+      { queryKey: ['mem', projectId, taskId], queryFn: () => contextApi.readMemory(projectId, taskId) },
+      { queryKey: ['att', projectId, taskId], queryFn: () => mediaApi.listAttachments(projectId, taskId) },
     ],
   });
   const histQ = useQuery({
     queryKey: ['hist', projectId, task?.boardId, taskId],
-    queryFn: () => api.feed(projectId, task!.boardId),
+    queryFn: () => feedApi.feed(projectId, task!.boardId),
     enabled: !!task,
   });
   // Board (for column-aware "Move to" labels) + board tasks (to derive which agents are "busy" = hold a
   // live claim). Both reuse the board screen's cache keys, so opening the drawer from the board is free.
-  const boardQ = useQuery({ queryKey: ['board', projectId, task?.boardId], queryFn: () => api.getBoard(projectId, task!.boardId), enabled: !!task });
+  const boardQ = useQuery({ queryKey: ['board', projectId, task?.boardId], queryFn: () => boardsApi.getBoard(projectId, task!.boardId), enabled: !!task });
   // The page size is IN the key (see `boardTasksKey`). At the default limit this is byte-identical to
   // Board's key, so opening the drawer from the board is still free; once the board has loaded more,
   // the two get their own entries instead of fighting over one.
-  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => api.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
+  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => boardsApi.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
   const busyNames = useMemo(() => busyAgentNames(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
   const agentList = useMemo(
     () => buildAgentList(
@@ -124,7 +127,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const run: Run = (p, onSuccess) => {
     setErr(null);
     // Every detail write (labels, fields, summary, subtasks, memory, deps, claim/release/complete/
-    // block/handoff) is marked as a local edit inside api.req(), so the board's "changed under you"
+    // block/handoff) is marked as a local edit inside req() (api/http.ts), so the board's "changed under you"
     // ring keeps meaning "someone ELSE touched this" rather than firing on your own typing.
     return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => { setErr(String(e instanceof Error ? e.message : e)); });
   };
@@ -134,7 +137,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     const mimeType = file.type || 'application/octet-stream';
     const kind = mimeType.startsWith('image/') ? 'image' : mimeType.startsWith('audio/') ? 'audio' : mimeType.startsWith('video/') ? 'video' : 'file';
     void run(
-      api
+      mediaApi
         .createAttachment(projectId, taskId, { fileName: file.name, mimeType, kind, bytes: file.size })
         .then((r) => fetch(r.uploadUrl, { method: 'PUT', headers: { 'content-type': mimeType }, body: file }))
         // Surface a failed object-store PUT instead of leaving the attachment "pending" forever with no feedback.
@@ -146,7 +149,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const move = useTaskAction<Status>(
     projectId,
     (to, t) => ({ ...t, status: to }),
-    (to, t) => api.moveTask(projectId, t.id, t.version, { toStatus: to }),
+    (to, t) => tasksApi.moveTask(projectId, t.id, t.version, { toStatus: to }),
   );
 
   const countdown = useLeaseCountdown(task?.claim?.expiresAt);
@@ -158,7 +161,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
   const subs = subQ.data?.tasks ?? [];
-  const subsDone = subs.filter((s) => s.status === 'DONE' || s.status === 'CANCELLED').length;
+  const subsDone = subs.filter((s) => s.status === 'DONE').length;
   const subsPct = subs.length ? Math.round((subsDone / subs.length) * 100) : 0;
 
   // Dependency chips, split into blocked-by / blocks relative to this task.
@@ -172,13 +175,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const taskById = new Map<string, Task>((boardTasksQ.data?.tasks ?? []).map((t) => [t.id, t]));
 
   // Board-aware move targets — shared by the header status select and the Actions move buttons.
-  // Prefer the board's transition table (per-project overrides), fall back to the default; only offer
-  // statuses that have a column on THIS board once it loads (labels use the column's name).
+  // The board's transition table (the fixed one, read-only), else the default; only offer statuses
+  // that have a column on THIS board once it loads (labels use the column's name).
   const cols = boardQ.data?.board.columns ?? [];
   const colFor = (s: string): { name: string } | undefined => cols.find((c) => c.status === s);
-  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? projectQ.data?.project.settings.transitionTable?.[task.status] ?? NEXT[task.status])) ?? [];
+  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? NEXT[task.status])) ?? [];
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
+
+  // Requeueing a poisoned task (BLOCKED → TODO) is a master's move (plan §Fold 1): master and the two
+  // roles above it. The server decides; this only keeps a worker from being offered a refusal.
+  const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
+  const canRequeue = myRole === 'master' || myRole === 'member' || myRole === 'admin';
 
   const startEdit = (): void => {
     if (!task) return;
@@ -192,7 +200,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ,
+    colFor, moveTargets, agentsQ, histQ, canRequeue,
   };
 }
 

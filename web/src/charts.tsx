@@ -355,7 +355,7 @@ export function RankedBars({ rows }: {
  */
 export function describeQueryError(err: unknown, subject: string): string {
   const msg = err instanceof Error ? err.message : String(err ?? '');
-  // `ApiError` carries the status as a FIELD (api.ts) — its `message` is the server's text and often
+  // `ApiError` carries the status as a FIELD (api/http.ts) — its `message` is the server's text and often
   // has no number in it at all. Reading the field is the difference between five distinct messages
   // and one fallback; the regex is only for errors that are not ApiError.
   const fromField = (err as { status?: unknown })?.status;

@@ -25,7 +25,7 @@ beforeEach(cleanup);
 
 const task = (over: Partial<Task> = {}): Task =>
   ({
-    id: 'T-1', projectId: 'P-1', boardId: 'B-1', columnId: 'c1', status: 'READY',
+    id: 'T-1', projectId: 'P-1', boardId: 'B-1', columnId: 'c1', status: 'TODO',
     title: 'a task', description: '', priority: 'normal', labels: [], requiredCapabilities: [],
     blockedBy: [], blocks: [], artifacts: [], version: 3, assignee: null, claim: null,
     createdBy: 'u', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
@@ -34,7 +34,7 @@ const task = (over: Partial<Task> = {}): Task =>
 
 const mount = (t: Task, selected = false): HTMLElement => {
   const { container } = render(
-    <TaskCard t={t} col={{ status: 'READY' }} selected={selected} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} />,
+    <TaskCard t={t} col={{ status: 'TODO' }} selected={selected} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} />,
   );
   return container;
 };

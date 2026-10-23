@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type
 import type ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Priority, Status } from './types.js';
+import type { Priority, Status, Task } from './types.js';
 import { isAgent } from './types.js';
 import { Icon } from './icons.js';
 import { ToolLogo, toolKey, type ToolKey } from './ToolLogo.js';
@@ -31,13 +31,11 @@ export const mdComponents: Components = {
 export const mdPlugins: ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm];
 
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 const PRIORITY_COLOR: Record<Priority, string> = {
   low: 'var(--text-muted)',
@@ -51,6 +49,23 @@ export function StatusPill({ status }: { status: Status }) {
   return (
     <span className="pill" style={{ color: c, background: `color-mix(in srgb, ${c} 18%, transparent)` }}>
       {status.replace('_', ' ')}
+    </span>
+  );
+}
+
+/** Poison (plan §Fold 1, ADR-0001): BLOCKED with the `poisoned` system label, which the retry policy
+ *  writes beside blockedReason "poison". The label is what the task wire carries; blockedReason is read
+ *  too, for a payload that has it. A dependency-blocked task carries neither. */
+export function isPoisoned(t: Pick<Task, 'status' | 'labels'> & { blockedReason?: string | null }): boolean {
+  return t.status === 'BLOCKED' && (t.labels.includes('poisoned') || t.blockedReason === 'poison');
+}
+
+/** The poison badge, on the Blocked lane's card and in the drawer. `claimAttempts` is absent at zero. */
+export function PoisonBadge({ task }: { task: Pick<Task, 'claimAttempts'> }) {
+  const n = task.claimAttempts ?? 0;
+  return (
+    <span className="badge poisoned" title="Quarantined after failed attempts: only a master can requeue it">
+      Poisoned{n > 0 ? ` · ${n} attempt${n === 1 ? '' : 's'}` : ''}
     </span>
   );
 }

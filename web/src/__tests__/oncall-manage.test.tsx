@@ -1,5 +1,5 @@
 /**
- * MANAGING AN INTEGRATION THAT ALREADY EXISTS — the half of the drawer that did not exist.
+ * MANAGING AN INTEGRATION THAT EXISTS — the half of the drawer that did not exist.
  *
  * Before this, an integration could be created and disabled and nothing else. The screen said so in
  * its own note: *"Change it, the lifecycle mode and the policy toggles from the MCP surface until
@@ -179,7 +179,7 @@ describe('managing an existing integration', () => {
   it('a source-issued secret cannot be rotated by minting one — it asks for the new value', async () => {
     // The core refuses `rotate_integration_secret` with no `externalSecret` on PagerDuty, because a
     // minted whsec_ is a secret PagerDuty will never send. Offering a one-click Rotate for it put
-    // the operator whose PD integration is ALREADY misbehaving one click from breaking it further.
+    // the operator whose PD integration is already misbehaving one click from breaking it further.
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

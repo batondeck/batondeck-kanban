@@ -1,4 +1,4 @@
-// Owner: R2.10 fills these bodies; R1.12 copied the signatures from api.ts, which R1.14 splits onto them.
+// Owner: R2.10 fills these bodies; R1.12 copied the signatures from api.ts.
 import type { CreateIntegrationBody, Delivery, Integration, IntegrationPatchBody, OncallSource } from '../types.js';
 import { req, ON } from './http.js';
 

@@ -2,26 +2,27 @@ import { useMemo, type CSSProperties, useEffect} from 'react';
 import { useDisplayNames } from '../displayNames.js';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
-import { api } from '../api.js';
+import * as agentsApi from '../api/agents.js';
+import * as analyticsApi from '../api/analytics.js';
+import * as boardsApi from '../api/boards.js';
+import * as feedApi from '../api/feed.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar, EmptyState, PageHeader, StatusPill, eventActor, eventVerb, timeAgo } from '../components.js';
 import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
-import { isAgent } from '../types.js';
+import { STATUSES, isAgent } from '../types.js';
 import type { ActivityEvent, Status } from '../types.js';
 import { Cluster, Stack, Tabs } from '../ui.js';
 
-const STATUS_ORDER: Status[] = ['BACKLOG', 'READY', 'IN_PROGRESS', 'BLOCKED', 'REVIEW', 'DONE', 'CANCELLED'];
+const STATUS_ORDER: Status[] = [...STATUSES];
 const STATUS_COLOR: Record<Status, string> = {
-  BACKLOG: 'var(--backlog)',
-  READY: 'var(--ready)',
+  TODO: 'var(--ready)',
   IN_PROGRESS: 'var(--progress)',
   BLOCKED: 'var(--blocked)',
   REVIEW: 'var(--review)',
   DONE: 'var(--done)',
-  CANCELLED: 'var(--text-muted)',
 };
 
 function Stat({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
@@ -66,7 +67,7 @@ export function Analytics() {
 
   const boardsQ = useQuery({
     queryKey: ['boards', projectId],
-    queryFn: () => api.listBoards(projectId),
+    queryFn: () => boardsApi.listBoards(projectId),
     enabled: !!projectId,
   });
   const boardId = boardsQ.data?.boards[0]?.id;
@@ -74,7 +75,7 @@ export function Analytics() {
 
   const boardQ = useQuery({
     queryKey: ['board', projectId, boardId],
-    queryFn: () => api.getBoard(projectId, boardId!),
+    queryFn: () => boardsApi.getBoard(projectId, boardId!),
     enabled: !!projectId && !!boardId,
   });
   /**
@@ -96,7 +97,7 @@ export function Analytics() {
     queryKey: ['tasks', projectId, boardId],
     initialPageParam: '',
     queryFn: ({ pageParam }) =>
-      api.listTasks(projectId, boardId!, {
+      boardsApi.listTasks(projectId, boardId!, {
         limit: String(CENSUS_PAGE),
         ...((pageParam as string) ? { cursor: pageParam as string } : {}),
       }),
@@ -132,14 +133,14 @@ export function Analytics() {
     (censusQ.data?.pages.length ?? 0) >= CENSUS_MAX_PAGES && !!censusQ.hasNextPage;
   const feedQ = useQuery({
     queryKey: ['feed', projectId, boardId],
-    queryFn: () => api.feed(projectId, boardId!),
+    queryFn: () => feedApi.feed(projectId, boardId!),
     enabled: !!projectId && !!boardId,
   });
   // Historical operations (last 7d) from the BigQuery-backed analytics service — what the live tools
   // can't show (throughput trend, per-tool usage, error rate over time). Scoped to this project.
   const opsQ = useQuery({
     queryKey: ['analytics-ops', projectId],
-    queryFn: () => api.analyticsOperations(projectId, 7),
+    queryFn: () => analyticsApi.analyticsOperations(projectId, 7),
     enabled: !!projectId,
     retry: false,
   });
@@ -152,7 +153,7 @@ export function Analytics() {
   const allSessions = can(permissions, SUPERADMIN);
   const sessionsQ = useQuery({
     queryKey: ['agentSessions', allSessions],
-    queryFn: () => api.agentSessions(ui.sessionsLimit, allSessions),
+    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit, allSessions),
     staleTime: 60000,
   });
   const toolMap = useMemo(() => toolByAgent(sessionsQ.data?.sessions ?? []), [sessionsQ.data]);
@@ -188,7 +189,6 @@ export function Analytics() {
     if (!board) return [] as Array<{ id: string; name: string; status: Status; count: number; wipLimit: number | null }>;
     const counts = new Map<string, number>();
     for (const t of tasks) {
-      if (t.status === 'CANCELLED') continue;
       const own = board.columns.find((c) => c.id === t.columnId);
       let cid = t.columnId;
       if (!own || own.status !== t.status) {

@@ -33,7 +33,7 @@ const daysAgo = (n: number): string => new Date(NOW - n * 86_400_000).toISOStrin
 const mk = (over: Partial<Task> = {}): Task =>
   ({
     id: 'T-1', projectId: 'p1', boardId: 'b1', columnId: 'c1',
-    title: 't', description: '', status: 'READY' as Status, priority: 'normal',
+    title: 't', description: '', status: 'TODO' as Status, priority: 'normal',
     assignee: null, labels: [], requiredCapabilities: [], estimate: null, dueAt: null,
     customFields: {}, parentTaskId: null, order: 'a0', blockedBy: [], blocks: [],
     contextSummary: '', version: 1, claim: null, createdBy: 'u',
@@ -110,10 +110,10 @@ describe('creationTrend', () => {
 
   it('stacks by status, and every series spans the whole axis', () => {
     const { days, series } = creationTrend(
-      [mk({ status: 'DONE', createdAt: daysAgo(1) }), mk({ status: 'READY', createdAt: daysAgo(1) })],
+      [mk({ status: 'DONE', createdAt: daysAgo(1) }), mk({ status: 'TODO', createdAt: daysAgo(1) })],
       NOW,
     );
-    expect(series.map((s) => s.key).sort()).toEqual(['DONE', 'READY']);
+    expect(series.map((s) => s.key).sort()).toEqual(['DONE', 'TODO']);
     for (const s of series) expect(s.values).toHaveLength(days.length);
   });
 
@@ -153,7 +153,7 @@ describe('censusCounts', () => {
   it('counts what the tiles claim', () => {
     const c = censusCounts(
       [
-        mk({ status: 'READY', createdAt: daysAgo(1) }),
+        mk({ status: 'TODO', createdAt: daysAgo(1) }),
         mk({ status: 'IN_PROGRESS', createdAt: daysAgo(2) }),
         mk({ status: 'BLOCKED', createdAt: daysAgo(20) }),
         mk({ status: 'DONE', createdAt: daysAgo(20) }),
@@ -165,9 +165,9 @@ describe('censusCounts', () => {
 
   it('does not count a past due date on a finished ticket as overdue', () => {
     const overdue = { dueAt: daysAgo(1) };
-    expect(censusCounts([mk({ ...overdue, status: 'READY' })], NOW).overdue).toBe(1);
+    expect(censusCounts([mk({ ...overdue, status: 'TODO' })], NOW).overdue).toBe(1);
     expect(censusCounts([mk({ ...overdue, status: 'DONE' })], NOW).overdue).toBe(0);
-    expect(censusCounts([mk({ ...overdue, status: 'CANCELLED' })], NOW).overdue).toBe(0);
+    expect(censusCounts([mk({ ...overdue, status: 'DONE', labels: ['cancelled'] })], NOW).overdue).toBe(0);
   });
 
   it('counts only LIVE leases', () => {
@@ -208,8 +208,8 @@ describe('topN and the rankings', () => {
 
   it('countBy skips nulls, and the status/priority rollups agree with the census', () => {
     expect([...countBy([1, 2, 3], (n) => (n === 2 ? null : 'k')).entries()]).toEqual([['k', 2]]);
-    const tasks = [mk({ status: 'READY', priority: 'high' }), mk({ status: 'READY', priority: 'low' })];
-    expect(statusCounts(tasks).get('READY')).toBe(2);
+    const tasks = [mk({ status: 'TODO', priority: 'high' }), mk({ status: 'TODO', priority: 'low' })];
+    expect(statusCounts(tasks).get('TODO')).toBe(2);
     expect(priorityCounts(tasks).get('high')).toBe(1);
   });
 });
