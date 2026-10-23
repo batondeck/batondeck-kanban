@@ -43,6 +43,5 @@
       "send_test_event",
       "update_integration"
     ]
-  },
-  "resourceTemplates": {}
+  }
 }
