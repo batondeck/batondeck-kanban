@@ -41,6 +41,21 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The MCP prompts, readable resources and server instructions (R1.7; ADR-0004, ADR-0005). The four
+  prompts `pick_up_next_task`, `triage_inbox`, `summarize_for_handoff` and `decompose_into_subtasks`
+  take conductor's arguments and text, with the five states: `triage_inbox` makes each TODO task a
+  self-contained brief instead of moving it to a claimable state. Five resource templates under
+  `batondeck://`: `board` (service.Feed board snapshot), `task`, `task-context` (the
+  `get_task_context` briefing), `board-feed` and `board-feed-cursor` (`…/feed{?cursor}`, service.Feed),
+  each read through the service as the caller; conductor's six chronicle templates are not served
+  (R2.6's area) and neither is `conductor://`. A failed read is a JSON-RPC error whose data is the
+  BatonDeckError. The `initialize` instructions describe the board, the five states, `claim_next` and
+  `get_task_context` first, and the two ways a client learns of work: a CLI on the device is rung on
+  its own messaging socket and then calls `claim_next`, then `list_notifications`; a hosted client
+  (claude.ai, ChatGPT) and Cursor pull each turn.
+- `notifications/tools/list_changed` to a session whose caller's workspace-admin flag changed since its
+  previous request (the only thing that changes a caller's `tools/list`), sent to that session alone.
+
 - The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
   `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
   `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
@@ -537,6 +552,10 @@ Notable changes to batondeck-kanban. The format follows
   `check` workflow runs `make check` on pull requests against a `postgres:16` service.
 
 ### Removed
+
+- MCP resource subscriptions (ADR-0004): `initialize` no longer advertises `resources.subscribe`, the
+  subscribe and unsubscribe handlers are gone, and `resources/subscribe` is answered method not found
+  (-32601).
 
 - The contract trim (R0.23, ADR-0004; the owner, 2026-10-23: "go with trimmed version"):
   `contract/expected.json` goes from 93 tools to 86. `deltas.json` `removedTools` gains the router

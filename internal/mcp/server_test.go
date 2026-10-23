@@ -81,7 +81,10 @@ func rawPOST(t *testing.T, url, bearer, session, body string) *http.Response {
 
 const initBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}`
 
-func TestInitializeAnswersEmptyLists(t *testing.T) {
+// TestInitializeAnswersTheSurface: a stateful session negotiates 2025-11-25 and lists no tools until
+// an area registers them, the four prompts and the resource templates (surface_test.go checks
+// their content), and advertises resources with listChanged and without subscribe.
+func TestInitializeAnswersTheSurface(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver())
 	cs := h.connect(t, tokenAda)
@@ -92,8 +95,8 @@ func TestInitializeAnswersEmptyLists(t *testing.T) {
 	}
 	caps := init.Capabilities
 	if caps.Tools == nil || !caps.Tools.ListChanged || caps.Prompts == nil || !caps.Prompts.ListChanged ||
-		caps.Resources == nil || !caps.Resources.ListChanged || !caps.Resources.Subscribe {
-		t.Errorf("capabilities = %+v, want tools, prompts and resources with listChanged and subscribe", caps)
+		caps.Resources == nil || !caps.Resources.ListChanged || caps.Resources.Subscribe {
+		t.Errorf("capabilities = %+v, want tools, prompts and resources with listChanged, and no subscribe", caps)
 	}
 	if cs.ID() == "" {
 		t.Error("no Mcp-Session-Id: the server is not stateful")
@@ -103,19 +106,16 @@ func TestInitializeAnswersEmptyLists(t *testing.T) {
 		t.Errorf("tools/list = %+v, %v; want [] (not null)", tools, err)
 	}
 	prompts, err := cs.ListPrompts(ctx(t), nil)
-	if err != nil || len(prompts.Prompts) != 0 {
-		t.Errorf("prompts/list = %+v, %v; want []", prompts, err)
+	if err != nil || len(prompts.Prompts) != 4 {
+		t.Errorf("prompts/list = %+v, %v; want the four prompts", prompts, err)
 	}
 	res, err := cs.ListResources(ctx(t), nil)
 	if err != nil || len(res.Resources) != 0 {
-		t.Errorf("resources/list = %+v, %v; want []", res, err)
+		t.Errorf("resources/list = %+v, %v; want [] (every resource is a template)", res, err)
 	}
 	tpl, err := cs.ListResourceTemplates(ctx(t), nil)
-	if err != nil || len(tpl.ResourceTemplates) != 0 {
-		t.Errorf("resources/templates/list = %+v, %v; want []", tpl, err)
-	}
-	if err := cs.Subscribe(ctx(t), &mcp.SubscribeParams{URI: "batondeck://board/B-1"}); err == nil {
-		t.Error("resources/subscribe accepted a URI no resource serves; want it refused")
+	if err != nil || len(tpl.ResourceTemplates) != 5 {
+		t.Errorf("resources/templates/list = %+v, %v; want the five templates", tpl, err)
 	}
 
 	touches := calls(f, "Sessions.TouchAgentSession")
