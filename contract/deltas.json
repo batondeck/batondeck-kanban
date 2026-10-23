@@ -1679,5 +1679,13 @@
         }
       }
     }
+  ],
+  "errorDeltas": [
+    {
+      "case": "a tenant-scoped tool naming a projectId that does not exist (P-138)",
+      "conductor": "NOT_FOUND",
+      "go": "FORBIDDEN",
+      "why": "authorize checks membership first and answers a missing project as it answers a non-member (internal/service/authz.go), so a project's existence does not leak; conductor answers NOT_FOUND (src/auth/authorizer.ts:121)"
+    }
   ]
 }
