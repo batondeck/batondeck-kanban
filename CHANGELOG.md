@@ -54,6 +54,25 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The contract against the live server and the per-call statement pins (R1.10).
+  `internal/cli/contract_live_test.go` boots `serve`'s composition (`compose`, `serveUntil`) on every
+  engine and reads it with a workspace admin's go-sdk client: `TestLiveContract` holds tools/list,
+  canonicalised, to `contract/expected.json` less the new `contract/pending.json` exactly (43 tools
+  compared, 43 pending, 86 in the contract), and to the derivation from `tools.json`,
+  `admin-tools.json` and `deltas.json` computed afresh; prompts/list to `tools.json`'s four by name and
+  arguments; resources/templates/list to `tools.json`'s less the six pending chronicle templates plus
+  `board-feed-cursor`. A pending tool that is registered fails, and so does a contract tool neither
+  registered nor pending, so `pending.json` only shrinks: each lane removes its names when it
+  registers them. `TestSurfaceSnapshot` pins the served tool, prompt and template names for an admin
+  and a member. `contract.CheckLive` and `contract.Pending` carry the rules (`contract/live.go`).
+- `test/perf/queries_per_call_test.go`: `get_task` 2, `list_tasks` 2, `get_board` 2, `claim_next` 4
+  (Postgres 5: the change row's `NotifyChanges`), `get_task_context` 6, `next_task` 3, each a
+  commented constant measured on SQLite and Postgres with the membership cached and the board
+  snapshot in the state the pin names; the other snapshot state and a fresh core are printed beside
+  it. New: `store.CountingStatements` (`internal/store/count.go`, over the existing counted handles),
+  `make perf` in `make check`, and the live half of `make contract`.
+- `deltas.json` `errorDeltas`: wire-code departures no schema shows; the first is P-138, a missing
+  project answering `FORBIDDEN` where conductor answers `NOT_FOUND`.
 - `plugin/`, the batondeck-kanban plugin for Claude Code (R3.4, ADR-0004, ADR-0005), loaded with
   `claude --plugin-dir plugin`: `.mcp.json` points the session at `http://localhost:8080/mcp` with
   `Authorization: Bearer ${BATONDECK_TOKEN}` (a CLI token from `batondeck-kanban token create`), and
