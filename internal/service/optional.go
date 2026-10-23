@@ -8,7 +8,7 @@ import (
 
 // Optional is a request field that is absent or a value, for a field whose zero value means
 // something (conductor's z.T().optional()): Set says it was sent, V is what was sent. JSON null is
-// refused, as Zod refuses it. Its schema is T's, registered per instantiation in the DTO recipe.
+// refused, as Zod refuses it. Its schema is T's, registered per instantiation in internal/service/dtoschema.
 type Optional[T any] struct {
 	Set bool
 	V   T
@@ -16,7 +16,7 @@ type Optional[T any] struct {
 
 // Nullable is a request field that is absent, null or a value (conductor's .nullable().optional()):
 // Set says it was sent, Null that it was sent as null, V the value otherwise. Its schema is T's or
-// null, registered per instantiation in the DTO recipe.
+// null, registered per instantiation in internal/service/dtoschema.
 type Nullable[T any] struct {
 	Set  bool
 	Null bool
