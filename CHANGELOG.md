@@ -52,6 +52,30 @@ Notable changes to batondeck-kanban. The format follows
   `routes.json`, by name; `TestStubsNameTheirLane` checks every stub's answer. `web/src/api/<area>.ts`
   holds the 41 `api.ts` functions for these routes over a `req` copy in `web/src/api/http.ts`, held to
   `api.ts`'s signatures by `web/src/__tests__/api-areas.test.ts`.
+- `search_tasks` (R1.9), keyword only: the project's tasks whose title, description or search tokens
+  hold every term of the query, best first, at most `k` (default 10, at most 50), each with the
+  engine's rank as `score`; `mode` semantic is `VALIDATION` (the plan keeps no embeddings), hybrid and
+  keyword run keyword and answer `mode: "keyword"`. The query is split into letters-and-digits terms
+  (`word*` a prefix) and only those reach the engine: an FTS5 match of quoted tokens ranked by how many of
+  the task's own tokens it matched (FTS5 `highlight`; not `bm25`, whose IDF counts every project's
+  tasks) on SQLite, a `to_tsquery('simple', …)` of quoted lexemes ranked by `ts_rank` on Postgres, each a
+  bound parameter; a query with no term is `VALIDATION`. Two statements (the page, then its tasks by
+  id), pinned on both engines. `store.Search` is built on SQLite, Postgres and memstore, and the
+  search battery gains the index following a title and token update and a delete, scores another project's tasks cannot
+  move, and no index row left by a delete under a reused row id; with search, the
+  last unbuilt contract II area, `internal/store/conformance/reference_test.go` is gone.
+- `batondeck-kanban session register --role worker|master [--agent LABEL]` and `session unregister`
+  (R3.3), the client half of the device session directory, for the plugin's SessionStart and
+  SessionEnd hooks (R3.4). They reach `POST /internal/wake-session` and `DELETE
+  /internal/wake-session/{pid}` only over the first `unix://` entry of `listen`, never TCP, with the
+  bearer in `BATONDECK_TOKEN`. The client process is the live Claude Code process whose
+  `~/.claude/sessions/<pid>.json` names `$CLAUDE_CODE_MESSAGING_SOCKET` (`wake.SessionOf`, the
+  directory's own registry parser), sent with that entry's `sessionId` and `procStart`; without the
+  variable it is the parent process, registered with no socket. `CLAUDE_CODE_MESSAGING_TOKEN` is not
+  sent: it is the session's child token (R3.1). Usage errors exit 2; every other failure (no Unix
+  listen entry, no token, no registry entry, the server down, a refusal) is one stderr line and exit
+  0, so a hook never breaks a session start; stdout stays empty, since a SessionStart hook's stdout
+  becomes the model's context.
 - The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
   check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
   (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
