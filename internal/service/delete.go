@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"time"
 
@@ -91,16 +92,30 @@ func (t *txn) deleteTree(root store.Task) ([]string, error) {
 	for _, x := range set {
 		in[x.ID] = true
 	}
+	// The mutation's own task, when it is outside the set (pick_run's and cancel_runs's parent), is
+	// skipped by the per-member writes: its one versioned write is the mutation's, so its caches are
+	// stripped versionless (stripOwn) and move with that write.
+	skip := in
+	own := t.Task != nil && !in[t.Task.ID]
+	if own {
+		skip = maps.Clone(in)
+		skip[t.Task.ID] = true
+	}
 	for _, x := range set {
-		if err := t.unblockDependentsOf(x.ID, in); err != nil {
+		if err := t.unblockDependentsOf(x.ID, skip); err != nil {
 			return nil, err
 		}
-		if err := t.stripFromBlockers(x.ID, in); err != nil {
+		if err := t.stripFromBlockers(x.ID, skip); err != nil {
 			return nil, err
 		}
 	}
-	if root.ParentTaskID != nil && !in[*root.ParentTaskID] {
+	if root.ParentTaskID != nil && !skip[*root.ParentTaskID] {
 		if err := t.unblockOne(*root.ParentTaskID, root.ID); err != nil {
+			return nil, err
+		}
+	}
+	if own {
+		if err := t.stripOwn(in); err != nil {
 			return nil, err
 		}
 	}
@@ -167,6 +182,36 @@ func (t *txn) deletionSet(root store.Task) ([]store.Task, error) {
 		}
 	}
 	return set, nil
+}
+
+// stripOwn removes the ids of in from the mutation's own task's blockedBy and blocks caches,
+// versionless (Dependencies.SetCaches), with task.dependency_cleared {clearedBy, autoReady: false}
+// for each blocker it drops: the status the task lands in is the mutation's own write.
+func (t *txn) stripOwn(in map[string]bool) error {
+	cur, err := t.Tx.GetTask(t.ctx, t.ProjectID, t.Task.ID)
+	if err != nil {
+		return err
+	}
+	gone := func(id string) bool { return in[id] }
+	blockedBy := slices.DeleteFunc(slices.Clone(cur.BlockedBy), gone)
+	blocks := slices.DeleteFunc(slices.Clone(cur.Blocks), gone)
+	if len(blockedBy) == len(cur.BlockedBy) && len(blocks) == len(cur.Blocks) {
+		return nil
+	}
+	if err := t.Tx.SetCaches(t.ctx, cur.ProjectID, cur.ID, blockedBy, blocks); err != nil {
+		return err
+	}
+	for _, id := range cur.BlockedBy {
+		if !in[id] {
+			continue
+		}
+		data, err := json.Marshal(map[string]any{"clearedBy": id, "autoReady": false})
+		if err != nil {
+			return err
+		}
+		t.Event(store.EventInput{TaskID: cur.ID, BoardID: cur.BoardID, Type: domain.EventTaskDependencyCleared, Data: data})
+	}
+	return nil
 }
 
 // runsOf is every run of x (the tasks of x's board whose runOf is x), paged to the end.

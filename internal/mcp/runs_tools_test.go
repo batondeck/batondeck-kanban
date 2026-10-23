@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -313,5 +314,55 @@ func TestRunToolErrors(t *testing.T) {
 		}
 		r.submit(runs[0], "draft")
 		r.ada.call("pick_run", at(r.p, map[string]any{"runTaskId": runs[0], "version": r.get(parent)["version"]})) // the controls
+	})
+}
+
+// Review B2 (rev5758): a race resolves when the parent shares a dependency edge with a losing run
+// or a losing run's subtask, in either direction, for pick_run and cancel_runs: the call succeeds,
+// the parent moves one version, and its blockedBy and blocks no longer name what was deleted. The
+// control is delete_task of a run with the same edge.
+func TestRaceResolvesWithParentEdges(t *testing.T) {
+	raceStacks(t, func(t *testing.T, r *raceRig) {
+		for _, tool := range []string{"pick_run", "cancel_runs"} {
+			for _, shape := range []string{"parent blocked by the loser", "parent blocks the loser", "parent blocked by the loser's subtask", "parent blocks the loser's subtask"} {
+				parent := r.task(tool+" "+shape, nil)
+				runs := r.start(parent, 2)
+				win, lose := runs[0], runs[1]
+				other := lose
+				if strings.Contains(shape, "subtask") {
+					other = str(obj(r.ada.call("add_subtask", map[string]any{"projectId": r.p, "parentTaskId": lose, "title": "sub"})["task"])["id"])
+				}
+				from, to := other, parent
+				if strings.Contains(shape, "parent blocks") {
+					from, to = parent, other
+				}
+				r.ada.call("add_dependency", map[string]any{"projectId": r.p, "fromTaskId": from, "toTaskId": to})
+				args := map[string]any{"projectId": r.p, "taskId": parent}
+				if tool == "pick_run" {
+					r.submit(win, "draft")
+					args["runTaskId"] = win
+				}
+				v := r.get(parent)["version"].(float64)
+				args["version"] = v
+				out := obj(r.ada.call(tool, args)["task"])
+				gone := []string{lose, other}
+				for _, k := range []string{"blockedBy", "blocks"} {
+					for _, id := range out[k].([]any) {
+						if slices.Contains(gone, str(id)) {
+							t.Fatalf("%s, %s: the parent's %s still names %s: %v", tool, shape, k, id, out[k])
+						}
+					}
+				}
+				if out["version"] != v+1 || out["racing"] == true {
+					t.Fatalf("%s, %s: parent v%v racing %v, want v%v and not racing", tool, shape, out["version"], out["racing"], v+1)
+				}
+				r.gone(gone...)
+			}
+		}
+		parent := r.task("control", nil)
+		runs := r.start(parent, 2)
+		r.ada.call("add_dependency", map[string]any{"projectId": r.p, "fromTaskId": runs[1], "toTaskId": parent})
+		r.ada.call("delete_task", map[string]any{"projectId": r.p, "taskId": runs[1], "version": r.get(runs[1])["version"]})
+		t.Logf("%s: pick_run and cancel_runs resolved under 4 edge shapes each; delete_task control ok", r.s.Engine)
 	})
 }

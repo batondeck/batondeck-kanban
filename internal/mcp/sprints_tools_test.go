@@ -148,8 +148,13 @@ func TestSprintTools(t *testing.T) {
 				break
 			}
 		}
-		if strings.Join(names, " ") != "one two three" {
-			t.Fatalf("list_sprints paged %v, want one two three", names)
+		// Oldest first, ties on the same millisecond broken by id: the pages read in a row equal one page.
+		var whole []string
+		for _, x := range r.ada.call("list_sprints", map[string]any{"projectId": r.p, "limit": 200})["sprints"].([]any) {
+			whole = append(whole, str(obj(x)["name"]))
+		}
+		if strings.Join(names, " ") != strings.Join(whole, " ") || len(names) != 3 || names[0] != "one" {
+			t.Fatalf("list_sprints paged %v, one page %v; want the same three, one first", names, whole)
 		}
 		cp := obj(r.ada.call("update_sprint", map[string]any{"projectId": r.p, "sprintId": sid, "version": 1, "patch": map[string]any{"checkpoint": "half way", "eventCursor": "42", "name": "one renamed"}})["sprint"])
 		if cp["checkpoint"] != "half way" || cp["eventCursor"] != "42" || cp["name"] != "one renamed" || cp["version"] != float64(2) {
