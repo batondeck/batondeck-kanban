@@ -6,3 +6,6 @@
 *.db-shm
 .DS_Store
 /batondeck-kanban
+# make bench's measurements and its last run (bench/baseline.json is the committed one)
+/bench/out/
+/bench/results.json
