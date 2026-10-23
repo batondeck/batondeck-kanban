@@ -203,6 +203,23 @@ func (r *reference) DeleteTask(_ context.Context, projectID, taskID string, expe
 	return nil
 }
 
+// DeleteProjectRecursive (for the memory battery) deletes the project and what it owns here: its
+// tasks and their context items, summaries and edges, its memory and its attachments.
+func (r *reference) DeleteProjectRecursive(_ context.Context, projectID string) error {
+	if _, ok := r.st.projects[projectID]; !ok {
+		return domain.NotFound("Project", projectID)
+	}
+	delete(r.st.projects, projectID)
+	delete(r.st.counters, projectID)
+	maps.DeleteFunc(r.st.tasks, func(k [2]string, _ refTask) bool { return k[0] == projectID })
+	maps.DeleteFunc(r.st.summaries, func(k [2]string, _ store.Summary) bool { return k[0] == projectID })
+	r.st.context = slices.DeleteFunc(r.st.context, func(it store.ContextItem) bool { return it.ProjectID == projectID })
+	r.st.memory = slices.DeleteFunc(r.st.memory, func(e store.MemoryEntry) bool { return e.ProjectID == projectID })
+	r.st.edges = slices.DeleteFunc(r.st.edges, func(e store.DependencyEdge) bool { return e.ProjectID == projectID })
+	r.st.attachments = slices.DeleteFunc(r.st.attachments, func(a store.Attachment) bool { return a.ProjectID == projectID })
+	return nil
+}
+
 // --- Context ---
 
 func (r *reference) AddContextItem(_ context.Context, in store.AddContextItemInput) (store.ContextItem, error) {
