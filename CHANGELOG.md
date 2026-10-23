@@ -41,6 +41,23 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `plugin/`, the batondeck-kanban plugin for Claude Code (R3.4, ADR-0004, ADR-0005), loaded with
+  `claude --plugin-dir plugin`: `.mcp.json` points the session at `http://localhost:8080/mcp` with
+  `Authorization: Bearer ${BATONDECK_TOKEN}` (a CLI token from `batondeck-kanban token create`), and
+  `hooks/hooks.json` registers exactly SessionStart and SessionEnd, both `hooks/session.sh`, which run
+  `batondeck-kanban session register --role "${BATONDECK_ROLE:-worker}"` (with `--agent
+  "$BATONDECK_AGENT"` when set) and `session unregister`, stdout sent to stderr, always exit 0. The
+  `batondeck-worker` and `batondeck-chronicle` skills and the `worker`, `master`, `work`,
+  `work-assigned`, `runs` and `chronicle` commands are rewritten for the five states, the fixed table
+  and the socket doorbell; `scripts/mcp.sh` makes one tool call from a shell. `plugin/TRIM.md` has a
+  keep / drop / rewrite row for each of conductor's 51 plugin files.
+- `make skill-lint` (`scripts/skill-lint.py`, in `make check`): every tool a plugin skill or command
+  names is in `contract/expected.json`, every script it names is in `plugin/`, no plugin file but
+  `TRIM.md` names a dropped conductor tool or a retired state, and `hooks.json` registers SessionStart
+  and SessionEnd only.
+- `make hook-check` (`scripts/hook-check.py`, in `make check`): runs the real binary's `session register`
+  and `unregister`, and `plugin/hooks/session.sh`, as subprocesses against a scratch server on a Unix
+  socket, and fails on any byte written to stdout or a hook exit other than 0.
 - `batondeck-kanban session register --role worker|master [--agent LABEL]` and `session unregister`
   (R3.3), the client half of the device session directory, for the plugin's SessionStart and
   SessionEnd hooks (R3.4). They reach `POST /internal/wake-session` and `DELETE
