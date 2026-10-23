@@ -7,19 +7,62 @@ package sqlitedb
 
 import (
 	"context"
+	"database/sql"
 )
 
 const getSummary = `-- name: GetSummary :one
-SELECT project_id, task_id, body, updated_by, updated_at FROM summaries WHERE project_id = ? AND task_id = ?
+SELECT t.id AS task_id, s.body, s.updated_by, s.updated_at
+FROM tasks t LEFT JOIN summaries s ON s.project_id = t.project_id AND s.task_id = t.id
+WHERE t.project_id = ? AND t.id = ?
 `
 
 type GetSummaryParams struct {
 	ProjectID string
-	TaskID    string
+	ID        string
 }
 
-func (q *Queries) GetSummary(ctx context.Context, arg GetSummaryParams) (Summary, error) {
-	row := q.db.QueryRowContext(ctx, getSummary, arg.ProjectID, arg.TaskID)
+type GetSummaryRow struct {
+	TaskID    string
+	Body      sql.NullString
+	UpdatedBy sql.NullString
+	UpdatedAt sql.NullInt64
+}
+
+// The task's summary in one statement: no row is a missing task, NULL columns a task with none.
+func (q *Queries) GetSummary(ctx context.Context, arg GetSummaryParams) (GetSummaryRow, error) {
+	row := q.db.QueryRowContext(ctx, getSummary, arg.ProjectID, arg.ID)
+	var i GetSummaryRow
+	err := row.Scan(
+		&i.TaskID,
+		&i.Body,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertSummary = `-- name: UpsertSummary :one
+INSERT INTO summaries (project_id, task_id, body, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (project_id, task_id) DO UPDATE SET body = excluded.body, updated_by = excluded.updated_by, updated_at = excluded.updated_at
+RETURNING project_id, task_id, body, updated_by, updated_at
+`
+
+type UpsertSummaryParams struct {
+	ProjectID string
+	TaskID    string
+	Body      string
+	UpdatedBy string
+	UpdatedAt int64
+}
+
+func (q *Queries) UpsertSummary(ctx context.Context, arg UpsertSummaryParams) (Summary, error) {
+	row := q.db.QueryRowContext(ctx, upsertSummary,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.Body,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
 	var i Summary
 	err := row.Scan(
 		&i.ProjectID,
