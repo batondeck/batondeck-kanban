@@ -50,6 +50,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `batondeck-kanban session register --role worker|master [--agent LABEL]` and `session unregister`
+  (R3.3), the client half of the device session directory, for the plugin's SessionStart and
+  SessionEnd hooks (R3.4). They reach `POST /internal/wake-session` and `DELETE
+  /internal/wake-session/{pid}` only over the first `unix://` entry of `listen`, never TCP, with the
+  bearer in `BATONDECK_TOKEN`. The client process is the live Claude Code process whose
+  `~/.claude/sessions/<pid>.json` names `$CLAUDE_CODE_MESSAGING_SOCKET` (`wake.SessionOf`, the
+  directory's own registry parser), sent with that entry's `sessionId` and `procStart`; without the
+  variable it is the parent process, registered with no socket. `CLAUDE_CODE_MESSAGING_TOKEN` is not
+  sent: it is the session's child token (R3.1). Usage errors exit 2; every other failure (no Unix
+  listen entry, no token, no registry entry, the server down, a refusal) is one stderr line and exit
+  0, so a hook never breaks a session start; stdout stays empty, since a SessionStart hook's stdout
+  becomes the model's context.
 - The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
   check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
   (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
