@@ -117,6 +117,9 @@ type StreamHandlers = {
   onPresence?: (sessions: AgentSession[]) => void;
   onNotifications?: (d: unknown) => void;
   onLive?: (live: boolean) => void;
+  /** The server could not replay what this tab missed (`event: resync`), or the socket was rebuilt
+   *  and starts at "now": refetch the board, its tasks and its feed. */
+  onResync?: () => void;
 };
 type Sub = { key: { projectId?: string; boardId?: string }; h: StreamHandlers };
 
@@ -158,11 +161,49 @@ function reconcile(): void {
     {
       updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
       board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
-      presence: (d) => fanout('onPresence', (h) => h.onPresence?.((d as { sessions: AgentSession[] }).sessions)),
+      presence: (d) => fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
+      // No notifications frame is sent until the notifications lane (R2.3) lands; the listener waits.
       notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
+      resync: () => fanout('onResync', (h) => h.onResync?.()),
     },
-    () => fanout('onUpdate', (h) => h.onUpdate?.()),
+    () => {
+      fanout('onUpdate', (h) => h.onUpdate?.());
+      fanout('onResync', (h) => h.onResync?.());
+    },
   );
+}
+
+/** One live CLI process as the device session directory lists it (internal/service DeviceSession). */
+interface DeviceSession {
+  pid: number;
+  role: string;
+  identityId: string;
+  agentId: string;
+  adapter?: string;
+  registeredAt: string;
+}
+
+/**
+ * A presence frame lists this device's live processes for the viewer, the whole list each time. They
+ * become AgentSession rows keyed `device:<pid>` (presenceMerge.ts replaces those rows per frame), and
+ * `seenAt`, the frame's arrival, stands for the directory's word that each one is live now.
+ */
+export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
+  const list = (d as { sessions?: DeviceSession[] } | null)?.sessions ?? [];
+  return list.map((e) => ({
+    sessionKey: `device:${e.pid}`,
+    agentId: e.agentId,
+    agentName: e.agentId,
+    identityId: e.identityId,
+    kind: 'dev',
+    ...(e.adapter ? { clientName: e.adapter } : {}),
+    firstSeenAt: e.registeredAt,
+    lastSeenAt: e.registeredAt,
+    wakeAttachedAt: seenAt,
+    sessionCount: 1,
+    requestCount: 0,
+    toolCounts: {},
+  }));
 }
 
 /** Join the shared stream. Returns an unsubscribe that rebuilds the socket only if the scope changed. */
@@ -215,6 +256,7 @@ export function stream(
   /** The composed snapshot. When present the caller writes it to the cache and the `onUpdate`
    *  refetch becomes redundant for THIS board — see Board.tsx. */
   onBoard?: (d: unknown) => void,
+  onResync?: () => void,
 ): () => void {
-  return joinStream({ projectId, boardId }, { onUpdate, onLive, onPresence, ...(onBoard ? { onBoard } : {}) });
+  return joinStream({ projectId, boardId }, { onUpdate, onLive, onPresence, ...(onBoard ? { onBoard } : {}), ...(onResync ? { onResync } : {}) });
 }

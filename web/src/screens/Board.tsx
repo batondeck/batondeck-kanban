@@ -25,7 +25,7 @@ import * as sprintsApi from '../api/sprints.js';
 import * as streamApi from '../api/stream.js';
 import * as tasksApi from '../api/tasks.js';
 import { isLocalEdit } from '../api/http.js';
-import { Avatar, Marquee, PageHeader, PriorityDot, StatusPill, eventActor, eventVerb, leaseLeft, timeAgo } from '../components.js';
+import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
 import { boardTasksKey, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
@@ -35,7 +35,7 @@ import { uiSettings } from '../settings.js';
 import { StatusDot } from '../AgentSelect.js';
 import type { ActivityEvent, AgentSession, Board as BoardT, Sprint, SprintStatus, Status, Task } from '../types.js';
 import { STATUSES } from '../types.js';
-import { mergePresence } from '../presenceMerge.js';
+import { replaceDevicePresence } from '../presenceMerge.js';
 
 const SPRINT_STATUS_COLOR: Record<SprintStatus, string> = {
   PROPOSED: 'var(--review)',
@@ -268,7 +268,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
       <div className="card-meta">
         <div className="card-badges">
           {t.status !== col.status && <StatusPill status={t.status} />}
-          {(t.status === 'BLOCKED' || t.blockedBy.length > 0) && <span className="badge blocked">Blocked</span>}
+          {isPoisoned(t) ? <PoisonBadge task={t} /> : (t.status === 'BLOCKED' || t.blockedBy.length > 0) && <span className="badge blocked">Blocked</span>}
           {t.racing && <span className="badge racing" title="racing — N runs open"><Icon name="finish" size={11} /> Racing</span>}
           {(t.sprintIds?.length ?? 0) > 0 && (
             <span className="badge sprint" title={`Sprint: ${sprintName ?? t.sprintIds![0]!}`}>
@@ -744,11 +744,11 @@ export function Board() {
           for (const k of ['task', 'ctx', 'subs', 'mem', 'att', 'hist', 'followups', 'runs', 'sprints']) void qc.invalidateQueries({ queryKey: [k, projectId] });
         },
         setStreamLive,
-        // Presence frames land straight in the cache — no refetch — and UPSERT: a frame is the newest
-        // rows for this identity, not the whole list the screen loaded (presenceMerge.ts).
+        // Presence frames land straight in the cache — no refetch. A frame is this device's whole live
+        // list for the viewer, so its rows are replaced (presenceMerge.ts).
         (sessions) =>
           qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
-            sessions: mergePresence(old?.sessions, sessions),
+            sessions: replaceDevicePresence(old?.sessions, sessions),
           })),
         // The composed board snapshot: board + tasks + feed in ONE frame, written directly to the
         // cache. This is what replaces the three refetches above.
@@ -776,6 +776,10 @@ export function Board() {
             );
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
+        },
+        // `resync`, or a rebuilt socket: no board frame comes until the next change, so refetch the three.
+        () => {
+          for (const k of [['board', projectId, boardId], ['tasks', projectId, boardId], ['feed', projectId, boardId]]) void qc.invalidateQueries({ queryKey: k });
         },
       ),
     [projectId, boardId, qc, limit],

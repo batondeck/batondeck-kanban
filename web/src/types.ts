@@ -51,6 +51,9 @@ export interface Task {
   createdBy: string;
   /** Display name of the agent that created the task; null/absent for human-created tasks. */
   createdByAgent?: string | null;
+  /** Failed claims so far (the retry policy's count); absent at zero. Poison is BLOCKED with the
+   *  `poisoned` label once it reaches the policy's poisonAfterAttempts (ADR-0001). */
+  claimAttempts?: number;
   /** ISO creation time. On the wire since the core's `TaskSchema`; the SPA simply never mirrored it,
    *  which is why every time-series in Analytics had to bucket on `updatedAt` or not exist. */
   createdAt: string;

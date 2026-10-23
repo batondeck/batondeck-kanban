@@ -183,6 +183,11 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
+  // Requeueing a poisoned task (BLOCKED → TODO) is a master's move (plan §Fold 1): master and the two
+  // roles above it. The server decides; this only keeps a worker from being offered a refusal.
+  const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
+  const canRequeue = myRole === 'master' || myRole === 'member' || myRole === 'admin';
+
   const startEdit = (): void => {
     if (!task) return;
     setEditing(true);
@@ -195,7 +200,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ,
+    colFor, moveTargets, agentsQ, histQ, canRequeue,
   };
 }
 
