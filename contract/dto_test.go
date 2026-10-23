@@ -7,10 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/jsonschema-go/jsonschema"
-
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
+	"github.com/batondeck/batondeck-kanban/internal/service/dtoschema"
 )
 
 // dtoTools maps each tool to the service method whose request and response types are its input and
@@ -74,110 +73,11 @@ var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Lifecycle](), reflect.TypeFor[service.Context](), reflect.TypeFor[service.Media](),
 }
 
-// openObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
-// infers additionalProperties:false, so these are inferred and then opened, inner types first.
-var openObjects = []reflect.Type{
-	reflect.TypeFor[service.ModelHintInput](),
-	reflect.TypeFor[service.TaskPatch](),
-	reflect.TypeFor[service.AnomalyPolicyPatch](),
-	reflect.TypeFor[service.RetryPolicyPatch](),
-	reflect.TypeFor[service.SelectionWeightsPatch](),
-	reflect.TypeFor[service.ColumnSpec](),
-	reflect.TypeFor[service.Shard](),
-	reflect.TypeFor[service.ArtifactInput](),
-	reflect.TypeFor[service.LargeArtifact](),
-}
-
-func enumSchema[T ~string](values []T) *jsonschema.Schema {
-	s := &jsonschema.Schema{Type: "string"}
-	for _, v := range values {
-		s.Enum = append(s.Enum, string(v))
-	}
-	return s
-}
-
-// optionals are the tri-state request fields' instantiations (service.Optional, service.Nullable).
-// Each is typed as its value: Optional[T] as T, Nullable[T] as *T (T or null), so a field keeps the
-// schema it had as a value or a pointer while carrying absent apart from false, 0 and null.
-var optionals = []reflect.Type{
-	reflect.TypeFor[service.Optional[bool]](),
-	reflect.TypeFor[service.Optional[float64]](),
-	reflect.TypeFor[service.Nullable[string]](),
-	reflect.TypeFor[service.Nullable[int64]](),
-	reflect.TypeFor[service.Nullable[float64]](),
-	reflect.TypeFor[service.Optional[string]](),
-	reflect.TypeFor[service.Nullable[service.ModelHintInput]](),
-	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
-}
-
-// dtoSchemaOptions is the inference recipe for the DTOs: the enums from their Go values, a custom
-// field's value as string|number|boolean, True as const true, the tri-state optionals, and the open
-// objects. Slices are
-// fixed after inference (dtoSchema), since jsonschema-go types every Go slice as [null, array].
-func dtoSchemaOptions(t *testing.T) *jsonschema.ForOptions {
+// dtoSchema is typ's schema as internal/service/dtoschema builds it for the tool registration,
+// decoded, so the comparison is of exactly what the server serves.
+func dtoSchema(t *testing.T, typ reflect.Type) any {
 	t.Helper()
-	isTrue := any(true)
-	opts := &jsonschema.ForOptions{TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-		reflect.TypeFor[domain.Status]():               enumSchema(domain.AllStatuses()),
-		reflect.TypeFor[domain.Role]():                 enumSchema(domain.AllRoles()),
-		reflect.TypeFor[domain.Priority]():             enumSchema([]domain.Priority{domain.PriorityLow, domain.PriorityNormal, domain.PriorityHigh, domain.PriorityUrgent}),
-		reflect.TypeFor[domain.MemoryScope]():          enumSchema([]domain.MemoryScope{domain.MemoryScopeTask, domain.MemoryScopeAgent, domain.MemoryScopeShared, domain.MemoryScopeProject, domain.MemoryScopeAgentGlobal}),
-		reflect.TypeFor[service.ArtifactKind]():        enumSchema(service.ArtifactKindValues),
-		reflect.TypeFor[service.AttachmentStatus]():    enumSchema(service.AttachmentStatusValues),
-		reflect.TypeFor[service.CapabilityMatchTier](): enumSchema(service.CapabilityMatchTierValues),
-		reflect.TypeFor[service.ContextKind]():         enumSchema(service.ContextKindValues),
-		reflect.TypeFor[service.ContextSection]():      enumSchema(service.ContextSectionValues),
-		reflect.TypeFor[service.DependencyType]():      enumSchema(service.DependencyTypeValues),
-		reflect.TypeFor[service.Effort]():              enumSchema(service.EffortValues),
-		reflect.TypeFor[service.FollowUpStatus]():      enumSchema(service.FollowUpStatusValues),
-		reflect.TypeFor[service.MediaKind]():           enumSchema(service.MediaKindValues),
-		reflect.TypeFor[service.NextStrategy]():        enumSchema(service.NextStrategyValues),
-		reflect.TypeFor[service.PolicyMode]():          enumSchema(service.PolicyModeValues),
-		reflect.TypeFor[service.ReadMemoryScope]():     enumSchema(service.ReadMemoryScopeValues),
-		reflect.TypeFor[service.RecallMemoryScope]():   enumSchema(service.RecallMemoryScopeValues),
-		reflect.TypeFor[service.SearchMode]():          enumSchema(service.SearchModeValues),
-		reflect.TypeFor[service.SessionKind]():         enumSchema(service.SessionKindValues),
-		reflect.TypeFor[service.SprintStatus]():        enumSchema(service.SprintStatusValues),
-		reflect.TypeFor[service.FieldValue]():          {Types: []string{"string", "number", "boolean"}},
-		reflect.TypeFor[service.True]():                {Type: "boolean", Const: &isTrue},
-	}}
-	for _, typ := range optionals {
-		v, _ := typ.FieldByName("V")
-		elem := v.Type
-		if _, nullable := typ.FieldByName("Null"); nullable {
-			elem = reflect.PointerTo(elem)
-		}
-		s, err := jsonschema.ForType(elem, opts)
-		if err != nil {
-			t.Fatalf("infer %s: %v", typ, err)
-		}
-		if v.Type.Kind() == reflect.Struct {
-			s.AdditionalProperties = nil // conductor's nested objects are open, as openObjects below
-		}
-		opts.TypeSchemas[typ] = s
-	}
-	for _, typ := range openObjects {
-		s, err := jsonschema.ForType(typ, opts)
-		if err != nil {
-			t.Fatalf("infer %s: %v", typ, err)
-		}
-		s.AdditionalProperties = nil
-		opts.TypeSchemas[typ] = s
-	}
-	return opts
-}
-
-// dtoSchema infers typ's schema and returns it decoded, every slice's [null, array] made array:
-// a DTO slice is never null on the wire (a response fills it, a request omits it). The surface
-// holds no nullable array, so the rewrite cannot hide one; a *[]T would come back as array and
-// fail the comparison against a nullable node.
-func dtoSchema(t *testing.T, typ reflect.Type, opts *jsonschema.ForOptions) any {
-	t.Helper()
-	s, err := jsonschema.ForType(typ, opts)
-	if err != nil {
-		t.Fatalf("infer %s: %v", typ, err)
-	}
-	b, err := json.Marshal(s)
+	b, err := json.Marshal(dtoschema.For(typ))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,23 +85,6 @@ func dtoSchema(t *testing.T, typ reflect.Type, opts *jsonschema.ForOptions) any 
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	var fix func(any)
-	fix = func(v any) {
-		switch n := v.(type) {
-		case map[string]any:
-			if ts, ok := n["type"].([]any); ok && len(ts) == 2 && ts[0] == "null" && ts[1] == "array" {
-				n["type"] = "array"
-			}
-			for _, c := range n {
-				fix(c)
-			}
-		case []any:
-			for _, c := range n {
-				fix(c)
-			}
-		}
-	}
-	fix(m)
 	return m
 }
 
@@ -210,7 +93,6 @@ func dtoSchema(t *testing.T, typ reflect.Type, opts *jsonschema.ForOptions) any 
 // for that tool, exactly.
 func TestDTOCanonical(t *testing.T) {
 	want := committed(t)
-	opts := dtoSchemaOptions(t)
 	mapped := map[string]bool{}
 	got := Surface{Tools: map[string]*Tool{}}
 	sub := Surface{Tools: map[string]*Tool{}}
@@ -232,11 +114,11 @@ func TestDTOCanonical(t *testing.T) {
 			t.Fatalf("%s is not in expected.json", d.tool)
 		}
 		sub.Tools[d.tool] = w
-		in, err := Canonicalize(dtoSchema(t, mt.In(2), opts))
+		in, err := Canonicalize(dtoSchema(t, mt.In(2)))
 		if err != nil {
 			t.Fatalf("%s input (%s): %v", d.tool, mt.In(2), err)
 		}
-		out, err := Canonicalize(dtoSchema(t, mt.Out(0), opts))
+		out, err := Canonicalize(dtoSchema(t, mt.Out(0)))
 		if err != nil {
 			t.Fatalf("%s output (%s): %v", d.tool, mt.Out(0), err)
 		}

@@ -404,6 +404,7 @@ func writeState(ctx context.Context, q sqlQueries, t Task, updatedBy string, upd
 	p := sqlitedb.WriteTaskStateParams{
 		Status: string(t.Status), ColumnID: t.ColumnID, OrderKey: t.OrderKey, BlockedReason: nullStr(t.BlockedReason),
 		Labels: jsonList(t.Labels), ClaimAttempts: t.ClaimAttempts, NextEligibleAt: nullInt(t.NextEligibleAt),
+		Assignee: nullStr(t.Assignee), Deliverable: nullStr(t.Deliverable), Review: nullRaw(t.Review),
 		Version: t.Version + 1, UpdatedBy: updatedBy, UpdatedAt: updatedAt, ProjectID: t.ProjectID, ID: t.ID,
 	}
 	if c := t.Claim; c != nil {
@@ -426,6 +427,11 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 	}
 	if c.OrderKey != nil && *c.OrderKey == "" {
 		return Task{}, domain.Validation("an empty order key", nil)
+	}
+	if c.Review != nil && c.Review.Value != nil {
+		if err := validJSON("review", *c.Review.Value); err != nil {
+			return Task{}, err
+		}
 	}
 	return versioned(ctx, e, projectID, taskID, expectedVersion, func(q sqlQueries, t Task) (Task, error) {
 		if c.ColumnID != "" {
@@ -465,6 +471,9 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		if c.ClearClaim {
 			t.Claim = nil
 		}
+		setNullable(&t.Assignee, c.Assignee)
+		setNullable(&t.Deliverable, c.Deliverable)
+		setNullableJSON(&t.Review, c.Review)
 		return writeState(ctx, q, t, c.UpdatedBy, c.UpdatedAt)
 	})
 }

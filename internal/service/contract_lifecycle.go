@@ -11,11 +11,12 @@ import (
 type Lifecycle interface {
 	// Claim is claim_task.
 	// Tier: write; version-checked (STALE); CONFLICT_LOCKED on a live lease. Event: task.claimed.
-	// Audit: none. Doorbell: assigned (the task gains the caller as assignee).
+	// Audit: none. Doorbell: none, a claim rings nobody (owner ruling 2026-10-23); the change row is
+	// "changed". The claim leaves the assignee as it was.
 	Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error)
 
 	// ClaimNext is claim_next.
-	// Tier: write. Event: task.claimed. Audit: none. Doorbell: assigned.
+	// Tier: write. Event: task.claimed. Audit: none. Doorbell: none, as Claim.
 	ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error)
 
 	// Heartbeat is heartbeat_task.
@@ -34,7 +35,7 @@ type Lifecycle interface {
 	// Lease-guarded. Event: task.completed, plus task.review_requested when review sends it to
 	// REVIEW, task.artifact_missing / task.checkpoint_missing under a warn policy, and
 	// task.dependency_cleared on each dependent DONE unblocks. Audit: none. Doorbell: assigned to the
-	// reviewer when the task lands REVIEW; for each dependent DONE unblocks, assigned to its assignee
+	// reviewer when the task lands REVIEW (none when the reviewer is the caller); for each dependent DONE unblocks, assigned to its assignee
 	// if it has one, else broadcast when it lands READY.
 	Complete(ctx context.Context, caller domain.Caller, req CompleteTaskReq) (CompleteTaskResp, error)
 
@@ -54,7 +55,8 @@ type Lifecycle interface {
 	Reap(ctx context.Context, caller domain.Caller, req ReapStaleLeasesReq) (ReapStaleLeasesResp, error)
 
 	// Handoff is handoff_task.
-	// Lease-guarded. Event: task.handoff. Audit: none. Doorbell: assigned (to the new assignee).
+	// Lease-guarded. Event: task.handoff. Audit: none. Doorbell: assigned (to the new assignee; none
+	// when the caller hands the task to itself).
 	Handoff(ctx context.Context, caller domain.Caller, req HandoffTaskReq) (HandoffTaskResp, error)
 
 	// Cancel is cancel_task.

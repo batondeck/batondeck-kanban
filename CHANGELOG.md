@@ -19,6 +19,40 @@ Notable changes to batondeck-kanban. The format follows
   `Subscribe(["project:<id>"])` is unchanged: that string is the broadcast token scope
   (`service.BroadcastScope`), so `/wake` hears no other identity's assigned row.
 
+- The lifecycle service (R1.5): `Core.Lifecycle()` implements `service.Lifecycle` in
+  `internal/service/lifecycle.go`, every write through `service.mutate`. `Claim` and `ClaimNext`
+  (one `store.Claims.ClaimNext` statement; 4 read statements cold, 2 with the board snapshot cached,
+  `TestClaimNextAndNextStatementPins`) ring nobody, and neither does a self-assignment (owner ruling
+  2026-10-23; `txn.RingFor` and `txn.RingAssigned` drop it); an empty frontier writes no
+  row and reaps the board's expired leases (lazy recovery, no sweeper). A lost claim race is
+  re-judged (`retryStale`): two concurrent claims give one lease and one `CONFLICT_LOCKED` on
+  memstore, SQLite and Postgres. `Heartbeat` moves the lease without bumping the version. The
+  lease-guarded outcomes (`Release`, `Complete`, `Block`, `Fail`, `Handoff`) check the caller's live
+  lease (any mismatch is `LEASE_EXPIRED`) and land the task in one versioned write. `Complete` lands
+  REVIEW (the reviewer assigned and rung `assigned`, conductor `lifecycle.ts:935`) or DONE, which runs the poison-aware unblock of every
+  dependent under the project lock; `Fail` and `Reap` apply `domain.ApplyFailure` (READY with a
+  backoff, or BLOCKED `poison` with the `poisoned` label, never a third state); `Block` writes its
+  `blockedBy` edges in the same transaction under the project lock and refuses the reason `poison`;
+  `Cancel` (ADR-0001) lands DONE with the `cancelled` label and the reason as a note, for a master
+  or the lease holder. `Next` previews the frontier (2 statements, 3 when empty) and its inbox splits
+  BLOCKED into `blocked` and `poisoned`. Refused as VALIDATION rather than ignored: `shard` lanes,
+  `sprintId`, `maxConcurrency`, `strategy: score`, `explain` and `artifacts`. Store:
+  `StatusChange` gains `Assignee`, `Deliverable` and `Review` (the `WriteTaskState` statement writes
+  them; no migration), and `AddEdge` takes the project lock itself, so block_task cannot reopen
+  P-110 (`TestConcurrentBlockClosesNoCycle` on Postgres).
+- The MCP tool registry and the first thirteen tools (R1.1). `internal/mcp/tools` holds one file per
+  area, each registering through its `Register<Area>` hook; `registry.go` pre-lists every area a plan
+  task names a tools file for, with the task that writes it, so a lane adds a file. `mcp.Tool`
+  (`internal/mcp/middleware.go`) registers a tool as one service call, its input and output schemas inferred from the service DTOs
+  by `internal/service/dtoschema` (the recipe moved out of `contract/dto_test.go`, which now compares
+  exactly what the server serves), and refuses a tool with no `domain.ToolPosture`; `Server.Manifest`
+  lists what is registered, by area, with its posture. Arguments are checked by go-sdk against that
+  schema before the service runs: an unknown key, a wrong type, a value outside an enum, a null sent
+  to an `Optional` field and a number its integer cannot hold are all `VALIDATION`. Registered and
+  served by `serve`: `create_project`, `get_project`, `list_projects`, `update_settings`,
+  `delete_project`, `add_member`, `remove_member`, `create_board`, `list_boards`, `get_board`,
+  `add_column`, `update_column`, `remove_column`. Each records one `tool_calls` row. A tool's own
+  output failing its output schema is now `isError` INTERNAL (logged) rather than a JSON-RPC error.
 - The tasks service and the `delete_task` cascade (R1.3): `Core.Tasks()` implements `service.Tasks`
   in `internal/service/{tasks,delete}.go`, every mutation through `service.mutate`. `Create` lands
   in `columnId` or the board's first column with its status, takes the project's next `T-n`,
