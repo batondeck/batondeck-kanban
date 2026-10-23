@@ -192,3 +192,26 @@ func TestSources(t *testing.T) {
 		t.Error("an unknown source is in the catalog")
 	}
 }
+
+// TestDecide is conductor's lifecycle table (incident.ts:167-182), row for row.
+func TestDecide(t *testing.T) {
+	for _, c := range []struct {
+		lifecycle, status string
+		open, untouched   bool
+		want              oncall.Action
+	}{
+		{"correlate", oncall.StatusTest, true, true, oncall.ActionCreate},
+		{"per_event", oncall.StatusFiring, true, false, oncall.ActionCreate},
+		{"per_event", oncall.StatusResolved, true, true, oncall.ActionRecord},
+		{"correlate", oncall.StatusFiring, true, false, oncall.ActionAppend},
+		{"correlate", oncall.StatusFiring, false, false, oncall.ActionCreate},
+		{"correlate", oncall.StatusResolved, false, false, oncall.ActionRecord},
+		{"autoclose", oncall.StatusResolved, true, true, oncall.ActionClose},
+		{"autoclose", oncall.StatusResolved, true, false, oncall.ActionAnnotate},
+		{"correlate", oncall.StatusResolved, true, true, oncall.ActionAnnotate},
+	} {
+		if got := oncall.Decide(c.lifecycle, c.status, c.open, c.untouched); got != c.want {
+			t.Errorf("Decide(%s, %s, open %v, untouched %v) = %s, want %s", c.lifecycle, c.status, c.open, c.untouched, got, c.want)
+		}
+	}
+}
