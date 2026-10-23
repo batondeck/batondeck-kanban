@@ -71,6 +71,10 @@ type state struct {
 	attachments  map[[3]string]store.Attachment     // by (project, task, attachment)
 	blobs        map[string]store.Blob              // by sha256
 
+	chroniclePages    map[[2]string]store.ChroniclePage    // by (project, page)
+	chronicleVersions map[[3]string]store.ChronicleVersion // by (project, page, version); no body
+	chronicleObjects  map[[2]string][]byte                 // by (project, key)
+
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
 	oauthFamilies map[string]store.OAuthFamily // by id
@@ -108,6 +112,10 @@ func newState() *state {
 		wake:         map[string]store.WakeSession{},
 		attachments:  map[[3]string]store.Attachment{},
 		blobs:        map[string]store.Blob{},
+
+		chroniclePages:    map[[2]string]store.ChroniclePage{},
+		chronicleVersions: map[[3]string]store.ChronicleVersion{},
+		chronicleObjects:  map[[2]string][]byte{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -296,6 +304,15 @@ func (st *state) clone() *state {
 	}
 	maps.Copy(c.attachments, st.attachments)
 	maps.Copy(c.blobs, st.blobs)
+	for k, v := range st.chroniclePages {
+		c.chroniclePages[k] = cloneChroniclePage(v)
+	}
+	for k, v := range st.chronicleVersions {
+		c.chronicleVersions[k] = cloneChronicleVersion(v)
+	}
+	for k, v := range st.chronicleObjects {
+		c.chronicleObjects[k] = cloneBytes(v)
+	}
 	for k, v := range st.oauthClients {
 		c.oauthClients[k] = cloneOAuthClient(v)
 	}

@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"strings"
 	"unicode"
@@ -192,4 +193,21 @@ func sameOrigin(a, b *BlockOrigin) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// ChronicleBody is the stored body of a block list: its JSON, provenance recomputed. The store
+// writes exactly these bytes and the service caps them, so the cap measures what is stored.
+func ChronicleBody(blocks []ChronicleBlock) []byte {
+	b, err := json.Marshal(WithComputedProvenance(blocks))
+	if err != nil {
+		panic("domain: a block list does not marshal: " + err.Error()) // strings, slices and pointers only
+	}
+	return b
+}
+
+// ChronicleStale is the STALE of a Chronicle write whose expected head is not the page's head, with
+// conductor's detail keys (expectedVersionId, actualVersionId).
+func ChronicleStale(expected, actual string) *BatonDeckError {
+	return NewError(CodeStale, "Chronicle head mismatch: expected "+expected+", found "+actual,
+		map[string]any{"expectedVersionId": expected, "actualVersionId": actual})
 }
