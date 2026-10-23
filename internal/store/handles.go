@@ -52,6 +52,7 @@ type sqlQueries interface {
 	wakeSessionQueries
 	attachmentQueries
 	blobQueries
+	searchQueries
 }
 
 // pgQueries is the Postgres sqlc queries behind sqlQueries; its methods are in the area files.
