@@ -52,6 +52,7 @@ var areas = []struct{ name, owner string }{
 	{"users", "R0.12"},
 	{"sessions", "R0.12"},
 	{"tokens", "R0.12"},
+	{"oauth", "R0.13"},
 	{"tasks", "R0.18"},
 	{"claims", "R0.18"},
 	{"events", "R0.18"},

@@ -29,6 +29,7 @@ type Store interface {
 	Users
 	Sessions
 	Tokens
+	OAuth
 	Context
 	Memory
 	Summaries
