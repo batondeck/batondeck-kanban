@@ -337,3 +337,79 @@ func TestCloneSnapshotSharesNothing(t *testing.T) {
 		t.Fatalf("cloneSnapshot shares %v and drops %v", shared, dropped)
 	}
 }
+
+// AC3 (P-100): a move_task followed at once by get_board returns the moved task, with the cache
+// live and no bus delivering the move's row: mutate drops the board's snapshot on commit.
+func TestMoveTaskThenGetBoardReadsTheMove(t *testing.T) {
+	f, n := counted(t)
+	f.wire()
+	todo, inProgress := f.column(t, domain.Todo), f.column(t, domain.InProgress)
+	task := f.task(t, domain.Todo, nil)
+	board := func() GetBoardResp {
+		got, err := f.c.Boards().Get(f.ctx, f.alice, GetBoardReq{ProjectID: f.project.ID, BoardID: f.board.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	board()
+	if warm := board(); warm.TaskCounts[todo] != 1 {
+		t.Fatalf("warm get_board: TODO %v", warm.TaskCounts[todo])
+	}
+	n.take()
+	if _, err := f.c.Tasks().Move(f.ctx, f.alice, MoveTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version, ToStatus: domain.InProgress}); err != nil {
+		t.Fatal(err)
+	}
+	n.take()
+	got := board()
+	reads := n.take()
+	t.Logf("get_board right after move_task: TODO %v, IN_PROGRESS %v, reads %v", got.TaskCounts[todo], got.TaskCounts[inProgress], reads)
+	if got.TaskCounts[todo] != 0 || got.TaskCounts[inProgress] != 1 || reads["GetBoard"] != 1 {
+		t.Fatalf("get_board after move_task: TODO %v, IN_PROGRESS %v, reads %v; want 0, 1, one GetBoard", got.TaskCounts[todo], got.TaskCounts[inProgress], reads)
+	}
+}
+
+// A move to DONE whose only doorbell is a dependent on another board writes no change row naming the
+// moved task's board; mutate still drops that board, so the writer reads its own move.
+func TestMoveToDoneWithACrossBoardDependentDropsItsBoard(t *testing.T) {
+	f, n := counted(t)
+	f.wire()
+	other, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "B2", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, done := f.column(t, domain.Review), f.column(t, domain.Done)
+	blocker := f.task(t, domain.Review, nil)
+	var todo2 string
+	for _, c := range other.Columns {
+		if c.Status == domain.Todo {
+			todo2 = c.ID
+		}
+	}
+	dep, err := f.st.CreateTask(f.ctx, store.CreateTaskInput{ProjectID: f.project.ID, BoardID: other.ID, ColumnID: todo2, Title: "d", Status: domain.Todo, OrderKey: "a0", CreatedBy: "alice", CreatedAt: f.clock.now().UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.Context().AddDependency(f.ctx, f.alice, AddDependencyReq{ProjectID: f.project.ID, FromTaskID: blocker.ID, ToTaskID: dep.ID}); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err = f.st.GetTask(f.ctx, f.project.ID, blocker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.snapshot(t)
+	before := f.changes(t)
+	if _, err := f.c.Tasks().Move(f.ctx, f.alice, MoveTaskReq{ProjectID: f.project.ID, TaskID: blocker.ID, Version: blocker.Version, ToStatus: domain.Done}); err != nil {
+		t.Fatal(err)
+	}
+	var named []string
+	for _, ch := range f.changes(t)[len(before):] {
+		named = append(named, string(ch.Payload))
+	}
+	n.take()
+	got := f.snapshot(t)
+	t.Logf("the move's change rows: %v; get_board: REVIEW %v, DONE %v, reads %v", named, got.TaskCounts[review], got.TaskCounts[done], n.take())
+	if got.TaskCounts[review] != 0 || got.TaskCounts[done] != 1 {
+		t.Fatalf("get_board after the move to DONE: REVIEW %v, DONE %v; want 0, 1", got.TaskCounts[review], got.TaskCounts[done])
+	}
+}
