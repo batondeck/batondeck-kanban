@@ -54,6 +54,21 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The join (R1.18, ADR-0003 B3): the transports' tests run on the real service. The new
+  `internal/service/servicetest` opens the real service, its store and a bus over one engine;
+  `BATONDECK_TEST_ENGINE=memstore|sqlite|postgres` picks one, unset runs all three (Postgres skips
+  without `BATONDECK_TEST_POSTGRES_DSN`, and a named `postgres` without one fails). Over it: every one
+  of the 43 registered tools answers once on the real stack (`TestEveryToolOnTheRealStack`, which
+  fails when a registered tool has no call there), the per-area schema comparison against
+  `contract/expected.json`, the bearer test, `search_tasks` end to end, `GET` board's shape and the
+  five `/api/stream` tests. The mapping tests that assert on servicefake's recorded calls stay on it.
+- The plan's proofs through real clients over the serve composition (`internal/cli/proofs_test.go`,
+  every engine): the 25 `move_task` verdicts (14 legal with 5 same-status, 11 `INVALID_TRANSITION`
+  carrying `allowed` and `path`); poison by three `fail_task`, skipped by `claim_next`, refused to a
+  worker and lifted by a master; the last-dependency poison refusal and its control; the eight
+  `delete_task` cases; two concurrent `claim_task` with one winner (20 rounds); 50 concurrent
+  `claim_next` with 50 distinct winners and their latency; a claim writing no doorbell row and a
+  handoff one `assigned` row; an `/api/stream` board frame after an MCP `move_task`.
 - The rest of the REST BFF's route table as stubs (R1.12): 41 more routes in `internal/api/{me,agents,
   notifications,comments,followups,sprints,runs,oncall,chronicle,analytics}.go`, each answering `404
   {"code":"NOT_FOUND","message":"<tool> lands in <lane>"}` until its lane (R2.1, R2.2, R2.3, R2.5, R2.7,

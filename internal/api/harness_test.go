@@ -12,15 +12,16 @@ import (
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
 
-// harness is the BFF over a memstore-backed auth service, signed in as one user through the real
-// POST /api/login: every request carries the session cookie and, unless told otherwise, the CSRF
-// token and Sec-Fetch-Site: same-origin.
+// harness is the BFF over an auth service, signed in as one user through the real POST /api/login:
+// every request carries the session cookie and, unless told otherwise, the CSRF token and
+// Sec-Fetch-Site: same-origin. newHarness builds it over memstore, newStackHarness over a real
+// stack's store, the auth service and the services sharing one engine.
 type harness struct {
 	t      *testing.T
-	st     *memstore.Store
 	auth   *auth.Service
 	srv    *httptest.Server
 	userID string
@@ -37,26 +38,39 @@ const testPassword = "correct horse battery"
 // memstore.
 func newHarness(t *testing.T, build func(st *memstore.Store) Options) *harness {
 	t.Helper()
-	h := &harness{t: t, st: memstore.New()}
-	if _, err := h.st.Migrate(context.Background()); err != nil {
+	st := memstore.New()
+	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	h.auth = &auth.Service{
-		Accounts: &auth.Accounts{Store: h.st, Params: auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}},
-		Tokens:   &auth.TokenService{Store: h.st},
-		Sessions: h.st,
-		Audit: func(_ context.Context, e auth.AuditEvent) {
-			h.mu.Lock()
-			h.audit = append(h.audit, e)
-			h.mu.Unlock()
-		},
+	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Params: fastArgon}, Tokens: &auth.TokenService{Store: st}, Sessions: st}
+	return mountHarness(t, a, build(st))
+}
+
+// newStackHarness is the BFF over the stack's real services and bus, its auth service over the
+// stack's store (R1.18: the engine servicetest selects).
+func newStackHarness(t *testing.T, s *servicetest.Stack, o Options) *harness {
+	t.Helper()
+	o.Services, o.Bus = s.Services, s.Bus
+	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store}, Sessions: s.Store}
+	return mountHarness(t, a, o)
+}
+
+var fastArgon = auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}
+
+// mountHarness records a's audit events, adds alice, mounts the BFF with o and signs her in.
+func mountHarness(t *testing.T, a *auth.Service, o Options) *harness {
+	t.Helper()
+	h := &harness{t: t, auth: a}
+	a.Audit = func(_ context.Context, e auth.AuditEvent) {
+		h.mu.Lock()
+		h.audit = append(h.audit, e)
+		h.mu.Unlock()
 	}
 	u, err := h.auth.Accounts.Add(context.Background(), "alice", "Alice", testPassword, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.userID = u.ID
-	o := build(h.st)
 	o.Auth = h.auth
 	if o.Logger == nil {
 		o.Logger = log.New(io.Discard, "", 0)
@@ -76,7 +90,7 @@ func (h *harness) as(login string) *harness {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	o := &harness{t: h.t, st: h.st, auth: h.auth, srv: h.srv, userID: u.ID}
+	o := &harness{t: h.t, auth: h.auth, srv: h.srv, userID: u.ID}
 	o.login(login, testPassword)
 	return o
 }
