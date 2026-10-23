@@ -35,6 +35,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
+  `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
+  `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
+  (R1.5's semantics), wired in `serve`'s composition. Their input and output schemas equal
+  `contract/expected.json`; each description is at most 200 characters. `fail_task`'s `retryable`
+  reaches the service unset when absent (read as true) and is `VALIDATION` when null. The authz
+  matrix pins each tool's tier and where it lands its task: claims IN_PROGRESS; release, handoff
+  TODO; fail, reap TODO or BLOCKED; block BLOCKED; complete REVIEW or DONE by the project's review;
+  cancel DONE; `next_task` grant-exempt.
 - Attachments on local disk behind HMAC-signed URLs (R1.8). `attach_file` creates a pending
   attachment (`attachment.created`, the task's version +1) and answers an `uploadUrl`,
   `PUT /blobs/{projectId.taskId.attachmentId}?exp=…&sig=…`, valid 15 minutes; the PUT's body is read
