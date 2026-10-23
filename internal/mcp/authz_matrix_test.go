@@ -40,6 +40,7 @@ var expectedPosture = map[string]pinnedPosture{
 	"delete_task":      {tier: domain.TierMaster, tenantScoped: true},
 	"attach_file":      {tier: domain.TierWrite, tenantScoped: true},
 	"list_attachments": {tier: domain.TierRead, tenantScoped: true},
+	"search_tasks":     {tier: domain.TierRead, tenantScoped: true},
 	// The lease-guarded outcomes and cancel_task carry no tier: the held lease (or, for
 	// cancel_task, the master role or the live lease) is the guard.
 	"claim_task":        {tier: domain.TierWrite, tenantScoped: true},

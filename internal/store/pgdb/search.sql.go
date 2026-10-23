@@ -9,23 +9,81 @@ import (
 	"context"
 )
 
+const countSearch = `-- name: CountSearch :one
+SELECT COUNT(*) FROM tasks t
+WHERE t.search @@ to_tsquery('simple', $1::text) AND t.project_id = $2::text
+  AND ($3::text = '' OR t.board_id = $3::text)
+  AND ($4::text = '[]' OR t.status IN (SELECT jsonb_array_elements_text($4::jsonb)))
+`
+
+type CountSearchParams struct {
+	Match     string
+	ProjectID string
+	BoardID   string
+	Statuses  string
+}
+
+// How many tasks SearchTasks pages through for the same match and filter, in one statement.
+func (q *Queries) CountSearch(ctx context.Context, arg CountSearchParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearch,
+		arg.Match,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Statuses,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const searchTasks = `-- name: SearchTasks :many
-SELECT project_id, id FROM tasks
-WHERE search @@ plainto_tsquery('simple', $1) AND project_id = $2
+SELECT h.id, h.score FROM (
+  SELECT t.id AS id, ts_rank(t.search, to_tsquery('simple', $1::text))::float8 AS score, substr(t.id, 3)::bigint AS num
+  FROM tasks t
+  WHERE t.search @@ to_tsquery('simple', $1::text) AND t.project_id = $2::text
+    AND ($3::text = '' OR t.board_id = $3::text)
+    AND ($4::text = '[]' OR t.status IN (SELECT jsonb_array_elements_text($4::jsonb)))
+) h
+WHERE $5::text = '' OR h.score < $6::float8
+   OR (h.score = $6::float8 AND h.num > $7::bigint)
+ORDER BY h.score DESC, h.num
+LIMIT $8::bigint
 `
 
 type SearchTasksParams struct {
-	PlaintoTsquery string
-	ProjectID      string
+	Match     string
+	ProjectID string
+	BoardID   string
+	Statuses  string
+	AfterID   string
+	AfterRank float64
+	AfterNum  int64
+	PageLimit int64
 }
 
 type SearchTasksRow struct {
-	ProjectID string
-	ID        string
+	ID    string
+	Score float64
 }
 
+// search_tasks over the generated tsvector tasks.search ('simple': no stemming, as FTS5's default
+// tokenizer does none). match is built by the store from the query's normalised terms (each a
+// single-quoted letters-and-digits lexeme, a prefix one followed by :*, joined by &), never the
+// caller's text, so to_tsquery rather than plainto_tsquery (which has no prefix). score is ts_rank
+// as float8, higher is better; num is the task number, the tie-break. statuses is a JSON array of
+// statuses, '[]' every status; after_id ” is the first page, else the page starts strictly after
+// (after_rank, after_num).
 func (q *Queries) SearchTasks(ctx context.Context, arg SearchTasksParams) ([]SearchTasksRow, error) {
-	rows, err := q.db.Query(ctx, searchTasks, arg.PlaintoTsquery, arg.ProjectID)
+	rows, err := q.db.Query(ctx, searchTasks,
+		arg.Match,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Statuses,
+		arg.AfterID,
+		arg.AfterRank,
+		arg.AfterNum,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +91,7 @@ func (q *Queries) SearchTasks(ctx context.Context, arg SearchTasksParams) ([]Sea
 	var items []SearchTasksRow
 	for rows.Next() {
 		var i SearchTasksRow
-		if err := rows.Scan(&i.ProjectID, &i.ID); err != nil {
+		if err := rows.Scan(&i.ID, &i.Score); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

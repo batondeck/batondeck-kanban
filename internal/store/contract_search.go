@@ -13,8 +13,10 @@ type SearchFilter struct {
 	Statuses []domain.Status
 }
 
-// SearchHit is one match. Rank is the engine's relevance, higher is better (SQLite's bm25 negated,
-// Postgres's ts_rank); it orders one engine's results and is not comparable across engines.
+// SearchHit is one match. Rank is the engine's relevance, higher is better (on SQLite how many of
+// the task's tokens the query matched, Postgres's ts_rank); it reads the task's own row alone, so
+// no other project's tasks move it. It orders one engine's results and is not comparable across
+// engines.
 type SearchHit struct {
 	TaskID string
 	Rank   float64
