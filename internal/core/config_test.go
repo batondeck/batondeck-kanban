@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,7 +26,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "127.0.0.1:8080" || c.Database.Synchronous != "FULL" || c.PublicURL != "" {
+	if !slices.Equal(c.Listen, []string{"tcp://127.0.0.1:8080"}) || c.Database.Synchronous != "FULL" || c.PublicURL != "" {
 		t.Fatalf("defaults: %+v", c)
 	}
 	if c.Engine() != EngineSQLite || c.SQLitePath() != DefaultSQLitePath {
@@ -35,16 +36,16 @@ func TestDefaults(t *testing.T) {
 
 // env > file > defaults, key by key: the file beats the default, the environment beats the file.
 func TestEnvBeatsFileBeatsDefault(t *testing.T) {
-	p := writeConfig(t, `{"listen":"127.0.0.1:9001","public_url":"https://file.example","database":{"url":"/srv/file.db","synchronous":"NORMAL"}}`)
+	p := writeConfig(t, `{"listen":["tcp://127.0.0.1:9001","unix:///run/bk/bk.sock"],"public_url":"https://file.example","database":{"url":"/srv/file.db","synchronous":"NORMAL"}}`)
 	c, err := Load(p, env(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "127.0.0.1:9001" || c.PublicURL != "https://file.example" || c.Database.URL != "/srv/file.db" || c.Database.Synchronous != "NORMAL" {
+	if !slices.Equal(c.Listen, []string{"tcp://127.0.0.1:9001", "unix:///run/bk/bk.sock"}) || c.PublicURL != "https://file.example" || c.Database.URL != "/srv/file.db" || c.Database.Synchronous != "NORMAL" {
 		t.Fatalf("file layer: %+v", c)
 	}
 	c, err = Load(p, env(map[string]string{
-		"BATONDECK_LISTEN":               "127.0.0.1:9002",
+		"BATONDECK_LISTEN":               "tcp://127.0.0.1:9002, unix:///tmp/b.sock",
 		"BATONDECK_PUBLIC_URL":           "https://env.example",
 		"BATONDECK_DATABASE_URL":         "postgres://u:p@db/bk",
 		"BATONDECK_DATABASE_SYNCHRONOUS": "FULL",
@@ -52,7 +53,7 @@ func TestEnvBeatsFileBeatsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "127.0.0.1:9002" || c.PublicURL != "https://env.example" || c.Database.URL != "postgres://u:p@db/bk" || c.Database.Synchronous != "FULL" {
+	if !slices.Equal(c.Listen, []string{"tcp://127.0.0.1:9002", "unix:///tmp/b.sock"}) || c.PublicURL != "https://env.example" || c.Database.URL != "postgres://u:p@db/bk" || c.Database.Synchronous != "FULL" {
 		t.Fatalf("env layer: %+v", c)
 	}
 	if c.Engine() != EnginePostgres {
@@ -87,6 +88,12 @@ func TestRefusals(t *testing.T) {
 		"unknown key":          {file: `{"data_dir":"/x"}`, rule: "unknown field"},
 		"other scheme":         {env: map[string]string{"BATONDECK_DATABASE_URL": "mysql://h/db"}, rule: RuleDatabaseURL},
 		"synchronous off enum": {env: map[string]string{"BATONDECK_DATABASE_SYNCHRONOUS": "OFF"}, rule: RuleEnum},
+		"bare listen address":  {env: map[string]string{"BATONDECK_LISTEN": ":8080"}, rule: RuleListen},
+		"listen scheme":        {env: map[string]string{"BATONDECK_LISTEN": "http://:8080"}, rule: RuleListen},
+		"relative unix path":   {env: map[string]string{"BATONDECK_LISTEN": "unix://run/bk.sock"}, rule: RuleListen},
+		"tcp without a port":   {env: map[string]string{"BATONDECK_LISTEN": "tcp://localhost"}, rule: RuleListen},
+		"empty listen":         {env: map[string]string{"BATONDECK_LISTEN": " , "}, rule: RuleListen},
+		"empty listen in file": {file: `{"listen":[]}`, rule: RuleListen},
 	}
 	for name, tc := range cases {
 		path := ""

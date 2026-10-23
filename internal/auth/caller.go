@@ -64,8 +64,17 @@ func (s *Service) now() time.Time {
 	return time.Now()
 }
 
+type freshAccountKey struct{}
+
+// FreshAccount marks ctx so that a ResolveCaller under it reads the account from the store rather
+// than the cache (and refreshes the cache): /wake's periodic recheck, so a disable ends an open
+// stream within one recheck whatever other traffic keeps the cache warm.
+func FreshAccount(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshAccountKey{}, true)
+}
+
 // account answers whether the user may act, from the cache while its entry is younger than
-// AccountCacheTTL, else from the store.
+// AccountCacheTTL (unless ctx is FreshAccount's), else from the store.
 func (s *Service) account(ctx context.Context, userID string) (accountEntry, error) {
 	ttl := s.AccountCacheTTL
 	if ttl == 0 {
@@ -75,7 +84,7 @@ func (s *Service) account(ctx context.Context, userID string) (accountEntry, err
 	s.mu.Lock()
 	e, ok := s.cache[userID]
 	s.mu.Unlock()
-	if ok && now.Sub(e.at) < ttl {
+	if fresh, _ := ctx.Value(freshAccountKey{}).(bool); ok && !fresh && now.Sub(e.at) < ttl {
 		return e, nil
 	}
 	u, err := s.Accounts.Store.GetUser(ctx, userID)

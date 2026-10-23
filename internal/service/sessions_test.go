@@ -1,9 +1,15 @@
 package service
 
 import (
+	"bytes"
+	"encoding/base64"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
@@ -98,4 +104,81 @@ func TestSessionsRegisterWakeSession(t *testing.T) {
 	}
 	_, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{Cursor: -1})
 	wantCode(t, err, domain.CodeValidation)
+}
+
+func testKeyring(t *testing.T) *core.Keyring {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	k, err := core.OpenKeyring(filepath.Join(t.TempDir(), "unused.key"), func(n string) (string, bool) { return key, n == core.MasterKeyEnv })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// A socket token is stored sealed: the row holds no byte run of the plaintext, and the keyring
+// opens it only under the row's own AAD.
+func TestSessionsRegisterWakeSessionSealsTheToken(t *testing.T) {
+	k := testKeyring(t)
+	f := newFixture(t, Options{Sealer: k})
+	const secret = "inbox-token-0123456789"
+	got, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock", SocketToken: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := f.st.GetWakeSession(f.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.SocketTokenSealed) == 0 || bytes.Contains(w.SocketTokenSealed, []byte(secret)) {
+		t.Fatalf("socket_token_sealed = %q: want a sealed value that does not hold the token", w.SocketTokenSealed)
+	}
+	pt, err := k.Decrypt(w.SocketTokenSealed, SocketTokenAAD(w.ID))
+	if err != nil || string(pt) != secret {
+		t.Fatalf("opening the sealed token: %q, %v", pt, err)
+	}
+	if _, err := k.Decrypt(w.SocketTokenSealed, SocketTokenAAD("W-other")); err == nil {
+		t.Fatal("the sealed token opened under another session's AAD")
+	}
+	// No token: nothing sealed (the positive control for the nil column).
+	got, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, _ = f.st.GetWakeSession(f.ctx, got.ID); w.SocketTokenSealed != nil {
+		t.Fatalf("no token, socket_token_sealed = %q, want nil", w.SocketTokenSealed)
+	}
+	_, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketToken: secret})
+	wantCode(t, err, domain.CodeValidation)
+}
+
+// With no sealer a token is refused INTERNAL, naming the setting, and nothing is written.
+func TestSessionsRegisterWakeSessionWithoutASealerRefusesAToken(t *testing.T) {
+	f := newFixture(t, Options{})
+	_, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock", SocketToken: "t"})
+	e := wantCode(t, err, domain.CodeInternal)
+	if !strings.Contains(e.Message, core.MasterKeyEnv) {
+		t.Fatalf("message %q does not name %s", e.Message, core.MasterKeyEnv)
+	}
+	if _, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock"}); err != nil {
+		t.Fatalf("no token and no sealer: %v, want the session registered", err)
+	}
+}
+
+// WakeScopes is the caller's own scope plus the broadcast scope of each project it is a member of.
+func TestWakeScopes(t *testing.T) {
+	f := newFixture(t, Options{})
+	got, err := f.c.WakeScopes(f.ctx, f.alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"alice", BroadcastScope(f.project.ID)}; !slices.Equal(got, want) {
+		t.Fatalf("alice's scopes %v, want %v", got, want)
+	}
+	got, err = f.c.WakeScopes(f.ctx, domain.Caller{Identity: "nobody", TokenScope: "nobody"})
+	if err != nil || !slices.Equal(got, []string{"nobody"}) {
+		t.Fatalf("a non-member's scopes %v, %v; want only its own", got, err)
+	}
+	_, err = f.c.WakeScopes(f.ctx, domain.Caller{Identity: "x"})
+	wantCode(t, err, domain.CodeInternal)
 }

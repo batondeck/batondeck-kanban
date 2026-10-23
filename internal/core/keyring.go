@@ -16,7 +16,7 @@ import (
 	"os"
 )
 
-const masterKeyEnv = "BATONDECK_MASTER_KEY"
+const MasterKeyEnv = "BATONDECK_MASTER_KEY"
 
 // Keyring seals and opens secret values under the master key with AES-256-GCM. It is the
 // only write path for secrets at rest. Build one with OpenKeyring.
@@ -29,13 +29,13 @@ type Keyring struct {
 // os.LookupEnv.
 func OpenKeyring(path string, lookup func(string) (string, bool)) (*Keyring, error) {
 	var key []byte
-	if v, ok := lookup(masterKeyEnv); ok {
+	if v, ok := lookup(MasterKeyEnv); ok {
 		k, err := base64.StdEncoding.DecodeString(v)
 		if err != nil {
-			return nil, fmt.Errorf("keyring: %s is not base64: %w", masterKeyEnv, err)
+			return nil, fmt.Errorf("keyring: %s is not base64: %w", MasterKeyEnv, err)
 		}
 		if len(k) != 32 {
-			return nil, fmt.Errorf("keyring: %s must decode to 32 bytes, got %d", masterKeyEnv, len(k))
+			return nil, fmt.Errorf("keyring: %s must decode to 32 bytes, got %d", MasterKeyEnv, len(k))
 		}
 		key = k
 	} else {
