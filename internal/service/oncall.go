@@ -986,11 +986,6 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 	return out, nil
 }
 
-func isNotFound(err error) bool {
-	e, ok := domain.AsBatonDeckError(err)
-	return ok && e.Code == domain.CodeNotFound
-}
-
 // ingestVersionField is the custom field holding the version the ingest last left an incident
 // ticket at (oncall.Untouched): stamped on create, carried forward by each ingest write only while it
 // still matches.
