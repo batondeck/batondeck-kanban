@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,9 +222,11 @@ func TestUploadRefusalsOverTheEngines(t *testing.T) {
 		if !m.onDisk(hashOf([]byte("abc"))) {
 			t.Fatal("a refused upload of a hash another row holds unlinked that row's file")
 		}
+		// Found by id: two attachments made in one millisecond list in id order, which is random.
 		list := m.list(t, task.ID)
-		if len(list) != 2 || list[1].ID != short.AttachmentID || list[1].Status != "pending" {
-			t.Fatalf("after the refusals %+v", list)
+		i := slices.IndexFunc(list, func(a Attachment) bool { return a.ID == short.AttachmentID })
+		if len(list) != 2 || i < 0 || list[i].Status != "pending" {
+			t.Fatalf("after the refusals %+v, want %s pending", list, short.AttachmentID)
 		}
 		st, err := m.files.Stage(strings.NewReader("abc"))
 		if err != nil {
@@ -378,4 +383,76 @@ func TestConcurrentUploadsOneWinnerOverTheEngines(t *testing.T) {
 			}
 		}
 	})
+}
+
+// gatedStore holds the first Atomically after arm until release: CompleteUpload's mutation, after
+// its file is moved into place and before its row is written.
+type gatedStore struct {
+	store.Store
+	armed            atomic.Bool
+	reached, release chan struct{}
+}
+
+func (g *gatedStore) arm() {
+	g.reached, g.release = make(chan struct{}), make(chan struct{})
+	g.armed.Store(true)
+}
+
+func (g *gatedStore) Atomically(ctx context.Context, fn func(tx store.Store) error) error {
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.reached)
+		<-g.release
+	}
+	return g.Store.Atomically(ctx, fn)
+}
+
+// N2 (review round 1): the hash lock CompleteUpload holds from the file's move to the row's commit
+// is what stops a blob GC of the same bytes, which judged the hash unreferenced, from unlinking the
+// file under a row about to say ready. Task A's attachment held H and is gone; an upload of H's bytes
+// onto task B is held between its rename and its mutation while CollectBlobs(H) runs: B ends ready
+// with H's file on disk, the GC having waited for the lock and then found H referenced.
+func TestTheHashLockKeepsAReadyRowsFileOverTheEngines(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			g := &gatedStore{Store: ec.open(t)}
+			m := newMediaEnv(t, g, true)
+			if err := m.c.Close(m.ctx); err != nil {
+				t.Fatal(err)
+			}
+			opts := MediaOptions{Files: m.files, Signer: m.signer, BaseURL: "http://bk.test", MaxBytes: 64}
+			m.c = New(g, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1, Media: opts, BlobGC: func(context.Context, []string) {}})
+			body := []byte("same bytes")
+			sha := hashOf(body)
+			a, b := m.newTask(t), m.newTask(t)
+			if err := m.upload(t, m.attach(t, a.ID, int64(len(body))).UploadURL, body); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.c.Tasks().Delete(m.ctx, m.alice, DeleteTaskReq{ProjectID: m.project, TaskID: a.ID, Version: m.get(t, a.ID).Version}); err != nil {
+				t.Fatal(err)
+			}
+			up := m.attach(t, b.ID, int64(len(body))).UploadURL
+			g.arm()
+			uploaded := make(chan error, 1)
+			go func() { uploaded <- m.upload(t, up, body) }()
+			<-g.reached
+			collected := make(chan struct{})
+			go func() { m.c.CollectBlobs(m.ctx, []string{sha}); close(collected) }()
+			select {
+			case <-collected: // no lock held it: the GC ran inside the upload's window
+			case <-time.After(200 * time.Millisecond):
+			}
+			close(g.release)
+			if err := <-uploaded; err != nil {
+				t.Fatalf("upload: %v", err)
+			}
+			<-collected
+			list := m.list(t, b.ID)
+			if len(list) != 1 || list[0].Status != "ready" {
+				t.Fatalf("task B %+v, want its attachment ready", list)
+			}
+			if !m.onDisk(sha) {
+				t.Fatal("task B's attachment is ready and its file is gone: the GC unlinked it inside the upload")
+			}
+		})
+	}
 }
