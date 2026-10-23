@@ -1,7 +1,6 @@
 package mcp_test
 
 import (
-	"context"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,7 +15,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/mcp/tools"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
-	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
 
 // TestSearchTasksTool drives search_tasks through a real client against servicefake: every input
@@ -100,20 +99,16 @@ func TestSearchTasksTool(t *testing.T) {
 	}
 }
 
-// TestSearchTasksEndToEnd: search_tasks through a real client, the real service and memstore (the
-// engines are judged in internal/service, which a transport test may not import: ADR-0003 row 6).
+// TestSearchTasksEndToEnd: search_tasks through a real client and the real service, on every engine
+// servicetest selects (R1.18; it ran over memstore alone before the join).
 // A project's search finds its task and another project's never does; update_task and delete_task
 // move the index; the four hostile inputs come back VALIDATION or a result, never INTERNAL.
 func TestSearchTasksEndToEnd(t *testing.T) {
-	ctx := context.Background()
-	st := memstore.New()
-	if _, err := st.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	core := service.New(st, service.Options{ToolCallFlush: -1})
-	t.Cleanup(func() { _ = core.Close(context.Background()) })
-	svc := service.Services{Projects: core.Projects(), Boards: core.Boards(), Tasks: core.Tasks(), Lifecycle: core.Lifecycle(),
-		Context: core.Context(), Media: core.Media(), Feed: core.Feed(), Sessions: core.Sessions(), ToolCalls: core.ToolCalls()}
+	servicetest.Run(t, searchTasksEndToEnd)
+}
+
+func searchTasksEndToEnd(t *testing.T, s *servicetest.Stack) {
+	svc := s.Services
 	carol := domain.Caller{Identity: "carol", TokenScope: "carol"}
 	h := bk.BootHarness(t, svc, authfake.Resolver{Callers: map[string]domain.Caller{"bk_test_carol": carol}})
 	tools.Register(h.Server(), svc)

@@ -12,6 +12,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
+	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
 
@@ -252,37 +253,35 @@ func TestSessionAndPublicConfig(t *testing.T) {
 	}
 }
 
-// AC4: GET /api/projects/:p/boards/:b over the real service answers the keys conductor's get_board
+// AC4: GET /api/projects/:p/boards/:b over the real service, on every engine, answers the keys conductor's get_board
 // answered (testdata/get_board.conductor.json, recorded from conductor's test harness at 5e2baafa),
 // with board.transitions as the one addition: an optional key of conductor's BoardSchema
 // (src/tools/schemas.ts:257) that this server always fills (the fixed table).
 func TestGetBoardShapeMatchesConductor(t *testing.T) {
-	var core *service.Core
-	h := newHarness(t, func(st *memstore.Store) Options {
-		core = service.New(st, service.Options{ToolCallFlush: -1})
-		return Options{Services: servicesOf(core)}
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		pid, bid := seedBoard(t, h, s.Core, "Shape")
+		code, body := h.do("GET", "/api/projects/"+pid+"/boards/"+bid, "", nil)
+		if code != 200 {
+			t.Fatalf("get board: %d %s", code, body)
+		}
+		fixture, err := os.ReadFile("testdata/get_board.conductor.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want, got any
+		if err := json.Unmarshal(fixture, &want); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(body), &got); err != nil {
+			t.Fatal(err)
+		}
+		// taskCounts is keyed by column id, which differs per run: its values are compared by type.
+		diffs := shapeDiff("", want, got, map[string]bool{".board.transitions": true}, map[string]bool{".taskCounts": true})
+		if len(diffs) > 0 {
+			t.Fatalf("GET board differs in shape from conductor's get_board:\n%s\ngot %s", strings.Join(diffs, "\n"), body)
+		}
 	})
-	pid, bid := seedBoard(t, h, core, "Shape")
-	code, body := h.do("GET", "/api/projects/"+pid+"/boards/"+bid, "", nil)
-	if code != 200 {
-		t.Fatalf("get board: %d %s", code, body)
-	}
-	fixture, err := os.ReadFile("testdata/get_board.conductor.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want, got any
-	if err := json.Unmarshal(fixture, &want); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal([]byte(body), &got); err != nil {
-		t.Fatal(err)
-	}
-	// taskCounts is keyed by column id, which differs per run: its values are compared by type.
-	diffs := shapeDiff("", want, got, map[string]bool{".board.transitions": true}, map[string]bool{".taskCounts": true})
-	if len(diffs) > 0 {
-		t.Fatalf("GET board differs in shape from conductor's get_board:\n%s\ngot %s", strings.Join(diffs, "\n"), body)
-	}
 }
 
 // shapeDiff lists where got's keys and JSON types differ from want's: a key of want missing from got,
