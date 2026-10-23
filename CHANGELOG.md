@@ -41,6 +41,26 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The REST BFF core (R1.11): `internal/api` mounted under `/api` behind R0.12's session cookie and CSRF
+  check, with conductor ui-backend's paths and JSON, each route one `service.*` call whose arguments
+  (the body, or a GET's query typed by the schema, under the path's ids) are validated against the
+  MCP tool's own input schema. 39 routes, listed with their `app.ts` lines in
+  `internal/api/routes.json`, which `TestRouteTable` compares with the mounted table: the session,
+  the public config and a new `POST /api/login` (R0.12's form sign-in), projects and members, boards
+  and columns, tasks, the UI's lifecycle (claim, release, complete, block, handoff), context items,
+  summary, memory, subtasks, dependencies, attachments, search, the board feed and `/api/stream`.
+  Errors carry ui-backend's status per code (409 for the conflicts, 429 for quota and rate) and
+  `{code, message, details}`.
+- `GET /api/stream?projectId&boardId` (ADR-0004's web transport): `ready`, `ping` every 20 s, and per
+  100 ms of a board's changes a `board` frame (ui-backend's `{board, tasks, feed}`, the board from
+  `service.Feed.BoardSnapshot`) and an `updated {uri, count}` frame, fed by the bus's project
+  subscription; `presence` frames from R0.25's device session directory (`service.DeviceSessions`, wired in
+  `serve`), listing the caller's own live processes. The board is authorized as the caller before the stream opens
+  (403 for a non-member) and at every frame. A board frame's SSE id is its change-log cursor; a
+  reconnect with it (`Last-Event-ID` or `?cursor=`) replays the missed changes as one frame, and past
+  5,000 change-log rows answers `resync`, so a reconnect never scans the whole retained log.
+- `/healthz` names the store's engine: `batondeck-kanban <version> ok sqlite` (or `postgres`).
+
 - The MCP prompts, readable resources and server instructions (R1.7; ADR-0004, ADR-0005). The four
   prompts `pick_up_next_task`, `triage_inbox`, `summarize_for_handoff` and `decompose_into_subtasks`
   take conductor's arguments and text, with the five states: `triage_inbox` makes each TODO task a

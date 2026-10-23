@@ -116,13 +116,24 @@ func migratedLine(m store.Migrated) string {
 	return fmt.Sprintf("%d applied, schema at version %d", m.Applied, m.Version)
 }
 
-// healthBody is /healthz's whole answer: liveness only, naming the binary and its version.
-func healthBody(version string) string { return "batondeck-kanban " + version + " ok\n" }
+// healthBody is /healthz's whole answer: liveness only, naming the binary, its version and, when
+// known, the store's engine.
+func healthBody(version, engine string) string {
+	if engine == "" {
+		return "batondeck-kanban " + version + " ok\n"
+	}
+	return "batondeck-kanban " + version + " ok " + engine + "\n"
+}
 
 // handler is everything serve answers: /healthz, the MCP server at /mcp, the routes mounts add
-// (compose's OAuth server when public_url is set, /wake and /internal/wake-session), and the
-// embedded SPA for every other path.
+// (compose's OAuth server when public_url is set, /wake, /internal/wake-session and the REST BFF
+// under /api), and the embedded SPA for every other path.
 func handler(version string, mcp http.Handler, mounts ...func(*http.ServeMux)) http.Handler {
+	return engineHandler(version, "", mcp, mounts...)
+}
+
+// engineHandler is handler with /healthz naming engine.
+func engineHandler(version, engine string, mcp http.Handler, mounts ...func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
 	for _, m := range mounts {
 		m(mux)
@@ -133,7 +144,7 @@ func handler(version string, mcp http.Handler, mounts ...func(*http.ServeMux)) h
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = io.WriteString(w, healthBody(version))
+		_, _ = io.WriteString(w, healthBody(version, engine))
 	})
 	web.MountSPA(mux)
 	return mux
