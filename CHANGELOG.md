@@ -48,6 +48,11 @@ Notable changes to batondeck-kanban. The format follows
   `contract/expected.json`; each description is at most 200 characters. `get_task_context`'s
   `resume` is always `null` until the resume scan is ported (P-117), and its description says so
   and that `null` is not permission to start a fresh branch, where conductor's text says it is.
+- The six task tools (R1.2): `create_task`, `get_task`, `update_task`, `move_task`, `list_tasks` and
+  `delete_task`, registered in `internal/mcp/tools/tasks.go`, each one `service.Tasks` call; `serve`
+  wires `Tasks` into the MCP services. Their schemas equal `contract/expected.json`; `create_task` takes
+  no `status`; `delete_task`, `create_task`, `update_task` and `move_task` are master tier, `get_task`
+  and `list_tasks` read tier, as `internal/domain/grants.go` classifies them.
 - The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
   `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
   `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call

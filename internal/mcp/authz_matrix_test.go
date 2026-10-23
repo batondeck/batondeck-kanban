@@ -32,6 +32,12 @@ var expectedPosture = map[string]pinnedPosture{
 	"add_column":       {tier: domain.TierWrite, tenantScoped: true},
 	"update_column":    {tier: domain.TierStructural, tenantScoped: true},
 	"remove_column":    {tier: domain.TierStructural, tenantScoped: true},
+	"create_task":      {tier: domain.TierMaster, tenantScoped: true},
+	"get_task":         {tier: domain.TierRead, tenantScoped: true},
+	"update_task":      {tier: domain.TierMaster, tenantScoped: true},
+	"move_task":        {tier: domain.TierMaster, tenantScoped: true},
+	"list_tasks":       {tier: domain.TierRead, tenantScoped: true},
+	"delete_task":      {tier: domain.TierMaster, tenantScoped: true},
 	"attach_file":      {tier: domain.TierWrite, tenantScoped: true},
 	"list_attachments": {tier: domain.TierRead, tenantScoped: true},
 	// The lease-guarded outcomes and cancel_task carry no tier: the held lease (or, for
