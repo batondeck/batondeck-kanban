@@ -4,14 +4,19 @@
 Checks, over the instruction files (plugin/skills/*/SKILL.md, plugin/commands/*.md, plugin/README.md,
 plugin/SECURITY.md) unless a check says otherwise:
   1. each SKILL.md has frontmatter with a non-empty name and description; each command a description;
-  2. every script a file names (scripts/<x>.sh|.py, hooks/<x>.sh) exists in plugin/;
-  3. every tool a file names exists in contract/expected.json: a call (`tool {`, in backticks or a
-     fenced block) or a bare backticked snake_case name;
+  2. every script a file names (scripts/<x>.sh|.py, hooks/<x>.sh) exists in plugin/, hooks.json included;
+  3. every tool a file names exists in contract/expected.json. A tool name is any lowercase snake_case
+     word (a letter, then letters and digits, with at least one `_` segment) that is not part of a
+     path or a longer identifier, in any form: backticked, a call, a fenced block or plain prose. The
+     only snake_case words allowed that are not tools are the contract's enum values and the server's
+     prompts (NOT_TOOLS);
   4. no file under plugin/ but TRIM.md names a conductor tool this repository dropped (in
      contract/tools.json or admin-tools.json, not in expected.json), in any form;
   5. no file under plugin/ but TRIM.md names a retired term (the six-state names, the dropped wake
      paths) — TRIM.md is the record of what was dropped, so it is the one file that names them;
   6. plugin/hooks/hooks.json registers exactly SessionStart and SessionEnd (ADR-0004).
+It also WARNS, without failing, about every tool the files name that is in expected.json but not
+registered by the server yet (the mcp.Tool(s, "<area>", "<name>" calls in internal/mcp/tools/*.go).
 Python 3 standard library only. Exit 1 with one line per problem.
 """
 import glob
@@ -83,9 +88,9 @@ def main():
             if not m or not m.group(1).strip().strip('"'):
                 problems.append(f"{rel(d)}: frontmatter `{k}` missing or empty")
 
-    # 2. scripts
+    # 2. scripts, in the instruction files and in hooks.json
     ref = re.compile(r"(?:\$\{CLAUDE_PLUGIN_ROOT\}/)?((?:[A-Za-z0-9_.-]+/)*(?:scripts|hooks)/[A-Za-z0-9_.-]+\.(?:sh|py))")
-    for d in docs:
+    for d in docs + [os.path.join(PLUGIN, "hooks", "hooks.json")]:
         base = os.path.dirname(d)
         for n, line in enumerate(open(d).read().splitlines(), 1):
             for m in ref.finditer(line):
@@ -93,18 +98,29 @@ def main():
                 if not any(os.path.isfile(os.path.join(b, p)) for b in (PLUGIN, base)):
                     problems.append(f"{rel(d)}:{n}: names `{p}`, which is not in plugin/")
 
-    # 3. tools named in call form or as a bare backticked snake_case word
-    call = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*\{")
-    bare = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
-    fenced_call = re.compile(r"^[ \t]*([a-z][a-z0-9]*(?:_[a-z0-9]+)+)[ \t]*\{", re.M)
-    fence = re.compile(r"```[a-z]*\n(.*?)```", re.S)
+    # 3. every snake_case word is a tool, in any form (backticks, a call, a fence, prose)
+    snake = re.compile(r"(?<![A-Za-z0-9_./$-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_])")
+    named = set()
     for d in docs:
-        text = open(d).read()
-        names = set(call.findall(text)) | set(bare.findall(text))
-        for block in fence.findall(text):
-            names |= set(fenced_call.findall(block))
-        for name in sorted(names - not_tools - expected):
-            problems.append(f"{rel(d)}: names the tool `{name}`, which is not in contract/expected.json")
+        for n, line in enumerate(open(d).read().splitlines(), 1):
+            for m in snake.finditer(line):
+                name = m.group(0)
+                if name in not_tools:
+                    continue
+                if name in expected:
+                    named.add(name)
+                else:
+                    problems.append(f"{rel(d)}:{n}: names the tool `{name}`, which is not in contract/expected.json")
+
+    # the warning: named tools the server does not register yet
+    reg = re.compile(r'mcp\.Tool(?:\[[^\]]*\])?\(s, "[a-z]+", "([a-z_]+)"')
+    registered = set()
+    for g in glob.glob(os.path.join(ROOT, "internal", "mcp", "tools", "*.go")):
+        if not g.endswith("_test.go"):
+            registered |= set(reg.findall(open(g).read()))
+    if not registered:
+        problems.append("internal/mcp/tools/*.go: no mcp.Tool registration found, so the unregistered-tool warning has no source")
+    unregistered = sorted(named - registered)
 
     # 4 and 5: every file under plugin/ except TRIM.md
     word = re.compile(r"\b(" + "|".join(sorted(map(re.escape, dropped), key=len, reverse=True)) + r")\b") if dropped else None
@@ -140,6 +156,9 @@ def main():
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
+    if registered and unregistered:
+        print(f"skill-lint: WARNING: the plugin names {len(unregistered)} tools that are in contract/expected.json "
+              f"but not registered by the server yet ({len(registered)} registered): {' '.join(unregistered)}")
     print(f"skill-lint: {len(docs)} instruction files, {scanned} plugin files, {len(expected)} tools in "
           f"contract/expected.json, {len(dropped)} dropped conductor tools: ok")
     return 0

@@ -5,18 +5,46 @@ A SessionStart hook's stdout is added to the model's context, so `batondeck-kanb
 and `unregister` must keep stdout empty on every path, success included, and plugin/hooks/session.sh
 must too. This builds the real binary, serves a scratch SQLite store on a Unix socket in a temporary
 directory, mints a user and a token with the binary's own subcommands, and runs each case as a
-subprocess, the binary directly (the argv the hook builds) and through the hook script.
+subprocess: the binary directly (the argv the hook builds), then EVERY command plugin/hooks/hooks.json
+declares, as Claude Code runs it (`sh -c` with CLAUDE_PLUGIN_ROOT set), under each scenario of its
+event. A declared command whose script does not exist, that writes to stdout or exits non-zero fails.
 
 usage: python3 scripts/hook-check.py   (needs go; no network; everything lives in a temp dir)
 """
+import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOOK = os.path.join(ROOT, "plugin", "hooks", "session.sh")
+PLUGIN = os.path.join(ROOT, "plugin")
+HOOKS_JSON = os.path.join(PLUGIN, "hooks", "hooks.json")
+
+# The scenarios each declared command of an event is run under: (name, environment, a stderr substring
+# that proves the path ran). An event with no scenarios here is refused: nothing would check it.
+SCENARIOS = {
+    "SessionStart": [
+        ("worker", {}, "registered as worker"),
+        ("master", {"BATONDECK_ROLE": "master"}, "registered as master"),
+        ("agent", {"BATONDECK_AGENT": "hook-check"}, "agent hook-check"),
+        ("bad role", {"BATONDECK_ROLE": "boss"}, "usage"),
+        ("binary not on PATH", {"PATH": "/usr/bin:/bin"}, "not on PATH"),
+    ],
+    "SessionEnd": [
+        ("unregister", {}, "session unregister"),
+        ("binary not on PATH", {"PATH": "/usr/bin:/bin"}, "not on PATH"),
+    ],
+}
+
+
+def declared_hooks():
+    """Every (event, hook) plugin/hooks/hooks.json declares."""
+    with open(HOOKS_JSON) as f:
+        events = json.load(f)["hooks"]
+    return [(event, h) for event, groups in events.items() for g in groups for h in g.get("hooks", [])]
 
 
 def main():
@@ -78,15 +106,30 @@ def main():
                  "registered as worker"),
                 ("unregister", [binary, "session", "unregister"], tok, "removed"),
                 ("unregister: nothing registered", [binary, "session", "unregister"], tok, "refused"),
-                ("hook start", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_ROLE": "master"}, "registered as master"),
-                ("hook start: agent", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_AGENT": "hook-check"},
-                 "agent hook-check"),
-                ("hook end", ["sh", HOOK, "end"], {**tok, **hook_path}, "session unregister"),
-                ("hook start: bad role", ["sh", HOOK, "start"], {**tok, **hook_path, "BATONDECK_ROLE": "boss"}, "usage"),
-                ("hook start: binary not on PATH", ["sh", HOOK, "start"], {**tok, "PATH": "/usr/bin:/bin"}, "not on PATH"),
             ]
-            for name, argv, extra, want in cases:
-                r = run(argv, extra, stdin=b'{"session_id":"hook-check","hook_event_name":"SessionStart"}')
+            hooks = declared_hooks()
+            for event in SCENARIOS:
+                if not any(e == event for e, _ in hooks):
+                    problems.append(f"hooks.json declares no command for {event}")
+            for event, h in hooks:
+                command = h.get("command", "")
+                if h.get("type") != "command" or not command:
+                    problems.append(f"hooks.json {event}: a hook that is not a command: {h!r}")
+                    continue
+                if event not in SCENARIOS:
+                    problems.append(f"hooks.json {event}: {command!r} is on an event hook-check has no scenario for")
+                    continue
+                script = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", PLUGIN))[0]
+                if "/" in script and not os.path.isfile(script):
+                    problems.append(f"hooks.json {event}: {command!r} runs {os.path.relpath(script, ROOT)}, which does not exist")
+                for name, extra, want in SCENARIOS[event]:
+                    cases.append((f"{event} {command!r}: {name}", ["sh", "-c", command],
+                                  {"CLAUDE_PLUGIN_ROOT": PLUGIN, **tok, **hook_path, **extra}, want, event))
+            for case in cases:
+                name, argv, extra, want = case[:4]
+                event = case[4] if len(case) > 4 else "SessionStart"
+                payload = json.dumps({"session_id": "hook-check", "hook_event_name": event}).encode()
+                r = run(argv, extra, stdin=payload)
                 err = r.stderr.decode(errors="replace").strip()
                 if r.stdout:
                     problems.append(f"{name}: wrote {len(r.stdout)} bytes to stdout: {r.stdout[:200]!r}")
@@ -105,7 +148,8 @@ def main():
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
-    print(f"hook-check: {len(cases)} cases, the binary and plugin/hooks/session.sh: stdout empty on every one: ok")
+    print(f"hook-check: {len(cases)} cases, the binary and the {len(hooks)} commands plugin/hooks/hooks.json declares: "
+          "stdout empty on every one: ok")
     return 0
 
 

@@ -17,18 +17,20 @@ url="${BATONDECK_URL:-http://localhost:8080}/mcp"
   echo "mcp.sh: BATONDECK_TOKEN is not set; mint one with: batondeck-kanban token create --user LOGIN" >&2
   exit 1
 }
-hdr=(-H "Authorization: Bearer ${BATONDECK_TOKEN}" -H "Content-Type: application/json"
-     -H "Accept: application/json, text/event-stream")
+hdr=(-H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
+# The bearer reaches curl on stdin (`-H @-`), never in its argv, which any local user can read with ps.
+# printf is a shell builtin, so no process carries the token on its command line either.
+auth() { printf 'Authorization: Bearer %s\n' "${BATONDECK_TOKEN}"; }
 
 # initialize, then read the session id the server answers with (a stateless server sends none).
-sid="$(curl -sS -D - -o /dev/null -X POST "${url}" "${hdr[@]}" \
+sid="$(auth | curl -sS -D - -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcp.sh","version":"1"}}}' \
   | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')"
 [ -z "${sid}" ] || hdr+=(-H "Mcp-Session-Id: ${sid}")
-curl -sS -o /dev/null -X POST "${url}" "${hdr[@]}" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+auth | curl -sS -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
 req="$(python3 -c 'import json,sys; print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":sys.argv[1],"arguments":json.loads(sys.argv[2])}}))' "${tool}" "${args}")"
-curl -sS -N --max-time 120 -X POST "${url}" "${hdr[@]}" -d "${req}" | python3 -c '
+auth | curl -sS -N --max-time 120 -X POST "${url}" -H @- "${hdr[@]}" -d "${req}" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 msgs = [l[6:] for l in raw.splitlines() if l.startswith("data: ")] or [raw]
