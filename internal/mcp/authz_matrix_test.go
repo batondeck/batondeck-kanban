@@ -47,6 +47,17 @@ var expectedPosture = map[string]pinnedPosture{
 	"reap_stale_leases": {tier: domain.TierWrite, tenantScoped: true},
 	"handoff_task":      {tier: "", tenantScoped: true},
 	"cancel_task":       {tier: "", tenantScoped: true},
+	// recall_memory is not tenant-scoped: agent_global answers with no projectId.
+	"add_context_item":  {tier: domain.TierWrite, tenantScoped: true},
+	"get_task_context":  {tier: domain.TierRead, tenantScoped: true},
+	"set_summary":       {tier: domain.TierWrite, tenantScoped: true},
+	"write_memory":      {tier: domain.TierWrite, tenantScoped: true},
+	"read_memory":       {tier: domain.TierRead, tenantScoped: true},
+	"recall_memory":     {tier: "", tenantScoped: false},
+	"add_dependency":    {tier: domain.TierMaster, tenantScoped: true},
+	"remove_dependency": {tier: domain.TierMaster, tenantScoped: true},
+	"add_subtask":       {tier: domain.TierMaster, tenantScoped: true},
+	"list_subtasks":     {tier: domain.TierRead, tenantScoped: true},
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the
