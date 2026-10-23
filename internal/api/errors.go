@@ -45,3 +45,18 @@ func statusOf(c domain.Code) int {
 	}
 	return http.StatusInternalServerError
 }
+
+// stub answers a mounted route whose tool is pending: NOT_FOUND "<what> lands in <lane>" (R1.12),
+// until that lane replaces it in its own <area>.go.
+func stub(o *Options, what, lane string) http.Handler {
+	return stubHandler{msg: what + " lands in " + lane, logger: o.logger()}
+}
+
+type stubHandler struct {
+	msg    string
+	logger *log.Logger
+}
+
+func (s stubHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	writeServiceError(w, domain.NewError(domain.CodeNotFound, s.msg, nil), s.logger)
+}

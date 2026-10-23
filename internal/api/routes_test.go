@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -73,7 +74,8 @@ func TestRouteTable(t *testing.T) {
 			continue // the stream stays open (stream_test.go); login is the harness's own sign-in
 		}
 		path := strings.NewReplacer("{projectId}", "P-1", "{boardId}", "B-1", "{taskId}", "T-1", "{columnId}", "C-1",
-			"{identityId}", "U-2", "{edgeId}", "E-1").Replace(r.Path)
+			"{identityId}", "U-2", "{edgeId}", "E-1", "{sprintId}", "S-1", "{followUpId}", "F-1", "{integrationId}", "I-1",
+			"{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
 		body := ""
 		if r.Method == "POST" || r.Method == "PATCH" {
 			body = "{}"
@@ -351,4 +353,79 @@ func typeName(v any) string {
 		return "object"
 	}
 	return "?"
+}
+
+// outOfScope is what the table must never hold: the groups the owner dropped (plan "Dropped as the
+// owner ordered") by prefix, and the in-scope-group routes left out by decision, by method and path.
+var outOfScope = struct {
+	prefixes []string
+	routes   map[string]string
+}{
+	prefixes: []string{"/api/studio", "/api/admin", "/api/tenants", "/api/billing", "/api/onboarding"},
+	routes: map[string]string{
+		"GET " + ppb + "/transitions":         "the transition table is fixed",
+		"PUT " + ppb + "/transitions":         "the transition table is fixed",
+		"GET /api/me/marketplace-key":         "the plan dropped the marketplace key",
+		"POST /api/me/marketplace-key":        "the plan dropped the marketplace key",
+		"POST /api/me/marketplace-key/rotate": "the plan dropped the marketplace key",
+	},
+}
+
+// AC1 (R1.12): no out-of-scope route is mounted or listed in routes.json, by name.
+func TestOutOfScopeRoutesAreRefused(t *testing.T) {
+	f := servicefake.New()
+	h := newHarness(t, fakeServices(f))
+	o := Options{Services: f.Services(), Auth: h.auth}
+	check := func(where, method, path string) {
+		for _, p := range outOfScope.prefixes {
+			if path == p || strings.HasPrefix(path, p+"/") {
+				t.Errorf("%s holds %s %s: the %s group is out of scope", where, method, path, p)
+			}
+		}
+		if why, ok := outOfScope.routes[method+" "+path]; ok {
+			t.Errorf("%s holds %s %s: out of scope, %s", where, method, path, why)
+		}
+	}
+	for _, r := range table(&o) {
+		check("the router", r.Method, r.Path)
+	}
+	for _, r := range loadRoutes(t) {
+		check("routes.json", r.Method, r.Path)
+	}
+}
+
+// Requirement 1 (R1.12): every stub answers 404 {code: NOT_FOUND, message: "<what> lands in <lane>"}
+// through the mounted mux, and reaches no service.
+func TestStubsNameTheirLane(t *testing.T) {
+	f := servicefake.New()
+	h := newHarness(t, fakeServices(f))
+	o := Options{Services: f.Services(), Auth: h.auth}
+	lane := regexp.MustCompile(`^\S.* lands in R\d+\.\d+$`)
+	n := 0
+	for _, r := range table(&o) {
+		s, ok := r.h.(stubHandler)
+		if !ok {
+			continue
+		}
+		n++
+		path := strings.NewReplacer("{projectId}", "P-1", "{taskId}", "T-1", "{sprintId}", "S-1", "{followUpId}", "F-1",
+			"{integrationId}", "I-1", "{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
+		body := ""
+		if r.Method == "POST" || r.Method == "PATCH" {
+			body = "{}"
+		}
+		code, got := h.do(r.Method, path, body, nil)
+		var e struct {
+			Code    domain.Code `json:"code"`
+			Message string      `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(got), &e); err != nil || code != http.StatusNotFound || e.Code != domain.CodeNotFound ||
+			e.Message != s.msg || !lane.MatchString(e.Message) {
+			t.Errorf("%s %s: %d %s, want 404 NOT_FOUND %q naming a lane", r.Method, r.Path, code, got, s.msg)
+		}
+	}
+	if len(f.Calls()) != 0 {
+		t.Fatalf("a stub reached the service: %+v", f.Calls())
+	}
+	t.Logf("%d stub routes", n)
 }
