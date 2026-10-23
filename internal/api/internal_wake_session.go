@@ -68,7 +68,8 @@ func WakeSessionHandler(r auth.Resolver, sessions service.Sessions, logger *log.
 	})
 }
 
-// writeServiceError answers a service error with the status its code names.
+// writeServiceError answers a service error with ui-backend's status for its code (gateway
+// shared/mcp-pool.ts STATUS) and the body {code, message, details}.
 func writeServiceError(w http.ResponseWriter, err error, logger *log.Logger) {
 	e, ok := domain.AsBatonDeckError(err)
 	if !ok {
@@ -76,18 +77,29 @@ func writeServiceError(w http.ResponseWriter, err error, logger *log.Logger) {
 		auth.WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "Internal error")
 		return
 	}
-	status := http.StatusInternalServerError
-	switch e.Code {
+	writeJSON(w, statusOf(e.Code), struct {
+		Code    domain.Code    `json:"code"`
+		Message string         `json:"message"`
+		Details map[string]any `json:"details,omitempty"`
+	}{e.Code, e.Message, e.Details})
+}
+
+// statusOf is ui-backend's HTTP status for a code; an unknown one is 500.
+func statusOf(c domain.Code) int {
+	switch c {
 	case domain.CodeValidation:
-		status = http.StatusBadRequest
+		return http.StatusBadRequest
 	case domain.CodeUnauthenticated:
-		status = http.StatusUnauthorized
+		return http.StatusUnauthorized
 	case domain.CodeForbidden:
-		status = http.StatusForbidden
+		return http.StatusForbidden
 	case domain.CodeNotFound:
-		status = http.StatusNotFound
-	case domain.CodeInvalidTransition:
-		status = http.StatusConflict
+		return http.StatusNotFound
+	case domain.CodeStale, domain.CodeConflictLocked, domain.CodeLeaseExpired, domain.CodeInvalidTransition,
+		domain.CodeWIPExceeded, domain.CodeCycleDetected:
+		return http.StatusConflict
+	case domain.CodeQuotaExceeded, domain.CodeRateLimited:
+		return http.StatusTooManyRequests
 	}
-	auth.WriteError(w, status, e.Code, e.Message)
+	return http.StatusInternalServerError
 }

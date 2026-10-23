@@ -115,6 +115,9 @@ func (s *Postgres) Atomically(ctx context.Context, fn func(tx Store) error) erro
 	return nil
 }
 
+// Engine names the engine, as /healthz reports it.
+func (s *Postgres) Engine() string { return "postgres" }
+
 // Close closes the connection pool and returns nil.
 func (s *Postgres) Close() error {
 	s.pool.Close()

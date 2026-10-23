@@ -497,7 +497,7 @@ func TestServeAnswersOnTheUnixSocket(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || string(b) != healthBody("x") {
+	if resp.StatusCode != 200 || string(b) != healthBody("x", "sqlite") {
 		t.Fatalf("healthz over the socket: %d %q", resp.StatusCode, b)
 	}
 	if fi, err := os.Stat(s.sock); err != nil || fi.Mode().Perm() != 0o600 {

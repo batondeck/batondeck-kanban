@@ -161,6 +161,9 @@ func (s *SQLite) Atomically(ctx context.Context, fn func(tx Store) error) error 
 	return nil
 }
 
+// Engine names the engine, as /healthz reports it.
+func (s *SQLite) Engine() string { return "sqlite" }
+
 // Close closes both pools. A transaction still open on them is the caller's to have ended.
 func (s *SQLite) Close() error {
 	rerr := s.r.Close()

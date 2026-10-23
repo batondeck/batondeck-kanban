@@ -37,8 +37,10 @@ type app struct {
 	as   *oauth.Server // nil while public_url is unset
 	core *service.Core
 	bus  *bus.Bus
-	// mount adds the OAuth routes, GET /wake and the socket-only POST /internal/wake-session to the
-	// mux handler builds.
+	// engine is the store's, which /healthz names.
+	engine string
+	// mount adds the OAuth routes, GET /wake, the socket-only POST /internal/wake-session and the
+	// REST BFF (api.Mount) to the mux handler builds.
 	mount func(*http.ServeMux)
 }
 
@@ -75,8 +77,12 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
 	srv := mcp.New(opts)
 	tools.Register(srv, opts.Services)
-	return &app{mcp: srv, as: as, core: sc, bus: b,
+	// The REST BFF calls every service; presence waits for the device directory (R1.18).
+	bff := api.Options{Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(),
+		Context: sc.Context(), Media: sc.Media(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls()}, Auth: resolver, Bus: b, Logger: logger}
+	return &app{mcp: srv, as: as, core: sc, bus: b, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
+			api.Mount(mux, bff)
 			if as != nil {
 				as.Mount(mux)
 			}
@@ -91,6 +97,14 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	}, nil
 }
 
+// engineOf names st's engine for /healthz ("" for a store that does not say).
+func engineOf(st store.Store) string {
+	if e, ok := st.(interface{ Engine() string }); ok {
+		return e.Engine()
+	}
+	return ""
+}
+
 // internalPrefix is the socket-only namespace: no path under it is served over TCP.
 const internalPrefix = "/internal/"
 
@@ -98,7 +112,7 @@ const internalPrefix = "/internal/"
 // its method, before the mux sees it, so a socket-only route answers there exactly as one that does
 // not exist (no 405, no Allow header naming its method).
 func (a *app) handler(version string) http.Handler {
-	mux := handler(version, a.mcp.Handler(), a.mount)
+	mux := engineHandler(version, a.engine, a.mcp.Handler(), a.mount)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !core.ViaUnixSocket(r.Context()) && strings.HasPrefix(r.URL.Path, internalPrefix) {
 			http.NotFound(w, r)
