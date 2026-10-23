@@ -235,6 +235,28 @@ func TestGetTaskContextComposesTheBriefing(t *testing.T) {
 				t.Errorf("%s is %s, want []", k, top[k])
 			}
 		}
+		if got.Upstream != nil || got.ProjectMemory != nil {
+			t.Errorf("upstream %v projectMemory %v without their flags", got.Upstream, got.ProjectMemory)
+		}
+		if _, err := cx.SetSummary(e.ctx, e.alice, SetSummaryReq{ProjectID: e.project, TaskID: blocker.ID, Version: e.get(t, blocker.ID).Version, Summary: "blocker so far"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, Scope: domain.MemoryScopeProject, Key: "fact", Value: "shared"}); err != nil {
+			t.Fatal(err)
+		}
+		opt, err := cx.GetTaskContext(e.ctx, e.alice, GetTaskContextReq{ProjectID: e.project, TaskID: task.ID, IncludeUpstream: true, IncludeProjectMemory: true, Include: []ContextSection{"summary"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(opt.Upstream) != 1 || opt.Upstream[0].TaskID != blocker.ID || opt.Upstream[0].Summary != "blocker so far" || opt.Upstream[0].Status != string(domain.Ready) {
+			t.Errorf("upstream %+v, want the blocker with its summary", opt.Upstream)
+		}
+		if len(opt.ProjectMemory) != 1 || opt.ProjectMemory[0].Key != "fact" {
+			t.Errorf("projectMemory %+v, want the project fact", opt.ProjectMemory)
+		}
+		if len(opt.Items) != 0 || len(opt.Deps.Edges) != 0 || opt.Summary != "so far" {
+			t.Errorf("include [summary] returned items %d edges %d summary %q", len(opt.Items), len(opt.Deps.Edges), opt.Summary)
+		}
 		t.Logf("briefing keys: %d, allowedMoves %v, edges %d", len(top), got.Workflow.AllowedMoves, len(got.Deps.Edges))
 	})
 }

@@ -14,7 +14,8 @@ Notable changes to batondeck-kanban. The format follows
   summary, both sides' edges, the fields and `workflow.allowedMoves` (the fixed table's row) with no
   `id`, `title` or `description`: 6 statements once the membership and the board snapshot are
   cached, 8 with a cold snapshot (`store.GetBoard`'s 2 for the lanes)
-  (`TestGetTaskContextCostsAtMostSixStatements`). `RecallMemory` is an exact key or the newest `k`,
+  (`TestGetTaskContextCostsAtMostSixStatements`); the snapshot cache serves only once the bus feeds
+  `ObserveChange` (P-100), so until then every call is 8. `RecallMemory` is an exact key or the newest `k`,
   the expired dropped; naming a project needs membership in it on every branch, and `agent_global`
   is the caller's. `WriteMemory`'s `ttl` is the expiry instant (RFC 3339), refused as VALIDATION
   when it does not parse. `AddDependency` writes the edge and both caches and bumps each task once,
