@@ -63,6 +63,11 @@ type state struct {
 	memory       map[string]store.MemoryEntry       // by id
 	summaries    map[[2]string]store.Summary        // by (project, task)
 	edges        map[[2]string]store.DependencyEdge // by (project, edge)
+	audit        []store.AuditRow                   // id ascending
+	lastAudit    int64                              // the last audit id handed out
+	toolCalls    []store.ToolCall                   // insertion order
+	agents       map[[2]string]store.AgentSession   // by (identity, agent)
+	wake         map[string]store.WakeSession       // by id
 }
 
 type idemEntry struct {
@@ -92,6 +97,8 @@ func newState() *state {
 		memory:       map[string]store.MemoryEntry{},
 		summaries:    map[[2]string]store.Summary{},
 		edges:        map[[2]string]store.DependencyEdge{},
+		agents:       map[[2]string]store.AgentSession{},
+		wake:         map[string]store.WakeSession{},
 	}
 }
 
@@ -261,6 +268,18 @@ func (st *state) clone() *state {
 	}
 	maps.Copy(c.summaries, st.summaries)
 	maps.Copy(c.edges, st.edges)
+	c.audit = make([]store.AuditRow, len(st.audit))
+	for i, r := range st.audit {
+		c.audit[i] = cloneAudit(r)
+	}
+	c.lastAudit = st.lastAudit
+	c.toolCalls = append([]store.ToolCall(nil), st.toolCalls...)
+	for k, v := range st.agents {
+		c.agents[k] = cloneAgentSession(v)
+	}
+	for k, v := range st.wake {
+		c.wake[k] = cloneWakeSession(v)
+	}
 	return c
 }
 
