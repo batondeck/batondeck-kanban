@@ -48,9 +48,9 @@ func TestServeMountsMCPOverTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
+	mcpSrv, _, core, _ := mcpServer(st, "x", "", log.New(io.Discard, "", 0))
 	defer core.Close(context.Background())
-	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
+	srv := httptest.NewServer(handler("x", mcpSrv.Handler(), nil))
 	defer srv.Close()
 
 	post := func(bearer string) *http.Response {
@@ -108,7 +108,7 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mcpSrv, core := mcpServer(st, "x", log.New(io.Discard, "", 0))
+	mcpSrv, _, core, _ := mcpServer(st, "x", "", log.New(io.Discard, "", 0))
 	defer core.Close(context.Background())
 	type in struct {
 		ProjectID string `json:"projectId"`
@@ -119,7 +119,7 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 	mcp.AddTool(mcpSrv, &sdk.Tool{Name: "probe"}, nil, func(context.Context, *sdk.CallToolRequest, in) (*sdk.CallToolResult, out, error) {
 		return nil, out{OK: true}, nil
 	})
-	srv := httptest.NewServer(handler("x", mcpSrv.Handler()))
+	srv := httptest.NewServer(handler("x", mcpSrv.Handler(), nil))
 	defer srv.Close()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "serve-test", Version: "1"}, nil)
@@ -177,7 +177,7 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- runServer(serveCtx, ln, st, "x", log.New(io.Discard, "", 0)) }()
+	go func() { done <- runServer(serveCtx, ln, st, "x", "", log.New(io.Discard, "", 0)) }()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
 	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
@@ -226,7 +226,7 @@ func served(t *testing.T, st store.Store, park func(context.Context)) (*sdk.Clie
 	}
 	logs := &lockedLog{}
 	logger := log.New(logs, "", 0)
-	mcpSrv, core := mcpServer(st, "x", logger)
+	mcpSrv, _, core, _ := mcpServer(st, "x", "", logger)
 	type in struct {
 		ProjectID string `json:"projectId"`
 	}
@@ -245,7 +245,7 @@ func served(t *testing.T, st store.Store, park func(context.Context)) (*sdk.Clie
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- serveUntil(serveCtx, ln, mcpSrv, core, "x", logger) }()
+	go func() { done <- serveUntil(serveCtx, ln, mcpSrv, nil, core, "x", logger) }()
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
 	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
 		HTTPClient: &http.Client{Transport: bearerRT{live}}, MaxRetries: -1}, nil)

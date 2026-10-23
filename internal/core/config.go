@@ -52,7 +52,9 @@ type Config struct {
 	Database Database `json:"database"`
 	// Listen is the host:port the HTTP server binds.
 	Listen string `json:"listen"`
-	// PublicURL is the externally reachable base (scheme://host[:port]); "" until configured.
+	// PublicURL is the externally reachable base (scheme://host[:port]); "" until configured. It
+	// is the OAuth server's issuer and the base of every URL in its RFC 8414 and RFC 9728 documents;
+	// while it is "", serve runs no OAuth server (internal/auth/oauth).
 	PublicURL string `json:"public_url"`
 	// Retention is the retention sweep's windows.
 	Retention Retention `json:"retention"`
