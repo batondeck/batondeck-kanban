@@ -8,6 +8,17 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The bus's project subscription and all-rows tap (R0.24, ADR-0004 B). `bus.SubscribeProjects(ctx,
+  projectIDs, buffer)` receives every change-log row whose stored `ProjectID` is one of the bare ids
+  (`"P-1"`), whatever its token scope: a `handoff_task` row scoped to its new assignee reaches it,
+  which no recipient subscription but the assignee's did. `bus.Tap(ctx, buffer)` receives every row
+  in cursor order. Their catch-ups are `bus.ReplayProjects` (pages `ReadChanges` and keeps the
+  projects' rows: one statement per 1000 rows read, no `(project_id, id)` index yet) and
+  `bus.ReplayAll` (one `ReadChanges`). Both are in-memory indexes the tail consults per row, so an
+  idle tail still issues 0 statements, and each drops for itself on a full buffer.
+  `Subscribe(["project:<id>"])` is unchanged: that string is the broadcast token scope
+  (`service.BroadcastScope`), so `/wake` hears no other identity's assigned row.
+
 - The lifecycle service (R1.5): `Core.Lifecycle()` implements `service.Lifecycle` in
   `internal/service/lifecycle.go`, every write through `service.mutate`. `Claim` and `ClaimNext`
   (one `store.Claims.ClaimNext` statement; 4 read statements cold, 2 with the board snapshot cached,
