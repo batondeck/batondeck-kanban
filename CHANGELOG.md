@@ -55,7 +55,11 @@ Notable changes to batondeck-kanban. The format follows
   (claude.ai, ChatGPT) and Cursor pull each turn.
 - `notifications/tools/list_changed` to a session whose caller's workspace-admin flag changed since its
   previous request (the only thing that changes a caller's `tools/list`), sent to that session alone.
-
+- The six task tools (R1.2): `create_task`, `get_task`, `update_task`, `move_task`, `list_tasks` and
+  `delete_task`, registered in `internal/mcp/tools/tasks.go`, each one `service.Tasks` call; `serve`
+  wires `Tasks` into the MCP services. Their schemas equal `contract/expected.json`; `create_task` takes
+  no `status`; `delete_task`, `create_task`, `update_task` and `move_task` are master tier, `get_task`
+  and `list_tasks` read tier, as `internal/domain/grants.go` classifies them.
 - The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
   `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
   `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
@@ -556,7 +560,6 @@ Notable changes to batondeck-kanban. The format follows
 - MCP resource subscriptions (ADR-0004): `initialize` no longer advertises `resources.subscribe`, the
   subscribe and unsubscribe handlers are gone, and `resources/subscribe` is answered method not found
   (-32601).
-
 - The contract trim (R0.23, ADR-0004; the owner, 2026-10-23: "go with trimmed version"):
   `contract/expected.json` goes from 93 tools to 86. `deltas.json` `removedTools` gains the router
   facade (`find_tools`, `get_tool_schema`, `invoke_tool`), the CLI-token tools (`create_cli_token`,
