@@ -35,6 +35,11 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The six task tools (R1.2): `create_task`, `get_task`, `update_task`, `move_task`, `list_tasks` and
+  `delete_task`, registered in `internal/mcp/tools/tasks.go`, each one `service.Tasks` call; `serve`
+  wires `Tasks` into the MCP services. Their schemas equal `contract/expected.json`; `create_task` takes
+  no `status`; `delete_task`, `create_task`, `update_task` and `move_task` are master tier, `get_task`
+  and `list_tasks` read tier, as `internal/domain/grants.go` classifies them.
 - Attachments on local disk behind HMAC-signed URLs (R1.8). `attach_file` creates a pending
   attachment (`attachment.created`, the task's version +1) and answers an `uploadUrl`,
   `PUT /blobs/{projectId.taskId.attachmentId}?exp=…&sig=…`, valid 15 minutes; the PUT's body is read
