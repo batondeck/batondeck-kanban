@@ -178,7 +178,6 @@ func (b boards) AddColumn(ctx context.Context, caller domain.Caller, req AddColu
 	if err != nil {
 		return AddColumnResp{}, err
 	}
-	b.c.dropSnapshots(req.ProjectID, req.BoardID)
 	return resp, nil
 }
 
@@ -227,7 +226,6 @@ func (b boards) UpdateColumn(ctx context.Context, caller domain.Caller, req Upda
 	if err != nil {
 		return UpdateColumnResp{}, err
 	}
-	b.c.dropSnapshots(req.ProjectID, req.BoardID)
 	return resp, nil
 }
 
@@ -258,7 +256,6 @@ func (b boards) RemoveColumn(ctx context.Context, caller domain.Caller, req Remo
 	if err != nil {
 		return RemoveColumnResp{}, err
 	}
-	b.c.dropSnapshots(req.ProjectID, req.BoardID)
 	return resp, nil
 }
 

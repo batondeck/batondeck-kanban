@@ -99,6 +99,9 @@ type txn struct {
 	deleted bool
 	events  []pendingEvent
 	bells   []Doorbell
+	// boards is every (project, board) the mutation's change rows name ("" board: the project),
+	// and its task's board: what mutate drops from the snapshot cache once the transaction commits.
+	boards [][2]string
 }
 
 type pendingEvent struct {
@@ -172,11 +175,14 @@ func (t *txn) RingAssigned(assignee string, task store.Task) {
 // mutate makes it when fn did not) → the task_events rows → the audit row when
 // domain.DescribeAudit names the tool → the change-log rows (one per doorbell, else one
 // ChangeKindChanged row) → the idempotency entry. Any error, from fn or any step, rolls all of it
-// back. A panic in fn is INTERNAL with its stack logged; a *domain.BatonDeckError passes through
-// unchanged and any other error is INTERNAL.
+// back. After the commit the boards it touched leave the snapshot cache (read-your-writes before the
+// bus delivers the rows); a replay touched none. A panic in fn is INTERNAL with its stack logged; a
+// *domain.BatonDeckError passes through unchanged and any other error is INTERNAL.
 func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutation, fn func(t *txn) (R, error)) (R, error) {
 	var zero R
+	var touched [][2]string // the last run's, so a retried transaction drops what committed
 	run := func(tx store.Store) (r R, err error) {
+		touched = nil
 		defer c.recovered(m.Tool, &err)
 		t := &txn{Tx: tx, Now: c.now(), Caller: caller, ProjectID: m.ProjectID, ctx: ctx}
 		if m.LockProject {
@@ -204,7 +210,13 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		if err := t.finish(c, m); err != nil {
 			return zero, err
 		}
+		touched = t.boards
 		return r, nil
+	}
+	committed := func() {
+		for _, b := range touched {
+			c.dropSnapshots(b[0], b[1])
+		}
 	}
 
 	if m.IdempotencyKey == "" {
@@ -217,6 +229,7 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		if err != nil {
 			return zero, c.mapErr(m.Tool, err)
 		}
+		committed()
 		return out, nil
 	}
 	// The key is namespaced by tool, as conductor's `${tool}:${key}` (common.ts:216-219): one key
@@ -235,6 +248,7 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 	if err != nil {
 		return zero, c.mapErr(m.Tool, err)
 	}
+	committed()
 	var out R
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return zero, c.mapErr(m.Tool, err)
@@ -301,6 +315,13 @@ func (t *txn) finish(c *Core, m mutation) error {
 			return err
 		}
 	}
+	// The task's own board too: a move to DONE that unblocks a dependent on another board rings only
+	// the dependent, so no row names the board the moved task left.
+	for _, x := range []*store.Task{t.Task, t.after} {
+		if x != nil {
+			t.boards = append(t.boards, [2]string{t.ProjectID, x.BoardID})
+		}
+	}
 	return t.writeChanges(m.Tool, ms)
 }
 
@@ -365,6 +386,7 @@ func (t *txn) writeChanges(tool string, ms int64) error {
 		if _, err := t.Tx.AppendChange(t.ctx, store.ChangeInput{Scope: scope, ProjectID: t.ProjectID, Kind: d.Kind, Payload: payload, Ts: ms}); err != nil {
 			return err
 		}
+		t.boards = append(t.boards, [2]string{t.ProjectID, d.BoardID})
 	}
 	return nil
 }

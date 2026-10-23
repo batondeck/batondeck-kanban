@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"slices"
 	"sort"
@@ -25,39 +25,50 @@ import (
 )
 
 // The join's proofs (R1.18; plan §Verification "State machine", "delete_task", "Race"): the serve
-// composition (compose) over each engine servicetest selects, mounted as serve mounts it, driven by
+// composition (compose, then serveUntil) over each engine servicetest selects, driven by
 // real go-sdk clients holding real API tokens. They live in the composition root because only it may
 // reach the store a run is seeded through and the change log a doorbell is read from (ADR-0003 §C
 // row 6), and because only here is /mcp beside /api/stream on one mux.
 
-// joined is compose over one engine on an httptest server.
+// joined is compose over one engine, served by serveUntil (the session directory, the board
+// snapshot cache's tap and the HTTP server, as serve starts them) on a loopback listener.
 type joined struct {
 	t      *testing.T
 	engine string
 	st     store.Store
 	a      *app
-	srv    *httptest.Server
+	url    string
 }
 
 func join(t *testing.T, engine string) *joined {
 	t.Helper()
 	st := servicetest.OpenStore(t, engine)
 	a := mustCompose(t, st, "", log.New(io.Discard, "", 0))
-	ctx, cancel := context.WithCancel(context.Background())
-	if err := a.dir.Start(ctx); err != nil {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(a.handler("x"))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveUntil(ctx, []net.Listener{ln}, a, "x", log.New(io.Discard, "", 0)) }()
 	t.Cleanup(func() {
-		shut, done := context.WithTimeout(context.Background(), 5*time.Second)
-		defer done()
-		_ = a.mcp.Close(shut)
-		srv.Close()
-		a.bus.Close()
 		cancel()
-		_ = a.core.Close(shut)
+		if err := <-done; err != nil {
+			t.Errorf("serveUntil: %v", err)
+		}
 	})
-	return &joined{t: t, engine: engine, st: st, a: a, srv: srv}
+	url := "http://" + ln.Addr().String()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if resp, err := http.Get(url + "/healthz"); err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("serveUntil never answered /healthz")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return &joined{t: t, engine: engine, st: st, a: a, url: url}
 }
 
 // onJoined runs fn once per selected engine over a fresh composition.
@@ -92,7 +103,7 @@ func (j *joined) user(login string) *agent {
 	client := sdk.NewClient(&sdk.Implementation{Name: "join-" + login, Version: "1"}, nil)
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cs, err := client.Connect(cctx, &sdk.StreamableClientTransport{Endpoint: j.srv.URL + "/mcp",
+	cs, err := client.Connect(cctx, &sdk.StreamableClientTransport{Endpoint: j.url + "/mcp",
 		HTTPClient: &http.Client{Transport: bearerRT{token}}, MaxRetries: -1}, nil)
 	if err != nil {
 		j.t.Fatalf("connect %s: %v", login, err)
@@ -715,7 +726,7 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 		cookies := j.login("ada")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, "GET", j.srv.URL+"/api/stream?projectId="+b.project+"&boardId="+b.bid, nil)
+		req, _ := http.NewRequestWithContext(ctx, "GET", j.url+"/api/stream?projectId="+b.project+"&boardId="+b.bid, nil)
 		for _, c := range cookies {
 			req.AddCookie(c)
 		}
@@ -801,7 +812,7 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 func (j *joined) login(login string) []*http.Cookie {
 	j.t.Helper()
 	form := url.Values{"login": {login}, "password": {joinPassword}}
-	req, _ := http.NewRequest("POST", j.srv.URL+"/api/login", strings.NewReader(form.Encode()))
+	req, _ := http.NewRequest("POST", j.url+"/api/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := http.DefaultClient.Do(req)

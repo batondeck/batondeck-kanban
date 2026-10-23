@@ -8,6 +8,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- The board snapshot cache serves (P-100, ADR-0004): `serve` subscribes it to the bus with a second
+  `bus.Tap` that feeds `Core.ObserveChange`, so a second `get_board`, `get_task_context`, `claim_next`
+  or `/api/stream` board frame on an unchanged board reads no board (2 statements saved), and any
+  change-log row naming the board (any project-wide row: every board of it) drops it. The tap adds no
+  statement and no poll; a change it drops clears every snapshot, and the cache turns off when the
+  bus closes. `service.mutate` drops the snapshot of every board its change rows name, and of its
+  task's board, once the transaction commits, so a writer reads its own write before the bus delivers
+  the row; this replaces the four hand-placed drops in `add_column`, `update_column`,
+  `remove_column` and `delete_project`. New: `Core.ResetSnapshots(live bool)`.
+- `move_task` to DONE writes a `changed` row naming its own task's board before it unblocks the
+  dependents, as `complete_task` does (P-187): a move whose only dependent sat on another board wrote
+  one row naming only the dependent's board, so every other process served the moved task's board
+  from a stale snapshot.
 - The pre-push gate removes its Postgres container with `docker rm -f -v`, so a gate run no longer
   leaves an anonymous volume behind (P-130: about 57 GB had piled up and filled the disk twice).
 - `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills` runs with a 3 s gap timeout instead of 1 s, so a
@@ -56,7 +69,17 @@ Notable changes to batondeck-kanban. The format follows
   `delete_task` cases; two concurrent `claim_task` with one winner (20 rounds); 50 concurrent
   `claim_next` with 50 distinct winners and their latency; a claim writing no doorbell row and a
   handoff one `assigned` row; an `/api/stream` board frame after an MCP `move_task`.
-
+- The rest of the REST BFF's route table as stubs (R1.12): 41 more routes in `internal/api/{me,agents,
+  notifications,comments,followups,sprints,runs,oncall,chronicle,analytics}.go`, each answering `404
+  {"code":"NOT_FOUND","message":"<tool> lands in <lane>"}` until its lane (R2.1, R2.2, R2.3, R2.5, R2.7,
+  R2.10, R2.11) replaces it, the three `me/cli-tokens` routes R2.5's over R0.12's TokenService (ADR-0004);
+  `routes.json` is 80 routes, every in-scope `/api` route of conductor's
+  ui-backend less the transitions pair, `me/marketplace-key`, `/api/healthz`,
+  `/api/client-error` and `/api/projects/{projectId}/overview`. `TestOutOfScopeRoutesAreRefused` fails
+  on a studio, admin, tenants, billing or onboarding route, or an excluded one, in the router or in
+  `routes.json`, by name; `TestStubsNameTheirLane` checks every stub's answer. `web/src/api/<area>.ts`
+  holds the 41 `api.ts` functions for these routes over a `req` copy in `web/src/api/http.ts`, held to
+  `api.ts`'s signatures by `web/src/__tests__/api-areas.test.ts`.
 - `search_tasks` (R1.9), keyword only: the project's tasks whose title, description or search tokens
   hold every term of the query, best first, at most `k` (default 10, at most 50), each with the
   engine's rank as `score`; `mode` semantic is `VALIDATION` (the plan keeps no embeddings), hybrid and
