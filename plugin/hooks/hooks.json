@@ -1,0 +1,27 @@
+{
+  "description": "batondeck-kanban: SessionStart registers this session in the server's wake directory and SessionEnd removes it (hooks/session.sh, which runs batondeck-kanban session register|unregister).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session.sh\" start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session.sh\" end",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
