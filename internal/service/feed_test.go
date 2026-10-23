@@ -106,6 +106,19 @@ func TestBoardSnapshotReadsItsOwnWrites(t *testing.T) {
 	if _, ok := got.TaskCounts[col.Column.ID]; !ok {
 		t.Fatalf("no count for the new column: %v", got.TaskCounts)
 	}
+	// update_column and remove_column drop it the same way.
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col.Column.ID, Name: "QA2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.snapshot(t); got.Board.Columns[len(got.Board.Columns)-1].Name != "QA2" {
+		t.Fatalf("get_board after update_column: %+v", got.Board.Columns)
+	}
+	if _, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col.Column.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.snapshot(t); len(got.Board.Columns) != len(before.Board.Columns) {
+		t.Fatalf("get_board after remove_column: %d columns", len(got.Board.Columns))
+	}
 }
 
 // A composition that began before a drop does not store what it read.
@@ -131,13 +144,15 @@ func TestSnapshotCacheDropBeatsAFillInFlight(t *testing.T) {
 // What a caller does to a snapshot it got does not reach the cache.
 func TestBoardSnapshotIsACopy(t *testing.T) {
 	f := newFixture(t, Options{})
-	first := f.snapshot(t)
-	first.TaskCounts["x"] = 9
-	first.Board.Columns[0].Name = "changed"
-	first.Board.Transitions["BACKLOG"] = nil
-	second := f.snapshot(t)
-	if _, ok := second.TaskCounts["x"]; ok || second.Board.Columns[0].Name == "changed" || !reflect.DeepEqual(second.Board.Transitions, fixedTable) {
-		t.Fatalf("the cached snapshot was changed through a returned copy: %+v", second)
+	for i := range 2 { // the miss's answer, then a hit's
+		got := f.snapshot(t)
+		got.TaskCounts["x"] = 9
+		got.Board.Columns[0].Name = "changed"
+		got.Board.Transitions["BACKLOG"] = nil
+		again := f.snapshot(t)
+		if _, ok := again.TaskCounts["x"]; ok || again.Board.Columns[0].Name == "changed" || !reflect.DeepEqual(again.Board.Transitions, fixedTable) {
+			t.Fatalf("read %d: the cached snapshot was changed through a returned copy: %+v", i, again)
+		}
 	}
 }
 
