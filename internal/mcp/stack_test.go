@@ -1,6 +1,7 @@
 package mcp_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -77,8 +78,8 @@ func str(v any) string         { s, _ := v.(string); return s }
 // through a real client against the real service, on every selected engine. Each call answers
 // without isError, so each real response passed the server's own output-schema validation (a
 // response the schema refuses is INTERNAL, TestBadOutputIsInternal); a tool registered without a
-// call here fails the test, so a new area joins the real stack when it lands. The four resource
-// templates are read over the same data.
+// call here fails the test, so a new area joins the real stack when it lands. The resource
+// templates are read over the same data, the cursor twins with a real cursor.
 func TestEveryToolOnTheRealStack(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		h := bootStack(t, s)
@@ -171,11 +172,30 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 			t.Fatal("search_tasks found none of the three tasks")
 		}
 
+		block := func(id, text string) map[string]any { return map[string]any{"id": id, "text": text} }
+		made := c.call("create_chronicle_page", map[string]any{"projectId": p, "kind": "adr", "slug": "adr/0001-stack", "title": "Stack", "blocks": []any{block("a-1", "by hand")}})
+		page := str(made["pageId"])
+		edited := c.call("edit_chronicle_page", map[string]any{"projectId": p, "pageId": page, "expectedParentVersionId": str(made["versionId"]), "blocks": []any{block("a-1", "edited")}})
+		if ing := c.call("ingest_chronicle_page", map[string]any{"projectId": p, "kind": "adr", "slug": "adr/0002-swept", "title": "Swept", "blocks": []any{block("dec1/1", "derived")}}); ing["created"] != true {
+			t.Fatalf("ingest_chronicle_page: %v", ing)
+		}
+		// A real cursor, as the store mints one (base64url of {"order","id"} of the page's last row).
+		after := func(order, id string) string {
+			raw, _ := json.Marshal(map[string]string{"order": order, "id": id})
+			return base64.RawURLEncoding.EncodeToString(raw)
+		}
+
 		for _, uri := range []string{
 			bk.Scheme + "://" + p + "/board/" + b,
 			bk.Scheme + "://" + p + "/task/" + id1,
 			bk.Scheme + "://" + p + "/task/" + id1 + "/context",
 			bk.Scheme + "://" + p + "/board/" + b + "/feed",
+			bk.Scheme + "://" + p + "/chronicle",
+			bk.Scheme + "://" + p + "/chronicle?cursor=" + after("adr/0001-stack", page),
+			bk.Scheme + "://" + p + "/chronicle/" + page,
+			bk.Scheme + "://" + p + "/chronicle/" + page + "/versions",
+			bk.Scheme + "://" + p + "/chronicle/" + page + "/versions?cursor=" + after("9999999999999", "CV-zzzzzzzzzzzz"),
+			bk.Scheme + "://" + p + "/chronicle/" + page + "/versions/" + str(edited["versionId"]),
 		} {
 			res, err := c.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: uri})
 			if err != nil || len(res.Contents) != 1 || !json.Valid([]byte(res.Contents[0].Text)) {
@@ -183,6 +203,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 			}
 		}
 
+		c.call("delete_chronicle_page", map[string]any{"projectId": p, "pageId": page, "expectedHeadVersionId": str(edited["versionId"])})
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
 		c.call("remove_member", map[string]any{"projectId": p, "identityId": "u-grace"})
 		c.call("delete_project", map[string]any{"projectId": p})
@@ -197,7 +218,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 		if len(missed) > 0 {
 			t.Fatalf("%d registered tools have no real-stack call here: %v", len(missed), missed)
 		}
-		t.Logf("%s: %d registered tools each answered on the real stack, and 4 resource templates read: %s", s.Engine, len(names), strings.Join(names, " "))
+		t.Logf("%s: %d registered tools each answered on the real stack, and 10 resource templates read: %s", s.Engine, len(names), strings.Join(names, " "))
 	})
 }
 

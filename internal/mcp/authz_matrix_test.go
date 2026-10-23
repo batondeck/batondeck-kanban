@@ -65,6 +65,11 @@ var expectedPosture = map[string]pinnedPosture{
 	"remove_dependency": {tier: domain.TierMaster, tenantScoped: true},
 	"add_subtask":       {tier: domain.TierMaster, tenantScoped: true},
 	"list_subtasks":     {tier: domain.TierRead, tenantScoped: true},
+	// The chronicle writes are conductor's requireWriter: tier write, and governed by a grant.
+	"create_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	"edit_chronicle_page":   {tier: domain.TierWrite, tenantScoped: true},
+	"delete_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the

@@ -115,8 +115,8 @@ func TestInitializeAnswersTheSurface(t *testing.T) {
 		t.Errorf("resources/list = %+v, %v; want [] (every resource is a template)", res, err)
 	}
 	tpl, err := cs.ListResourceTemplates(ctx(t), nil)
-	if err != nil || len(tpl.ResourceTemplates) != 5 {
-		t.Errorf("resources/templates/list = %+v, %v; want the five templates", tpl, err)
+	if err != nil || len(tpl.ResourceTemplates) != 11 {
+		t.Errorf("resources/templates/list = %+v, %v; want the eleven templates (five board and task, six chronicle)", tpl, err)
 	}
 
 	touches := calls(f, "Sessions.TouchAgentSession")

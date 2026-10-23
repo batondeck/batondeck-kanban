@@ -61,6 +61,52 @@ var resources = []resource{
 		segments:    []string{"board", "", "feed"},
 		read:        readFeed,
 	},
+	{
+		name: "chronicle", path: "{projectId}/chronicle", title: "Chronicle index",
+		description: "Decision records and topic pages for this project. Paginated: when nextCursor is present more pages exist; re-read with ?cursor=<nextCursor>",
+		segments:    []string{"chronicle"},
+		read:        readChronicleIndex,
+	},
+	{
+		name: "chronicle-cursor", path: "{projectId}/chronicle{?cursor}", title: "Chronicle index",
+		description: "Decision records and topic pages for this project. Paginated: when nextCursor is present more pages exist; re-read with ?cursor=<nextCursor>",
+		segments:    []string{"chronicle"},
+		read:        readChronicleIndex,
+	},
+	{
+		name: "chronicle-page", path: "{projectId}/chronicle/{pageId}", title: "Chronicle page", description: "A decision record with its current blocks and provenance",
+		segments: []string{"chronicle", ""},
+		read: func(ctx context.Context, svc service.Services, c domain.Caller, p string, v []string, _ string) (any, error) {
+			return svc.Chronicle.GetPage(ctx, c, service.GetChroniclePageReq{ProjectID: p, PageID: v[0]})
+		},
+	},
+	{
+		name: "chronicle-history", path: "{projectId}/chronicle/{pageId}/versions", title: "Chronicle history",
+		description: "Version history for a page, newest first. Paginated: when nextCursor is present older versions exist; re-read with ?cursor=<nextCursor>",
+		segments:    []string{"chronicle", "", "versions"},
+		read:        readChronicleHistory,
+	},
+	{
+		name: "chronicle-history-cursor", path: "{projectId}/chronicle/{pageId}/versions{?cursor}", title: "Chronicle history",
+		description: "Version history for a page, newest first. Paginated: when nextCursor is present older versions exist; re-read with ?cursor=<nextCursor>",
+		segments:    []string{"chronicle", "", "versions"},
+		read:        readChronicleHistory,
+	},
+	{
+		name: "chronicle-version", path: "{projectId}/chronicle/{pageId}/versions/{versionId}", title: "Chronicle version", description: "One immutable version of a page, blocks included",
+		segments: []string{"chronicle", "", "versions", ""},
+		read: func(ctx context.Context, svc service.Services, c domain.Caller, p string, v []string, _ string) (any, error) {
+			return svc.Chronicle.GetVersion(ctx, c, service.GetChronicleVersionReq{ProjectID: p, PageID: v[0], VersionID: v[1]})
+		},
+	},
+}
+
+func readChronicleIndex(ctx context.Context, svc service.Services, c domain.Caller, p string, _ []string, cursor string) (any, error) {
+	return svc.Chronicle.ListPages(ctx, c, service.ListChroniclePagesReq{ProjectID: p, Cursor: cursor})
+}
+
+func readChronicleHistory(ctx context.Context, svc service.Services, c domain.Caller, p string, v []string, cursor string) (any, error) {
+	return svc.Chronicle.ListVersions(ctx, c, service.ListChronicleVersionsReq{ProjectID: p, PageID: v[0], Cursor: cursor})
 }
 
 func readFeed(ctx context.Context, svc service.Services, c domain.Caller, p string, v []string, cursor string) (any, error) {

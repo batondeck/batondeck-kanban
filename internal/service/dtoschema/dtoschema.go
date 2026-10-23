@@ -27,6 +27,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Optional[string]](),
 	reflect.TypeFor[service.Nullable[service.ModelHintInput]](),
 	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
+	reflect.TypeFor[service.Nullable[domain.ChronicleCoverage]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
@@ -65,6 +66,8 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[domain.Status]():               enumSchema(domain.AllStatuses()),
 		reflect.TypeFor[domain.Role]():                 enumSchema(domain.AllRoles()),
 		reflect.TypeFor[domain.Priority]():             enumSchema([]domain.Priority{domain.PriorityLow, domain.PriorityNormal, domain.PriorityHigh, domain.PriorityUrgent}),
+		reflect.TypeFor[domain.ChroniclePageKind]():    enumSchema(domain.ChroniclePageKinds()),
+		reflect.TypeFor[domain.ChronicleCoverage]():    enumSchema(domain.ChronicleCoverages()),
 		reflect.TypeFor[domain.MemoryScope]():          enumSchema([]domain.MemoryScope{domain.MemoryScopeTask, domain.MemoryScopeAgent, domain.MemoryScopeShared, domain.MemoryScopeProject, domain.MemoryScopeAgentGlobal}),
 		reflect.TypeFor[service.ArtifactKind]():        enumSchema(service.ArtifactKindValues),
 		reflect.TypeFor[service.AttachmentStatus]():    enumSchema(service.AttachmentStatusValues),
