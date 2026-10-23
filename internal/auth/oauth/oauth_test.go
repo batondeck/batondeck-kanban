@@ -622,14 +622,14 @@ func TestCORSOnTheCookielessRoutesOnly(t *testing.T) {
 // code of its own is the control.
 func TestRefusalCodeRedeemedByAnotherClient(t *testing.T) {
 	f := newFixture(t)
-	owner, code, verifier := f.authorize(t, "worker", nil)
+	_, code, verifier := f.authorize(t, "worker", nil)
 	other := f.register(t, callbackURI)
 	st, m := f.exchange(t, other, code, verifier)
 	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
 	if m["error_description"] != "the code was not issued to this client_id" || m["access_token"] != nil {
 		t.Fatalf("another client's exchange: %v", m)
 	}
-	owner, code, verifier = f.authorize(t, "worker", nil)
+	owner, code, verifier := f.authorize(t, "worker", nil)
 	if st, m := f.exchange(t, owner, code, verifier); st != http.StatusOK || m["access_token"] == nil {
 		t.Fatalf("control, the owner's exchange: %d %v", st, m)
 	}
