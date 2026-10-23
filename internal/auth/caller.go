@@ -40,6 +40,12 @@ type Service struct {
 	AccountCacheTTL time.Duration
 	// SessionTTL: 0 means DefaultSessionTTL.
 	SessionTTL time.Duration
+	// OAuth is the OAuth server's tokens (internal/auth/oauth issues them); nil resolves API tokens
+	// only.
+	OAuth store.OAuth
+	// OAuthResource is the resource (RFC 8707) this service's bearers are presented at: an OAuth
+	// access token issued for any other is refused.
+	OAuthResource string
 
 	mu    sync.Mutex
 	cache map[string]accountEntry
@@ -96,11 +102,15 @@ func callerFor(userID string, e accountEntry) domain.Caller {
 	return domain.Caller{Identity: userID, WorkspaceAdmin: e.admin, TokenScope: userID}
 }
 
-// ResolveCaller resolves an API token (with or without a leading "Bearer ") to its principal.
+// ResolveCaller resolves an API token or an OAuth access token (with or without a leading
+// "Bearer ") to its principal.
 func (s *Service) ResolveCaller(ctx context.Context, bearer string) (domain.Caller, error) {
 	bearer = strings.TrimSpace(bearer)
 	if len(bearer) > 7 && strings.EqualFold(bearer[:7], "bearer ") {
 		bearer = strings.TrimSpace(bearer[7:])
+	}
+	if strings.HasPrefix(bearer, OAuthAccessPrefix) {
+		return s.resolveOAuth(ctx, bearer)
 	}
 	row, err := s.Tokens.Validate(ctx, bearer)
 	if err != nil {
