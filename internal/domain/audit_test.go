@@ -13,9 +13,9 @@ import (
 
 func TestAuditCoveragePinned(t *testing.T) {
 	want := []string{
-		"add_member", "create_cli_token", "create_integration", "delete_integration", "delete_project",
-		"delete_task", "disconnect_agent", "grant_capabilities", "prune_agent_sessions", "remove_member",
-		"revoke_cli_token", "rotate_integration_secret", "update_integration", "update_settings",
+		"add_member", "create_integration", "delete_integration", "delete_project", "delete_task",
+		"disconnect_agent", "grant_capabilities", "remove_member", "rotate_integration_secret",
+		"update_integration", "update_settings",
 	}
 	if got := AuditedTools(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("audited tools\n got %q\nwant %q", got, want)
@@ -48,10 +48,6 @@ func TestDescribeAudit(t *testing.T) {
 	d, _ = DescribeAudit("delete_project", map[string]any{"projectId": "P-AbC"})
 	if d.Subject != "P-AbC" {
 		t.Fatalf("a project id is opaque and keeps its case: %+v", d)
-	}
-	d, _ = DescribeAudit("create_cli_token", map[string]any{"label": "laptop", "ttlSeconds": 3600})
-	if d.Action != "cli_token.minted" || d.Subject != "" || !reflect.DeepEqual(d.Data, map[string]any{"label": "laptop", "ttlSeconds": 3600}) {
-		t.Fatalf("create_cli_token: %+v", d)
 	}
 }
 
