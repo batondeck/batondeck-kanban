@@ -69,6 +69,14 @@ func (l *live) addTask(t *testing.T, caller domain.Caller, projectID, boardID, t
 	}
 }
 
+// setColor is a project-wide change: update_settings names the project and no board.
+func (l *live) setColor(t *testing.T, projectID, color string) {
+	t.Helper()
+	if _, err := l.core.Projects().UpdateSettings(context.Background(), l.caller(), service.UpdateSettingsReq{ProjectID: projectID, Color: service.Value(color)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type frame struct {
 	event, id, data string
 	at              time.Time
@@ -246,11 +254,21 @@ func TestStreamIsScopedToTheProject(t *testing.T) {
 		t.Fatal("no ready")
 	}
 	time.Sleep(50 * time.Millisecond)
+	// q's rows: a task on q's board, and a settings change naming q and no board, which only the
+	// project subscription keeps off p's stream.
 	l.addTask(t, l.caller(), qid, qbid, "in q")
+	l.setColor(t, qid, "#aa0000")
 	c.quiet(t, 400*time.Millisecond)
 	l.addTask(t, l.caller(), pid, bid, "in p")
 	if f := c.next(t, time.Second); f.event != "board" || !strings.Contains(f.data, `"in p"`) || strings.Contains(f.data, `"in q"`) {
 		t.Fatalf("after p's change: %+v, want p's board frame", f)
+	}
+	if u := c.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":1`) {
+		t.Fatalf("%+v, want updated count 1", u)
+	}
+	l.setColor(t, pid, "#0000aa") // the positive control: a project-wide row of p is p's board's too
+	if f := c.next(t, time.Second); f.event != "board" {
+		t.Fatalf("after p's settings change: %+v, want board", f)
 	}
 
 	other := domain.Caller{Identity: "U-other", TokenScope: "U-other"}
@@ -291,7 +309,7 @@ func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
 		l.addTask(t, l.caller(), pid, bid, title)
 	}
 	l.addTask(t, l.caller(), qid, qbid, "q1")
-	l.addTask(t, l.caller(), qid, qbid, "q2")
+	l.setColor(t, qid, "#aa0000") // q's, naming no board: only the replay's project filter drops it
 
 	for _, via := range []struct {
 		query  string
