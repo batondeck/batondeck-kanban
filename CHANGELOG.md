@@ -35,6 +35,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The eleven lifecycle MCP tools (R1.4): `claim_task`, `claim_next`, `heartbeat_task`, `release_task`,
+  `next_task`, `complete_task`, `block_task`, `fail_task`, `reap_stale_leases`, `handoff_task` and
+  `cancel_task`, registered in `internal/mcp/tools/lifecycle.go`, each one `service.Lifecycle` call
+  (R1.5's semantics), wired in `serve`'s composition. Their input and output schemas equal
+  `contract/expected.json`; each description is at most 200 characters. `fail_task`'s `retryable`
+  reaches the service unset when absent (read as true) and is `VALIDATION` when null. The authz
+  matrix pins each tool's tier and where it lands its task: claims IN_PROGRESS; release, handoff
+  TODO; fail, reap TODO or BLOCKED; block BLOCKED; complete REVIEW or DONE by the project's review;
+  cancel DONE; `next_task` grant-exempt.
 - Attachments on local disk behind HMAC-signed URLs (R1.8). `attach_file` creates a pending
   attachment (`attachment.created`, the task's version +1) and answers an `uploadUrl`,
   `PUT /blobs/{projectId.taskId.attachmentId}?exp=…&sig=…`, valid 15 minutes; the PUT's body is read
@@ -523,6 +532,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Removed
 
+- The contract trim (R0.23, ADR-0004; the owner, 2026-10-23: "go with trimmed version"):
+  `contract/expected.json` goes from 93 tools to 86. `deltas.json` `removedTools` gains the router
+  facade (`find_tools`, `get_tool_schema`, `invoke_tool`), the CLI-token tools (`create_cli_token`,
+  `list_cli_tokens`, `revoke_cli_token`; the `token` subcommand and the REST settings page cover
+  them) and `prune_agent_sessions` (sessions are collected after 30 minutes idle), and `removedProps`
+  gains `disconnect_agent`'s `wakeRevoked`; `wakeRevokeFailed` leaves with `prune_agent_sessions`.
+  The 7 leave `internal/domain`'s posture table and the audit catalogue with them.
+  `internal/mcp/description_test.go` fails on any registered tool description over 200 characters,
+  or carrying conductor-only text, naming the tool and its length. The plan of record says 86, that
+  `add_subtask` leaves the parent alone, and that `tools/list` is memoised per workspace-admin flag.
 - The GitHub Actions `check` workflow (`.github/workflows/check.yml`), by the owner's ruling
   (ADR-0002): the local hooks are the gate. `pre-commit` runs gofmt, the 5 MiB cap and the INDEX
   secret scan; `pre-push` runs `make check` on both engines and refuses the push without Docker. A
