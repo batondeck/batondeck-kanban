@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -17,7 +18,8 @@ import (
 // result with isError, the BatonDeckError {code, message, details?, retryable} as structured
 // content and as its text. A handler's BatonDeckError passes through (AddTool has already made any
 // other handler error INTERNAL); any other failed result is go-sdk refusing the arguments before
-// the handler ran, so it is VALIDATION. A panic is INTERNAL, logged with its stack. Every call,
+// the handler ran, so it is VALIDATION. A panic, and a non-protocol error go-sdk returns after the
+// handler (its output failing the output schema), are INTERNAL, logged. Every call,
 // whatever its outcome, is then recorded once through service.ToolCalls.
 func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (res mcp.Result, err error) {
@@ -33,8 +35,17 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			s.record(ctx, req, res, err, time.Since(start))
 		}()
 		res, err = next(ctx, method, req)
+		if err != nil {
+			if _, protocol := err.(*jsonrpc.Error); !protocol {
+				// A non-protocol error after the handler (go-sdk refusing the tool's own output
+				// against its output schema, or failing to marshal it) is the server's bug: INTERNAL.
+				s.log.Printf("mcp: tool %s failed after its handler: %+v", toolName(req), err)
+				return errorResult(domain.NewError(domain.CodeInternal, "internal error", nil)), nil
+			}
+			return res, err
+		}
 		r, _ := res.(*mcp.CallToolResult)
-		if err != nil || r == nil || !r.IsError || r.StructuredContent != nil {
+		if r == nil || !r.IsError || r.StructuredContent != nil {
 			return res, err
 		}
 		e, ok := domain.AsBatonDeckError(r.GetError())

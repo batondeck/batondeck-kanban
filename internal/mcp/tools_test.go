@@ -35,7 +35,8 @@ func bearerFor(code domain.Code) string { return "bk_test_trigger_" + string(cod
 
 func toolsResolver() authfake.Resolver {
 	r := authfake.Resolver{Callers: map[string]domain.Caller{
-		bearerAda:   {Identity: "u-ada", TokenScope: "u-ada"},
+		// Every Caller field is set on one bearer or the other, so a transport dropping any fails.
+		bearerAda:   {Identity: "u-ada", Agent: "agent-ada", Role: string(domain.RoleWorker), TokenScope: "u-ada"},
 		bearerAdmin: {Identity: "u-admin", TokenScope: "u-admin", WorkspaceAdmin: true},
 	}}
 	for _, c := range triggerCodes {
@@ -182,13 +183,15 @@ func projectsBoardsCases() []toolCase {
 }
 
 // TestProjectsBoardsTools drives each of the 13 tools through a real client against servicefake:
-// the happy path (the decoded request reaches the service, its response comes back as structured
+// the happy path for a non-admin and a workspace-admin bearer (the decoded request and the
+// resolver's caller, field for field, reach the service; its response comes back as structured
 // content), an unknown key (VALIDATION, the service never called) and each service error (the
 // contract shape with its code and retryable).
 func TestProjectsBoardsTools(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
-	ada := h.Connect(t, bearerAda)
+	ada, admin := h.Connect(t, bearerAda), h.Connect(t, bearerAdmin)
+	callers := map[*sdk.ClientSession]domain.Caller{ada: toolsResolver().Callers[bearerAda], admin: toolsResolver().Callers[bearerAdmin]}
 	triggered := map[domain.Code]*sdk.ClientSession{}
 	for _, c := range triggerCodes {
 		triggered[c] = h.Connect(t, bearerFor(c))
@@ -199,27 +202,34 @@ func TestProjectsBoardsTools(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
-			t.Run("happy", func(t *testing.T) {
-				f.Reset()
-				f.Set(tc.method, tc.resp, nil)
-				res, err := ada.CallTool(testCtx(t), &sdk.CallToolParams{Name: tc.tool, Arguments: tc.args})
-				if err != nil || res.IsError {
-					t.Fatalf("%s: %+v, %v", tc.tool, res, err)
-				}
-				got := callsOf(f, tc.method)
-				if len(got) != 1 {
-					t.Fatalf("%s called %s %d times, want 1", tc.tool, tc.method, len(got))
-				}
-				if !reflect.DeepEqual(got[0].Req, tc.want) {
-					t.Errorf("%s reached the service as %#v, want %#v", tc.tool, got[0].Req, tc.want)
-				}
-				if got[0].Caller.Identity != "u-ada" {
-					t.Errorf("%s reached the service as caller %q, want u-ada", tc.tool, got[0].Caller.Identity)
-				}
-				if want := asJSON(t, tc.resp); !reflect.DeepEqual(res.StructuredContent, want) {
-					t.Errorf("%s answered %v, want the service's %v", tc.tool, res.StructuredContent, want)
-				}
-			})
+			// Each bearer's caller reaches the service whole: the workspace-admin flag, the token's
+			// role cap and the rest are the service's to read, so the transport may drop none of them.
+			for _, b := range []struct {
+				name string
+				cs   *sdk.ClientSession
+			}{{"happy", ada}, {"happy_admin", admin}} {
+				t.Run(b.name, func(t *testing.T) {
+					f.Reset()
+					f.Set(tc.method, tc.resp, nil)
+					res, err := b.cs.CallTool(testCtx(t), &sdk.CallToolParams{Name: tc.tool, Arguments: tc.args})
+					if err != nil || res.IsError {
+						t.Fatalf("%s: %+v, %v", tc.tool, res, err)
+					}
+					got := callsOf(f, tc.method)
+					if len(got) != 1 {
+						t.Fatalf("%s called %s %d times, want 1", tc.tool, tc.method, len(got))
+					}
+					if !reflect.DeepEqual(got[0].Req, tc.want) {
+						t.Errorf("%s reached the service as %#v, want %#v", tc.tool, got[0].Req, tc.want)
+					}
+					if want := callers[b.cs]; got[0].Caller != want {
+						t.Errorf("%s reached the service as caller %+v, want the resolver's %+v", tc.tool, got[0].Caller, want)
+					}
+					if want := asJSON(t, tc.resp); !reflect.DeepEqual(res.StructuredContent, want) {
+						t.Errorf("%s answered %v, want the service's %v", tc.tool, res.StructuredContent, want)
+					}
+				})
+			}
 			t.Run("VALIDATION_unknown_key", func(t *testing.T) {
 				f.Reset()
 				e := bk.ToolError(t, ada, tc.tool, with(tc.args, "unexpectedKey", true))
@@ -417,5 +427,28 @@ func TestAdminOnlyToolHiddenFromOthers(t *testing.T) {
 		if !admin[c.tool] || !ada[c.tool] {
 			t.Errorf("%s listed to admin %v, to a non-admin %v; want both", c.tool, admin[c.tool], ada[c.tool])
 		}
+	}
+}
+
+// TestBadOutputIsInternal: a service response that fails the tool's own output schema (a column
+// status outside the enum) is the server's bug: the client gets isError INTERNAL in the contract
+// shape, not a JSON-RPC error, the cause is logged, and the call still records one row.
+func TestBadOutputIsInternal(t *testing.T) {
+	f := servicefake.New()
+	h := bootTools(t, f.Services())
+	cs := h.Connect(t, bearerAda)
+	bad := sampleBoard()
+	bad.Columns[0].Status = "BOGUS"
+	f.Set("Boards.Get", service.GetBoardResp{Board: bad, TaskCounts: map[string]float64{}}, nil)
+	e := bk.ToolError(t, cs, "get_board", map[string]any{"projectId": "P-1", "boardId": "B-1"})
+	if e["code"] != "INTERNAL" || e["retryable"] != true || strings.Contains(fmt.Sprint(e["message"]), "BOGUS") {
+		t.Errorf("get_board with a bad output = %v, want INTERNAL retryable, the cause kept out of the message", e)
+	}
+	if logs := h.Log(); !strings.Contains(logs, "mcp: tool get_board failed after its handler") || !strings.Contains(logs, "BOGUS") {
+		t.Errorf("the output failure was not logged:\n%s", logs)
+	}
+	rows := callsOf(f, "ToolCalls.Record")
+	if len(rows) != 1 || rows[0].Req.(service.RecordToolCallReq).Code != "INTERNAL" || rows[0].Req.(service.RecordToolCallReq).Outcome != "error" {
+		t.Errorf("tool_calls rows = %+v, want one get_board error INTERNAL", rows)
 	}
 }

@@ -33,7 +33,8 @@ var expectedPosture = map[string]pinnedPosture{
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the
-// manifest, equals its pinned row, and every pinned tool is registered.
+// manifest, equals its pinned row, every pinned tool is registered, and every tool served in
+// tools/list is in the manifest.
 func TestAuthzMatrix(t *testing.T) {
 	h := bootTools(t, servicefake.New().Services())
 	registered := map[string]bool{}
@@ -55,6 +56,17 @@ func TestAuthzMatrix(t *testing.T) {
 	for name := range expectedPosture {
 		if !registered[name] {
 			t.Errorf("%s is pinned and not registered", name)
+		}
+	}
+	// Every tool served is in the manifest: one registered beside mcp.Tool (mcp.AddTool skips the
+	// posture check and the manifest) would be served unpinned and unchecked by the area test.
+	listed, err := h.Connect(t, bearerAdmin).ListTools(testCtx(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range listed.Tools {
+		if !registered[tl.Name] {
+			t.Errorf("%s is served in tools/list and not in the manifest: register it through mcp.Tool", tl.Name)
 		}
 	}
 	t.Logf("%d tools pinned", len(registered))

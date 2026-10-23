@@ -19,7 +19,8 @@ Notable changes to batondeck-kanban. The format follows
   to an `Optional` field and a number its integer cannot hold are all `VALIDATION`. Registered and
   served by `serve`: `create_project`, `get_project`, `list_projects`, `update_settings`,
   `delete_project`, `add_member`, `remove_member`, `create_board`, `list_boards`, `get_board`,
-  `add_column`, `update_column`, `remove_column`. Each records one `tool_calls` row.
+  `add_column`, `update_column`, `remove_column`. Each records one `tool_calls` row. A tool's own
+  output failing its output schema is now `isError` INTERNAL (logged) rather than a JSON-RPC error.
 - The `/wake` doorbell, the Unix socket listener and `/internal/wake-session` (R0.15).
   `GET /wake[?since=<cursor>]` (bearer required; 401 with `WWW-Authenticate: Bearer` without one, 400
   for a cursor that is not one non-negative integer) is an SSE stream of the caller's doorbells:
