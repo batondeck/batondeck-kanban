@@ -204,11 +204,7 @@ func (s *Server) refresh(ctx context.Context, token, clientID, resource, scope s
 			refused = invalidGrant("invalid or expired refresh token")
 			return nil
 		}
-		if _, err := tx.ConsumeOAuthToken(ctx, hash, now.UnixMilli()); errors.Is(err, store.ErrOAuthUsed) {
-			return revokeFamily() // a concurrent rotation won: this is the second presentation
-		} else if err != nil {
-			return err
-		}
+		// The request is judged whole before the token is spent: a refusal here leaves it usable.
 		fam, err := tx.GetOAuthFamily(ctx, t.FamilyID)
 		if err != nil {
 			return err
@@ -226,6 +222,11 @@ func (s *Server) refresh(ctx context.Context, token, clientID, resource, scope s
 				return nil
 			}
 			granted = string(want)
+		}
+		if _, err := tx.ConsumeOAuthToken(ctx, hash, now.UnixMilli()); errors.Is(err, store.ErrOAuthUsed) {
+			return revokeFamily() // a concurrent rotation won: this is the second presentation
+		} else if err != nil {
+			return err
 		}
 		out, err = s.mint(ctx, tx, fam, granted, now)
 		return err
