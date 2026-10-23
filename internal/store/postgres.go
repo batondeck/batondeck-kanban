@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,8 @@ type Postgres struct {
 	pool *pgxpool.Pool
 	// tx is set on the copy Atomically hands its callback.
 	tx pgx.Tx
+	// issued counts every area statement, whatever its context (StatementCounter).
+	issued *atomic.Int64
 }
 
 var _ Store = (*Postgres)(nil)
@@ -33,7 +36,7 @@ func OpenPostgres(ctx context.Context, dsn string) (*Postgres, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	return &Postgres{pool: pool}, nil
+	return &Postgres{pool: pool, issued: new(atomic.Int64)}, nil
 }
 
 // migrator opens a database/sql handle over the pool for goose; the caller closes it.
@@ -105,7 +108,7 @@ func (s *Postgres) Atomically(ctx context.Context, fn func(tx Store) error) erro
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	if err := fn(&Postgres{pool: s.pool, tx: tx}); err != nil {
+	if err := fn(&Postgres{pool: s.pool, tx: tx, issued: s.issued}); err != nil {
 		_ = tx.Rollback(ctx)
 		return err
 	}

@@ -612,58 +612,80 @@ func TestJoinTwoClaimsOneWinner(t *testing.T) {
 func TestJoinFiftyClaimers(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		const n = 50
-		owner := j.user("ada")
-		workers := map[*agent]string{}
-		var order []*agent
-		for i := range n {
-			w := j.user(fmt.Sprintf("w%02d", i))
-			workers[w] = "worker"
-			order = append(order, w)
-		}
-		b := j.board(owner, nil, workers)
-		for i := range n {
-			b.task(fmt.Sprintf("job %d", i))
-		}
-		ids := make([]string, n)
-		errs := make([]*toolErr, n)
-		took := make([]time.Duration, n)
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		for i, w := range order {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				t0 := time.Now()
-				out, e := w.try("claim_next", map[string]any{"projectId": b.project, "boardId": b.bid})
-				took[i], errs[i] = time.Since(t0), e
-				ids[i] = asStr(asMap(out["task"])["id"])
-			}()
-		}
-		close(start)
-		wg.Wait()
-		seen := map[string]bool{}
-		failed := 0
-		for i := range n {
-			if errs[i] != nil {
-				failed++
-				t.Errorf("claimer %d: %+v", i, errs[i])
-				continue
-			}
-			if ids[i] == "" || seen[ids[i]] {
-				t.Errorf("claimer %d won %q (empty or a duplicate)", i, ids[i])
-			}
-			seen[ids[i]] = true
-		}
-		sorted := slices.Clone(took)
-		sort.Slice(sorted, func(a, b int) bool { return sorted[a] < sorted[b] })
-		p := func(q float64) time.Duration { return sorted[int(q*float64(n-1)+0.5)] }
+		r := j.claimRace(n)
 		t.Logf("%s: %d concurrent claim_next: %d distinct winners, %d errors; latency p50 %v p95 %v max %v",
-			j.engine, n, len(seen), failed, p(0.50).Round(time.Millisecond), p(0.95).Round(time.Millisecond), sorted[n-1].Round(time.Millisecond))
-		if len(seen) != n || failed != 0 {
-			t.Fatalf("%d distinct winners, %d errors; want %d and 0", len(seen), failed, n)
+			j.engine, n, r.winners, r.failed, r.p(0.50).Round(time.Millisecond), r.p(0.95).Round(time.Millisecond), r.p(1).Round(time.Millisecond))
+		if r.winners != n || r.failed != 0 {
+			t.Fatalf("%d distinct winners, %d errors; want %d and 0", r.winners, r.failed, n)
 		}
 	})
+}
+
+// race is one claimRace: the distinct winners, the calls that failed, each call's latency in
+// ascending order, and the wall time from the start to the last answer.
+type race struct {
+	winners, failed int
+	sorted          []time.Duration
+	wall            time.Duration
+}
+
+// p is the q-quantile of the latencies (nearest rank); p(1) is the slowest.
+func (r race) p(q float64) time.Duration { return r.sorted[int(q*float64(len(r.sorted)-1)+0.5)] }
+
+// claimRace makes n workers, each a member with its own session, and a board of n TODO tasks, then
+// has every worker call claim_next at once; a duplicate or empty win and every error is reported on
+// j.t.
+func (j *joined) claimRace(n int) race {
+	t := j.t
+	t.Helper()
+	owner := j.user("ada")
+	workers := map[*agent]string{}
+	var order []*agent
+	for i := range n {
+		w := j.user(fmt.Sprintf("w%02d", i))
+		workers[w] = "worker"
+		order = append(order, w)
+	}
+	b := j.board(owner, nil, workers)
+	for i := range n {
+		b.task(fmt.Sprintf("job %d", i))
+	}
+	ids := make([]string, n)
+	errs := make([]*toolErr, n)
+	took := make([]time.Duration, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, w := range order {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			t0 := time.Now()
+			out, e := w.try("claim_next", map[string]any{"projectId": b.project, "boardId": b.bid})
+			took[i], errs[i] = time.Since(t0), e
+			ids[i] = asStr(asMap(out["task"])["id"])
+		}()
+	}
+	t0 := time.Now()
+	close(start)
+	wg.Wait()
+	r := race{wall: time.Since(t0)}
+	seen := map[string]bool{}
+	for i := range n {
+		if errs[i] != nil {
+			r.failed++
+			t.Errorf("claimer %d: %+v", i, errs[i])
+			continue
+		}
+		if ids[i] == "" || seen[ids[i]] {
+			t.Errorf("claimer %d won %q (empty or a duplicate)", i, ids[i])
+		}
+		seen[ids[i]] = true
+	}
+	r.winners = len(seen)
+	r.sorted = slices.Clone(took)
+	sort.Slice(r.sorted, func(a, b int) bool { return r.sorted[a] < r.sorted[b] })
+	return r
 }
 
 // changes is the change log past cursor after: each row's kind, scope and tool.

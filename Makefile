@@ -6,7 +6,8 @@ VERSION ?= 0.1.0-dev
 SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
-.PHONY: release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+# bench and bench-baseline are not part of check (see bench below).
+.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -199,6 +200,33 @@ contract:
 # Postgres half needs BATONDECK_TEST_POSTGRES_DSN, as conformance does.
 perf:
 	go test -race -count=1 -v ./test/perf/
+
+# bench runs plan §Performance's three numbers, outside check: the claim race (50 real MCP clients
+# call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 3 rounds), the
+# idle cost (200 device-directory entries and 10 /api/stream clients held 60 s with no write: the
+# sweep's statements per entry, and none between sweeps, by the engine's own count) and the per-call
+# statement pins of test/perf, each in its three cache states. SQLite always, Postgres too with
+# BATONDECK_TEST_POSTGRES_DSN. No -race: it multiplies the claim latency about 15x (P-195). Then
+# bench/bench_test.go writes bench/results.json and fails on a latency beyond +20 % or any rise in a
+# statement count against bench/baseline.json, when both were measured on the same machine (model,
+# CPU, cores; it says so when they were not), and on a README performance block that is not
+# baseline.json's. bench-baseline writes baseline.json and that block from the run instead: commit
+# both, so the PR shows the reviewer the new numbers.
+BENCH_OUT := $(CURDIR)/bench/out
+bench: BENCH_MODE = compare
+bench-baseline: BENCH_MODE = write
+# Every measurement runs even after one fails, so the judge names each number that regressed; the
+# judge's own tests run first, and a baseline is written only from a run that passed.
+bench bench-baseline:
+	@rm -rf $(BENCH_OUT) && mkdir -p $(BENCH_OUT)
+	go test -count=1 -skip '^TestBench$$' ./bench/
+	@s=0; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestBench$$' ./internal/cli/ || s=1; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) go test -count=1 -v -run '^TestQueriesPerCall$$' ./test/perf/ || s=1; \
+	if [ "$(BENCH_MODE)" = write ] && [ $$s != 0 ]; then echo "bench-baseline: a measurement failed, so no baseline is written" >&2; exit 1; fi; \
+	BATONDECK_BENCH_DIR=$(BENCH_OUT) BATONDECK_BENCH_BASELINE=$(BENCH_MODE) go test -count=1 -v -run '^TestBench$$' ./bench/ || s=1; \
+	if [ $$s != 0 ]; then echo "make $@: FAILED (each failure is named above)" >&2; fi; \
+	exit $$s
 
 # clean removes what a build PRODUCES: the binary and dist/.
 clean:

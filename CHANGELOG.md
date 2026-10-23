@@ -102,6 +102,20 @@ Notable changes to batondeck-kanban. The format follows
   comment, a follow-up without a reopen and an ack leave the task's version as it was, as
   conductor's do. The comment and follow-up routes under `/api/projects/{projectId}/tasks/{taskId}`
   replace R1.12's stubs. No migration: 0001 holds the three tables.
+- `make bench` (R3.5, plan §Performance), outside `make check` and without `-race`: the claim race
+  (50 go-sdk MCP clients × `claim_next` on one board of 50 TODO tasks, 50 distinct winners and 0
+  errors asserted, p50/p95 of the median of 5 rounds after a dropped warm-up round), the idle cost (200 device-directory entries
+  and 10 `/api/stream` clients held 60 s with no write: at most 3 statements per entry per sweep and
+  none between sweeps, asserted) and test/perf's statement pins in three cache states, on SQLite
+  and, with `BATONDECK_TEST_POSTGRES_DSN`, on Postgres. `bench/bench_test.go` writes
+  `bench/results.json` (gitignored) and fails, against the committed `bench/baseline.json` measured
+  on the same machine, on a latency beyond +20 % or any rise in a statement count, and on a README
+  performance block that is not the baseline's; `make bench-baseline` rewrites both. The README
+  gains its performance section.
+- `store.StatementCounter`: each SQL engine counts every statement it issues, from any goroutine and
+  under any context, which the bench's idle cost needs (the bus tail and the HTTP handlers run on
+  contexts no caller holds). The auth areas (users, tokens, sessions, OAuth) are now counted too, by
+  both counters; no pin moved.
 - The Chronicle (R2.6): `create_chronicle_page`, `ingest_chronicle_page`, `edit_chronicle_page` and
   `delete_chronicle_page` (tier write, grant-governed), and the six chronicle resource templates
   (`chronicle`, `chronicle-cursor`, `chronicle-page`, `chronicle-history`, `chronicle-history-cursor`,
