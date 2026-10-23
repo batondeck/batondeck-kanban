@@ -7,22 +7,42 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
 
-const getOauthClient = `-- name: GetOauthClient :one
-SELECT client_id, client_name, redirect_uris, grant_types, response_types, token_endpoint_auth_method, scope, created_at, last_used_at FROM oauth_clients WHERE client_id = $1
+const deleteUnusedOauthClients = `-- name: DeleteUnusedOauthClients :execrows
+DELETE FROM oauth_clients WHERE last_used_at IS NULL AND created_at < $1
 `
 
-func (q *Queries) GetOauthClient(ctx context.Context, clientID string) (OauthClient, error) {
+func (q *Queries) DeleteUnusedOauthClients(ctx context.Context, createdAt int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnusedOauthClients, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getOauthClient = `-- name: GetOauthClient :one
+SELECT client_id, client_name, redirect_uris, scope, created_at, last_used_at
+FROM oauth_clients WHERE client_id = $1
+`
+
+type GetOauthClientRow struct {
+	ClientID     string
+	ClientName   string
+	RedirectUris string
+	Scope        string
+	CreatedAt    int64
+	LastUsedAt   sql.NullInt64
+}
+
+func (q *Queries) GetOauthClient(ctx context.Context, clientID string) (GetOauthClientRow, error) {
 	row := q.db.QueryRow(ctx, getOauthClient, clientID)
-	var i OauthClient
+	var i GetOauthClientRow
 	err := row.Scan(
 		&i.ClientID,
 		&i.ClientName,
 		&i.RedirectUris,
-		&i.GrantTypes,
-		&i.ResponseTypes,
-		&i.TokenEndpointAuthMethod,
 		&i.Scope,
 		&i.CreatedAt,
 		&i.LastUsedAt,
@@ -31,19 +51,32 @@ func (q *Queries) GetOauthClient(ctx context.Context, clientID string) (OauthCli
 }
 
 const getOauthCode = `-- name: GetOauthCode :one
-SELECT code_hash, client_id, identity_id, redirect_uri, code_challenge, code_challenge_method, scope, resource, created_at, expires_at, used_at FROM oauth_codes WHERE code_hash = $1
+SELECT code_hash, client_id, identity_id, redirect_uri, code_challenge, scope, resource, created_at, expires_at, used_at
+FROM oauth_codes WHERE code_hash = $1
 `
 
-func (q *Queries) GetOauthCode(ctx context.Context, codeHash string) (OauthCode, error) {
+type GetOauthCodeRow struct {
+	CodeHash      string
+	ClientID      string
+	IdentityID    string
+	RedirectUri   string
+	CodeChallenge string
+	Scope         string
+	Resource      string
+	CreatedAt     int64
+	ExpiresAt     int64
+	UsedAt        sql.NullInt64
+}
+
+func (q *Queries) GetOauthCode(ctx context.Context, codeHash string) (GetOauthCodeRow, error) {
 	row := q.db.QueryRow(ctx, getOauthCode, codeHash)
-	var i OauthCode
+	var i GetOauthCodeRow
 	err := row.Scan(
 		&i.CodeHash,
 		&i.ClientID,
 		&i.IdentityID,
 		&i.RedirectUri,
 		&i.CodeChallenge,
-		&i.CodeChallengeMethod,
 		&i.Scope,
 		&i.Resource,
 		&i.CreatedAt,
@@ -53,12 +86,13 @@ func (q *Queries) GetOauthCode(ctx context.Context, codeHash string) (OauthCode,
 	return i, err
 }
 
-const getOauthRefreshFamily = `-- name: GetOauthRefreshFamily :one
-SELECT id, client_id, identity_id, scope, resource, created_at, revoked_at, revoked_reason FROM oauth_refresh_families WHERE id = $1
+const getOauthFamily = `-- name: GetOauthFamily :one
+SELECT id, client_id, identity_id, scope, resource, created_at, revoked_at, revoked_reason
+FROM oauth_refresh_families WHERE id = $1
 `
 
-func (q *Queries) GetOauthRefreshFamily(ctx context.Context, id string) (OauthRefreshFamily, error) {
-	row := q.db.QueryRow(ctx, getOauthRefreshFamily, id)
+func (q *Queries) GetOauthFamily(ctx context.Context, id string) (OauthRefreshFamily, error) {
+	row := q.db.QueryRow(ctx, getOauthFamily, id)
 	var i OauthRefreshFamily
 	err := row.Scan(
 		&i.ID,
@@ -74,12 +108,30 @@ func (q *Queries) GetOauthRefreshFamily(ctx context.Context, id string) (OauthRe
 }
 
 const getOauthToken = `-- name: GetOauthToken :one
-SELECT token_hash, kind, family_id, client_id, identity_id, scope, resource, created_at, expires_at, used_at, revoked_at FROM oauth_tokens WHERE token_hash = $1
+SELECT t.token_hash, t.kind, t.family_id, t.client_id, t.identity_id, t.scope, t.resource,
+       t.created_at, t.expires_at, t.used_at, t.revoked_at, f.revoked_at AS family_revoked_at
+FROM oauth_tokens t JOIN oauth_refresh_families f ON f.id = t.family_id
+WHERE t.token_hash = $1
 `
 
-func (q *Queries) GetOauthToken(ctx context.Context, tokenHash string) (OauthToken, error) {
+type GetOauthTokenRow struct {
+	TokenHash       string
+	Kind            string
+	FamilyID        string
+	ClientID        string
+	IdentityID      string
+	Scope           string
+	Resource        string
+	CreatedAt       int64
+	ExpiresAt       int64
+	UsedAt          sql.NullInt64
+	RevokedAt       sql.NullInt64
+	FamilyRevokedAt sql.NullInt64
+}
+
+func (q *Queries) GetOauthToken(ctx context.Context, tokenHash string) (GetOauthTokenRow, error) {
 	row := q.db.QueryRow(ctx, getOauthToken, tokenHash)
-	var i OauthToken
+	var i GetOauthTokenRow
 	err := row.Scan(
 		&i.TokenHash,
 		&i.Kind,
@@ -92,6 +144,193 @@ func (q *Queries) GetOauthToken(ctx context.Context, tokenHash string) (OauthTok
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.RevokedAt,
+		&i.FamilyRevokedAt,
 	)
 	return i, err
+}
+
+const insertOauthClient = `-- name: InsertOauthClient :exec
+
+INSERT INTO oauth_clients (client_id, client_name, redirect_uris, scope, created_at)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertOauthClientParams struct {
+	ClientID     string
+	ClientName   string
+	RedirectUris string
+	Scope        string
+	CreatedAt    int64
+}
+
+// The OAuth 2.1 authorization server: registered clients, codes, refresh families and opaque
+// tokens. Codes and tokens are held by the SHA-256 of their value, never the value.
+func (q *Queries) InsertOauthClient(ctx context.Context, arg InsertOauthClientParams) error {
+	_, err := q.db.Exec(ctx, insertOauthClient,
+		arg.ClientID,
+		arg.ClientName,
+		arg.RedirectUris,
+		arg.Scope,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertOauthCode = `-- name: InsertOauthCode :exec
+INSERT INTO oauth_codes (code_hash, client_id, identity_id, redirect_uri, code_challenge, scope, resource, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertOauthCodeParams struct {
+	CodeHash      string
+	ClientID      string
+	IdentityID    string
+	RedirectUri   string
+	CodeChallenge string
+	Scope         string
+	Resource      string
+	CreatedAt     int64
+	ExpiresAt     int64
+}
+
+func (q *Queries) InsertOauthCode(ctx context.Context, arg InsertOauthCodeParams) error {
+	_, err := q.db.Exec(ctx, insertOauthCode,
+		arg.CodeHash,
+		arg.ClientID,
+		arg.IdentityID,
+		arg.RedirectUri,
+		arg.CodeChallenge,
+		arg.Scope,
+		arg.Resource,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const insertOauthFamily = `-- name: InsertOauthFamily :exec
+INSERT INTO oauth_refresh_families (id, client_id, identity_id, scope, resource, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertOauthFamilyParams struct {
+	ID         string
+	ClientID   string
+	IdentityID string
+	Scope      string
+	Resource   string
+	CreatedAt  int64
+}
+
+func (q *Queries) InsertOauthFamily(ctx context.Context, arg InsertOauthFamilyParams) error {
+	_, err := q.db.Exec(ctx, insertOauthFamily,
+		arg.ID,
+		arg.ClientID,
+		arg.IdentityID,
+		arg.Scope,
+		arg.Resource,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertOauthToken = `-- name: InsertOauthToken :exec
+INSERT INTO oauth_tokens (token_hash, kind, family_id, client_id, identity_id, scope, resource, created_at, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertOauthTokenParams struct {
+	TokenHash  string
+	Kind       string
+	FamilyID   string
+	ClientID   string
+	IdentityID string
+	Scope      string
+	Resource   string
+	CreatedAt  int64
+	ExpiresAt  int64
+}
+
+func (q *Queries) InsertOauthToken(ctx context.Context, arg InsertOauthTokenParams) error {
+	_, err := q.db.Exec(ctx, insertOauthToken,
+		arg.TokenHash,
+		arg.Kind,
+		arg.FamilyID,
+		arg.ClientID,
+		arg.IdentityID,
+		arg.Scope,
+		arg.Resource,
+		arg.CreatedAt,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const revokeOauthFamily = `-- name: RevokeOauthFamily :execrows
+UPDATE oauth_refresh_families SET revoked_at = $1, revoked_reason = $2 WHERE id = $3 AND revoked_at IS NULL
+`
+
+type RevokeOauthFamilyParams struct {
+	RevokedAt     sql.NullInt64
+	RevokedReason sql.NullString
+	ID            string
+}
+
+func (q *Queries) RevokeOauthFamily(ctx context.Context, arg RevokeOauthFamilyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeOauthFamily, arg.RevokedAt, arg.RevokedReason, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const touchOauthClient = `-- name: TouchOauthClient :execrows
+UPDATE oauth_clients SET last_used_at = $1 WHERE client_id = $2
+`
+
+type TouchOauthClientParams struct {
+	LastUsedAt sql.NullInt64
+	ClientID   string
+}
+
+func (q *Queries) TouchOauthClient(ctx context.Context, arg TouchOauthClientParams) (int64, error) {
+	result, err := q.db.Exec(ctx, touchOauthClient, arg.LastUsedAt, arg.ClientID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const useOauthCode = `-- name: UseOauthCode :execrows
+UPDATE oauth_codes SET used_at = $1 WHERE code_hash = $2 AND used_at IS NULL
+`
+
+type UseOauthCodeParams struct {
+	UsedAt   sql.NullInt64
+	CodeHash string
+}
+
+func (q *Queries) UseOauthCode(ctx context.Context, arg UseOauthCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useOauthCode, arg.UsedAt, arg.CodeHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const useOauthToken = `-- name: UseOauthToken :execrows
+UPDATE oauth_tokens SET used_at = $1 WHERE token_hash = $2 AND used_at IS NULL
+`
+
+type UseOauthTokenParams struct {
+	UsedAt    sql.NullInt64
+	TokenHash string
+}
+
+func (q *Queries) UseOauthToken(ctx context.Context, arg UseOauthTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useOauthToken, arg.UsedAt, arg.TokenHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

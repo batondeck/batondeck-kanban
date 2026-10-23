@@ -178,3 +178,31 @@ func TestNoCredentialIs401(t *testing.T) {
 		t.Fatalf("bad bearer: %d", w.Code)
 	}
 }
+
+// A login with next redirects there (303) on success and back with login=failed on a wrong
+// password, but only to a path on this server: any other next is 400 and signs nobody in.
+func TestLoginNextRedirectsOnlyToLocalPaths(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "pw-alice-1")
+	post := func(password, next string) *http.Response {
+		form := url.Values{"login": {"alice"}, "password": {password}, "next": {next}}
+		r := httptest.NewRequest(http.MethodPost, "http://board.test/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.svc.CSRF(f.svc.LoginHandler()).ServeHTTP(w, r)
+		return w.Result()
+	}
+	if r := post("pw-alice-1", "/authorize?client_id=c&state=s"); r.StatusCode != http.StatusSeeOther ||
+		r.Header.Get("Location") != "/authorize?client_id=c&state=s" || cookie(r, SessionCookie) == nil {
+		t.Fatalf("local next: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	if r := post("wrong", "/authorize?client_id=c"); r.StatusCode != http.StatusSeeOther ||
+		r.Header.Get("Location") != "/authorize?client_id=c&login=failed" || cookie(r, SessionCookie) != nil {
+		t.Fatalf("wrong password: %d %q", r.StatusCode, r.Header.Get("Location"))
+	}
+	for _, next := range []string{"https://evil.example/", "//evil.example/x", "/\\evil.example", "javascript:alert(1)", "authorize"} {
+		if r := post("pw-alice-1", next); r.StatusCode != http.StatusBadRequest || cookie(r, SessionCookie) != nil {
+			t.Fatalf("next %q: %d, want 400 and no session", next, r.StatusCode)
+		}
+	}
+}

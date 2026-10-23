@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/auth/oauth"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/web"
@@ -117,10 +118,13 @@ func migratedLine(m store.Migrated) string {
 // healthBody is /healthz's whole answer: liveness only, naming the binary and its version.
 func healthBody(version string) string { return "batondeck-kanban " + version + " ok\n" }
 
-// handler is everything serve answers: /healthz, the MCP server at /mcp, and the embedded SPA for
-// every other path.
-func handler(version string, mcp http.Handler) http.Handler {
+// handler is everything serve answers: /healthz, the MCP server at /mcp, the OAuth server's routes
+// when as is not nil, and the embedded SPA for every other path.
+func handler(version string, mcp http.Handler, as *oauth.Server) http.Handler {
 	mux := http.NewServeMux()
+	if as != nil {
+		as.Mount(mux)
+	}
 	// One pattern per method the transport answers: a bare "/mcp" conflicts with the SPA's "GET /".
 	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
 		mux.Handle(m+" /mcp", mcp)
@@ -189,7 +193,7 @@ func serve(args []string, version string, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, ln, st, version, log); err != nil {
+	if err := runServer(ctx, ln, st, version, cfg.PublicURL, log); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}

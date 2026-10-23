@@ -18,10 +18,10 @@ import (
 const callerKey = "batondeck.caller"
 
 // requireBearer resolves every request's bearer through r. No bearer, or one the resolver refuses
-// as UNAUTHENTICATED, is 401 with `WWW-Authenticate: Bearer`; any other resolver error is 500. The
-// caller's identity is the TokenInfo's UserID, so go-sdk refuses (403) a session presented with
-// another identity's bearer.
-func requireBearer(r auth.Resolver, logger *log.Logger) func(http.Handler) http.Handler {
+// as UNAUTHENTICATED, is 401 with `WWW-Authenticate: Bearer`, naming resourceMetadata (RFC 9728)
+// when it is set; any other resolver error is 500. The caller's identity is the TokenInfo's UserID,
+// so go-sdk refuses (403) a session presented with another identity's bearer.
+func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger) func(http.Handler) http.Handler {
 	verify := func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		c, err := r.ResolveCaller(ctx, token)
 		if err != nil {
@@ -34,7 +34,7 @@ func requireBearer(r auth.Resolver, logger *log.Logger) func(http.Handler) http.
 		return &sdkauth.TokenInfo{UserID: c.Identity, Extra: map[string]any{callerKey: c}}, nil
 	}
 	// Tokens are checked for expiry by the resolver, so the TokenInfo carries none.
-	bearer := sdkauth.RequireBearerToken(verify, &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true})
+	bearer := sdkauth.RequireBearerToken(verify, &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true, ResourceMetadataURL: resourceMetadata})
 	return func(next http.Handler) http.Handler {
 		h := bearer(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -44,7 +44,8 @@ func requireBearer(r auth.Resolver, logger *log.Logger) func(http.Handler) http.
 }
 
 // challengeWriter adds `WWW-Authenticate: Bearer` to a 401 that carries no challenge. go-sdk writes
-// one only when a resource-metadata URL or scopes are configured; R0.13 sets the URL (RFC 9728).
+// one only when a resource-metadata URL or scopes are configured, so this covers a server with no
+// OAuth server (public_url unset).
 type challengeWriter struct {
 	http.ResponseWriter
 }
