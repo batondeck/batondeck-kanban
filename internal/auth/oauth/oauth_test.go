@@ -588,3 +588,31 @@ func TestNewRefusesAPublicURLWithAPath(t *testing.T) {
 		t.Fatalf("issuerOf: %q %v", got, err)
 	}
 }
+
+// A browser-run client (the MCP Inspector) may read the metadata and call /register and /token from
+// another origin: none of them reads a cookie. The consent routes carry no CORS header.
+func TestCORSOnTheCookielessRoutesOnly(t *testing.T) {
+	f := newFixture(t)
+	for _, p := range []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/register", "/token"} {
+		req, _ := http.NewRequest(http.MethodOptions, f.srv.URL+p, nil)
+		req.Header.Set("Origin", "http://localhost:6274")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body(t, resp)
+		if resp.StatusCode != http.StatusNoContent || resp.Header.Get("Access-Control-Allow-Origin") != "*" ||
+			!strings.Contains(resp.Header.Get("Access-Control-Allow-Headers"), "Content-Type") {
+			t.Fatalf("preflight %s: %d %v", p, resp.StatusCode, resp.Header)
+		}
+	}
+	resp, err := http.Get(f.srv.URL + "/authorize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body(t, resp)
+	if resp.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatal("/authorize carries a CORS header")
+	}
+}

@@ -73,8 +73,9 @@ when the variable is unset, and fails when it is set and the server does not ans
 ## How an area plugs in
 
 An area is `func <area>(t *testing.T, newStore Factory)` in its own file of this package
-(`conformance_<area>.go`), handed to `register("<area>", <area>)` from that file's `init`. Its line in
-`areas` is already there, so a new area adds a file and no line; `register` panics on a name not in `areas`
+(`conformance_<area>.go`), handed to `register("<area>", <area>)` from that file's `init`. An area of
+ADR-0003 B2 has its line in `areas` already, so it adds a file and no line; one outside B2 (`oauth`,
+R0.13) adds its line too; `register` panics on a name not in `areas`
 or registered twice. Each subtest asks `newStore` for its own store (or
 `migrated(t, newStore)` for a migrated one) and calls it only through `store.Store`: no engine branch,
 so a statement that differs between SQLite and Postgres fails in one of the two callers.

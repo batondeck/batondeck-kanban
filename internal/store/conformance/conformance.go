@@ -26,8 +26,9 @@ type Factory func(t *testing.T) Migratable
 // Run judges one engine by the whole suite: lifecycle, then every area of areas in that order, each
 // as a subtest named for it. An area is a function of this package, `func <area>(t *testing.T,
 // newStore Factory)`, in its own file conformance_<area>.go, which hands it to register from an
-// init; its line in areas is already here, so a lane adds a file and never a line. An area whose
-// file has not landed yet SKIPS, naming the task that writes it.
+// init. ADR-0003 B2's areas have their lines in areas already, so their lanes add a file and no
+// line; an area outside B2 (oauth, R0.13) adds its line too. An area whose file has not landed yet
+// SKIPS, naming the task that writes it.
 func Run(t *testing.T, newStore Factory) {
 	lifecycle(t, newStore)
 	for _, a := range areas {

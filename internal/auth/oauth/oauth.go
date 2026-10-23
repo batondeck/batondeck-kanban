@@ -25,6 +25,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,6 +98,7 @@ func New(o Options) (*Server, error) {
 	if o.Resources == nil {
 		o.Resources = []string{issuer + MCPPath}
 	}
+	o.Resources = slices.Clone(o.Resources)
 	for i, r := range o.Resources {
 		o.Resources[i] = strings.TrimRight(r, "/")
 	}
