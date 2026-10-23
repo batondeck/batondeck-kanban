@@ -25,7 +25,6 @@ Notable changes to batondeck-kanban. The format follows
   its foreign key to tasks, so a project entry keeps its task as provenance after the task is deleted;
   the task scopes are the service's cascade (`DeleteMemoryByTask`). SQLite rebuilds the table (it has no
   index, trigger or view beyond its primary key's); the down migration restores the key.
-
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
   (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
