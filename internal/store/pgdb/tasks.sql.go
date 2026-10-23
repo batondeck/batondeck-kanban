@@ -878,8 +878,8 @@ func (q *Queries) WriteTaskFields(ctx context.Context, arg WriteTaskFieldsParams
 }
 
 const writeTaskState = `-- name: WriteTaskState :one
-UPDATE tasks SET status = $1, column_id = $2, order_key = $3, blocked_reason = $4, labels = $5, claim_attempts = $6, next_eligible_at = $7, claim_owner = $8, claim_agent = $9, claim_agent_id = $10, lease_id = $11, lease_expires_at = $12, version = $13, updated_by = $14, updated_at = $15
-WHERE project_id = $16 AND id = $17
+UPDATE tasks SET status = $1, column_id = $2, order_key = $3, blocked_reason = $4, labels = $5, claim_attempts = $6, next_eligible_at = $7, claim_owner = $8, claim_agent = $9, claim_agent_id = $10, lease_id = $11, lease_expires_at = $12, assignee = $13, deliverable = $14, review = $15, version = $16, updated_by = $17, updated_at = $18
+WHERE project_id = $19 AND id = $20
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -896,6 +896,9 @@ type WriteTaskStateParams struct {
 	ClaimAgentID   sql.NullString
 	LeaseID        sql.NullString
 	LeaseExpiresAt sql.NullInt64
+	Assignee       sql.NullString
+	Deliverable    sql.NullString
+	Review         sql.NullString
 	Version        int64
 	UpdatedBy      string
 	UpdatedAt      int64
@@ -949,7 +952,8 @@ type WriteTaskStateRow struct {
 	UpdatedAt            int64
 }
 
-// The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state and lease.
+// The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state, lease, and the
+// assignee, deliverable and review a SetStatus may carry with them.
 func (q *Queries) WriteTaskState(ctx context.Context, arg WriteTaskStateParams) (WriteTaskStateRow, error) {
 	row := q.db.QueryRow(ctx, writeTaskState,
 		arg.Status,
@@ -964,6 +968,9 @@ func (q *Queries) WriteTaskState(ctx context.Context, arg WriteTaskStateParams) 
 		arg.ClaimAgentID,
 		arg.LeaseID,
 		arg.LeaseExpiresAt,
+		arg.Assignee,
+		arg.Deliverable,
+		arg.Review,
 		arg.Version,
 		arg.UpdatedBy,
 		arg.UpdatedAt,

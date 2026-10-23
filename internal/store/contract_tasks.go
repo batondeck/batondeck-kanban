@@ -123,7 +123,10 @@ type TaskPatch struct {
 // status clears it. ClaimAttempts and NextEligibleAt nil keep them. Labels nil keeps them.
 // ClearClaim drops the lease. Unpoison takes a poisoned task (BLOCKED, reason "poison") out of
 // quarantine: claim_attempts to 0, next_eligible_at NULL, the poisoned label removed
-// (domain.Unpoison); the role gate is the service's. UpdatedBy and UpdatedAt are required.
+// (domain.Unpoison); the role gate is the service's. Assignee, Deliverable and Review are written
+// with the status as TaskPatch writes them (nil keeps the column, a nil Value sets it NULL), so an
+// outcome that hands a task over (complete_task, handoff_task) is one versioned write; a Review that
+// is not JSON is VALIDATION. UpdatedBy and UpdatedAt are required.
 type StatusChange struct {
 	Status         domain.Status
 	ColumnID       string
@@ -134,6 +137,9 @@ type StatusChange struct {
 	Labels         []string
 	ClearClaim     bool
 	Unpoison       bool
+	Assignee       *Nullable[string]
+	Deliverable    *Nullable[string]
+	Review         *Nullable[json.RawMessage]
 	UpdatedBy      string
 	UpdatedAt      int64
 }

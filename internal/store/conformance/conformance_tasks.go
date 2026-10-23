@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -374,6 +375,41 @@ func tasks(t *testing.T, newStore Factory) {
 		// Refusal: Unpoison on a task that is not poisoned.
 		_, err = f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.Ready, Unpoison: true, UpdatedBy: "master", UpdatedAt: taskClock + 3})
 		wantCode(t, err, domain.CodeValidation, "")
+	})
+
+	t.Run("SetStatusWritesTheHandoverFields", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Assignee = ptr("ann") })
+		review := json.RawMessage(`{"reviewer":"rex"}`)
+		got, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{
+			Status: domain.Review, Assignee: &store.Nullable[string]{Value: ptr("rex")}, Deliverable: &store.Nullable[string]{Value: ptr("shipped")},
+			Review: &store.Nullable[json.RawMessage]{Value: &review}, UpdatedBy: "bob", UpdatedAt: taskClock + 1,
+		})
+		mustOK(t, err)
+		if got.Assignee == nil || *got.Assignee != "rex" || got.Deliverable == nil || *got.Deliverable != "shipped" ||
+			!json.Valid(got.Review) || !strings.Contains(string(got.Review), `"rex"`) || got.Version != 2 {
+			t.Fatalf("handover: %+v", got)
+		}
+		// nil keeps each field; a nil Value sets it NULL.
+		kept, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Done, UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		mustOK(t, err)
+		if kept.Assignee == nil || *kept.Assignee != "rex" || kept.Deliverable == nil || kept.Review == nil {
+			t.Fatalf("nil fields were not kept: %+v", kept)
+		}
+		cleared, err := f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.InProgress, Assignee: &store.Nullable[string]{}, Review: &store.Nullable[json.RawMessage]{}, UpdatedBy: "bob", UpdatedAt: taskClock + 3})
+		mustOK(t, err)
+		if cleared.Assignee != nil || cleared.Review != nil || cleared.Deliverable == nil {
+			t.Fatalf("nil Values were not written NULL: %+v", cleared)
+		}
+		again, err := f.s.GetTask(ctx, f.project, task.ID)
+		mustOK(t, err)
+		sameTask(t, again, cleared)
+		// Refusal: a Review that is not JSON writes nothing.
+		bad := json.RawMessage(`{`)
+		_, err = f.s.SetStatus(ctx, f.project, task.ID, 4, store.StatusChange{Status: domain.Done, Review: &store.Nullable[json.RawMessage]{Value: &bad}, UpdatedBy: "bob", UpdatedAt: taskClock + 4})
+		wantCode(t, err, domain.CodeValidation, "")
+		after, _ := f.s.GetTask(ctx, f.project, task.ID)
+		sameTask(t, after, cleared)
 	})
 
 	t.Run("SetStatusAtAnotherVersionIsStale", func(t *testing.T) {
