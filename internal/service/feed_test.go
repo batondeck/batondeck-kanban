@@ -22,6 +22,11 @@ func otherWriter(t *testing.T, f *fixture, boardID string) store.Change {
 	return ch[len(ch)-1]
 }
 
+// wire is the bus attaching: it delivers a row of another project, which makes the cache live.
+func (f *fixture) wire() {
+	f.c.ObserveChange(store.Change{ID: 0, Payload: json.RawMessage(`{"projectId":"P-elsewhere"}`)})
+}
+
 func (f *fixture) snapshot(t *testing.T) BoardSnapshotResp {
 	t.Helper()
 	s, err := f.c.Feed().BoardSnapshot(f.ctx, f.alice, BoardSnapshotReq{ProjectID: f.project.ID, BoardID: f.board.ID})
@@ -35,6 +40,7 @@ func (f *fixture) snapshot(t *testing.T) BoardSnapshotResp {
 // costs one GetBoard, a hit none, and the row (through the bus hook) makes the next read one again.
 func TestBoardSnapshotCachedUntilAChangeRow(t *testing.T) {
 	f, n := counted(t)
+	f.wire()
 	ready := f.column(t, domain.Ready)
 	f.snapshot(t) // the miss; also warms alice's access entry
 	n.take()
@@ -65,6 +71,7 @@ func TestBoardSnapshotCachedUntilAChangeRow(t *testing.T) {
 // naming only the project drops every board of it.
 func TestBoardSnapshotOtherBoardRowKeepsTheEntry(t *testing.T) {
 	f, n := counted(t)
+	f.wire()
 	f.snapshot(t)
 	n.take()
 	f.c.ObserveChange(otherWriter(t, f, "B-other"))
@@ -88,6 +95,7 @@ func TestBoardSnapshotOtherBoardRowKeepsTheEntry(t *testing.T) {
 // A writer reads its own column change before any bus delivers the row.
 func TestBoardSnapshotReadsItsOwnWrites(t *testing.T) {
 	f, n := counted(t)
+	f.wire()
 	before := f.snapshot(t)
 	col, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "QA", Status: domain.Review})
 	if err != nil {
@@ -121,9 +129,26 @@ func TestBoardSnapshotReadsItsOwnWrites(t *testing.T) {
 	}
 }
 
+// With no bus attached nothing would ever drop an entry, so every read composes: a task written by
+// another lane's mutation shows at once.
+func TestBoardSnapshotUncachedUntilTheBusDelivers(t *testing.T) {
+	f, n := counted(t)
+	ready := f.column(t, domain.Ready)
+	f.snapshot(t)
+	f.task(t, domain.Ready, nil)
+	n.take()
+	got := f.snapshot(t)
+	reads := n.take()
+	t.Logf("unwired: read after a store write: %v, READY %v", reads, got.TaskCounts[ready])
+	if reads["GetBoard"] != 1 || got.TaskCounts[ready] != 1 {
+		t.Fatalf("an unwired cache served a snapshot: reads %v, READY %v", reads, got.TaskCounts[ready])
+	}
+}
+
 // A composition that began before a drop does not store what it read.
 func TestSnapshotCacheDropBeatsAFillInFlight(t *testing.T) {
 	s := newSnapshotCache()
+	s.observe(0, "", "")
 	key := [2]string{"P", "B"}
 	_, gen, _, ok := s.get(key)
 	if ok {
@@ -144,6 +169,7 @@ func TestSnapshotCacheDropBeatsAFillInFlight(t *testing.T) {
 // What a caller does to a snapshot it got does not reach the cache.
 func TestBoardSnapshotIsACopy(t *testing.T) {
 	f := newFixture(t, Options{})
+	f.wire()
 	for i := range 2 { // the miss's answer, then a hit's
 		got := f.snapshot(t)
 		got.TaskCounts["x"] = 9

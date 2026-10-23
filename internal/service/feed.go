@@ -75,7 +75,8 @@ func (f feed) BoardSnapshot(ctx context.Context, caller domain.Caller, req Board
 }
 
 // boardSnapshot is the board and its counts, from the cache when no change for the board has been
-// seen since it was composed, else one store.GetBoard (two statements).
+// seen since it was composed, else one store.GetBoard (two statements). Until the bus has delivered
+// a change (ObserveChange), nothing is cached: no row would ever drop the entry.
 func (c *Core) boardSnapshot(ctx context.Context, projectID, boardID string) (BoardSnapshotResp, error) {
 	if boardID == "" {
 		return BoardSnapshotResp{}, domain.Validation("boardId is required", map[string]any{"field": "boardId"})
@@ -98,8 +99,9 @@ func (c *Core) boardSnapshot(ctx context.Context, projectID, boardID string) (Bo
 }
 
 // ObserveChange is the snapshot cache's invalidation hook: the bus calls it with every change-log
-// row it delivers. A row naming a board drops that board's snapshot; a row naming only a project
-// drops every snapshot of the project. The highest id seen is the cursor a snapshot is composed at.
+// row it delivers, and the cache serves nothing before its first call. A row naming a board drops
+// that board's snapshot; a row naming only a project drops every snapshot of the project. The
+// highest id seen is the cursor a snapshot is composed at.
 func (c *Core) ObserveChange(ch store.Change) {
 	var p struct {
 		ProjectID string `json:"projectId"`
@@ -118,11 +120,13 @@ func (c *Core) dropSnapshots(projectID, boardID string) {
 	c.boards.drop(projectID, boardID)
 }
 
-// snapshotCache holds one BoardSnapshotResp per (project, board). gen counts drops: a composition
-// that began before one does not store what it read, so a drop is never undone by a read in flight.
+// snapshotCache holds one BoardSnapshotResp per (project, board) once live (the bus has delivered a
+// change). gen counts drops: a composition that began before one does not store what it read, so a
+// drop is never undone by a read in flight.
 // ponytail: one entry per board read, never evicted; bound it if boards per process grow large.
 type snapshotCache struct {
 	mu      sync.Mutex
+	live    bool
 	gen     uint64
 	cursor  int64
 	entries map[[2]string]BoardSnapshotResp
@@ -145,7 +149,7 @@ func (s *snapshotCache) get(key [2]string) (BoardSnapshotResp, uint64, int64, bo
 func (s *snapshotCache) put(key [2]string, snap BoardSnapshotResp, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if gen != s.gen {
+	if !s.live || gen != s.gen {
 		return
 	}
 	s.entries[key] = cloneSnapshot(snap)
@@ -154,6 +158,7 @@ func (s *snapshotCache) put(key [2]string, snap BoardSnapshotResp, gen uint64) {
 func (s *snapshotCache) observe(id int64, projectID, boardID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.live = true
 	if id > s.cursor {
 		s.cursor = id
 	}
