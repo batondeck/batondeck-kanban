@@ -126,11 +126,11 @@ func TestApplyFailure(t *testing.T) {
 			t.Fatalf("got %+v", o)
 		}
 	})
-	t.Run("below the threshold: READY with a future nextEligibleAt", func(t *testing.T) {
+	t.Run("below the threshold: TODO with a future nextEligibleAt", func(t *testing.T) {
 		below := f
 		below.ClaimAttempts = 1
 		o := ApplyFailure(below, noJitter, now, 0.5)
-		if o.Status != Ready || o.BlockedReason != "" || o.ClaimAttempts != 2 || o.Event != EventTaskFailed {
+		if o.Status != Todo || o.BlockedReason != "" || o.ClaimAttempts != 2 || o.Event != EventTaskFailed {
 			t.Fatalf("got %+v", o)
 		}
 		if !o.NextEligibleAt.After(now) || !o.NextEligibleAt.Equal(now.Add(2*time.Second)) {
@@ -143,7 +143,7 @@ func TestApplyFailure(t *testing.T) {
 	t.Run("the reaper's retry event", func(t *testing.T) {
 		reaped := f
 		reaped.ClaimAttempts, reaped.RetryEvent = 0, EventTaskLeaseReaped
-		if o := ApplyFailure(reaped, noJitter, now, 0.5); o.Event != EventTaskLeaseReaped || o.Status != Ready {
+		if o := ApplyFailure(reaped, noJitter, now, 0.5); o.Event != EventTaskLeaseReaped || o.Status != Todo {
 			t.Fatalf("got %+v", o)
 		}
 	})
@@ -152,7 +152,7 @@ func TestApplyFailure(t *testing.T) {
 			for _, retryable := range []bool{true, false} {
 				o := ApplyFailure(Failure{ClaimAttempts: attempts, Retryable: retryable, RetryEvent: EventTaskFailed}, noJitter, now, 0.5)
 				poisoned := o.Status == Blocked && o.BlockedReason == BlockedReasonPoison
-				retried := o.Status == Ready && o.BlockedReason == ""
+				retried := o.Status == Todo && o.BlockedReason == ""
 				if poisoned == retried {
 					t.Errorf("attempts=%d retryable=%v: %+v is neither or both outcomes", attempts, retryable, o)
 				}
@@ -168,11 +168,11 @@ func TestUnpoison(t *testing.T) {
 		to     Status
 		want   bool
 	}{
-		{Blocked, BlockedReasonPoison, Ready, true},
+		{Blocked, BlockedReasonPoison, Todo, true},
 		{Blocked, BlockedReasonPoison, InProgress, true},
 		{Blocked, BlockedReasonPoison, Blocked, false},
-		{Blocked, "dependency", Ready, false},
-		{Ready, BlockedReasonPoison, InProgress, false},
+		{Blocked, "dependency", Todo, false},
+		{Todo, BlockedReasonPoison, InProgress, false},
 	} {
 		t.Run(fmt.Sprintf("%s/%s->%s", c.from, c.reason, c.to), func(t *testing.T) {
 			if got := IsUnpoison(c.from, c.reason, c.to); got != c.want {

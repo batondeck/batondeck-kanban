@@ -9,7 +9,7 @@ import (
 // Ported from conductor test/unit/grants.test.ts, case for case, with conductor's names. Changed with
 // the folds: fail_task's second outcome is BLOCKED (poison), not DEAD_LETTER, so it refuses as
 // status:BLOCKED; the two status:CANCELLED cases (cancel_runs, pick_run) are gone, because the
-// losing runs are now deleted rather than moved, so cancel_runs lands READY only and pick_run lands
+// losing runs are now deleted rather than moved, so cancel_runs lands TODO only and pick_run lands
 // where a completion does. One deviation: a task with a priority outside the four is refused under a
 // maxPriority grant, where conductor's lookup let it through. Added: the classification invariants
 // conductor holds in src/authz/manifest.ts (assertManifestInvariants) and authz-matrix.test.ts.
@@ -65,7 +65,7 @@ func TestCheckGrant(t *testing.T) {
 		expectGrant(t, CapabilityGrant{MaxPriority: PriorityLow}, GrantSubject{Tool: "update_settings"}, "priority<=low")
 	})
 	t.Run("toStatus and memory scope arguments", func(t *testing.T) {
-		g := CapabilityGrant{Statuses: []Status{Ready, InProgress, Review}, MemoryScopes: []MemoryScope{MemoryScopeTask}}
+		g := CapabilityGrant{Statuses: []Status{Todo, InProgress, Review}, MemoryScopes: []MemoryScope{MemoryScopeTask}}
 		expectGrant(t, g, GrantSubject{Tool: "move_task", ToStatus: Review}, "")
 		expectGrant(t, g, GrantSubject{Tool: "move_task", ToStatus: Done}, "status:DONE")
 		expectGrant(t, WorkerDefaultGrant(), GrantSubject{Tool: "write_memory", MemoryScope: MemoryScopeTask}, "")
@@ -74,7 +74,7 @@ func TestCheckGrant(t *testing.T) {
 }
 
 func TestCheckGrantLandingStatus(t *testing.T) {
-	working := CapabilityGrant{Statuses: []Status{Ready, InProgress, Review}}
+	working := CapabilityGrant{Statuses: []Status{Todo, InProgress, Review}}
 	t.Run("a completion landing DONE is refused, one landing REVIEW permitted", func(t *testing.T) {
 		expectGrant(t, working, GrantSubject{Tool: "complete_task", ReviewEnabled: boolp(false)}, "status:DONE")
 		expectGrant(t, working, GrantSubject{Tool: "complete_task", ReviewEnabled: boolp(true)}, "")
@@ -100,7 +100,7 @@ func TestCheckGrantLandingStatus(t *testing.T) {
 		expectGrant(t, working, GrantSubject{Tool: "some_future_tool"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "complete_task"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1"}, "status:*")
-		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1", ToStatus: Ready}, "")
+		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1", ToStatus: Todo}, "")
 		expectGrant(t, CapabilityGrant{Tools: []string{"some_future_tool"}}, GrantSubject{Tool: "some_future_tool"}, "")
 	})
 }
@@ -131,7 +131,7 @@ func TestGrantGovernance(t *testing.T) {
 	if !IsGrantGoverned("some_future_tool") {
 		t.Fatal("an unclassified tool must be governed")
 	}
-	if GrantNeedsTask(CapabilityGrant{Tools: []string{"complete_task"}, Statuses: []Status{Ready}}) ||
+	if GrantNeedsTask(CapabilityGrant{Tools: []string{"complete_task"}, Statuses: []Status{Todo}}) ||
 		!GrantNeedsTask(CapabilityGrant{Labels: []string{"ingest"}}) ||
 		!GrantNeedsTask(CapabilityGrant{Boards: []string{"B-1"}}) ||
 		!GrantNeedsTask(CapabilityGrant{MaxPriority: PriorityLow}) {
@@ -189,7 +189,7 @@ func TestPostureFoldedRows(t *testing.T) {
 		s, _ := p.Landing(f)
 		return s
 	}
-	if got := land("fail_task", LandingFacts{}); !reflect.DeepEqual(got, []Status{Ready, Blocked}) {
+	if got := land("fail_task", LandingFacts{}); !reflect.DeepEqual(got, []Status{Todo, Blocked}) {
 		t.Errorf("fail_task lands %v", got)
 	}
 	if got := land("delete_task", LandingFacts{}); len(got) != 0 {

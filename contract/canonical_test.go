@@ -114,7 +114,7 @@ func surface(t *testing.T) Surface {
 	t.Helper()
 	s, err := FromRaw([]RawTool{{
 		Name:         "move_task",
-		InputSchema:  decode(t, `{"type":"object","properties":{"toStatus":{"type":"string","enum":["READY","CANCELLED"]},"order":{"type":"string"}},"required":["toStatus"],"additionalProperties":false}`),
+		InputSchema:  decode(t, `{"type":"object","properties":{"toStatus":{"type":"string","enum":["TODO","CANCELLED","REVIEW"]},"order":{"type":"string"}},"required":["toStatus"],"additionalProperties":false}`),
 		OutputSchema: decode(t, `{"type":"object","properties":{"ok":{"type":"boolean"}}}`),
 	}})
 	if err != nil {
@@ -128,6 +128,7 @@ func TestApply(t *testing.T) {
 	err := Apply(s, Deltas{
 		RemovedProps:      []string{"/tools/move_task/input/properties/order"},
 		RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/CANCELLED"},
+		RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/TODO", To: "BLOCKED"}},
 		AddedTools:        []RawTool{{Name: "delete_task", InputSchema: decode(t, `{"type":"object"}`), OutputSchema: decode(t, `{"type":"object"}`)}},
 		AddedProps:        []AddedProp{{Pointer: "/tools/move_task/output/properties/poisoned", Required: true, Schema: decode(t, `{"type":"number"}`)}},
 	})
@@ -135,7 +136,7 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := Marshal(s)
-	want := `{"tools":{"delete_task":{"input":{"typeSet":["object"]},"output":{"typeSet":["object"]}},"move_task":{"input":{"typeSet":["object"],"properties":{"toStatus":{"typeSet":["string"],"enum":["READY"]}},"required":["toStatus"],"additionalProperties":false},"output":{"typeSet":["object"],"properties":{"ok":{"typeSet":["boolean"]},"poisoned":{"typeSet":["number"]}},"required":["poisoned"]}}}}`
+	want := `{"tools":{"delete_task":{"input":{"typeSet":["object"]},"output":{"typeSet":["object"]}},"move_task":{"input":{"typeSet":["object"],"properties":{"toStatus":{"typeSet":["string"],"enum":["BLOCKED","REVIEW"]}},"required":["toStatus"],"additionalProperties":false},"output":{"typeSet":["object"],"properties":{"ok":{"typeSet":["boolean"]},"poisoned":{"typeSet":["number"]}},"required":["poisoned"]}}}}`
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, got); err != nil {
 		t.Fatal(err)
@@ -149,14 +150,17 @@ func TestApply(t *testing.T) {
 // fails instead of silently doing nothing.
 func TestApplyRefusesStaleDeltas(t *testing.T) {
 	cases := map[string]Deltas{
-		"removed tool absent":       {RemovedTools: []string{"get_transitions"}},
-		"removed prop absent":       {RemovedProps: []string{"/tools/move_task/input/properties/transitions"}},
-		"removed prop path absent":  {RemovedProps: []string{"/tools/move_task/input/properties/nope/properties/x"}},
-		"removed enum value absent": {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER"}},
-		"enum emptied":              {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/READY", "/tools/move_task/input/properties/toStatus/enum/CANCELLED"}},
-		"added tool present":        {AddedTools: []RawTool{{Name: "move_task", InputSchema: map[string]any{}, OutputSchema: map[string]any{}}}},
-		"added prop present":        {AddedProps: []AddedProp{{Pointer: "/tools/move_task/input/properties/order", Schema: map[string]any{}}}},
-		"pointer outside tools":     {RemovedProps: []string{"/move_task/input/properties/order"}},
+		"removed tool absent":        {RemovedTools: []string{"get_transitions"}},
+		"removed prop absent":        {RemovedProps: []string{"/tools/move_task/input/properties/transitions"}},
+		"removed prop path absent":   {RemovedProps: []string{"/tools/move_task/input/properties/nope/properties/x"}},
+		"removed enum value absent":  {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER"}},
+		"enum emptied":               {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/TODO", "/tools/move_task/input/properties/toStatus/enum/CANCELLED", "/tools/move_task/input/properties/toStatus/enum/REVIEW"}},
+		"renamed enum value absent":  {RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER", To: "X"}}},
+		"renamed onto a present one": {RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/TODO", To: "REVIEW"}}},
+		"renamed off an enum":        {RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus", To: "X"}}},
+		"added tool present":         {AddedTools: []RawTool{{Name: "move_task", InputSchema: map[string]any{}, OutputSchema: map[string]any{}}}},
+		"added prop present":         {AddedProps: []AddedProp{{Pointer: "/tools/move_task/input/properties/order", Schema: map[string]any{}}}},
+		"pointer outside tools":      {RemovedProps: []string{"/move_task/input/properties/order"}},
 	}
 	for name, d := range cases {
 		if err := Apply(surface(t), d); err == nil {

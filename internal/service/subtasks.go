@@ -61,10 +61,12 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 		if err != nil {
 			return AddSubtaskResp{}, err
 		}
-		if len(board.Columns) == 0 {
-			return AddSubtaskResp{}, domain.Validation("Board has no columns", nil)
+		// ADR-0005: a created task lands TODO, in the board's first TODO column.
+		i := slices.IndexFunc(board.Columns, func(c store.Column) bool { return c.Status == domain.Todo })
+		if i < 0 {
+			return AddSubtaskResp{}, domain.Validation("Board has no TODO column", nil)
 		}
-		col := board.Columns[0] // the store keeps them in (order, id)
+		col := board.Columns[i] // the store keeps them in (order, id)
 		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return AddSubtaskResp{}, err

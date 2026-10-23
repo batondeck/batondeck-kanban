@@ -145,7 +145,7 @@ func claimView(t store.Task) domain.ClaimView {
 }
 
 // ringFrontier rings broadcast when task is open-frontier work (claimable now, assigned to nobody):
-// a READY task still inside its retry backoff rings nothing, or every woken agent finds nothing.
+// a TODO task still inside its retry backoff rings nothing, or every woken agent finds nothing.
 func (t *txn) ringFrontier(task store.Task) {
 	if domain.IsOpenFrontier(claimView(task), t.Now) {
 		t.Ring(Doorbell{Kind: DoorbellBroadcast, TaskID: task.ID, BoardID: task.BoardID})
@@ -248,7 +248,7 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if err != nil {
 				return ClaimTaskResp{}, err
 			}
-			if cur.Status == domain.Ready {
+			if cur.Status == domain.Todo {
 				if err := t.checkWIP(board, cur.Status); err != nil {
 					return ClaimTaskResp{}, err
 				}
@@ -346,7 +346,7 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 		Tool: "claim_next", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
 		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
 	}, func(t *txn) (ClaimNextResp, error) {
-		if err := t.checkWIP(board, domain.Ready); err != nil {
+		if err := t.checkWIP(board, domain.Todo); err != nil {
 			return ClaimNextResp{}, err
 		}
 		now := t.Now.UnixMilli()
@@ -453,7 +453,7 @@ func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req Hear
 	})
 }
 
-// Release is release_task: the caller's live lease dropped, the task READY in its board's READY
+// Release is release_task: the caller's live lease dropped, the task TODO in its board's TODO
 // column with no backoff. Broadcast when it is open-frontier work.
 func (l lifecycle) Release(ctx context.Context, caller domain.Caller, req ReleaseTaskReq) (ReleaseTaskResp, error) {
 	a, err := l.leaseArgs(ctx, caller, "release_task", req.ProjectID, req.TaskID, req.LeaseID, domain.GrantSubject{})
@@ -477,7 +477,7 @@ func (l lifecycle) Release(ctx context.Context, caller domain.Caller, req Releas
 				return ReleaseTaskResp{}, err
 			}
 			after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, store.StatusChange{
-				Status: domain.Ready, ColumnID: statusColumn(board, domain.Ready), ClearClaim: true,
+				Status: domain.Todo, ColumnID: statusColumn(board, domain.Todo), ClearClaim: true,
 				NextEligibleAt: &store.Nullable[int64]{}, UpdatedBy: caller.Identity, UpdatedAt: t.Now.UnixMilli(),
 			})
 			if err != nil {
@@ -926,7 +926,7 @@ func (l lifecycle) Fail(ctx context.Context, caller domain.Caller, req FailTaskR
 }
 
 // applyFailure is conductor's applyFailure over domain.ApplyFailure: the lease dropped, claimAttempts
-// counted, and either READY with a backoff (nextEligibleAt) or BLOCKED with blockedReason "poison" and
+// counted, and either TODO with a backoff (nextEligibleAt) or BLOCKED with blockedReason "poison" and
 // the poisoned label, never a third state; the outcome's event (retryEvent, or task.poisoned). It
 // rings broadcast only when the task is claimable at once (a zero backoff).
 func (t *txn) applyFailure(cur store.Task, policy domain.RetryPolicy, reason string, retryEvent domain.EventType, retryable bool) (store.Task, error) {
@@ -940,7 +940,7 @@ func (t *txn) applyFailure(cur store.Task, policy domain.RetryPolicy, reason str
 		Status: o.Status, ColumnID: statusColumn(board, o.Status), BlockedReason: o.BlockedReason, ClaimAttempts: &attempts,
 		NextEligibleAt: &store.Nullable[int64]{}, Labels: nonNil(o.Labels), ClearClaim: true, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
 	}
-	if o.Status == domain.Ready {
+	if o.Status == domain.Todo {
 		ms := o.NextEligibleAt.UnixMilli()
 		ch.NextEligibleAt = &store.Nullable[int64]{Value: &ms}
 	}
@@ -956,7 +956,7 @@ func (t *txn) applyFailure(cur store.Task, policy domain.RetryPolicy, reason str
 	return after, nil
 }
 
-// reapSummary is what one reap did: the tasks it returned to READY with a backoff and the ones it
+// reapSummary is what one reap did: the tasks it returned to TODO with a backoff and the ones it
 // poisoned. The poisoned bucket is conductor's deadLetter (plan §Fold 1).
 type reapSummary struct {
 	Retried  []string `json:"retried"`
@@ -966,7 +966,7 @@ type reapSummary struct {
 func (s reapSummary) reaped() int { return len(s.Retried) + len(s.Poisoned) }
 
 // Reap is reap_stale_leases: every IN_PROGRESS task of the board whose lease has expired, each in its
-// own mutation (conductor: one transaction per task), back to READY with a backoff or poisoned.
+// own mutation (conductor: one transaction per task), back to TODO with a backoff or poisoned.
 func (l lifecycle) Reap(ctx context.Context, caller domain.Caller, req ReapStaleLeasesReq) (ReapStaleLeasesResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "reap_stale_leases", domain.GrantSubject{BoardID: req.BoardID}, false)
 	if err != nil {
@@ -1030,7 +1030,7 @@ func (c *Core) reap(ctx context.Context, caller domain.Caller, a access, project
 	return sum, nil
 }
 
-// Handoff is handoff_task: the caller's live lease dropped, the task READY with toAgent as its
+// Handoff is handoff_task: the caller's live lease dropped, the task TODO with toAgent as its
 // assignee and no backoff, the note kept as the task-scope memory entry "handoff" {note, toAgent,
 // from} (conductor SRS §8.4), all in one transaction. toAgent is rung assigned, even when it was
 // already the assignee (conductor's publishAssignment).
@@ -1062,7 +1062,7 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 			}
 			to := req.ToAgent
 			after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, store.StatusChange{
-				Status: domain.Ready, ColumnID: statusColumn(board, domain.Ready), ClearClaim: true, NextEligibleAt: &store.Nullable[int64]{},
+				Status: domain.Todo, ColumnID: statusColumn(board, domain.Todo), ClearClaim: true, NextEligibleAt: &store.Nullable[int64]{},
 				Assignee: &store.Nullable[string]{Value: &to}, UpdatedBy: caller.Identity, UpdatedAt: now,
 			})
 			if err != nil {

@@ -41,11 +41,11 @@ func HasLiveLease(claim *Lease, now time.Time) bool {
 	return claim != nil && claim.ExpiresAt.After(now)
 }
 
-// IsClaimable is the one definition of "an agent may claim this task now": READY, nothing blocking
+// IsClaimable is the one definition of "an agent may claim this task now": TODO, nothing blocking
 // it, not poisoned, not racing, no live lease, and past its retry backoff. Every selector, frontier
 // and doorbell calls this rather than re-deriving it.
 func IsClaimable(t ClaimView, now time.Time) bool {
-	return t.Status == Ready &&
+	return t.Status == Todo &&
 		len(t.BlockedBy) == 0 &&
 		t.BlockedReason != BlockedReasonPoison &&
 		!t.Racing &&

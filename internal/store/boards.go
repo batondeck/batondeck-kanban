@@ -79,8 +79,7 @@ func (s *Postgres) RemoveColumn(ctx context.Context, projectID, boardID, columnI
 // project's reviewEnabled is off (conductor's defaultColumnsFor).
 func defaultColumns(reviewEnabled bool) []ColumnInput {
 	all := []ColumnInput{
-		{Name: "Backlog", Status: domain.Backlog},
-		{Name: "Ready", Status: domain.Ready},
+		{Name: "To do", Status: domain.Todo},
 		{Name: "In progress", Status: domain.InProgress},
 		{Name: "Blocked", Status: domain.Blocked},
 		{Name: "Review", Status: domain.Review},

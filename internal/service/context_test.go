@@ -154,7 +154,7 @@ func ofType(events []store.Event, typ domain.EventType) []store.Event {
 // the fields and workflow.allowedMoves equal to the fixed table's row; no id, title or description.
 func TestGetTaskContextComposesTheBriefing(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
-		task, blocker, dependent := e.task(t, domain.InProgress), e.task(t, domain.Ready), e.task(t, domain.Ready)
+		task, blocker, dependent := e.task(t, domain.InProgress), e.task(t, domain.Todo), e.task(t, domain.Todo)
 		cx := e.c.Context()
 		sum, err := cx.SetSummary(e.ctx, e.alice, SetSummaryReq{ProjectID: e.project, TaskID: task.ID, Version: task.Version, Summary: "so far"})
 		if err != nil {
@@ -211,8 +211,8 @@ func TestGetTaskContextComposesTheBriefing(t *testing.T) {
 		if got.Workflow.Status != domain.InProgress || !slices.Equal(got.Workflow.AllowedMoves, domain.AllowedNext(domain.InProgress)) {
 			t.Errorf("workflow %s %v, want IN_PROGRESS %v", got.Workflow.Status, got.Workflow.AllowedMoves, domain.AllowedNext(domain.InProgress))
 		}
-		if !slices.Equal(got.Workflow.AllowedMoves, []domain.Status{domain.Review, domain.Blocked, domain.Ready}) {
-			t.Errorf("allowedMoves %v, want the fixed table's IN_PROGRESS row [REVIEW BLOCKED READY]", got.Workflow.AllowedMoves)
+		if !slices.Equal(got.Workflow.AllowedMoves, []domain.Status{domain.Review, domain.Blocked, domain.Todo}) {
+			t.Errorf("allowedMoves %v, want the fixed table's IN_PROGRESS row [REVIEW BLOCKED TODO]", got.Workflow.AllowedMoves)
 		}
 		if len(got.Workflow.Lanes) != len(e.board.Columns) {
 			t.Errorf("lanes %d, want the board's %d columns", len(got.Workflow.Lanes), len(e.board.Columns))
@@ -248,7 +248,7 @@ func TestGetTaskContextComposesTheBriefing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(opt.Upstream) != 1 || opt.Upstream[0].TaskID != blocker.ID || opt.Upstream[0].Summary != "blocker so far" || opt.Upstream[0].Status != string(domain.Ready) {
+		if len(opt.Upstream) != 1 || opt.Upstream[0].TaskID != blocker.ID || opt.Upstream[0].Summary != "blocker so far" || opt.Upstream[0].Status != string(domain.Todo) {
 			t.Errorf("upstream %+v, want the blocker with its summary", opt.Upstream)
 		}
 		if len(opt.ProjectMemory) != 1 || opt.ProjectMemory[0].Key != "fact" {
@@ -318,7 +318,7 @@ func TestGetTaskContextCostsAtMostSixStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := f.task(t, domain.InProgress, nil)
-	blocker := f.task(t, domain.Ready, nil)
+	blocker := f.task(t, domain.Todo, nil)
 	cx := f.c.Context()
 	if _, err := cx.AddItem(f.ctx, f.alice, AddContextItemReq{ProjectID: f.project.ID, TaskID: task.ID, Kind: "note", Body: "n"}); err != nil {
 		t.Fatal(err)
@@ -418,11 +418,11 @@ func TestRecallMemoryNeverCrossesProjects(t *testing.T) {
 }
 
 // AC3: a cycle-closing add_dependency is CYCLE_DETECTED and writes nothing; removing a BLOCKED
-// dependent's last blocker moves it to READY.
+// dependent's last blocker moves it to TODO.
 func TestAddDependencyCycleWritesNothingAndRemoveUnblocks(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		cx := e.c.Context()
-		a, b, c := e.task(t, domain.Ready), e.task(t, domain.Ready), e.task(t, domain.Ready)
+		a, b, c := e.task(t, domain.Todo), e.task(t, domain.Todo), e.task(t, domain.Todo)
 		for _, p := range [][2]string{{a.ID, b.ID}, {b.ID, c.ID}} {
 			if _, err := cx.AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: p[0], ToTaskID: p[1]}); err != nil {
 				t.Fatal(err)
@@ -447,7 +447,7 @@ func TestAddDependencyCycleWritesNothingAndRemoveUnblocks(t *testing.T) {
 			t.Fatalf("a refused cycle appended %d events", got-events)
 		}
 
-		dep, blocker := e.blocked(t, ""), e.task(t, domain.Ready)
+		dep, blocker := e.blocked(t, ""), e.task(t, domain.Todo)
 		edge, err := cx.AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: dep.ID})
 		if err != nil {
 			t.Fatal(err)
@@ -462,8 +462,8 @@ func TestAddDependencyCycleWritesNothingAndRemoveUnblocks(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := e.get(t, dep.ID)
-		if got.Status != domain.Ready || got.ColumnID != e.column(t, domain.Ready) || len(got.BlockedBy) != 0 {
-			t.Fatalf("after its last blocker is removed the dependent is %s in %s blockedBy %v, want READY in the READY column", got.Status, got.ColumnID, got.BlockedBy)
+		if got.Status != domain.Todo || got.ColumnID != e.column(t, domain.Todo) || len(got.BlockedBy) != 0 {
+			t.Fatalf("after its last blocker is removed the dependent is %s in %s blockedBy %v, want TODO in the TODO column", got.Status, got.ColumnID, got.BlockedBy)
 		}
 		_, err = cx.RemoveDependency(e.ctx, e.alice, RemoveDependencyReq{ProjectID: e.project, EdgeID: edge.Edge.ID})
 		wantCode(t, err, domain.CodeNotFound)
@@ -471,12 +471,12 @@ func TestAddDependencyCycleWritesNothingAndRemoveUnblocks(t *testing.T) {
 }
 
 // AC5: through the unblock path a poisoned dependent stays BLOCKED (refusal) and a non-poisoned one
-// goes READY with one task.dependency_cleared {autoReady: true} (control).
+// goes TODO with one task.dependency_cleared {autoReady: true} (control).
 func TestRemoveDependencyUnblockIsPoisonAware(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		cx := e.c.Context()
 		run := func(t *testing.T, reason string) store.Task {
-			dep, blocker := e.blocked(t, reason), e.task(t, domain.Ready)
+			dep, blocker := e.blocked(t, reason), e.task(t, domain.Todo)
 			edge, err := cx.AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: dep.ID})
 			if err != nil {
 				t.Fatal(err)
@@ -497,8 +497,8 @@ func TestRemoveDependencyUnblockIsPoisonAware(t *testing.T) {
 		})
 		t.Run("NonPoisonedGoesReady", func(t *testing.T) {
 			got := run(t, "")
-			if got.Status != domain.Ready {
-				t.Fatalf("the dependent is %s, want READY", got.Status)
+			if got.Status != domain.Todo {
+				t.Fatalf("the dependent is %s, want TODO", got.Status)
 			}
 			cleared := ofType(e.events(t, got.ID), domain.EventTaskDependencyCleared)
 			if len(cleared) != 1 {
@@ -516,13 +516,13 @@ func TestRemoveDependencyUnblockIsPoisonAware(t *testing.T) {
 }
 
 // AC5, the completion path's entry (R1.5 calls it): a dependent whose blockedBy names the cleared
-// blocker gets its cache written, and moves to READY unless it is poisoned; the event says which.
+// blocker gets its cache written, and moves to TODO unless it is poisoned; the event says which.
 func TestUnblockDependentOnTheCompletionPath(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		for _, c := range []struct {
 			reason string
 			want   domain.Status
-		}{{domain.BlockedReasonPoison, domain.Blocked}, {"", domain.Ready}} {
+		}{{domain.BlockedReasonPoison, domain.Blocked}, {"", domain.Todo}} {
 			t.Run("reason="+c.reason, func(t *testing.T) { completeOne(t, e, c.reason, c.want) })
 		}
 	})
@@ -531,7 +531,7 @@ func TestUnblockDependentOnTheCompletionPath(t *testing.T) {
 // completeOne completes a blocker the way R1.5 will: DecideUnblock over the dependent's cache, then
 // the entry, inside the blocker's mutation.
 func completeOne(t *testing.T, e *env, reason string, want domain.Status) {
-	dep, blocker := e.blocked(t, reason), e.task(t, domain.Ready)
+	dep, blocker := e.blocked(t, reason), e.task(t, domain.Todo)
 	if _, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: blocker.ID, ToTaskID: dep.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestWriteMemoryTTLExpiresOnRead(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		t.Parallel()
 		cx := e.c.Context()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		ttl := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
 		w, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "short", Value: "v", TTL: ttl})
 		if err != nil {
@@ -591,7 +591,7 @@ func TestWriteMemoryTTLExpiresOnRead(t *testing.T) {
 func TestAddSubtaskLeavesTheParentAlone(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		cx := e.c.Context()
-		parent, other := e.task(t, domain.InProgress), e.task(t, domain.Ready)
+		parent, other := e.task(t, domain.InProgress), e.task(t, domain.Todo)
 		if _, err := cx.AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: other.ID, ToTaskID: parent.ID}); err != nil {
 			t.Fatal(err)
 		}
@@ -644,7 +644,7 @@ func TestAddSubtaskLeavesTheParentAlone(t *testing.T) {
 func TestContextRefusals(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		cx := e.c.Context()
-		task := e.task(t, domain.Ready)
+		task := e.task(t, domain.Todo)
 		worker := e.member(t, e.project, "wanda", domain.RoleWorker)
 		stranger := domain.Caller{Identity: "zed", TokenScope: "zed"}
 		for _, c := range []struct {
@@ -759,7 +759,7 @@ func TestConcurrentAddDependencyOnDisjointPairsClosesNoCycle(t *testing.T) {
 		t.Run(ec.name, func(t *testing.T) {
 			st := ec.open(t)
 			e := newEnv(t, st)
-			ids := []string{e.task(t, domain.Ready).ID, e.task(t, domain.Ready).ID, e.task(t, domain.Ready).ID, e.task(t, domain.Ready).ID}
+			ids := []string{e.task(t, domain.Todo).ID, e.task(t, domain.Todo).ID, e.task(t, domain.Todo).ID, e.task(t, domain.Todo).ID}
 			A, B, C, D := ids[0], ids[1], ids[2], ids[3]
 			for _, p := range [][2]string{{B, C}, {D, A}} {
 				if _, err := e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: p[0], ToTaskID: p[1]}); err != nil {

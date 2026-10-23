@@ -24,7 +24,7 @@ type Lifecycle interface {
 	Heartbeat(ctx context.Context, caller domain.Caller, req HeartbeatTaskReq) (HeartbeatTaskResp, error)
 
 	// Release is release_task.
-	// Lease-guarded. Event: task.released. Audit: none. Doorbell: broadcast (READY, no assignee).
+	// Lease-guarded. Event: task.released. Audit: none. Doorbell: broadcast (TODO, no assignee).
 	Release(ctx context.Context, caller domain.Caller, req ReleaseTaskReq) (ReleaseTaskResp, error)
 
 	// Next is next_task.
@@ -36,7 +36,7 @@ type Lifecycle interface {
 	// REVIEW, task.artifact_missing / task.checkpoint_missing under a warn policy, and
 	// task.dependency_cleared on each dependent DONE unblocks. Audit: none. Doorbell: assigned to the
 	// reviewer when the task lands REVIEW (none when the reviewer is the caller); for each dependent DONE unblocks, assigned to its assignee
-	// if it has one, else broadcast when it lands READY.
+	// if it has one, else broadcast when it lands TODO.
 	Complete(ctx context.Context, caller domain.Caller, req CompleteTaskReq) (CompleteTaskResp, error)
 
 	// Block is block_task.
@@ -45,8 +45,8 @@ type Lifecycle interface {
 
 	// Fail is fail_task.
 	// Lease-guarded. Event: task.failed, plus task.poisoned when the retry policy poisons it (BLOCKED,
-	// blockedReason "poison", label poisoned). Audit: none. Doorbell: broadcast when it returns to READY
-	// past its backoff (open frontier); none for READY with a backoff pending, or poisoned.
+	// blockedReason "poison", label poisoned). Audit: none. Doorbell: broadcast when it returns to TODO
+	// past its backoff (open frontier); none for TODO with a backoff pending, or poisoned.
 	Fail(ctx context.Context, caller domain.Caller, req FailTaskReq) (FailTaskResp, error)
 
 	// Reap is reap_stale_leases.
@@ -65,7 +65,7 @@ type Lifecycle interface {
 	// reason as a context note. Event: task.moved (data {to: DONE, cancelled: true, reason}),
 	// context.added for the note, and task.dependency_cleared per dependent it unblocks; no event type
 	// of its own. Audit: none. Doorbell: as Move to DONE (each unblocked dependent: assigned to its
-	// assignee if it has one, else broadcast when it lands READY).
+	// assignee if it has one, else broadcast when it lands TODO).
 	Cancel(ctx context.Context, caller domain.Caller, req CancelTaskReq) (CancelTaskResp, error)
 }
 

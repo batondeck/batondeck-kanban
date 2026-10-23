@@ -36,11 +36,11 @@ func ptr[T any](v T) *T { return &v }
 func boards(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	defaults := [][2]string{
-		{"Backlog", "BACKLOG"}, {"Ready", "READY"}, {"In progress", "IN_PROGRESS"},
+		{"To do", "TODO"}, {"In progress", "IN_PROGRESS"},
 		{"Blocked", "BLOCKED"}, {"Review", "REVIEW"}, {"Done", "DONE"},
 	}
 
-	t.Run("CreateBoardGivesTheSixDefaultColumnsInOrderAndNoCancelled", func(t *testing.T) {
+	t.Run("CreateBoardGivesTheFiveDefaultColumnsInOrderAndNoCancelled", func(t *testing.T) {
 		s := migrated(t, newStore)
 		p := newProject(t, s, "alice")
 		b := newBoard(t, s, p.ID, nil)
@@ -54,8 +54,8 @@ func boards(t *testing.T, newStore Factory) {
 		if got := columnShape(read.Columns); !slices.Equal(got, defaults) {
 			t.Fatalf("GetBoard columns %v, want %v", got, defaults)
 		}
-		if len(counts) != 6 {
-			t.Fatalf("task counts %v, want all six columns", counts)
+		if len(counts) != 5 {
+			t.Fatalf("task counts %v, want all five columns", counts)
 		}
 		for _, c := range read.Columns {
 			if n, ok := counts[c.ID]; !ok || n != 0 {
@@ -81,14 +81,14 @@ func boards(t *testing.T, newStore Factory) {
 		s := migrated(t, newStore)
 		p := newProject(t, s, "alice")
 		b := newBoard(t, s, p.ID, []store.ColumnInput{
-			{Name: "Todo", Status: domain.Ready, WIPLimit: ptr[int64](3)},
+			{Name: "Todo", Status: domain.Todo, WIPLimit: ptr[int64](3)},
 			{Name: "Doing", Status: domain.InProgress},
 		})
 		read, _, err := s.GetBoard(ctx, p.ID, b.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := columnShape(read.Columns); !slices.Equal(got, [][2]string{{"Todo", "READY"}, {"Doing", "IN_PROGRESS"}}) {
+		if got := columnShape(read.Columns); !slices.Equal(got, [][2]string{{"Todo", "TODO"}, {"Doing", "IN_PROGRESS"}}) {
 			t.Fatalf("columns %v", got)
 		}
 		if read.Columns[0].WIPLimit == nil || *read.Columns[0].WIPLimit != 3 || read.Columns[1].WIPLimit != nil {
@@ -102,8 +102,8 @@ func boards(t *testing.T, newStore Factory) {
 		for _, cols := range [][]store.ColumnInput{
 			{},
 			{{Name: "Gone", Status: "CANCELLED"}},
-			{{Name: "", Status: domain.Ready}},
-			{{Name: "Zero", Status: domain.Ready, WIPLimit: ptr[int64](0)}},
+			{{Name: "", Status: domain.Todo}},
+			{{Name: "Zero", Status: domain.Todo, WIPLimit: ptr[int64](0)}},
 		} {
 			_, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "b", CreatedBy: "alice", Columns: cols}, store.WriteOptions{Identity: "alice"})
 			wantCode(t, err, domain.CodeValidation, "")
@@ -133,7 +133,7 @@ func boards(t *testing.T, newStore Factory) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if second.ID != first.ID || len(second.Columns) != 6 || second.Columns[0].ID != first.Columns[0].ID || len(boards) != 1 {
+		if second.ID != first.ID || len(second.Columns) != 5 || second.Columns[0].ID != first.Columns[0].ID || len(boards) != 1 {
 			t.Fatalf("replay %+v of %+v, boards %d: want the same board, one row", second, first, len(boards))
 		}
 	})
@@ -159,14 +159,14 @@ func boards(t *testing.T, newStore Factory) {
 		}
 		first := newBoard(t, s, p.ID, nil)
 		time.Sleep(2 * time.Millisecond)
-		second := newBoard(t, s, p.ID, []store.ColumnInput{{Name: "Only", Status: domain.Backlog}})
+		second := newBoard(t, s, p.ID, []store.ColumnInput{{Name: "Only", Status: domain.Todo}})
 		newBoard(t, s, other.ID, nil)
 		got, err := s.ListBoards(ctx, p.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 2 || got[0].ID != first.ID || got[1].ID != second.ID || len(got[0].Columns) != 6 || len(got[1].Columns) != 1 {
-			t.Fatalf("boards %+v, want %s (6 columns) then %s (1)", got, first.ID, second.ID)
+		if len(got) != 2 || got[0].ID != first.ID || got[1].ID != second.ID || len(got[0].Columns) != 5 || len(got[1].Columns) != 1 {
+			t.Fatalf("boards %+v, want %s (5 columns) then %s (1)", got, first.ID, second.ID)
 		}
 		_, err = s.ListBoards(ctx, "P-missing")
 		wantCode(t, err, domain.CodeNotFound, "Project")
@@ -180,10 +180,10 @@ func boards(t *testing.T, newStore Factory) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Order != 6 || c.Name != "QA" || c.Status != domain.Review || c.WIPLimit == nil || *c.WIPLimit != 2 {
-			t.Fatalf("AddColumn = %+v, want order 6 after the six defaults", c)
+		if c.Order != 5 || c.Name != "QA" || c.Status != domain.Review || c.WIPLimit == nil || *c.WIPLimit != 2 {
+			t.Fatalf("AddColumn = %+v, want order 5 after the five defaults", c)
 		}
-		first, err := s.AddColumn(ctx, p.ID, b.ID, store.ColumnInput{Name: "Inbox", Status: domain.Backlog, Order: ptr[int64](-1)}, store.WriteOptions{Identity: "alice"})
+		first, err := s.AddColumn(ctx, p.ID, b.ID, store.ColumnInput{Name: "Inbox", Status: domain.Todo, Order: ptr[int64](-1)}, store.WriteOptions{Identity: "alice"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +191,7 @@ func boards(t *testing.T, newStore Factory) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(read.Columns) != 8 || read.Columns[0].ID != first.ID || read.Columns[7].ID != c.ID || counts[c.ID] != 0 {
+		if len(read.Columns) != 7 || read.Columns[0].ID != first.ID || read.Columns[6].ID != c.ID || counts[c.ID] != 0 {
 			t.Fatalf("columns %+v, want Inbox first and QA last", read.Columns)
 		}
 	})
@@ -214,7 +214,7 @@ func boards(t *testing.T, newStore Factory) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if second != first || len(read.Columns) != 7 {
+		if second != first || len(read.Columns) != 6 {
 			t.Fatalf("replay %+v of %+v with %d columns: want the same column, one row", second, first, len(read.Columns))
 		}
 	})
@@ -225,13 +225,13 @@ func boards(t *testing.T, newStore Factory) {
 		b := newBoard(t, s, p.ID, nil)
 		for _, in := range []store.ColumnInput{
 			{Name: "x", Status: "DEAD_LETTER"},
-			{Name: " ", Status: domain.Ready},
-			{Name: "x", Status: domain.Ready, WIPLimit: ptr[int64](-2)},
+			{Name: " ", Status: domain.Todo},
+			{Name: "x", Status: domain.Todo, WIPLimit: ptr[int64](-2)},
 		} {
 			_, err := s.AddColumn(ctx, p.ID, b.ID, in, store.WriteOptions{Identity: "alice"})
 			wantCode(t, err, domain.CodeValidation, "")
 		}
-		_, err := s.AddColumn(ctx, p.ID, "B-missing", store.ColumnInput{Name: "x", Status: domain.Ready}, store.WriteOptions{Identity: "alice"})
+		_, err := s.AddColumn(ctx, p.ID, "B-missing", store.ColumnInput{Name: "x", Status: domain.Todo}, store.WriteOptions{Identity: "alice"})
 		wantCode(t, err, domain.CodeNotFound, "Board")
 	})
 
@@ -239,7 +239,7 @@ func boards(t *testing.T, newStore Factory) {
 		s := migrated(t, newStore)
 		p := newProject(t, s, "alice")
 		b := newBoard(t, s, p.ID, nil)
-		done := b.Columns[5]
+		done := b.Columns[4]
 		got, err := s.UpdateColumn(ctx, p.ID, b.ID, done.ID, store.ColumnPatch{
 			Name: ptr("Shipped"), Order: ptr[int64](-1), SetWIPLimit: true, WIPLimit: ptr[int64](4),
 		})
@@ -277,7 +277,7 @@ func boards(t *testing.T, newStore Factory) {
 		_, err = s.UpdateColumn(ctx, p.ID, "B-missing", col, store.ColumnPatch{Name: ptr("x")})
 		wantCode(t, err, domain.CodeNotFound, "Board")
 		read, _, err := s.GetBoard(ctx, p.ID, b.ID)
-		if err != nil || read.Columns[0].Status != domain.Backlog || read.Columns[0].WIPLimit != nil {
+		if err != nil || read.Columns[0].Status != domain.Todo || read.Columns[0].WIPLimit != nil {
 			t.Fatalf("a refused update changed the column: %+v, %v", read.Columns[0], err)
 		}
 	})
@@ -285,7 +285,7 @@ func boards(t *testing.T, newStore Factory) {
 	t.Run("RemoveColumnRemovesAnEmptyColumnButNeverTheLast", func(t *testing.T) {
 		s := migrated(t, newStore)
 		p := newProject(t, s, "alice")
-		b := newBoard(t, s, p.ID, []store.ColumnInput{{Name: "A", Status: domain.Backlog}, {Name: "B", Status: domain.Done}})
+		b := newBoard(t, s, p.ID, []store.ColumnInput{{Name: "A", Status: domain.Todo}, {Name: "B", Status: domain.Done}})
 		got, err := s.RemoveColumn(ctx, p.ID, b.ID, b.Columns[0].ID)
 		if err != nil {
 			t.Fatal(err)

@@ -231,8 +231,7 @@ func (s *Store) GetMember(ctx context.Context, projectID, identityID string) (st
 // Review when the project's reviewEnabled is off.
 func defaultColumns(reviewEnabled bool) []store.ColumnInput {
 	all := []store.ColumnInput{
-		{Name: "Backlog", Status: domain.Backlog},
-		{Name: "Ready", Status: domain.Ready},
+		{Name: "To do", Status: domain.Todo},
 		{Name: "In progress", Status: domain.InProgress},
 		{Name: "Blocked", Status: domain.Blocked},
 		{Name: "Review", Status: domain.Review},
