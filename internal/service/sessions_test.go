@@ -89,23 +89,6 @@ func TestSessionsListAllIsAdminOnly(t *testing.T) {
 	}
 }
 
-func TestSessionsRegisterWakeSession(t *testing.T) {
-	f := newFixture(t, Options{WakeSessionTTL: time.Hour})
-	got, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock", Cursor: 7})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w, err := f.st.GetWakeSession(f.ctx, got.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w.IdentityID != "alice" || w.AgentID != "claude" || w.SocketPath != "/tmp/inbox.sock" || w.LastCursor != 7 || w.ExpiresAt-w.CreatedAt != time.Hour.Milliseconds() || got.ExpiresAt != isoMs(w.ExpiresAt) {
-		t.Fatalf("wake session %+v, resp %+v", w, got)
-	}
-	_, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{Cursor: -1})
-	wantCode(t, err, domain.CodeValidation)
-}
-
 func testKeyring(t *testing.T) *core.Keyring {
 	t.Helper()
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
@@ -116,13 +99,16 @@ func testKeyring(t *testing.T) *core.Keyring {
 	return k
 }
 
-// A socket token is stored sealed: the row holds no byte run of the plaintext, and the keyring
-// opens it only under the row's own AAD.
-func TestSessionsRegisterWakeSessionSealsTheToken(t *testing.T) {
-	k := testKeyring(t)
-	f := newFixture(t, Options{Sealer: k})
-	const secret = "inbox-token-0123456789"
-	got, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock", SocketToken: secret})
+// worker is a valid directory entry for alice; the tests vary one field at a time.
+func worker() RegisterWakeSessionReq {
+	return RegisterWakeSessionReq{PID: 4242, Role: RoleWorker, SocketPath: "/tmp/cc-socks/4242.sock", ClientSessionID: "f73a2587", ProcStart: "Fri Oct 23 08:36:23 2026", Cursor: 7, Bearer: "bk_bearer-0123456789"}
+}
+
+// An entry is stored with every directory field, for the TTL, and lists back with its bearer opened;
+// a re-register under its id replaces it; the cursor and the drop are one call each.
+func TestSessionsRegisterWakeSession(t *testing.T) {
+	f := newFixture(t, Options{WakeSessionTTL: time.Hour, Sealer: testKeyring(t)})
+	got, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, worker())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,38 +116,103 @@ func TestSessionsRegisterWakeSessionSealsTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(w.SocketTokenSealed) == 0 || bytes.Contains(w.SocketTokenSealed, []byte(secret)) {
-		t.Fatalf("socket_token_sealed = %q: want a sealed value that does not hold the token", w.SocketTokenSealed)
+	if w.IdentityID != "alice" || w.AgentID != "claude" || got.AgentID != "claude" || w.SocketPath != "/tmp/cc-socks/4242.sock" || w.LastCursor != 7 || w.PID != 4242 || w.Role != RoleWorker ||
+		w.ClientSessionID != "f73a2587" || w.ProcStart != "Fri Oct 23 08:36:23 2026" || w.ExpiresAt-w.CreatedAt != time.Hour.Milliseconds() || got.ExpiresAt != isoMs(w.ExpiresAt) {
+		t.Fatalf("wake session %+v, resp %+v", w, got)
 	}
-	pt, err := k.Decrypt(w.SocketTokenSealed, SocketTokenAAD(w.ID))
-	if err != nil || string(pt) != secret {
-		t.Fatalf("opening the sealed token: %q, %v", pt, err)
+	rows, err := f.c.WakeStore().ListWakeSessions(f.ctx)
+	if err != nil || len(rows) != 1 || rows[0].Bearer != "bk_bearer-0123456789" || !rows[0].Sealed || rows[0].PID != 4242 || rows[0].Role != RoleWorker {
+		t.Fatalf("ListWakeSessions = %+v, %v", rows, err)
 	}
-	if _, err := k.Decrypt(w.SocketTokenSealed, SocketTokenAAD("W-other")); err == nil {
-		t.Fatal("the sealed token opened under another session's AAD")
+	again := worker()
+	again.ID, again.Role, again.Agent = got.ID, RoleMaster, "planner"
+	if _, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, again); err != nil {
+		t.Fatal(err)
 	}
-	// No token: nothing sealed (the positive control for the nil column).
-	got, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock"})
+	if w, _ = f.st.GetWakeSession(f.ctx, got.ID); w.Role != RoleMaster || w.AgentID != "planner" {
+		t.Fatalf("after the re-register %+v", w)
+	}
+	other := worker()
+	_, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, other) // a new id for a pid already held
+	wantCode(t, err, domain.CodeValidation)
+	if err := f.c.WakeStore().SetWakeSessionCursor(f.ctx, got.ID, 99); err != nil {
+		t.Fatal(err)
+	}
+	if w, _ = f.st.GetWakeSession(f.ctx, got.ID); w.LastCursor != 99 {
+		t.Fatalf("cursor %d, want 99", w.LastCursor)
+	}
+	if err := f.c.WakeStore().DropWakeSession(f.ctx, got.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.c.WakeStore().DropWakeSession(f.ctx, got.ID); err != nil {
+		t.Fatalf("dropping a missing row: %v, want nil", err)
+	}
+	for _, bad := range []func(*RegisterWakeSessionReq){
+		func(r *RegisterWakeSessionReq) { r.Cursor = -1 },
+		func(r *RegisterWakeSessionReq) { r.PID = 0 },
+		func(r *RegisterWakeSessionReq) { r.Role = "admin" },
+		func(r *RegisterWakeSessionReq) { r.Bearer = "" },
+		func(r *RegisterWakeSessionReq) { r.SocketPath, r.SocketToken = "", "t" },
+	} {
+		req := worker()
+		bad(&req)
+		_, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, req)
+		wantCode(t, err, domain.CodeValidation)
+	}
+}
+
+// The bearer and the socket token are stored sealed: the row holds no byte run of either, and the
+// keyring opens each only under the row's own AAD.
+func TestSessionsRegisterWakeSessionSealsTheSecrets(t *testing.T) {
+	k := testKeyring(t)
+	f := newFixture(t, Options{Sealer: k})
+	const secret = "inbox-token-0123456789"
+	req := worker()
+	req.SocketToken = secret
+	got, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w, _ = f.st.GetWakeSession(f.ctx, got.ID); w.SocketTokenSealed != nil {
-		t.Fatalf("no token, socket_token_sealed = %q, want nil", w.SocketTokenSealed)
+	w, err := f.st.GetWakeSession(f.ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err = f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketToken: secret})
-	wantCode(t, err, domain.CodeValidation)
+	for _, c := range []struct {
+		sealed []byte
+		plain  string
+		aad    func(string) []byte
+	}{{w.SocketTokenSealed, secret, SocketTokenAAD}, {w.BearerSealed, req.Bearer, BearerAAD}} {
+		if len(c.sealed) == 0 || bytes.Contains(c.sealed, []byte(c.plain)) {
+			t.Fatalf("sealed %q: want a sealed value that does not hold %q", c.sealed, c.plain)
+		}
+		if pt, err := k.Decrypt(c.sealed, c.aad(w.ID)); err != nil || string(pt) != c.plain {
+			t.Fatalf("opening %q: %q, %v", c.plain, pt, err)
+		}
+		if _, err := k.Decrypt(c.sealed, c.aad("W-other")); err == nil {
+			t.Fatal("a secret opened under another session's AAD")
+		}
+	}
+	// A row sealed under another key lists unopened, so the directory drops it.
+	w.BearerSealed, _ = k.Encrypt([]byte("x"), BearerAAD("W-other"))
+	if err := f.st.PutWakeSession(f.ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.c.WakeStore().ListWakeSessions(f.ctx)
+	if err != nil || len(rows) != 1 || rows[0].Sealed || rows[0].Bearer != "" {
+		t.Fatalf("a row whose bearer does not open: %+v, %v", rows, err)
+	}
 }
 
-// With no sealer a token is refused INTERNAL, naming the setting, and nothing is written.
-func TestSessionsRegisterWakeSessionWithoutASealerRefusesAToken(t *testing.T) {
+// With no sealer an entry is refused INTERNAL, naming the setting, and nothing is written.
+func TestSessionsRegisterWakeSessionWithoutASealerIsRefused(t *testing.T) {
 	f := newFixture(t, Options{})
-	_, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock", SocketToken: "t"})
+	_, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, worker())
 	e := wantCode(t, err, domain.CodeInternal)
 	if !strings.Contains(e.Message, core.MasterKeyEnv) {
 		t.Fatalf("message %q does not name %s", e.Message, core.MasterKeyEnv)
 	}
-	if _, err := f.c.Sessions().RegisterWakeSession(f.ctx, f.alice, RegisterWakeSessionReq{SocketPath: "/tmp/inbox.sock"}); err != nil {
-		t.Fatalf("no token and no sealer: %v, want the session registered", err)
+	if rows, _ := f.st.ListWakeSessions(f.ctx); len(rows) != 0 {
+		t.Fatalf("rows %+v written without a sealer", rows)
 	}
 }
 

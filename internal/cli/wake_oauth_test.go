@@ -146,50 +146,19 @@ func oauthStore(t *testing.T) (*store.SQLite, string) {
 	return st, user.ID
 }
 
-// One OAuth access token opens /mcp and /wake alike; a token issued for another server's resource
-// (RFC 8707) is refused on both.
-func TestOAuthTokenOnMCPAndWake(t *testing.T) {
+// One OAuth access token opens /mcp; a token issued for another server's resource (RFC 8707) is
+// refused. GET /wake is gone (R0.25): 404 whatever the token.
+func TestOAuthTokenOnMCP(t *testing.T) {
 	st, _ := oauthStore(t)
 	here, there := oauthServer(t, st), oauthServer(t, st)
 	_, access, _ := oauthGrant(t, here, "alice", "pw-alice")
 	if code := statusOf(t, http.MethodPost, here+"/mcp", access); code != http.StatusOK {
 		t.Fatalf("/mcp with the token: %d", code)
 	}
-	if code := statusOf(t, http.MethodGet, here+"/wake", access); code != http.StatusOK {
-		t.Fatalf("/wake with the token: %d", code)
+	if code := statusOf(t, http.MethodGet, here+"/wake", access); code != http.StatusNotFound {
+		t.Fatalf("/wake with the token: %d, want 404", code)
 	}
-	for _, path := range []string{"/mcp", "/wake"} {
-		method := http.MethodGet
-		if path == "/mcp" {
-			method = http.MethodPost
-		}
-		if code := statusOf(t, method, there+path, access); code != http.StatusUnauthorized {
-			t.Fatalf("%s at another resource with this token: %d, want 401", path, code)
-		}
-	}
-}
-
-// Refresh-token reuse revokes the family, and an open /wake stream on its access token ends within
-// one recheck, as /mcp refuses the token.
-func TestWakeRecheckEndsAnOAuthFamilyRevokedByRefreshReuse(t *testing.T) {
-	old := wakeRecheck
-	wakeRecheck = 200 * time.Millisecond
-	t.Cleanup(func() { wakeRecheck = old })
-	st, _ := oauthStore(t)
-	public := oauthServer(t, st)
-	clientID, access, refresh := oauthGrant(t, public, "alice", "pw-alice")
-	host := strings.TrimPrefix(public, "http://")
-	w := (&wakeServer{tcp: host, token: access}).open(t, "")
-	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["_status"] != http.StatusOK {
-		t.Fatalf("first refresh: %v", m)
-	}
-	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["error"] != "invalid_grant" {
-		t.Fatalf("refresh reuse: %v, want invalid_grant", m)
-	}
-	if got := w.last(t, 600*time.Millisecond); got != "reauthenticate, reconnect" {
-		t.Fatalf("the open stream's last comment %q, want reauthenticate", got)
-	}
-	if code := statusOf(t, http.MethodPost, public+"/mcp", access); code != http.StatusUnauthorized {
-		t.Fatalf("/mcp with the revoked family's token: %d, want 401", code)
+	if code := statusOf(t, http.MethodPost, there+"/mcp", access); code != http.StatusUnauthorized {
+		t.Fatalf("/mcp at another resource with this token: %d, want 401", code)
 	}
 }

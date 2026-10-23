@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,10 +27,10 @@ import (
 )
 
 // app is what serve composes over one store: the MCP server, the OAuth server when public_url is
-// set, the service core, the change-log bus and the doorbell routes. A bearer is an API token
-// (`batondeck-kanban token create`) or, when publicURL is set, an OAuth access token the
-// authorization server issued for /mcp; both resolve through the one auth service, on /mcp, /wake
-// and /internal/wake-session alike. The session bookkeeping and the tool_calls rows go through the
+// set, the service core, the change-log bus and the device session directory with its socket-only
+// routes. A bearer is an API token (`batondeck-kanban token create`) or, when publicURL is set, an
+// OAuth access token the authorization server issued for /mcp; both resolve through the one auth
+// service, on /mcp and /internal/wake-session alike. The session bookkeeping and the tool_calls rows go through the
 // service core, and so do the projects and boards tools; R1.18 wires the remaining services. Close
 // the core after the HTTP server, so it flushes the tool calls still buffered.
 type app struct {
@@ -37,7 +38,9 @@ type app struct {
 	as   *oauth.Server // nil while public_url is unset
 	core *service.Core
 	bus  *bus.Bus
-	// mount adds the OAuth routes, GET /wake and the socket-only POST /internal/wake-session to the
+	// dir is the device session directory (R0.25); serveUntil starts it.
+	dir *wake.Directory
+	// mount adds the OAuth routes and the socket-only POST and DELETE /internal/wake-session to the
 	// mux handler builds.
 	mount func(*http.ServeMux)
 }
@@ -71,17 +74,22 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	// The engines wake the tail on commit (store.ChangeWatcher); without one it polls.
 	watcher, _ := st.(store.ChangeWatcher)
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
-	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger, Recheck: wakeRecheck})
-	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
+	dir, err := wake.NewDirectory(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Sessions: sc.WakeStore(), Registry: wakeRegistry(), Logger: logger, Sweep: wakeSweep})
+	if err != nil {
+		return nil, err
+	}
+	sc.SetDeviceSessions(dir)
 	srv := mcp.New(opts)
 	tools.Register(srv, opts.Services)
-	return &app{mcp: srv, as: as, core: sc, bus: b,
+	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir,
 		mount: func(mux *http.ServeMux) {
 			if as != nil {
 				as.Mount(mux)
 			}
-			mux.Handle("GET /wake", doorbell)
-			mux.Handle("POST "+internalPrefix+"wake-session", inbox)
+			// GET /wake is retired (ADR-0004): 404, not the SPA shell the catch-all would answer.
+			mux.Handle("GET /wake", http.NotFoundHandler())
+			mux.Handle("POST "+internalPrefix+"wake-session", wake.RegisterHandler(dir, resolver, logger))
+			mux.Handle("DELETE "+internalPrefix+"wake-session/{pid}", wake.UnregisterHandler(dir, resolver, logger))
 			if media.Files != nil && media.Signer != nil {
 				blobs := &api.BlobRoutes{Signer: media.Signer, Files: media.Files, MaxBytes: media.MaxBytes, Uploads: sc, Logger: logger}
 				mux.Handle("PUT /blobs/{id}", blobs.Upload())
@@ -165,9 +173,19 @@ var (
 	flushBudget    = 5 * time.Second
 )
 
-// wakeRecheck is how often an open /wake stream re-resolves its bearer (wake.Recheck). A variable
-// only so a test can watch a revocation end a stream quickly.
-var wakeRecheck = wake.Recheck
+// wakeSweep is how often the directory re-resolves every entry's bearer (wake.Sweep). A variable
+// only so a test can watch a revocation drop an entry quickly.
+var wakeSweep = wake.Sweep
+
+// wakeRegistry is Claude Code's session registry directory: $CLAUDE_CONFIG_DIR/sessions, else
+// ~/.claude/sessions. A variable only so a test can point it at a fake registry.
+var wakeRegistry = func() string {
+	if d, ok := os.LookupEnv("CLAUDE_CONFIG_DIR"); ok && d != "" {
+		return filepath.Join(d, "sessions")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude", "sessions")
+}
 
 // runServer serves the app over st on every listener until ctx ends or one fails.
 func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) error {
@@ -180,10 +198,13 @@ func runServer(ctx context.Context, lns []net.Listener, st store.Store, version,
 
 // serveUntil serves one handler on every listener until ctx ends or one fails, then stops in
 // order: the MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
-// deadline; a handler still running at the deadline is cancelled), the bus (which ends every /wake
-// stream, for the same reason), the HTTP server, and the tool-call flush. It returns the first
+// deadline; a handler still running at the deadline is cancelled), the bus (which stops the
+// session directory's dispatcher), the HTTP server, and the tool-call flush. It returns the first
 // failure, naming the step.
 func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string, logger *log.Logger) error {
+	if err := a.dir.Start(ctx); err != nil {
+		return fmt.Errorf("starting the session directory: %w", err)
+	}
 	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
