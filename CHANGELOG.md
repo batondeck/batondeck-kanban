@@ -10,6 +10,8 @@ Notable changes to batondeck-kanban. The format follows
 
 - The pre-push gate removes its Postgres container with `docker rm -f -v`, so a gate run no longer
   leaves an anonymous volume behind (P-130: about 57 GB had piled up and filled the disk twice).
+- `TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills` runs with a 3 s gap timeout instead of 1 s, so a
+  loaded gate no longer passes hole 2 before its commit (P-141, P-147). It still fails on the per-tail clock bug.
 - Five states (R0.26, ADR-0005; the owner, 2026-10-23: "rename Ready to TODO and remove backlog. if
   task is added, it can't be draft"). `domain.Todo` (`"TODO"`) replaces the claimable state and the
   parking state is gone: `domain.AllStatuses()` is `TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE`, and the
