@@ -8,6 +8,30 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
+  `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
+  `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token
+  scopes; `C()` carries `store.Change` as-is, its id the cursor; `Dropped()` counts what a full
+  buffer refused), `Replay(ctx, scopes, since, limit)`, `Running()` and `Close()`. The tail runs
+  only while a subscriber exists, reads the log at most once per 250 ms, and with an engine wake
+  (`store.ChangeWatcher`, new in `internal/store/watch.go`: Postgres `LISTEN batondeck_changes` on
+  one pooled connection, `AppendChange` now sending `pg_notify` in its transaction; SQLite an
+  in-process signal fired after the commit of a transaction that appended a change) it reads only
+  after a wake: 200 subscribers held 10 s with no write issue 0 statements on both engines, and one
+  write reaches all 200 in 2.6 ms (SQLite) and 5.9 ms (Postgres) (`TestIdle`). Delivery never
+  blocks: a subscriber that never reads (buffer 8) drops 992 of 1,000 changes while a reading one
+  gets all 1,000. On Postgres ids follow appends, not commits, so the tail keeps a frontier below
+  which every id was delivered and re-reads from it; an id missing for `GapTimeout` (10 s) is taken
+  for a rolled-back transaction (`TestPostgresDeliversChangesCommittedOutOfIDOrder`,
+  `TestPostgresPassesAnIDARolledBackTransactionTook`). `store.Audit` and `store.ToolCalls` are built
+  on SQLite and Postgres (`internal/store/{audit,toolcalls}.go` over
+  `queries/{sqlite,postgres}/{audit,toolcalls}.sql`; the eight stubs are gone) and their batteries
+  pass on both. `internal/retention`: a `Sweeper` deleting memory past its own expiry, change-log
+  rows past `retention.change_log_days` (7) and tool_calls rows past `retention.tool_calls_days`
+  (45) — new config keys, env `BATONDECK_RETENTION_CHANGE_LOG_DAYS` and
+  `BATONDECK_RETENTION_TOOL_CALLS_DAYS` — 500 rows a statement and at most 50,000 a table a sweep,
+  hourly; task events are kept. Deliveries and raw webhook bodies are not swept yet (no Store
+  method). `internal/store/storetest` opens migrated engine stores for tests above the store.
 - Store contract I in SQL on both engines (R0.9): `internal/store/{tasks,claims,events,changelog}.go`
   over `queries/{sqlite,postgres}/{tasks,claims,events,changelog}.sql` replace the INTERNAL stubs
   (`stubs_contract_i.go` is gone), and the tasks, claims, events and changelog batteries pass on
