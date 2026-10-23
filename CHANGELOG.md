@@ -75,6 +75,26 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The on-call integrations and their delivery log (R2.8, ADR-0004): nine tools,
+  `create_integration`, `update_integration`, `delete_integration`, `list_integrations`,
+  `rotate_integration_secret`, `list_deliveries`, `read_delivery_raw`, `replay_delivery` and
+  `send_test_event`, each workspace-admin only (hidden from a non-admin's `tools/list`, `FORBIDDEN` by
+  name with `requiredCapability: workspace-admin`) and then tiered as conductor's manifest: the four
+  mutations structural, the rest master. An hmac secret is minted (`whsec_` and 256 bits), sealed
+  with the keyring into conductor's seven-segment `enc1:` envelope (`internal/oncall/envelope.go`, AAD
+  `integrations.auth:<id>`) and answered once (`secret`, `shownOnce`); an idempotent replay answers no
+  secret, `list_integrations` only auth's shape, and an api_key or basic key is stored as its sha256.
+  A rotation keeps the previous secret verifying for 24 hours unless `revokePrevious`
+  (`internal/oncall/hmac.go`: the BatonDeck `v0=` and PagerDuty `v1=` forms, dual-accept over the
+  current and the unexpired previous secret). `send_test_event` and `replay_delivery` ingest a
+  normalized event in-process: the create and record arms of conductor's lifecycle table
+  (`oncall.Decide`), filing a TODO incident labelled `incident` (and `test`) that rings its on-call
+  identity `assigned` or the project `broadcast`, and one delivery row. `read_delivery_raw` is
+  `NOT_FOUND` once a raw body is swept. New: the store's `Oncall` area on both engines and memstore
+  with its conformance battery, `service.Oncall`, `Core.VerificationSecrets` and the retention
+  sweeps' `DeleteExpiredDeliveries`/`DeleteExpiredDeliveryRawBodies` (wired into the sweeper by R2.9),
+  `/hooks/<id>` as the endpoint path. The nine leave `contract/pending.json`; the surface snapshot
+  pins the admin-only set apart.
 - The contract against the live server and the per-call statement pins (R1.10).
   `internal/cli/contract_live_test.go` boots `serve`'s composition (`compose`, `serveUntil`) on every
   engine and reads it with a workspace admin's go-sdk client: `TestLiveContract` holds tools/list,
