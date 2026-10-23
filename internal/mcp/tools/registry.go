@@ -9,8 +9,9 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service"
 )
 
-// areas is every tool area of the target surface, in the order Register adds them, with the task
-// that writes its file. An area is pre-registered here so its lane adds a file, not a line here.
+// areas is every tool area a plan task names a file in this package for, in the order Register adds
+// them, with the task that writes it. An area is pre-registered here so its lane adds a file, not a
+// line here.
 var areas = []struct{ name, owner string }{
 	{"projects", "R1.1"},
 	{"boards", "R1.1"},
