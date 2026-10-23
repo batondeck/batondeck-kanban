@@ -23,12 +23,14 @@ import (
 const (
 	stackOwner = "bk_stack_ada" // creates every project, so its admin
 	stackGrace = "bk_stack_grace"
+	stackRoot  = "bk_stack_root" // u-ada again, as a workspace admin: the on-call tools are admin-only
 )
 
 func stackResolver() authfake.Resolver {
 	return authfake.Resolver{Callers: map[string]domain.Caller{
 		stackOwner: {Identity: "u-ada", Agent: "agent-ada", TokenScope: "u-ada"},
 		stackGrace: {Identity: "u-grace", TokenScope: "u-grace"},
+		stackRoot:  {Identity: "u-ada", Agent: "agent-ada", TokenScope: "u-ada", WorkspaceAdmin: true},
 	}}
 }
 
@@ -204,6 +206,9 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 		}
 
 		c.call("delete_chronicle_page", map[string]any{"projectId": p, "pageId": page, "expectedHeadVersionId": str(edited["versionId"])})
+
+		oncallOnTheStack(t, h, s, c, p, b)
+
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
 		c.call("remove_member", map[string]any{"projectId": p, "identityId": "u-grace"})
 		c.call("delete_project", map[string]any{"projectId": p})
@@ -226,4 +231,52 @@ func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return slices.Equal(x, y)
+}
+
+// oncallOnTheStack drives the nine on-call tools as a workspace admin: the secret answered once and
+// never listed, a rotation, a test event filing a ticket, its delivery listed, a kept raw body read,
+// the delivery replayed, and the tombstone; a non-admin calling one by name is FORBIDDEN.
+func oncallOnTheStack(t *testing.T, h *bk.Harness, s *servicetest.Stack, c *caller, p, b string) {
+	t.Helper()
+	root := &caller{t: t, cs: h.Connect(t, stackRoot), called: c.called}
+	created := root.call("create_integration", map[string]any{"projectId": p, "name": "Stack alerts", "source": "generic", "boardId": b,
+		"auth": map[string]any{"mode": "hmac"}, "routing": map[string]any{"mode": "broadcast"}})
+	integration := obj(created["integration"])
+	iid, secret := str(integration["id"]), str(created["secret"])
+	if !strings.HasPrefix(secret, "whsec_") || created["shownOnce"] != true || str(integration["endpointPath"]) != "/hooks/"+iid {
+		t.Fatalf("create_integration answered %v", created)
+	}
+	listed := root.call("list_integrations", map[string]any{"projectId": p})
+	if b, _ := json.Marshal(listed); strings.Contains(string(b), secret) || strings.Contains(string(b), `"secret"`) || len(listed["integrations"].([]any)) != 1 {
+		t.Fatalf("list_integrations carries a secret, or not the one integration: %s", b)
+	}
+	updated := obj(root.call("update_integration", map[string]any{"projectId": p, "integrationId": iid, "version": integration["version"],
+		"patch": map[string]any{"name": "Stack alerts two"}})["integration"])
+	rotated := root.call("rotate_integration_secret", map[string]any{"projectId": p, "integrationId": iid, "version": updated["version"]})
+	if str(rotated["secret"]) == secret || str(obj(obj(rotated["integration"])["auth"])["dualAcceptUntil"]) == "" {
+		t.Fatalf("rotate_integration_secret answered %v", rotated)
+	}
+	sent := root.call("send_test_event", map[string]any{"projectId": p, "integrationId": iid})
+	if sent["result"] != "created" || str(sent["taskId"]) == "" || sent["doorbell"] != "broadcast" {
+		t.Fatalf("send_test_event answered %v", sent)
+	}
+	dlv := str(sent["deliveryId"])
+	if n := len(root.call("list_deliveries", map[string]any{"projectId": p, "integrationId": iid})["deliveries"].([]any)); n != 1 {
+		t.Fatalf("list_deliveries: %d rows, want the test event's", n)
+	}
+	// A raw body is kept by the ingest route for a refused delivery (R2.9); here it is put directly.
+	if err := s.Store.PutDeliveryRawBody(testCtx(t), p, iid, dlv, []byte(`{"raw":true}`), 1<<62); err != nil {
+		t.Fatal(err)
+	}
+	if raw := root.call("read_delivery_raw", map[string]any{"projectId": p, "integrationId": iid, "deliveryId": dlv}); str(raw["payloadBase64"]) != "eyJyYXciOnRydWV9" {
+		t.Fatalf("read_delivery_raw answered %v", raw)
+	}
+	if replay := root.call("replay_delivery", map[string]any{"projectId": p, "integrationId": iid, "deliveryId": dlv}); replay["result"] != "created" || replay["replayed"] != false {
+		t.Fatalf("replay_delivery answered %v", replay)
+	}
+	root.call("delete_integration", map[string]any{"projectId": p, "integrationId": iid, "version": obj(rotated["integration"])["version"]})
+	if e := bk.ToolError(t, c.cs, "create_integration", map[string]any{"projectId": p, "name": "x", "source": "generic", "boardId": b,
+		"auth": map[string]any{"mode": "hmac"}, "routing": map[string]any{"mode": "broadcast"}}); e["code"] != "FORBIDDEN" {
+		t.Fatalf("a non-admin's create_integration by name = %v, want FORBIDDEN", e)
+	}
 }

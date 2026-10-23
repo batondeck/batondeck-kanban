@@ -14,8 +14,8 @@ import (
 
 // dtoTools maps each tool to the service method whose request and response types are its input and
 // output schemas: the 42 CORE tools of plan §Target surface, cancel_task (ADR-0001, after the 42
-// was counted), list_agent_sessions (service.Sessions.ListAgentSessions) and the 4 chronicle tools
-// (R2.6).
+// was counted), list_agent_sessions (service.Sessions.ListAgentSessions), the 4 chronicle tools
+// (R2.6) and the nine on-call tools (service.Oncall, R2.8).
 var dtoTools = []struct {
 	tool   string
 	iface  reflect.Type
@@ -69,6 +69,15 @@ var dtoTools = []struct {
 	{"ingest_chronicle_page", reflect.TypeFor[service.Chronicle](), "IngestPage"},
 	{"edit_chronicle_page", reflect.TypeFor[service.Chronicle](), "EditPage"},
 	{"delete_chronicle_page", reflect.TypeFor[service.Chronicle](), "DeletePage"},
+	{"create_integration", reflect.TypeFor[service.Oncall](), "CreateIntegration"},
+	{"update_integration", reflect.TypeFor[service.Oncall](), "UpdateIntegration"},
+	{"delete_integration", reflect.TypeFor[service.Oncall](), "DeleteIntegration"},
+	{"list_integrations", reflect.TypeFor[service.Oncall](), "ListIntegrations"},
+	{"rotate_integration_secret", reflect.TypeFor[service.Oncall](), "RotateIntegrationSecret"},
+	{"list_deliveries", reflect.TypeFor[service.Oncall](), "ListDeliveries"},
+	{"read_delivery_raw", reflect.TypeFor[service.Oncall](), "ReadDeliveryRaw"},
+	{"replay_delivery", reflect.TypeFor[service.Oncall](), "ReplayDelivery"},
+	{"send_test_event", reflect.TypeFor[service.Oncall](), "SendTestEvent"},
 }
 
 // toolShaped are the interfaces every method of which is one tool: a method added to one without a
@@ -76,6 +85,7 @@ var dtoTools = []struct {
 var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Projects](), reflect.TypeFor[service.Boards](), reflect.TypeFor[service.Tasks](),
 	reflect.TypeFor[service.Lifecycle](), reflect.TypeFor[service.Context](), reflect.TypeFor[service.Media](),
+	reflect.TypeFor[service.Oncall](),
 }
 
 // dtoSchema is typ's schema as internal/service/dtoschema builds it for the tool registration,
@@ -145,8 +155,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 48 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions and the 4 chronicle tools (48)", len(names))
+	if len(names) != 57 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 4 chronicle tools and the 9 on-call tools (57)", len(names))
 	}
 }
 

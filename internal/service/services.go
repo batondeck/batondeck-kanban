@@ -33,4 +33,5 @@ type Services struct {
 	Feed      Feed
 	Sessions  Sessions
 	ToolCalls ToolCalls
+	Oncall    Oncall
 }

@@ -7,7 +7,48 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const deleteExpiredDeliveries = `-- name: DeleteExpiredDeliveries :execrows
+DELETE FROM deliveries WHERE (project_id, integration_id, id) IN (
+  SELECT d.project_id, d.integration_id, d.id FROM deliveries d WHERE d.expires_at <= $1::bigint
+  ORDER BY d.expires_at, d.id COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteExpiredDeliveriesParams struct {
+	Now       int64
+	PageLimit int64
+}
+
+// The bounded sweeps: at most page_limit rows expired at or before now, oldest expiry first. A
+// delivery's raw body goes with it (ON DELETE CASCADE).
+func (q *Queries) DeleteExpiredDeliveries(ctx context.Context, arg DeleteExpiredDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeliveries, arg.Now, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredDeliveryRawBodies = `-- name: DeleteExpiredDeliveryRawBodies :execrows
+DELETE FROM delivery_raw_bodies WHERE (project_id, integration_id, delivery_id) IN (
+  SELECT r.project_id, r.integration_id, r.delivery_id FROM delivery_raw_bodies r WHERE r.expires_at <= $1::bigint
+  ORDER BY r.expires_at, r.delivery_id COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteExpiredDeliveryRawBodiesParams struct {
+	Now       int64
+	PageLimit int64
+}
+
+func (q *Queries) DeleteExpiredDeliveryRawBodies(ctx context.Context, arg DeleteExpiredDeliveryRawBodiesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredDeliveryRawBodies, arg.Now, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
 
 const getAlertState = `-- name: GetAlertState :one
 SELECT project_id, integration_id, fingerprint_hash, fingerprint, task_id, occurrences, first_at, last_at, alert_status, expires_at FROM alert_states WHERE project_id = $1 AND integration_id = $2 AND fingerprint_hash = $3
@@ -90,7 +131,7 @@ func (q *Queries) GetDeliveryRawBody(ctx context.Context, arg GetDeliveryRawBody
 }
 
 const getIntegration = `-- name: GetIntegration :one
-SELECT project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at FROM integrations WHERE project_id = $1 AND id = $2
+SELECT project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at FROM integrations WHERE project_id = $1 AND id = $2 AND deleted_at IS NULL
 `
 
 type GetIntegrationParams struct {
@@ -98,8 +139,337 @@ type GetIntegrationParams struct {
 	ID        string
 }
 
+// A live integration: a tombstoned one (deleted_at set) is not found.
 func (q *Queries) GetIntegration(ctx context.Context, arg GetIntegrationParams) (Integration, error) {
 	row := q.db.QueryRow(ctx, getIntegration, arg.ProjectID, arg.ID)
+	var i Integration
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Enabled,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Auth,
+		&i.Mapping,
+		&i.Routing,
+		&i.Lifecycle,
+		&i.Policy,
+		&i.Limits,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const insertDelivery = `-- name: InsertDelivery :one
+INSERT INTO deliveries (project_id, integration_id, id, delivery_id, ts, kind, result, task_id, error, normalized_event, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (project_id, integration_id, id) DO NOTHING
+RETURNING project_id, integration_id, id, delivery_id, ts, kind, result, task_id, error, normalized_event, expires_at
+`
+
+type InsertDeliveryParams struct {
+	ProjectID       string
+	IntegrationID   string
+	ID              string
+	DeliveryID      string
+	Ts              int64
+	Kind            string
+	Result          string
+	TaskID          sql.NullString
+	Error           sql.NullString
+	NormalizedEvent sql.NullString
+	ExpiresAt       int64
+}
+
+// A delivery is recorded once: a second insert of its id changes nothing and returns no row.
+func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) (Delivery, error) {
+	row := q.db.QueryRow(ctx, insertDelivery,
+		arg.ProjectID,
+		arg.IntegrationID,
+		arg.ID,
+		arg.DeliveryID,
+		arg.Ts,
+		arg.Kind,
+		arg.Result,
+		arg.TaskID,
+		arg.Error,
+		arg.NormalizedEvent,
+		arg.ExpiresAt,
+	)
+	var i Delivery
+	err := row.Scan(
+		&i.ProjectID,
+		&i.IntegrationID,
+		&i.ID,
+		&i.DeliveryID,
+		&i.Ts,
+		&i.Kind,
+		&i.Result,
+		&i.TaskID,
+		&i.Error,
+		&i.NormalizedEvent,
+		&i.ExpiresAt,
+	)
+	return i, err
+}
+
+const insertIntegration = `-- name: InsertIntegration :one
+INSERT INTO integrations (project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1, $14, $15, $16)
+RETURNING project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at
+`
+
+type InsertIntegrationParams struct {
+	ProjectID string
+	ID        string
+	Name      string
+	Source    string
+	Enabled   int64
+	BoardID   string
+	ColumnID  sql.NullString
+	Auth      string
+	Mapping   string
+	Routing   string
+	Lifecycle string
+	Policy    string
+	Limits    string
+	CreatedBy string
+	CreatedAt int64
+	UpdatedAt int64
+}
+
+func (q *Queries) InsertIntegration(ctx context.Context, arg InsertIntegrationParams) (Integration, error) {
+	row := q.db.QueryRow(ctx, insertIntegration,
+		arg.ProjectID,
+		arg.ID,
+		arg.Name,
+		arg.Source,
+		arg.Enabled,
+		arg.BoardID,
+		arg.ColumnID,
+		arg.Auth,
+		arg.Mapping,
+		arg.Routing,
+		arg.Lifecycle,
+		arg.Policy,
+		arg.Limits,
+		arg.CreatedBy,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	var i Integration
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.Name,
+		&i.Source,
+		&i.Enabled,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Auth,
+		&i.Mapping,
+		&i.Routing,
+		&i.Lifecycle,
+		&i.Policy,
+		&i.Limits,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const listDeliveries = `-- name: ListDeliveries :many
+SELECT project_id, integration_id, id, delivery_id, ts, kind, result, task_id, error, normalized_event, expires_at FROM deliveries
+WHERE project_id = $1::text AND integration_id = $2::text
+  AND ($3::text = '' OR kind = $3::text)
+  AND (ts < $4::bigint
+       OR (ts = $4::bigint AND id COLLATE "C" < $5::text))
+ORDER BY ts DESC, id COLLATE "C" DESC
+LIMIT $6::bigint
+`
+
+type ListDeliveriesParams struct {
+	ProjectID     string
+	IntegrationID string
+	Kind          string
+	AfterTs       int64
+	AfterID       string
+	PageLimit     int64
+}
+
+// One page of an integration's deliveries, newest first ((ts, id) descending), strictly after the
+// cursor's (after_ts, after_id); kind ” is every kind.
+func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) ([]Delivery, error) {
+	rows, err := q.db.Query(ctx, listDeliveries,
+		arg.ProjectID,
+		arg.IntegrationID,
+		arg.Kind,
+		arg.AfterTs,
+		arg.AfterID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Delivery
+	for rows.Next() {
+		var i Delivery
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.IntegrationID,
+			&i.ID,
+			&i.DeliveryID,
+			&i.Ts,
+			&i.Kind,
+			&i.Result,
+			&i.TaskID,
+			&i.Error,
+			&i.NormalizedEvent,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrations = `-- name: ListIntegrations :many
+SELECT project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at FROM integrations
+WHERE project_id = $1::text
+  AND ($2::bigint = 1 OR deleted_at IS NULL)
+ORDER BY created_at DESC, id COLLATE "C" DESC
+LIMIT $3::bigint
+`
+
+type ListIntegrationsParams struct {
+	ProjectID      string
+	IncludeDeleted int64
+	PageLimit      int64
+}
+
+// The project's integrations, newest first ((created_at, id) descending); tombstones only when
+// include_deleted is 1.
+func (q *Queries) ListIntegrations(ctx context.Context, arg ListIntegrationsParams) ([]Integration, error) {
+	rows, err := q.db.Query(ctx, listIntegrations, arg.ProjectID, arg.IncludeDeleted, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Integration
+	for rows.Next() {
+		var i Integration
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.Name,
+			&i.Source,
+			&i.Enabled,
+			&i.BoardID,
+			&i.ColumnID,
+			&i.Auth,
+			&i.Mapping,
+			&i.Routing,
+			&i.Lifecycle,
+			&i.Policy,
+			&i.Limits,
+			&i.Version,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const putDeliveryRawBody = `-- name: PutDeliveryRawBody :exec
+INSERT INTO delivery_raw_bodies (project_id, integration_id, delivery_id, body, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (project_id, integration_id, delivery_id) DO UPDATE SET body = excluded.body, expires_at = excluded.expires_at
+`
+
+type PutDeliveryRawBodyParams struct {
+	ProjectID     string
+	IntegrationID string
+	DeliveryID    string
+	Body          []byte
+	ExpiresAt     int64
+}
+
+func (q *Queries) PutDeliveryRawBody(ctx context.Context, arg PutDeliveryRawBodyParams) error {
+	_, err := q.db.Exec(ctx, putDeliveryRawBody,
+		arg.ProjectID,
+		arg.IntegrationID,
+		arg.DeliveryID,
+		arg.Body,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const updateIntegration = `-- name: UpdateIntegration :one
+UPDATE integrations SET name = $1, enabled = $2, board_id = $3, column_id = $4, auth = $5, mapping = $6, routing = $7, lifecycle = $8, policy = $9, limits = $10, deleted_at = $11, version = version + 1, updated_at = $12
+WHERE project_id = $13 AND id = $14 AND version = $15 AND deleted_at IS NULL
+RETURNING project_id, id, name, source, enabled, board_id, column_id, auth, mapping, routing, lifecycle, policy, limits, version, created_by, created_at, updated_at, deleted_at
+`
+
+type UpdateIntegrationParams struct {
+	Name      string
+	Enabled   int64
+	BoardID   string
+	ColumnID  sql.NullString
+	Auth      string
+	Mapping   string
+	Routing   string
+	Lifecycle string
+	Policy    string
+	Limits    string
+	DeletedAt sql.NullInt64
+	UpdatedAt int64
+	ProjectID string
+	ID        string
+	Version   int64
+}
+
+// The whole row as the caller merged it, compare-and-set on version; a tombstone is never updated.
+func (q *Queries) UpdateIntegration(ctx context.Context, arg UpdateIntegrationParams) (Integration, error) {
+	row := q.db.QueryRow(ctx, updateIntegration,
+		arg.Name,
+		arg.Enabled,
+		arg.BoardID,
+		arg.ColumnID,
+		arg.Auth,
+		arg.Mapping,
+		arg.Routing,
+		arg.Lifecycle,
+		arg.Policy,
+		arg.Limits,
+		arg.DeletedAt,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+		arg.Version,
+	)
 	var i Integration
 	err := row.Scan(
 		&i.ProjectID,

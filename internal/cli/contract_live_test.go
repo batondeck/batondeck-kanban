@@ -184,6 +184,11 @@ var (
 		"remove_column", "remove_dependency", "remove_member", "search_tasks", "set_summary",
 		"update_column", "update_settings", "update_task", "write_memory",
 	}
+	// snapshotAdminOnly are listed to a workspace admin alone (ADR-0004: the on-call tools).
+	snapshotAdminOnly = []string{
+		"create_integration", "delete_integration", "list_deliveries", "list_integrations", "read_delivery_raw",
+		"replay_delivery", "rotate_integration_secret", "send_test_event", "update_integration",
+	}
 	snapshotPrompts   = []string{"decompose_into_subtasks", "pick_up_next_task", "summarize_for_handoff", "triage_inbox"}
 	snapshotTemplates = []string{
 		"board", "board-feed", "board-feed-cursor", "chronicle", "chronicle-cursor", "chronicle-history",
@@ -192,10 +197,15 @@ var (
 )
 
 // TestSurfaceSnapshot: a workspace admin's and a member's tools/list, prompts/list and
-// resources/templates/list names are exactly the snapshot.
+// resources/templates/list names are exactly the snapshot: the admin's tools are snapshotTools and
+// snapshotAdminOnly, the member's snapshotTools alone.
 func TestSurfaceSnapshot(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		for _, a := range []*agent{j.account("root", true), j.user("ada")} {
+			wantTools := snapshotTools
+			if a.login == "root" {
+				wantTools = slices.Sorted(slices.Values(append(slices.Clone(snapshotTools), snapshotAdminOnly...)))
+			}
 			live := a.surface()
 			tools := slices.Sorted(maps.Keys(live.tools.Tools))
 			var prompts, templates []string
@@ -210,13 +220,13 @@ func TestSurfaceSnapshot(t *testing.T) {
 			for _, c := range []struct {
 				what      string
 				got, want []string
-			}{{"tools", tools, snapshotTools}, {"prompts", prompts, snapshotPrompts}, {"resource templates", templates, snapshotTemplates}} {
+			}{{"tools", tools, wantTools}, {"prompts", prompts, snapshotPrompts}, {"resource templates", templates, snapshotTemplates}} {
 				if !slices.Equal(c.got, c.want) {
 					t.Errorf("%s's %s: served but not in the snapshot %v; in the snapshot but not served %v",
 						a.login, c.what, minus(c.got, c.want), minus(c.want, c.got))
 				}
 			}
-			t.Logf("%s as %s: %d tools, %d prompts, %d resource templates served, compared with the snapshot's %d, %d, %d", j.engine, a.login, len(tools), len(prompts), len(templates), len(snapshotTools), len(snapshotPrompts), len(snapshotTemplates))
+			t.Logf("%s as %s: %d tools, %d prompts, %d resource templates served, compared with the snapshot's %d, %d, %d", j.engine, a.login, len(tools), len(prompts), len(templates), len(wantTools), len(snapshotPrompts), len(snapshotTemplates))
 		}
 	})
 }

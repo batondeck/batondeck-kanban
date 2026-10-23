@@ -48,6 +48,7 @@ type Store interface {
 	Claims
 	Events
 	ChangeLog
+	Oncall
 }
 
 // Lifecycle opens, migrates, transacts and closes: what every engine does before it holds anything.

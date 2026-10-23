@@ -70,6 +70,17 @@ var expectedPosture = map[string]pinnedPosture{
 	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	"edit_chronicle_page":   {tier: domain.TierWrite, tenantScoped: true},
 	"delete_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	// The on-call tools are workspace-admin only (ADR-0004), then tiered on the project as conductor's
+	// manifest.ts:203-215: the mutations structural, the reads and the two that file tickets master.
+	"create_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"update_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"rotate_integration_secret": {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"delete_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"list_integrations":         {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"list_deliveries":           {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"read_delivery_raw":         {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"replay_delivery":           {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	"send_test_event":           {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the

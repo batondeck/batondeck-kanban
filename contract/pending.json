@@ -31,17 +31,6 @@
       "set_sprint",
       "start_runs",
       "update_sprint"
-    ],
-    "P7 oncall": [
-      "create_integration",
-      "delete_integration",
-      "list_deliveries",
-      "list_integrations",
-      "read_delivery_raw",
-      "replay_delivery",
-      "rotate_integration_secret",
-      "send_test_event",
-      "update_integration"
     ]
   }
 }
