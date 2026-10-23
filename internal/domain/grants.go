@@ -93,9 +93,9 @@ type Posture struct {
 	Landing Landing
 }
 
-// toolPosture is the one place every tool is classified: the 93 tools of the target surface
-// (conductor's 91 in scope, delete_task and cancel_task). The exempt set, the unscoped set and the
-// landing statuses all derive from it.
+// toolPosture is the one place every tool is classified: the 86 tools of the target surface
+// (conductor's 91 in scope, delete_task and cancel_task, less ADR-0004's 7). The exempt set, the
+// unscoped set and the landing statuses all derive from it.
 var toolPosture = map[string]Posture{
 	"ack_follow_up":             {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
 	"add_artifact":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
@@ -115,7 +115,6 @@ var toolPosture = map[string]Posture{
 	"complete_task":             {TenantScoped: true, Landing: completionLanding},
 	"create_board":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
 	"create_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
-	"create_cli_token":          {TenantScoped: false, GrantExempt: true},
 	"create_integration":        {Tier: TierStructural, TenantScoped: true, Landing: fixedLanding()},
 	"create_project":            {TenantScoped: false, GrantExempt: true},
 	"create_sprint":             {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding()},
@@ -128,7 +127,6 @@ var toolPosture = map[string]Posture{
 	"disconnect_agent":          {TenantScoped: false, AdminOnly: AdminOnlyConditional, Landing: fixedLanding()},
 	"edit_chronicle_page":       {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
 	"fail_task":                 {TenantScoped: true, Landing: fixedLanding(Todo, Blocked)},
-	"find_tools":                {TenantScoped: false, GrantExempt: true},
 	"get_board":                 {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"get_my_settings":           {TenantScoped: false, GrantExempt: true},
 	"get_project":               {Tier: TierRead, TenantScoped: true, GrantExempt: true},
@@ -136,17 +134,14 @@ var toolPosture = map[string]Posture{
 	"get_sprint":                {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"get_task":                  {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"get_task_context":          {Tier: TierRead, TenantScoped: true, GrantExempt: true},
-	"get_tool_schema":           {TenantScoped: false, GrantExempt: true},
 	"grant_capabilities":        {Tier: TierAdmin, TenantScoped: true, Landing: fixedLanding()},
 	"handoff_task":              {TenantScoped: true, Landing: fixedLanding(Todo)},
 	"heartbeat_task":            {TenantScoped: true, Landing: fixedLanding()},
 	"ingest_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
-	"invoke_tool":               {TenantScoped: false, GrantExempt: true},
 	"list_agent_sessions":       {TenantScoped: false, AdminOnly: AdminOnlyConditional, Landing: fixedLanding()},
 	"list_attachments":          {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"list_audit_log":            {TenantScoped: false, AdminOnly: AdminOnlyOnly, Landing: fixedLanding()},
 	"list_boards":               {Tier: TierRead, TenantScoped: true, GrantExempt: true},
-	"list_cli_tokens":           {TenantScoped: false, GrantExempt: true},
 	"list_comments":             {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"list_deliveries":           {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding()},
 	"list_follow_ups":           {Tier: TierRead, TenantScoped: true, GrantExempt: true},
@@ -163,7 +158,6 @@ var toolPosture = map[string]Posture{
 	"open_run":                  {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding()},
 	"orchestrate_subtasks":      {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(Blocked)},
 	"pick_run":                  {Tier: TierMaster, TenantScoped: true, Landing: completionLanding},
-	"prune_agent_sessions":      {TenantScoped: false, AdminOnly: AdminOnlyConditional, Landing: fixedLanding()},
 	"rank_tasks":                {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"read_delivery_raw":         {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding()},
 	"read_memory":               {Tier: TierRead, TenantScoped: true, GrantExempt: true},
@@ -176,7 +170,6 @@ var toolPosture = map[string]Posture{
 	"remove_member":             {Tier: TierAdmin, TenantScoped: true, Landing: fixedLanding()},
 	"replay_delivery":           {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(Todo)},
 	"retract_artifact":          {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding()},
-	"revoke_cli_token":          {TenantScoped: false, GrantExempt: true},
 	"rotate_integration_secret": {Tier: TierStructural, TenantScoped: true, Landing: fixedLanding()},
 	"search_tasks":              {Tier: TierRead, TenantScoped: true, GrantExempt: true},
 	"send_test_event":           {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(Todo)},
