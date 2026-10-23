@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/batondeck/batondeck-kanban/internal/core"
 )
 
 // The Claude Code adapter (R3.1, docs/release/socket-wake-spike-2026-10.md): the registry entry
@@ -53,6 +56,45 @@ func readRegistry(dir string, pid int64) (registryEntry, error) {
 		return registryEntry{}, fmt.Errorf("the registry entry of pid %d names pid %d, session %q, socket %q", pid, r.PID, r.SessionID, r.MessagingSocketPath)
 	}
 	return r, nil
+}
+
+// Session is the registry entry of one live Claude Code process, as `session register` sends it.
+type Session struct {
+	PID       int64
+	SessionID string
+	ProcStart string
+}
+
+// SessionOf is the one live process in dir whose registry entry names socket as its
+// messagingSocketPath (the R3.1 spike's way to find the hook's Claude Code process), read with the
+// parser the directory validates a registration against.
+func SessionOf(dir, socket string) (Session, error) {
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return Session{}, err
+	}
+	var found []Session
+	for _, n := range names {
+		pid, err := strconv.ParseInt(strings.TrimSuffix(n.Name(), ".json"), 10, 64)
+		if err != nil || !strings.HasSuffix(n.Name(), ".json") || pid <= 0 {
+			continue
+		}
+		r, err := readRegistry(dir, pid)
+		if err != nil || r.MessagingSocketPath != socket {
+			continue
+		}
+		if _, err := core.ProcessUID(int(pid)); err != nil {
+			continue
+		}
+		found = append(found, Session{PID: pid, SessionID: r.SessionID, ProcStart: r.ProcStart})
+	}
+	switch len(found) {
+	case 0:
+		return Session{}, fmt.Errorf("no live session in %s names the socket %s", dir, socket)
+	case 1:
+		return found[0], nil
+	}
+	return Session{}, fmt.Errorf("%d live sessions in %s name the socket %s", len(found), dir, socket)
 }
 
 // peerToken is the session's peer token from <pid>.<sha256(socket)>.key beside its registry entry,
