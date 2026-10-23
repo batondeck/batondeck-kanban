@@ -44,6 +44,8 @@ type Store interface {
 	Blobs
 	Search
 	Chronicle
+	Runs
+	Sprints
 	Tasks
 	Claims
 	Events

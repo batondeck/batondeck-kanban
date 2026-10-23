@@ -344,6 +344,10 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		setNullable(&t.Assignee, c.Assignee)
 		setNullable(&t.Deliverable, c.Deliverable)
 		setNullableJSON(&t.Review, c.Review)
+		if c.Racing != nil {
+			t.Racing = *c.Racing
+		}
+		setNullable(&t.RaceOpenedAt, c.RaceOpenedAt)
 		t.Version++
 		t.UpdatedBy, t.UpdatedAt = c.UpdatedBy, c.UpdatedAt
 		return st.put(t), nil
@@ -489,7 +493,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID, taskID string, expect
 		}
 		delete(st.tasks, [2]string{projectID, taskID})
 		// The rows the schema cascades from the task that this store holds: its events, context
-		// items, summary, edges and attachments. Memory is not one of them (migration 0003): its task scopes are
+		// items, summary, edges, attachments and run row. Memory is not one of them (migration 0003): its task scopes are
 		// the service's cascade (DeleteMemoryByTask), and a project entry keeps the task as provenance.
 		for k, e := range st.events {
 			if k[0] == projectID && e.TaskID != nil && *e.TaskID == taskID {
@@ -502,6 +506,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID, taskID string, expect
 			return k[0] == projectID && (e.FromTaskID == taskID || e.ToTaskID == taskID)
 		})
 		maps.DeleteFunc(st.attachments, func(k [3]string, _ store.Attachment) bool { return k[0] == projectID && k[1] == taskID })
+		delete(st.runs, [2]string{projectID, taskID})
 		return nil
 	})
 }

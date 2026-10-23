@@ -405,7 +405,7 @@ func writeState(ctx context.Context, q sqlQueries, t Task, updatedBy string, upd
 		Status: string(t.Status), ColumnID: t.ColumnID, OrderKey: t.OrderKey, BlockedReason: nullStr(t.BlockedReason),
 		Labels: jsonList(t.Labels), ClaimAttempts: t.ClaimAttempts, NextEligibleAt: nullInt(t.NextEligibleAt),
 		Assignee: nullStr(t.Assignee), Deliverable: nullStr(t.Deliverable), Review: nullRaw(t.Review),
-		Version: t.Version + 1, UpdatedBy: updatedBy, UpdatedAt: updatedAt, ProjectID: t.ProjectID, ID: t.ID,
+		Racing: boolInt(t.Racing), RaceOpenedAt: nullInt(t.RaceOpenedAt), Version: t.Version + 1, UpdatedBy: updatedBy, UpdatedAt: updatedAt, ProjectID: t.ProjectID, ID: t.ID,
 	}
 	if c := t.Claim; c != nil {
 		p.ClaimOwner, p.ClaimAgent, p.ClaimAgentID = sql.NullString{String: c.Owner, Valid: true}, nullStr(c.Agent), nullStr(c.AgentID)
@@ -474,6 +474,10 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		setNullable(&t.Assignee, c.Assignee)
 		setNullable(&t.Deliverable, c.Deliverable)
 		setNullableJSON(&t.Review, c.Review)
+		if c.Racing != nil {
+			t.Racing = *c.Racing
+		}
+		setNullable(&t.RaceOpenedAt, c.RaceOpenedAt)
 		return writeState(ctx, q, t, c.UpdatedBy, c.UpdatedAt)
 	})
 }
