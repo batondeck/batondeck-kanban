@@ -123,6 +123,7 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 	res, err := next(ctx, method, req)
 	if err != nil {
 		s.sessions.release(id)
+		s.tools.forget(id)
 		return res, err
 	}
 	params, _ := req.GetParams().(*mcp.InitializeParams)
@@ -140,6 +141,7 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 		defer s.sessions.ends.Done()
 		_ = ss.Wait()
 		s.sessions.release(id)
+		s.tools.forget(id)
 		if !s.sessions.leave(key) {
 			return
 		}
@@ -162,11 +164,3 @@ func agentName(c domain.Caller, p *mcp.InitializeParams) string {
 	}
 	return "mcp"
 }
-
-// subscribe refuses every URI: R0 has no resource, and a subscription that can never deliver is
-// refused rather than accepted silently. R1.7 registers the resources and replaces this.
-func subscribe(_ context.Context, req *mcp.SubscribeRequest) error {
-	return mcp.ResourceNotFoundError(req.Params.URI)
-}
-
-func unsubscribe(context.Context, *mcp.UnsubscribeRequest) error { return nil }

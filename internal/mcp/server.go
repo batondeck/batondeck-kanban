@@ -61,8 +61,10 @@ type Server struct {
 	halt     context.CancelFunc
 }
 
-// New builds the server: tools, prompts and resources declared (all empty in R0), both subscribe
-// handlers set (go-sdk panics with one), stateful sessions.
+// New builds the server: the instructions, the four prompts and the resource templates, tools
+// declared (each area adds its own), stateful sessions. Resources are readable and never pushed:
+// no subscribe capability is advertised and no SubscribeHandler is set, so go-sdk answers
+// resources/subscribe with method not found (ADR-0004).
 func New(o Options) *Server {
 	if o.SessionIdle == 0 {
 		o.SessionIdle = DefaultSessionIdle
@@ -77,16 +79,19 @@ func New(o Options) *Server {
 	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
-	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}}
+	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, log: s.log}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
+		Instructions: Instructions,
 		Capabilities: &mcp.ServerCapabilities{
 			Tools:     &mcp.ToolCapabilities{ListChanged: true},
 			Prompts:   &mcp.PromptCapabilities{ListChanged: true},
-			Resources: &mcp.ResourceCapabilities{ListChanged: true, Subscribe: true},
+			Resources: &mcp.ResourceCapabilities{ListChanged: true},
 		},
-		SubscribeHandler:   subscribe,
-		UnsubscribeHandler: unsubscribe,
 	})
+	// The sending handler, kept to notify one session (go-sdk exports no per-session list_changed).
+	s.sdk.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler { s.tools.send = next; return next })
+	registerPrompts(s.sdk)
+	registerResources(s)
 	// The first is outermost: the handler's context is cancelled at Close's deadline, and the caller
 	// rides it into the session bookkeeping, the tools/list filter and the error shape, which sits
 	// next to the tool handler.
@@ -147,12 +152,17 @@ func (s *Server) SDK() *mcp.Server { return s.sdk }
 type audience struct{ admin bool }
 
 // toolList filters tools/list per audience and memoises the answer. gen counts registrations, so
-// a list read before one is never memoised after it.
+// a list read before one is never memoised after it. seen is each live session's audience as of its
+// last request: one that changes (the caller's workspace-admin flag, re-read through the 60 s
+// account cache) sends that session notifications/tools/list_changed through send.
 type toolList struct {
 	mu      sync.Mutex
 	gen     int
 	memo    map[audience]*mcp.ListToolsResult
 	visible map[string]func(audience) bool // tool name -> who sees it; absent: everyone
+	seen    map[string]audience            // MCP session id -> its audience
+	send    mcp.MethodHandler              // go-sdk's sending handler
+	log     *log.Logger
 }
 
 // AddTool registers a tool on s. visible says which callers see it in tools/list (nil: every

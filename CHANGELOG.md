@@ -61,6 +61,20 @@ Notable changes to batondeck-kanban. The format follows
   5,000 change-log rows answers `resync`, so a reconnect never scans the whole retained log.
 - `/healthz` names the store's engine: `batondeck-kanban <version> ok sqlite` (or `postgres`).
 
+- The MCP prompts, readable resources and server instructions (R1.7; ADR-0004, ADR-0005). The four
+  prompts `pick_up_next_task`, `triage_inbox`, `summarize_for_handoff` and `decompose_into_subtasks`
+  take conductor's arguments and text, with the five states: `triage_inbox` makes each TODO task a
+  self-contained brief instead of moving it to a claimable state. Five resource templates under
+  `batondeck://`: `board` (service.Feed board snapshot), `task`, `task-context` (the
+  `get_task_context` briefing), `board-feed` and `board-feed-cursor` (`…/feed{?cursor}`, service.Feed),
+  each read through the service as the caller; conductor's six chronicle templates are not served
+  (R2.6's area) and neither is `conductor://`. A failed read is a JSON-RPC error whose data is the
+  BatonDeckError. The `initialize` instructions describe the board, the five states, `claim_next` and
+  `get_task_context` first, and the two ways a client learns of work: a CLI on the device is rung on
+  its own messaging socket and then calls `claim_next`, then `list_notifications`; a hosted client
+  (claude.ai, ChatGPT) and Cursor pull each turn.
+- `notifications/tools/list_changed` to a session whose caller's workspace-admin flag changed since its
+  previous request (the only thing that changes a caller's `tools/list`), sent to that session alone.
 - The device session directory and its socket dispatcher (R0.25, ADR-0004 Transport 1), `internal/wake`.
   A CLI client process registers with `POST /internal/wake-session {pid, role, agent, socket, token,
   sessionId, procStart, cursor}` over the server's 0600 Unix socket only (TCP 404): the pid must be
@@ -599,6 +613,9 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Removed
 
+- MCP resource subscriptions (ADR-0004): `initialize` no longer advertises `resources.subscribe`, the
+  subscribe and unsubscribe handlers are gone, and `resources/subscribe` is answered method not found
+  (-32601).
 - `GET /wake` (R0.15's SSE doorbell) and its TCP mount (ADR-0004; plan open question 2, default
   removed): it answers 404 over TCP and the Unix socket, rather than the SPA shell. Its catch-up and
   coalescer are the dispatcher's parts. `service.Sessions.RegisterWakeSession` now registers a
