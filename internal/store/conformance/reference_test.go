@@ -182,6 +182,27 @@ func (r *reference) taskState(_ context.Context, projectID, taskID string) (seed
 	return seededTask{Version: tk.version, BlockedBy: slices.Clone(tk.blockedBy), Blocks: slices.Clone(tk.blocks)}, err
 }
 
+// --- Tasks (DeleteTask alone, for the memory battery's provenance subtest) ---
+
+// DeleteTask deletes the task and what the schema cascades from it: its context items, summary
+// and edges. Memory is kept (migration 0003).
+func (r *reference) DeleteTask(_ context.Context, projectID, taskID string, expected int64) error {
+	tk, err := r.task(projectID, taskID)
+	if err != nil {
+		return err
+	}
+	if tk.version != expected {
+		return domain.Stale(expected, tk.version)
+	}
+	delete(r.st.tasks, [2]string{projectID, taskID})
+	r.st.context = slices.DeleteFunc(r.st.context, func(it store.ContextItem) bool { return it.ProjectID == projectID && it.TaskID == taskID })
+	delete(r.st.summaries, [2]string{projectID, taskID})
+	r.st.edges = slices.DeleteFunc(r.st.edges, func(e store.DependencyEdge) bool {
+		return e.ProjectID == projectID && (e.FromTaskID == taskID || e.ToTaskID == taskID)
+	})
+	return nil
+}
+
 // --- Context ---
 
 func (r *reference) AddContextItem(_ context.Context, in store.AddContextItemInput) (store.ContextItem, error) {

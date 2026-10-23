@@ -240,6 +240,27 @@ func memory(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// P-65 (migration 0003): the task's own scopes go by the service's cascade, DeleteMemoryByTask
+		// before DeleteTask; the task's deletion takes nothing from memory, so a project entry keeps
+		// the task as its provenance.
+		t.Run("AProjectEntryKeepsItsTaskAsProvenanceAfterTheTaskIsDeleted", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryProject, Key: "learned-on-a"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "a-only"})
+			n, err := s.DeleteMemoryByTask(ctx, p, task)
+			noErr(t, err)
+			if n != 1 {
+				t.Fatalf("the cascade deleted %d task-scope entries, want 1", n)
+			}
+			noErr(t, s.DeleteTask(ctx, p, task, stateOf(t, sd, p, task).Version))
+			durable, err := s.RecallMemory(ctx, store.RecallMemoryQuery{Scope: store.MemoryProject, ProjectID: p, Limit: 10})
+			noErr(t, err)
+			if !slices.Equal(keys(durable), []string{"learned-on-a"}) || durable[0].TaskID != task {
+				t.Fatalf("after %s was deleted the project recalls %+v, want learned-on-a with task %s", task, durable, task)
+			}
+		})
+
 		t.Run("WriteRefusesBadRouting", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			task := seedTasks(t, sd, p, b, "a")[0]
