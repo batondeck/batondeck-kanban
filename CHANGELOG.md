@@ -8,6 +8,29 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The OAuth 2.1 authorization server for MCP remote connectors (R0.13), `internal/auth/oauth`, mounted
+  by `serve` when `public_url` (`BATONDECK_PUBLIC_URL`) is set, every URL built from it:
+  `GET /.well-known/oauth-authorization-server` (RFC 8414, no `jwks_uri`, PKCE `S256` only, token
+  endpoint auth `none` only), `GET /.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-protected-resource/mcp` (RFC 9728, resource `<public_url>/mcp`),
+  `POST /register` (RFC 7591 public clients; 20 per client address per hour, then 429 with
+  `Retry-After`; each call first deletes registrations no authorization used within 24 h),
+  `GET /authorize` (the sign-in page, then the consent page), `POST /authorize` (the consent
+  decision, under `Authenticate` and `CSRF`), `POST /login` (R0.12's `LoginHandler`, which now
+  takes a local-path `next` and answers 303 there, or back with `login=failed`) and `POST /token`
+  (`authorization_code` and `refresh_token`). The one departure from conductor's `as.ts`: tokens are
+  opaque (`bd_at_`/`bd_rt_`/`bd_ac_` + 32 random bytes), stored only as SHA-256 in `oauth_codes` and
+  `oauth_tokens`, and `/mcp` resolves them through `auth.Service.ResolveCaller` beside API tokens.
+  Hardening: `redirect_uri` matched exactly against the registration (conductor also took a loopback
+  URI on any port); a code is used once, and a second exchange revokes what the first issued; refresh
+  tokens rotate, and presenting a rotated one revokes its whole family; RFC 8707 `resource` is bound
+  into the code and the tokens, and a token for another resource does not resolve; `/mcp`'s 401 says
+  `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`
+  (`mcp.Options.ResourceMetadataURL`). Scope values are the five role names: consent grants one, a
+  ceiling on the member's project role (`Caller.Role`); only `admin` keeps the workspace-admin flag.
+  Access tokens live 1 h, refresh tokens 14 d, codes 10 min. `store.OAuth`
+  (`internal/store/contract_oauth.go`) on SQLite, Postgres and memstore, judged by the new `oauth`
+  conformance battery; no migration (the tables are 0001's).
 - The change-log bus, audit rows, the tool_calls writer and the retention sweep (R0.11).
   `internal/bus`: `bus.New(store.ChangeLog, bus.Options{Watcher, PollInterval, GapTimeout, OnError})`,
   `Subscribe(ctx, scopes []string, buffer) (*Subscription, error)` (a subscriber holds several token

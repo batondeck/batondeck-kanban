@@ -12,7 +12,7 @@ every HDTP area removed.
   is not on the interface.
 - `Factory`: `func(t *testing.T) Migratable`, returning a new, empty, unmigrated store. The suite migrates
   it; clean-up is the factory's.
-- `Run(t, newStore)`: judges one engine by lifecycle and then every area of `areas` (all 24 of ADR-0003 B2,
+- `Run(t, newStore)`: judges one engine by lifecycle and then every area of `areas` (the 24 of ADR-0003 B2 and R0.13's oauth,
   listed in `conformance.go` with the task that owns each), in that order, each a subtest named for the area
   whose own subtests start from a fresh store. An area whose battery file has not landed skips, naming its
   owner; a battery whose engine methods are still unbuilt (`store.UnbuiltTask`) skips, naming the task that
@@ -27,6 +27,7 @@ every HDTP area removed.
 | counters (`conformance_counters.go`) | `T-n` per project, 100 concurrent calls handed T-1..T-100 once, rolled back with its transaction, NOT_FOUND |
 | idempotency (`conformance_idempotency.go`) | replay inside the window, a second after it, scoped by identity, nothing kept on failure, one run under concurrency |
 | users, sessions, tokens (`conformance_{users,sessions,tokens}.go`) | create and read back, lists in creation order, disable and revoke (the first time stands), ErrNotFound |
+| oauth (`conformance_oauth.go`) | clients read back, touched and collected when never used (their codes, families and tokens with them); codes and tokens consumed once (ErrOAuthUsed after, one winner of ten concurrent calls, nothing kept by a rollback); a family revoked once, read by every token of it; the foreign keys; ErrNotFound |
 | tasks (`conformance_tasks.go`) | `T-n` per project, create and read back, patch, status and order writes at a version (STALE otherwise, one winner of ten), pages by cursor, filters, counts, lookups by id, delete; the board's counts and column removal over real tasks; each with its refusals |
 | claims (`conformance_claims.go`) | claim by id and from the frontier, heartbeat, release, expired leases, the frontier's order and filters; CONFLICT_LOCKED, LEASE_EXPIRED, INVALID_TRANSITION; 50 concurrent `ClaimNext` callers, 50 distinct winners |
 | events (`conformance_events.go`) | task and board events newest first, the board feed, cursors, keyed by project, gone with their task; each with its refusals |
