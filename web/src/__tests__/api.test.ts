@@ -279,74 +279,49 @@ describe('the shared stream opens exactly one EventSource', () => {
 });
 
 /**
- * SIGN-OUT LEAVES OUR ORIGIN (T-452).
- *
- * *** THIS IS THE LAST HOP, AND IT IS THE ONE NO SERVER TEST CAN SEE. *** The BFF suite proves
- * `/auth/logout` EMITS a URL naming this session; nothing there proves anyone goes to it. Delete the
- * navigation in `sessionApi.logout` and every server-side test stays green while the browser never leaves our
- * origin, the AuthKit session survives, and the defect is fully restored — precisely the "green guard
- * over a deleted line" shape CONTRIBUTING rule 12 is about.
- *
- * Driven through the REAL `sessionApi.logout` with `fetch` stubbed, never through a mocked `api`: mocking the
- * module under test would assert the interface against itself.
+ * The local flow (R1.15). Sign-in posts R0.12's FORM fields — the handler reads `login` and
+ * `password` with ParseForm, so a JSON body would sign nobody in — and a refusal surfaces the BFF's
+ * message. Sign-out POSTs /api/logout with the CSRF token and goes nowhere: the session row is
+ * deleted server-side, there is no IdP session to end.
  */
-describe('sessionApi.logout navigates to the IdP logout URL', () => {
-  const LOGOUT_URL = 'https://api.workos.com/user_management/sessions/logout?session_id=session_01X';
-
-  const stubbedLocation = (logoutUrl: string | null): ReturnType<typeof vi.fn> => {
-    const assign = vi.fn();
-    vi.stubGlobal('location', { assign, search: '', href: '' });
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { ok: true, logoutUrl })));
-    return assign;
-  };
-
-  it('THE LAST HOP: a logout URL in the body becomes a top-level navigation', async () => {
-    const assign = stubbedLocation(LOGOUT_URL);
-    // NOT awaited — since T-490 a logout with a URL never resolves (the navigation is the sign-out,
-    // and resolving is what let SignIn's auto-redirect abort it). The race rows below pin that.
-    void sessionApi.logout();
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    expect(assign, 'the browser never left our origin — the AuthKit session would survive').toHaveBeenCalledWith(
-      LOGOUT_URL,
-    );
+describe('sessionApi: the local sign-in and sign-out', () => {
+  it('login posts the form-encoded fields to /api/login and resolves on 204', async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}) }) as Response);
+    vi.stubGlobal('fetch', spy);
+    await sessionApi.login('bob', 'pw & more');
+    const [path, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe('/api/login');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(new URLSearchParams(String(init.body)).get('login')).toBe('bob');
+    expect(new URLSearchParams(String(init.body)).get('password')).toBe('pw & more');
   });
 
-  /**
-   * NEGATIVE CONTROL (rule 5). `/auth/demo`, and any session minted before `cws` existed, answer
-   * `logoutUrl: null` — those must sign out locally with no redirect at all. A version of the line
-   * above that navigated unconditionally would send them to `undefined`.
-   */
-  it('NEGATIVE CONTROL: a null logout URL navigates nowhere', async () => {
-    const assign = stubbedLocation(null);
-    await sessionApi.logout();
-    expect(assign).not.toHaveBeenCalled();
-  });
-});
-
-describe('logout wins the race (T-490)', () => {
-  /**
-   * The IdP-logout navigation must be the LAST thing logout does: a resolved promise hands control
-   * back to auth.tsx, which drops identity, renders SignIn, and SignIn's auto-redirect REPLACES the
-   * in-flight navigation. Measured live 2026-08-20: IdP logout ERR_ABORTED, silent re-auth, Sign out
-   * a no-op. So with a logoutUrl the promise must stay PENDING after location.assign.
-   */
-  it('with a logoutUrl: assigns the navigation and NEVER resolves', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { ok: true, logoutUrl: 'https://idp.example/logout?session_id=s1' })));
-    const assign = vi.fn();
-    vi.stubGlobal('location', { assign, search: '', href: '' });
-    let resolved = false;
-    void sessionApi.logout().then(() => { resolved = true; });
-    // Drain microtasks well past the fetch + assign.
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    expect(assign).toHaveBeenCalledWith('https://idp.example/logout?session_id=s1');
-    expect(resolved, 'logout resolved after assign — the SignIn auto-redirect can now abort the IdP logout').toBe(false);
+  it('REFUSAL: a 401 throws the BFF message and does not fire batondeck:unauthorized', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(401, { code: 'UNAUTHENTICATED', message: 'The login or password is wrong, or the account is disabled.' })));
+    const fired = vi.fn();
+    window.addEventListener('batondeck:unauthorized', fired);
+    await expect(sessionApi.login('bob', 'nope')).rejects.toMatchObject({
+      status: 401,
+      code: 'UNAUTHENTICATED',
+      message: 'The login or password is wrong, or the account is disabled.',
+    });
+    window.removeEventListener('batondeck:unauthorized', fired);
+    expect(fired, 'a wrong password is not a session that ended').not.toHaveBeenCalled();
   });
 
-  it('POSITIVE CONTROL: without a logoutUrl (demo session) logout resolves and navigates nowhere', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(200, { ok: true, logoutUrl: null })));
+  it('logout POSTs /api/logout with the CSRF token and navigates nowhere', async () => {
+    document.cookie = 'bk_csrf=tok-1; path=/';
+    const spy = vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}) }) as Response);
+    vi.stubGlobal('fetch', spy);
     const assign = vi.fn();
     vi.stubGlobal('location', { assign, search: '', href: '' });
     await sessionApi.logout();
+    const [path, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe('/api/logout');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['x-csrf-token']).toBe('tok-1');
     expect(assign).not.toHaveBeenCalled();
+    document.cookie = 'bk_csrf=; path=/; max-age=0';
   });
 });

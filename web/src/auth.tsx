@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import * as sessionApi from './api/session.js';
 import { UI_DEFAULTS, hydrateUiSettings, type UiSettings } from './settings.js';
 
@@ -54,6 +55,9 @@ interface AuthState {
    * marketplace URL in Settings. Null on gateways predating it. */
   pullBase: string | null;
   loading: boolean;
+  /** Local sign-in; throws the BFF's ApiError on a refusal. The URL is not touched, so the route the
+   * visitor asked for renders once the session loads. */
+  login: (login: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Re-fetch /api/session so context-derived UI (e.g. the Billing nav) reflects a runtime change like an
    * admin toggling subscriptions on/off — without a full page reload. */
@@ -70,6 +74,7 @@ const Ctx = createContext<AuthState>({
   tenantName: null,
   pullBase: null,
   loading: true,
+  login: async () => {},
   logout: async () => {},
   refresh: async () => {},
 });
@@ -84,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [tenantName, setTenantName] = useState<string | null>(null);
   const [pullBase, setPullBase] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
 
   const refresh = async (): Promise<void> => {
     try {
@@ -114,12 +120,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('batondeck:unauthorized', onUnauthorized);
   }, []);
 
+  // Both drop the query cache: the next account must not render the previous one's data.
+  const login = async (loginName: string, password: string): Promise<void> => {
+    await sessionApi.login(loginName, password);
+    qc.clear();
+    await refresh();
+  };
+
+  // A failed sign-out throws and keeps the identity: showing the sign-in card over a session the
+  // server still holds would be a sign-out that did not happen. A 401 (already ended) is signed out
+  // by http.ts's `batondeck:unauthorized`.
   const logout = async (): Promise<void> => {
     await sessionApi.logout();
+    qc.clear();
     setIdentity(null);
   };
 
-  return <Ctx.Provider value={{ identity, isAdmin, permissions, subscriptionsEnabled, ui, tenantId, tenantName, pullBase, loading, logout, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ identity, isAdmin, permissions, subscriptionsEnabled, ui, tenantId, tenantName, pullBase, loading, login, logout, refresh }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = (): AuthState => useContext(Ctx);
