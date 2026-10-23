@@ -523,6 +523,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Removed
 
+- The contract trim (R0.23, ADR-0004; the owner, 2026-10-23: "go with trimmed version"):
+  `contract/expected.json` goes from 93 tools to 86. `deltas.json` `removedTools` gains the router
+  facade (`find_tools`, `get_tool_schema`, `invoke_tool`), the CLI-token tools (`create_cli_token`,
+  `list_cli_tokens`, `revoke_cli_token`; the `token` subcommand and the REST settings page cover
+  them) and `prune_agent_sessions` (sessions are collected after 30 minutes idle), and `removedProps`
+  gains `disconnect_agent`'s `wakeRevoked`; `wakeRevokeFailed` leaves with `prune_agent_sessions`.
+  The 7 leave `internal/domain`'s posture table and the audit catalogue with them.
+  `internal/mcp/description_test.go` fails on any registered tool description over 200 characters,
+  or carrying conductor-only text, naming the tool and its length. The plan of record says 86, that
+  `add_subtask` leaves the parent alone, and that `tools/list` is memoised per workspace-admin flag.
 - The GitHub Actions `check` workflow (`.github/workflows/check.yml`), by the owner's ruling
   (ADR-0002): the local hooks are the gate. `pre-commit` runs gofmt, the 5 MiB cap and the INDEX
   secret scan; `pre-push` runs `make check` on both engines and refuses the push without Docker. A

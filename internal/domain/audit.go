@@ -53,17 +53,6 @@ var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	"disconnect_agent": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "agent.disconnected", Subject: canonID(a, "identityId"), Data: pick(a, "agentId")}
 	},
-	"prune_agent_sessions": func(a map[string]any) AuditDescriptor {
-		return AuditDescriptor{Action: "agent_sessions.pruned", Data: pick(a, "all", "olderThanMinutes")}
-	},
-
-	// CLI tokens. Self-scoped, so no subject; the token value is never an argument and so never here.
-	"create_cli_token": func(a map[string]any) AuditDescriptor {
-		return AuditDescriptor{Action: "cli_token.minted", Data: pick(a, "label", "ttlSeconds")}
-	},
-	"revoke_cli_token": func(a map[string]any) AuditDescriptor {
-		return AuditDescriptor{Action: "cli_token.revoked", Data: pick(a, "id")}
-	},
 
 	// Oncall integrations: each is an inbound write credential for a board. Ids and shapes only.
 	"create_integration": func(a map[string]any) AuditDescriptor {

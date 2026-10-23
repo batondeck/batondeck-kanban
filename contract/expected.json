@@ -6841,103 +6841,6 @@
         "additionalProperties": false
       }
     },
-    "create_cli_token": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "label": {
-            "typeSet": [
-              "string"
-            ]
-          },
-          "ttlSeconds": {
-            "typeSet": [
-              "integer"
-            ]
-          }
-        },
-        "required": [
-          "label"
-        ],
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "createdAt": {
-            "typeSet": [
-              "string"
-            ]
-          },
-          "expiresAt": {
-            "typeSet": [
-              "string"
-            ]
-          },
-          "id": {
-            "typeSet": [
-              "string"
-            ]
-          },
-          "label": {
-            "typeSet": [
-              "string"
-            ]
-          },
-          "lastUsedAt": {
-            "typeSet": [
-              "null",
-              "string"
-            ]
-          },
-          "revokedAt": {
-            "typeSet": [
-              "null",
-              "string"
-            ]
-          },
-          "shownOnce": {
-            "typeSet": [
-              "boolean"
-            ],
-            "enum": [
-              true
-            ]
-          },
-          "status": {
-            "typeSet": [
-              "string"
-            ],
-            "enum": [
-              "expired",
-              "live",
-              "revoked"
-            ]
-          },
-          "token": {
-            "typeSet": [
-              "string"
-            ]
-          }
-        },
-        "required": [
-          "createdAt",
-          "expiresAt",
-          "id",
-          "label",
-          "lastUsedAt",
-          "revokedAt",
-          "shownOnce",
-          "status",
-          "token"
-        ],
-        "additionalProperties": false
-      }
-    },
     "create_integration": {
       "input": {
         "typeSet": [
@@ -9094,11 +8997,6 @@
             "typeSet": [
               "boolean"
             ]
-          },
-          "wakeRevoked": {
-            "typeSet": [
-              "boolean"
-            ]
           }
         },
         "required": [
@@ -9841,59 +9739,6 @@
         },
         "required": [
           "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "find_tools": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "query": {
-            "typeSet": [
-              "string"
-            ]
-          }
-        },
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "tools": {
-            "typeSet": [
-              "array"
-            ],
-            "items": {
-              "typeSet": [
-                "object"
-              ],
-              "properties": {
-                "name": {
-                  "typeSet": [
-                    "string"
-                  ]
-                },
-                "summary": {
-                  "typeSet": [
-                    "string"
-                  ]
-                }
-              },
-              "required": [
-                "name",
-                "summary"
-              ],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": [
-          "tools"
         ],
         "additionalProperties": false
       }
@@ -13051,68 +12896,6 @@
         "additionalProperties": false
       }
     },
-    "get_tool_schema": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "name": {
-            "typeSet": [
-              "string"
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "tool": {
-            "typeSet": [
-              "object"
-            ],
-            "properties": {
-              "description": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "inputSchema": {
-                "typeSet": [
-                  "any"
-                ]
-              },
-              "name": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "outputSchema": {
-                "typeSet": [
-                  "any"
-                ]
-              }
-            },
-            "required": [
-              "description",
-              "inputSchema",
-              "name"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "tool"
-        ],
-        "additionalProperties": false
-      }
-    },
     "grant_capabilities": {
       "input": {
         "typeSet": [
@@ -14204,47 +13987,6 @@
         "additionalProperties": false
       }
     },
-    "invoke_tool": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "args": {
-            "typeSet": [
-              "object"
-            ],
-            "additionalProperties": {
-              "typeSet": [
-                "any"
-              ]
-            }
-          },
-          "name": {
-            "typeSet": [
-              "string"
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "result": {
-            "typeSet": [
-              "any"
-            ]
-          }
-        },
-        "additionalProperties": false
-      }
-    },
     "list_agent_sessions": {
       "input": {
         "typeSet": [
@@ -14815,89 +14557,6 @@
         },
         "required": [
           "boards"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "list_cli_tokens": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "tokens": {
-            "typeSet": [
-              "array"
-            ],
-            "items": {
-              "typeSet": [
-                "object"
-              ],
-              "properties": {
-                "createdAt": {
-                  "typeSet": [
-                    "string"
-                  ]
-                },
-                "expiresAt": {
-                  "typeSet": [
-                    "string"
-                  ]
-                },
-                "id": {
-                  "typeSet": [
-                    "string"
-                  ]
-                },
-                "label": {
-                  "typeSet": [
-                    "string"
-                  ]
-                },
-                "lastUsedAt": {
-                  "typeSet": [
-                    "null",
-                    "string"
-                  ]
-                },
-                "revokedAt": {
-                  "typeSet": [
-                    "null",
-                    "string"
-                  ]
-                },
-                "status": {
-                  "typeSet": [
-                    "string"
-                  ],
-                  "enum": [
-                    "expired",
-                    "live",
-                    "revoked"
-                  ]
-                }
-              },
-              "required": [
-                "createdAt",
-                "expiresAt",
-                "id",
-                "label",
-                "lastUsedAt",
-                "revokedAt",
-                "status"
-              ],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": [
-          "tokens"
         ],
         "additionalProperties": false
       }
@@ -22790,47 +22449,6 @@
         "additionalProperties": false
       }
     },
-    "prune_agent_sessions": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "all": {
-            "typeSet": [
-              "boolean"
-            ]
-          },
-          "olderThanMinutes": {
-            "typeSet": [
-              "integer"
-            ]
-          }
-        },
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "pruned": {
-            "typeSet": [
-              "number"
-            ]
-          },
-          "wakeRevokeFailed": {
-            "typeSet": [
-              "number"
-            ]
-          }
-        },
-        "required": [
-          "pruned"
-        ],
-        "additionalProperties": false
-      }
-    },
     "rank_tasks": {
       "input": {
         "typeSet": [
@@ -25672,101 +25290,6 @@
         "required": [
           "retracted",
           "task"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "revoke_cli_token": {
-      "input": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "id": {
-            "typeSet": [
-              "string"
-            ]
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "output": {
-        "typeSet": [
-          "object"
-        ],
-        "properties": {
-          "revoked": {
-            "typeSet": [
-              "boolean"
-            ]
-          },
-          "token": {
-            "typeSet": [
-              "null",
-              "object"
-            ],
-            "properties": {
-              "createdAt": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "expiresAt": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "id": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "label": {
-                "typeSet": [
-                  "string"
-                ]
-              },
-              "lastUsedAt": {
-                "typeSet": [
-                  "null",
-                  "string"
-                ]
-              },
-              "revokedAt": {
-                "typeSet": [
-                  "null",
-                  "string"
-                ]
-              },
-              "status": {
-                "typeSet": [
-                  "string"
-                ],
-                "enum": [
-                  "expired",
-                  "live",
-                  "revoked"
-                ]
-              }
-            },
-            "required": [
-              "createdAt",
-              "expiresAt",
-              "id",
-              "label",
-              "lastUsedAt",
-              "revokedAt",
-              "status"
-            ],
-            "additionalProperties": false
-          }
-        },
-        "required": [
-          "revoked",
-          "token"
         ],
         "additionalProperties": false
       }
