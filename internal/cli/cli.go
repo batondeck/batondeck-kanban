@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -60,7 +59,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: batondeck-kanban <command> [flags]
 
 commands:
-  serve        migrate the store, then run the server: GET /healthz and the embedded web UI
+  serve        migrate the store, then run the server: GET /healthz, the MCP server at /mcp and the web UI
   migrate      run the store's migrations on the engine database.url selects
   token        create, list and revoke API tokens (a token is printed once, at create)
   user         add, disable, list users and set their passwords (no sign-up page: users are made here)
@@ -118,9 +117,14 @@ func migratedLine(m store.Migrated) string {
 // healthBody is /healthz's whole answer: liveness only, naming the binary and its version.
 func healthBody(version string) string { return "batondeck-kanban " + version + " ok\n" }
 
-// handler is everything serve answers: /healthz, and the embedded SPA for every other path.
-func handler(version string) http.Handler {
+// handler is everything serve answers: /healthz, the MCP server at /mcp, and the embedded SPA for
+// every other path.
+func handler(version string, mcp http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	// One pattern per method the transport answers: a bare "/mcp" conflicts with the SPA's "GET /".
+	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		mux.Handle(m+" /mcp", mcp)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, healthBody(version))
@@ -183,22 +187,10 @@ func serve(args []string, version string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
-	srv := &http.Server{Handler: handler(version), ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
-	log.Printf("serve: batondeck-kanban %s listening on %s", version, ln.Addr())
-	select {
-	case err := <-errc:
+	if err := runServer(ctx, ln, st, version, log); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
-		return 1
-	case <-ctx.Done():
-	}
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintln(stderr, "serve: shutdown:", err)
 		return 1
 	}
 	log.Printf("serve: stopped")
