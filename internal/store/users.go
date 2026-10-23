@@ -13,27 +13,28 @@ import (
 )
 
 // The auth areas' handles: inside Atomically every statement, reads included, goes through the
-// transaction; outside it SQLite reads use the read pool and writes the one write connection.
+// transaction; outside it SQLite reads use the read pool and writes the one write connection. Each
+// is counted as the other areas' are (handles.go).
 
 func (s *SQLite) authRead() *sqlitedb.Queries {
 	if s.tx != nil {
-		return sqlitedb.New(s.tx)
+		return sqlitedb.New(sqliteCounted{s.tx, s.issued})
 	}
-	return sqlitedb.New(s.r)
+	return sqlitedb.New(sqliteCounted{s.r, s.issued})
 }
 
 func (s *SQLite) authWrite() *sqlitedb.Queries {
 	if s.tx != nil {
-		return sqlitedb.New(s.tx)
+		return sqlitedb.New(sqliteCounted{s.tx, s.issued})
 	}
-	return sqlitedb.New(s.w)
+	return sqlitedb.New(sqliteCounted{s.w, s.issued})
 }
 
 func (s *Postgres) authQ() *pgdb.Queries {
 	if s.tx != nil {
-		return pgdb.New(s.tx)
+		return pgdb.New(pgCounted{s.tx, s.issued})
 	}
-	return pgdb.New(s.pool)
+	return pgdb.New(pgCounted{s.pool, s.issued})
 }
 
 // authErr maps either driver's no-row error to ErrNotFound and names the area on the rest.
