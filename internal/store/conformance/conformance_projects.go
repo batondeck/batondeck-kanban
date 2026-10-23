@@ -139,7 +139,7 @@ func projects(t *testing.T, newStore Factory) {
 		s := migrated(t, newStore)
 		p := newProject(t, s, "alice")
 		_, err := s.UpdateSettings(ctx, p.ID, store.SettingsPatch{
-			"transitionTable": json.RawMessage(`{"BACKLOG":["DONE"]}`),
+			"transitionTable": json.RawMessage(`{"TODO":["DONE"]}`),
 			"color":           json.RawMessage(`"#00ff00"`),
 		})
 		wantCode(t, err, domain.CodeValidation, "")

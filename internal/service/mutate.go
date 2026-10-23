@@ -39,23 +39,23 @@ type Doorbell struct {
 }
 
 // doorbellsFor is the F4 doorbell rule for one task going from before (nil: it did not exist) to
-// after: assigned when it gains an assignee; broadcast when it becomes READY with no assignee, or
-// a READY task loses its assignee; and, when unblocked (an auto-unblock moved it), assigned to the
-// assignee it already had when it becomes READY.
+// after: assigned when it gains an assignee; broadcast when it becomes TODO with no assignee, or
+// a TODO task loses its assignee; and, when unblocked (an auto-unblock moved it), assigned to the
+// assignee it already had when it becomes TODO.
 func doorbellsFor(before *store.Task, after store.Task, unblocked bool) []Doorbell {
 	ring := func(kind, agent string) Doorbell {
 		return Doorbell{Kind: kind, Agent: agent, TaskID: after.ID, BoardID: after.BoardID}
 	}
 	gained := after.Assignee != nil && (before == nil || before.Assignee == nil || *before.Assignee != *after.Assignee)
-	becameReady := after.Status == domain.Ready && (before == nil || before.Status != domain.Ready)
+	becameTodo := after.Status == domain.Todo && (before == nil || before.Status != domain.Todo)
 	lostAssignee := before != nil && before.Assignee != nil && after.Assignee == nil
 	var out []Doorbell
 	switch {
 	case gained:
 		out = append(out, ring(DoorbellAssigned, *after.Assignee))
-	case after.Assignee == nil && after.Status == domain.Ready && (becameReady || lostAssignee):
+	case after.Assignee == nil && after.Status == domain.Todo && (becameTodo || lostAssignee):
 		out = append(out, ring(DoorbellBroadcast, ""))
-	case unblocked && becameReady && after.Assignee != nil:
+	case unblocked && becameTodo && after.Assignee != nil:
 		out = append(out, ring(DoorbellAssigned, *after.Assignee))
 	}
 	return out

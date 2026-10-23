@@ -20,13 +20,13 @@ var searchCorpus = []struct {
 	status      domain.Status
 	title, desc string
 }{
-	{0, domain.Ready, "alpha deploy pipeline", "rerun alpha alpha"}, // T-1: alpha x3
-	{0, domain.Ready, "alpha login page", "fix sso alpha"},          // T-2: alpha x2
-	{0, domain.Backlog, "beta login page", "fix sso button"},        // T-3
-	{1, domain.Ready, "alpha billing export", "csv gamma report"},   // T-4: alpha x1, gamma x1
-	{1, domain.Done, "gamma billing export", "pdf gamma report"},    // T-5: gamma x2
+	{0, domain.Todo, "alpha deploy pipeline", "rerun alpha alpha"}, // T-1: alpha x3
+	{0, domain.Todo, "alpha login page", "fix sso alpha"},          // T-2: alpha x2
+	{0, domain.Review, "beta login page", "fix sso button"},        // T-3
+	{1, domain.Todo, "alpha billing export", "csv gamma report"},   // T-4: alpha x1, gamma x1
+	{1, domain.Done, "gamma billing export", "pdf gamma report"},   // T-5: gamma x2
 	{0, domain.Blocked, "authentication timeout", "retry after login fails"},
-	{1, domain.Ready, "authorize webhook calls", "sign each request"}, // T-7
+	{1, domain.Todo, "authorize webhook calls", "sign each request"}, // T-7
 }
 
 // searchQueries are the ten pinned queries over searchCorpus and the ordered ids each returns.
@@ -43,7 +43,7 @@ var searchQueries = []struct {
 	{"APrefixMatchesTheTokensItBegins", "auth*", nil, []string{"T-6", "T-7"}},
 	{"ByBoard", "alpha", func(b [2]string) store.SearchFilter { return store.SearchFilter{BoardID: b[1]} }, []string{"T-4"}},
 	{"ByStatus", "login", func([2]string) store.SearchFilter {
-		return store.SearchFilter{Statuses: []domain.Status{domain.Ready, domain.Blocked}}
+		return store.SearchFilter{Statuses: []domain.Status{domain.Todo, domain.Blocked}}
 	}, []string{"T-2", "T-6"}},
 	{"CaseInsensitive", "ALPHA Deploy", nil, []string{"T-1"}},
 	{"PunctuationIsNotSyntax", `fix: "sso"`, nil, []string{"T-2", "T-3"}},

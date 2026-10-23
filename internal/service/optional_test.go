@@ -51,7 +51,7 @@ func TestOptionalRoundTrip(t *testing.T) {
 		{`{"projectId":"P-1","reviewEnabled":false}`, &UpdateSettingsReq{}},
 		{`{"projectId":"P-1","color":null,"defaultReviewer":null,"quotaEnabled":false,"reviewEnabled":false,"txnCap":null}`, &UpdateSettingsReq{}},
 		{`{"boardId":"B-1","columnId":"C-1","projectId":"P-1","order":0,"wipLimit":null}`, &UpdateColumnReq{}},
-		{`{"boardId":"B-1","name":"N","projectId":"P-1","status":"READY","order":0}`, &AddColumnReq{}},
+		{`{"boardId":"B-1","name":"N","projectId":"P-1","status":"TODO","order":0}`, &AddColumnReq{}},
 		{`{"patch":{"assignee":null,"dueAt":null,"estimate":null,"reviewer":null},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
 		{`{"patch":{"estimate":0},"projectId":"P-1","taskId":"T-1","version":1}`, &UpdateTaskReq{}},
 		{`{"leaseId":"L-1","projectId":"P-1","reason":"r","taskId":"T-1","retryable":false}`, &FailTaskReq{}},
@@ -198,7 +198,7 @@ func TestTriStateOverMemstore(t *testing.T) {
 
 	// order:0 is a position, not an absent order the store appends at the end.
 	add := AddColumnReq{}
-	if err := json.Unmarshal([]byte(`{"name":"First","status":"READY","order":0}`), &add); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"First","status":"TODO","order":0}`), &add); err != nil {
 		t.Fatal(err)
 	}
 	add.ProjectID, add.BoardID = f.project.ID, f.board.ID

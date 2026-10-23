@@ -59,12 +59,12 @@ func TestProjectsCreateReplaysOnIdempotencyKey(t *testing.T) {
 // naming it; the positive control updates real settings and writes the audit row.
 func TestUpdateSettingsRefusesTransitionTable(t *testing.T) {
 	f := newFixture(t, Options{})
-	body := `{"projectId":"` + f.project.ID + `","transitionTable":{"BACKLOG":["DONE"]}}`
+	body := `{"projectId":"` + f.project.ID + `","transitionTable":{"TODO":["DONE"]}}`
 	d := json.NewDecoder(strings.NewReader(body))
 	d.DisallowUnknownFields()
 	var req UpdateSettingsReq
 	derr := d.Decode(&req)
-	_, serr := f.st.UpdateSettings(f.ctx, f.project.ID, store.SettingsPatch{"transitionTable": json.RawMessage(`{"BACKLOG":["DONE"]}`)})
+	_, serr := f.st.UpdateSettings(f.ctx, f.project.ID, store.SettingsPatch{"transitionTable": json.RawMessage(`{"TODO":["DONE"]}`)})
 	t.Logf("strict decode: %v; store patch: %v", derr, serr)
 	if derr == nil || !strings.Contains(derr.Error(), "transitionTable") {
 		t.Fatalf("UpdateSettingsReq accepted a transitionTable: %v", derr)

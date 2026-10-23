@@ -39,8 +39,8 @@ type ColumnInput struct {
 	Order    *int64
 }
 
-// CreateBoardInput is a new board. Columns nil gives the default columns: Backlog, Ready, In
-// progress, Blocked, Review, Done (Review left out when the project's reviewEnabled is off,
+// CreateBoardInput is a new board. Columns nil gives the default columns: To do, In progress,
+// Blocked, Review, Done (Review left out when the project's reviewEnabled is off,
 // conductor's defaultColumnsFor); there is no Cancelled column. An empty, non-nil list is
 // VALIDATION: a board needs a column.
 type CreateBoardInput struct {

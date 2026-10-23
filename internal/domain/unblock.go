@@ -1,6 +1,6 @@
 package domain
 
-// AutoReady is the auto-unblock guard: a dependent moves BLOCKED → READY when its last blocker
+// AutoReady is the auto-unblock guard: a dependent moves BLOCKED → TODO when its last blocker
 // clears, unless it is poisoned. A poisoned task stays BLOCKED whatever its dependencies do; only a
 // master's un-poison releases it (plan §Fold 1). Every auto-unblock site calls this.
 func AutoReady(blockedBy []string, status Status, blockedReason string) bool {
@@ -13,7 +13,7 @@ type UnblockDecision struct {
 	Cleared bool
 	// BlockedBy is the dependent's blockers without clearedID.
 	BlockedBy []string
-	// AutoReady: the dependent moves to READY in the same transaction.
+	// AutoReady: the dependent moves to TODO in the same transaction.
 	AutoReady bool
 }
 

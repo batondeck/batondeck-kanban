@@ -19,7 +19,7 @@ UPDATE tasks AS t SET status = 'IN_PROGRESS',
   version = t.version + 1, updated_by = $2::text, updated_at = $7::bigint
 WHERE t.id = (
   SELECT f.id FROM tasks f, (SELECT $8::text AS caps) p
-  WHERE f.project_id = $9 AND f.board_id = $10 AND f.status = 'READY'
+  WHERE f.project_id = $9 AND f.board_id = $10 AND f.status = 'TODO'
     AND json_array_length(f.blocked_by::json) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
@@ -33,7 +33,7 @@ WHERE t.id = (
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
   LIMIT 1
-  FOR UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'READY'
+  FOR UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -97,7 +97,7 @@ type ClaimNextRow struct {
 	UpdatedAt            int64
 }
 
-// The claim frontier of one board is domain.IsClaimable as a predicate: READY, nothing in
+// The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 // blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
 // with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
 // tasks whose required capabilities are all among caps. caps is read once, as the derived table p
@@ -429,7 +429,7 @@ func (q *Queries) ListExpiredLeases(ctx context.Context, arg ListExpiredLeasesPa
 const previewFrontier = `-- name: PreviewFrontier :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 FROM tasks f, (SELECT $1::text AS caps) p
-WHERE f.project_id = $2 AND f.board_id = $3 AND f.status = 'READY'
+WHERE f.project_id = $2 AND f.board_id = $3 AND f.status = 'TODO'
   AND json_array_length(f.blocked_by::json) = 0
   AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
   AND f.racing = 0

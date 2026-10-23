@@ -1,4 +1,4 @@
--- The claim frontier of one board is domain.IsClaimable as a predicate: READY, nothing in
+-- The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 -- blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
 -- with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
 -- tasks whose required capabilities are all among caps. caps is read once, as the derived table p:
@@ -18,7 +18,7 @@ UPDATE tasks SET status = 'IN_PROGRESS',
   version = version + 1, updated_by = CAST(sqlc.arg(owner) AS TEXT), updated_at = CAST(sqlc.arg(now) AS INTEGER)
 WHERE rid = (
   SELECT f.rid FROM tasks f, (SELECT CAST(sqlc.arg(caps) AS TEXT) AS caps) p
-  WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'READY'
+  WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
     AND json_array_length(f.blocked_by) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
@@ -39,7 +39,7 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 -- name: PreviewFrontier :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 FROM tasks f, (SELECT CAST(sqlc.arg(caps) AS TEXT) AS caps) p
-WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'READY'
+WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
   AND json_array_length(f.blocked_by) = 0
   AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
   AND f.racing = 0

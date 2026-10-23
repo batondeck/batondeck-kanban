@@ -180,7 +180,7 @@ func (r *reference) seedTask(_ context.Context, in seedTaskInput) (string, error
 	id := "T-" + strconv.Itoa(r.st.counters[in.ProjectID])
 	status := in.Status
 	if status == "" {
-		status = domain.Ready
+		status = domain.Todo
 	}
 	r.st.tasks[[2]string{in.ProjectID, id}] = refTask{projectID: in.ProjectID, id: id, boardID: in.BoardID, title: in.Title, desc: in.Description, parent: in.ParentTaskID, status: status, version: 1, blockedBy: []string{}, blocks: []string{}}
 	return id, nil

@@ -22,8 +22,8 @@ func TestCreateBoardDefaultColumns(t *testing.T) {
 		statuses = append(statuses, c.Status)
 	}
 	t.Logf("create_board columns: %v %v", names, statuses)
-	if len(got.Board.Columns) != 6 || !reflect.DeepEqual(statuses, domain.AllStatuses()) {
-		t.Fatalf("columns %v %v, want the six statuses", names, statuses)
+	if len(got.Board.Columns) != 5 || !reflect.DeepEqual(statuses, domain.AllStatuses()) {
+		t.Fatalf("columns %v %v, want the five statuses", names, statuses)
 	}
 	for _, n := range names {
 		if strings.EqualFold(n, "cancelled") {
@@ -31,7 +31,7 @@ func TestCreateBoardDefaultColumns(t *testing.T) {
 		}
 	}
 	// Positive control: named columns are kept as given, in order.
-	got, err = f.c.Boards().Create(f.ctx, f.alice, CreateBoardReq{ProjectID: f.project.ID, Name: "Two", Columns: []ColumnSpec{{Name: "Todo", Status: domain.Ready, WIPLimit: ptr(int64(3))}, {Name: "Done", Status: domain.Done}}})
+	got, err = f.c.Boards().Create(f.ctx, f.alice, CreateBoardReq{ProjectID: f.project.ID, Name: "Two", Columns: []ColumnSpec{{Name: "Todo", Status: domain.Todo, WIPLimit: ptr(int64(3))}, {Name: "Done", Status: domain.Done}}})
 	if err != nil || len(got.Board.Columns) != 2 || got.Board.Columns[0].Name != "Todo" || *got.Board.Columns[0].WIPLimit != 3 || got.Board.Columns[1].WIPLimit != nil {
 		t.Fatalf("named columns %+v (err %v)", got.Board.Columns, err)
 	}
@@ -39,13 +39,12 @@ func TestCreateBoardDefaultColumns(t *testing.T) {
 	wantCode(t, err, domain.CodeValidation)
 }
 
-// fixedTable is the plan's §Ticket states table, written out rather than derived, so a change to
+// fixedTable is ADR-0005's table, written out rather than derived, so a change to
 // the domain's table fails here.
 var fixedTable = map[string][]domain.Status{
-	"BACKLOG":     {domain.Ready},
-	"READY":       {domain.InProgress, domain.Backlog},
-	"IN_PROGRESS": {domain.Review, domain.Blocked, domain.Ready},
-	"BLOCKED":     {domain.InProgress, domain.Ready},
+	"TODO":        {domain.InProgress},
+	"IN_PROGRESS": {domain.Review, domain.Blocked, domain.Todo},
+	"BLOCKED":     {domain.InProgress, domain.Todo},
 	"REVIEW":      {domain.Done, domain.InProgress},
 	"DONE":        {domain.InProgress},
 }
@@ -54,8 +53,8 @@ var fixedTable = map[string][]domain.Status{
 // and its columns joined to one grouped count), and its transitions are the fixed table.
 func TestGetBoardCostsTwoStatements(t *testing.T) {
 	f, n := counted(t)
-	f.task(t, domain.Ready, nil)
-	f.task(t, domain.Ready, nil)
+	f.task(t, domain.Todo, nil)
+	f.task(t, domain.Todo, nil)
 	if _, err := f.c.Boards().List(f.ctx, f.alice, ListBoardsReq{ProjectID: f.project.ID}); err != nil {
 		t.Fatal(err) // warms alice's access entry
 	}
@@ -69,7 +68,7 @@ func TestGetBoardCostsTwoStatements(t *testing.T) {
 	if !reflect.DeepEqual(reads, map[string]int{"GetBoard": 1}) {
 		t.Fatalf("get_board made %v, want one GetBoard (2 statements)", reads)
 	}
-	if got.TaskCounts[f.column(t, domain.Ready)] != 2 || len(got.TaskCounts) != 6 {
+	if got.TaskCounts[f.column(t, domain.Todo)] != 2 || len(got.TaskCounts) != 5 {
 		t.Fatalf("taskCounts %v", got.TaskCounts)
 	}
 	if !reflect.DeepEqual(got.Board.Transitions, fixedTable) {
@@ -84,14 +83,14 @@ func TestGetBoardCostsTwoStatements(t *testing.T) {
 // remove_column is refused while the column holds a task, and removes it once empty.
 func TestRemoveColumnRefusedWhileItHoldsTasks(t *testing.T) {
 	f := newFixture(t, Options{})
-	task := f.task(t, domain.Ready, nil)
-	col := f.column(t, domain.Ready)
+	task := f.task(t, domain.Todo, nil)
+	col := f.column(t, domain.Todo)
 	_, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: col})
 	t.Logf("remove_column holding %s: %v", task.ID, err)
 	wantCode(t, err, domain.CodeValidation)
 	empty := f.column(t, domain.Blocked)
 	got, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: empty})
-	if err != nil || len(got.Board.Columns) != 5 {
+	if err != nil || len(got.Board.Columns) != 4 {
 		t.Fatalf("remove_column of an empty column: %+v (err %v)", got.Board.Columns, err)
 	}
 	// Structural tier: a master cannot.
@@ -120,7 +119,7 @@ func TestColumns(t *testing.T) {
 			got = c
 		}
 	}
-	if got.Name != "QA2" || got.WIPLimit == nil || *got.WIPLimit != 5 || len(upd.Board.Columns) != 7 {
+	if got.Name != "QA2" || got.WIPLimit == nil || *got.WIPLimit != 5 || len(upd.Board.Columns) != 6 {
 		t.Fatalf("update_column %+v", upd.Board.Columns)
 	}
 	for _, c := range []struct {
@@ -128,7 +127,7 @@ func TestColumns(t *testing.T) {
 		err  error
 	}{
 		{"a fractional order", func() error {
-			_, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Status: domain.Ready, Order: Some(1.5)})
+			_, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Status: domain.Todo, Order: Some(1.5)})
 			return err
 		}()},
 		{"a zero wipLimit", func() error {

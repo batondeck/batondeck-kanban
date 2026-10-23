@@ -18,7 +18,7 @@ import (
 // seeder; a store gets one through WithSeeder, the adapter over its own store.Projects, Boards and
 // Tasks, and a built area on a store without one FAILS.
 
-// seedTaskInput is a task to put in place. Status "" is READY.
+// seedTaskInput is a task to put in place. Status "" is TODO.
 type seedTaskInput struct {
 	ProjectID    string
 	BoardID      string
@@ -74,7 +74,7 @@ func (s storeSeeder) seedBoard(ctx context.Context, projectID string) (string, e
 func (s storeSeeder) seedTask(ctx context.Context, in seedTaskInput) (string, error) {
 	status := in.Status
 	if status == "" {
-		status = domain.Ready
+		status = domain.Todo
 	}
 	b, _, err := s.GetBoard(ctx, in.ProjectID, in.BoardID)
 	if err != nil {
@@ -163,7 +163,7 @@ func seeded(t *testing.T, newStore Factory) (store.Store, seeder, string, string
 	return s, sd, p, b
 }
 
-// seedTasks puts one READY task per title on the board and returns their ids in order.
+// seedTasks puts one TODO task per title on the board and returns their ids in order.
 func seedTasks(t *testing.T, sd seeder, projectID, boardID string, titles ...string) []string {
 	t.Helper()
 	ids := make([]string, len(titles))
