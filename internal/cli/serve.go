@@ -17,6 +17,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
+	"github.com/batondeck/batondeck-kanban/internal/mcp/tools"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/wake"
@@ -27,8 +28,8 @@ import (
 // (`batondeck-kanban token create`) or, when publicURL is set, an OAuth access token the
 // authorization server issued for /mcp; both resolve through the one auth service, on /mcp, /wake
 // and /internal/wake-session alike. The session bookkeeping and the tool_calls rows go through the
-// service core. R0 registers no tool; R1.18 wires the remaining services. Close the core after the
-// HTTP server, so it flushes the tool calls still buffered.
+// service core, and so do the projects and boards tools; R1.18 wires the remaining services. Close
+// the core after the HTTP server, so it flushes the tool calls still buffered.
 type app struct {
 	mcp  *mcp.Server
 	as   *oauth.Server // nil while public_url is unset
@@ -57,7 +58,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
-		Services: service.Services{Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls()},
+		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls()},
 		Logger:   logger,
 	}
 	if as != nil {
@@ -68,7 +69,9 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
 	doorbell := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: logger, Recheck: wakeRecheck})
 	inbox := api.WakeSessionHandler(resolver, sc.Sessions(), logger)
-	return &app{mcp: mcp.New(opts), as: as, core: sc, bus: b,
+	srv := mcp.New(opts)
+	tools.Register(srv, opts.Services)
+	return &app{mcp: srv, as: as, core: sc, bus: b,
 		mount: func(mux *http.ServeMux) {
 			if as != nil {
 				as.Mount(mux)
