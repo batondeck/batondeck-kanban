@@ -16,3 +16,12 @@ WHERE token_scope = sqlc.arg(token_scope) AND id > sqlc.arg(since)::bigint ORDER
 -- name: DeleteChangesOlderThan :execrows
 DELETE FROM change_log WHERE id IN (
   SELECT c.id FROM change_log c WHERE c.ts < sqlc.arg(before)::bigint ORDER BY c.id LIMIT sqlc.arg(page_limit)::bigint);
+
+-- The wake the bus's LISTEN (ListenChanges) hears, sent by AppendChange after its INSERT: inside
+-- Atomically on its transaction, so Postgres delivers it at that commit (once per transaction
+-- however many rows it wrote); outside, once the INSERT has committed.
+-- name: NotifyChanges :exec
+SELECT pg_notify('batondeck_changes', '');
+
+-- name: ListenChanges :exec
+LISTEN batondeck_changes;

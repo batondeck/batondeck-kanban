@@ -41,6 +41,8 @@ type sqlQueries interface {
 	claimQueries
 	eventQueries
 	changeQueries
+	auditQueries
+	toolCallQueries
 	contextQueries
 	memoryQueries
 	summaryQueries

@@ -1,0 +1,142 @@
+package retention
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
+)
+
+type opener struct {
+	name string
+	open func(*testing.T) store.Store
+}
+
+var backends = []opener{
+	{"memstore", func(t *testing.T) store.Store {
+		s := memstore.New()
+		t.Cleanup(func() { s.Close() })
+		if _, err := s.Migrate(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}},
+	{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+	{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+}
+
+const day = 24 * time.Hour
+
+// AC4: one sweep removes the change-log row older than 7 days, the tool_calls row past 45 days and
+// the memory entry past its TTL, and leaves the younger ones, on memstore and both engines.
+func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			at := func(ago time.Duration) int64 { return now.Add(-ago).UnixMilli() }
+			appendChange := func(ago time.Duration) int64 {
+				id, err := s.AppendChange(ctx, store.ChangeInput{Scope: "project:P-1", Kind: "changed", Ts: at(ago)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return id
+			}
+			oldChange, youngChange := appendChange(8*day), appendChange(6*day)
+			call := func(ago time.Duration) store.ToolCall {
+				return store.ToolCall{TS: at(ago), Tool: "claim_next", Identity: "alice", Outcome: store.ToolCallOK, Code: "OK"}
+			}
+			if err := s.InsertToolCalls(ctx, []store.ToolCall{call(46 * day), call(44 * day)}); err != nil {
+				t.Fatal(err)
+			}
+			for _, expires := range []int64{at(time.Minute), at(-time.Hour)} {
+				if _, err := s.WriteMemory(ctx, store.WriteMemoryInput{Scope: "agent_global", Key: "k", Value: json.RawMessage(`1`), Author: "alice", ExpiresAt: expires}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}),
+				Now: func() time.Time { return now }, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			got := sw.Sweep(ctx)
+			t.Logf("swept %+v", got)
+			if got != (Swept{Memory: 1, ChangeLog: 1, ToolCalls: 1}) {
+				t.Fatalf("swept %+v, want one memory entry, one change-log row and one tool call", got)
+			}
+			left, err := s.ReadChanges(ctx, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(left) != 1 || left[0].ID != youngChange {
+				t.Fatalf("change log after the sweep: %+v, want only %d (not %d)", left, youngChange, oldChange)
+			}
+			if again := sw.Sweep(ctx); again.ChangeLog != 0 || again.ToolCalls != 0 || again.Memory != 0 {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+			if n, err := s.DeleteToolCallsOlderThan(ctx, 1<<62, 10); err != nil || n != 1 {
+				t.Fatalf("tool calls left: %d (%v), want the young one", n, err)
+			}
+		})
+	}
+}
+
+// fake deletes whatever it is asked to, or fails one step.
+type fake struct {
+	calls map[string]int
+	fail  string
+}
+
+func (f *fake) del(step string, limit int) (int64, error) {
+	f.calls[step]++
+	if step == f.fail {
+		return 3, errors.New("boom")
+	}
+	return int64(limit), nil
+}
+
+func (f *fake) DeleteExpiredMemory(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("memory", limit)
+}
+
+func (f *fake) DeleteChangesOlderThan(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("change log", limit)
+}
+
+func (f *fake) DeleteToolCallsOlderThan(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("tool calls", limit)
+}
+
+// Each table loses at most MaxPerTick rows a sweep, Batch per statement; a step that fails is
+// reported and the next one still runs.
+func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
+	f := &fake{calls: map[string]int{}, fail: "change log"}
+	var reported []string
+	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
+	}
+	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
+		t.Fatalf("the failed step: swept %d in %d calls, reported %v", got.ChangeLog, f.calls["change log"], reported)
+	}
+}
+
+// Run sweeps once at once and then every interval, until ctx ends.
+func TestRunSweepsAtOnceThenOnTheTimer(t *testing.T) {
+	f := &fake{calls: map[string]int{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { (&Sweeper{Store: f}).Run(ctx, 20*time.Millisecond); close(done) }()
+	time.Sleep(70 * time.Millisecond)
+	cancel()
+	<-done
+	if n := f.calls["tool calls"] / (MaxPerTick / Batch); n < 3 {
+		t.Fatalf("%d sweeps in 70 ms at a 20 ms interval, want at least 3", n)
+	}
+}

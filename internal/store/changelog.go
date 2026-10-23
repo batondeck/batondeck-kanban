@@ -13,7 +13,8 @@ import (
 
 // The change log of contract_changelog.go, on both engines: change_log.id is SQLite's AUTOINCREMENT
 // (never reused, a rolled-back id included) and Postgres's bigserial (taken at the INSERT, so ids
-// follow appends, not commits). Every call is one statement.
+// follow appends, not commits). Every call is one statement, except Postgres's AppendChange:
+// it sends the bus its NOTIFY as a second (watch.go).
 
 type changeQueries interface {
 	AppendChange(ctx context.Context, arg sqlitedb.AppendChangeParams) (int64, error)
@@ -22,12 +23,26 @@ type changeQueries interface {
 	DeleteChangesOlderThan(ctx context.Context, arg sqlitedb.DeleteChangesOlderThanParams) (int64, error)
 }
 
+// AppendChange wakes the file's in-process watchers once the change is committed (watch.go).
 func (s *SQLite) AppendChange(ctx context.Context, in ChangeInput) (int64, error) {
-	return appendChange(ctx, s, in)
+	id, err := appendChange(ctx, s, in)
+	if err == nil {
+		s.noteAppended()
+	}
+	return id, err
 }
 
+// AppendChange sends the NOTIFY the bus LISTENs for (watch.go) as a second statement: inside
+// Atomically on its transaction, delivered at that commit; outside it, after the INSERT committed.
 func (s *Postgres) AppendChange(ctx context.Context, in ChangeInput) (int64, error) {
-	return appendChange(ctx, s, in)
+	id, err := appendChange(ctx, s, in)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.notifyChanges(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (s *SQLite) ReadChanges(ctx context.Context, since int64, limit int) ([]Change, error) {

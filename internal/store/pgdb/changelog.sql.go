@@ -55,6 +55,27 @@ func (q *Queries) DeleteChangesOlderThan(ctx context.Context, arg DeleteChangesO
 	return result.RowsAffected(), nil
 }
 
+const listenChanges = `-- name: ListenChanges :exec
+LISTEN batondeck_changes
+`
+
+func (q *Queries) ListenChanges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, listenChanges)
+	return err
+}
+
+const notifyChanges = `-- name: NotifyChanges :exec
+SELECT pg_notify('batondeck_changes', '')
+`
+
+// The wake the bus's LISTEN (ListenChanges) hears, sent by AppendChange after its INSERT: inside
+// Atomically on its transaction, so Postgres delivers it at that commit (once per transaction
+// however many rows it wrote); outside, once the INSERT has committed.
+func (q *Queries) NotifyChanges(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, notifyChanges)
+	return err
+}
+
 const readChanges = `-- name: ReadChanges :many
 SELECT id, token_scope, project_id, kind, payload, ts FROM change_log
 WHERE id > $1::bigint ORDER BY id LIMIT $2::bigint

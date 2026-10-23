@@ -99,3 +99,31 @@ func TestRefusals(t *testing.T) {
 		}
 	}
 }
+
+// The retention windows: 7 and 45 days by default, the file's object over them, the environment
+// over the file, and anything below a day (or not a number) refused by name.
+func TestRetentionWindows(t *testing.T) {
+	c, err := Load("", env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Retention != (Retention{ChangeLogDays: 7, ToolCallsDays: 45}) {
+		t.Fatalf("default retention %+v", c.Retention)
+	}
+	p := writeConfig(t, `{"retention":{"change_log_days":3,"tool_calls_days":90}}`)
+	if c, err = Load(p, env(nil)); err != nil || c.Retention != (Retention{ChangeLogDays: 3, ToolCallsDays: 90}) {
+		t.Fatalf("file retention %+v, %v", c.Retention, err)
+	}
+	if c, err = Load(p, env(map[string]string{"BATONDECK_RETENTION_CHANGE_LOG_DAYS": "1"})); err != nil || c.Retention != (Retention{ChangeLogDays: 1, ToolCallsDays: 90}) {
+		t.Fatalf("env retention %+v, %v", c.Retention, err)
+	}
+	for _, bad := range []map[string]string{
+		{"BATONDECK_RETENTION_CHANGE_LOG_DAYS": "0"},
+		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS": "-1"},
+		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS": "week"},
+	} {
+		if _, err := Load("", env(bad)); err == nil || !strings.Contains(err.Error(), RuleRetention) {
+			t.Fatalf("%v: %v, want %s", bad, err, RuleRetention)
+		}
+	}
+}
