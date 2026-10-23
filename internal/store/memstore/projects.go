@@ -156,6 +156,7 @@ func (s *Store) DeleteProjectRecursive(ctx context.Context, projectID string) er
 		maps.DeleteFunc(st.memory, func(_ string, e store.MemoryEntry) bool { return e.ProjectID == projectID })
 		maps.DeleteFunc(st.summaries, func(k [2]string, _ store.Summary) bool { return k[0] == projectID })
 		maps.DeleteFunc(st.edges, func(k [2]string, _ store.DependencyEdge) bool { return k[0] == projectID })
+		maps.DeleteFunc(st.attachments, func(k [3]string, _ store.Attachment) bool { return k[0] == projectID })
 		// The change log is the trace of what happened: it is kept, as on the engines.
 		return nil
 	})

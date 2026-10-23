@@ -68,6 +68,7 @@ type state struct {
 	toolCalls    []store.ToolCall                   // insertion order
 	agents       map[[2]string]store.AgentSession   // by (identity, agent)
 	wake         map[string]store.WakeSession       // by id
+	attachments  map[[3]string]store.Attachment     // by (project, task, attachment)
 
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
@@ -104,6 +105,7 @@ func newState() *state {
 		edges:        map[[2]string]store.DependencyEdge{},
 		agents:       map[[2]string]store.AgentSession{},
 		wake:         map[string]store.WakeSession{},
+		attachments:  map[[3]string]store.Attachment{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -290,6 +292,7 @@ func (st *state) clone() *state {
 	for k, v := range st.wake {
 		c.wake[k] = cloneWakeSession(v)
 	}
+	maps.Copy(c.attachments, st.attachments)
 	for k, v := range st.oauthClients {
 		c.oauthClients[k] = cloneOAuthClient(v)
 	}
