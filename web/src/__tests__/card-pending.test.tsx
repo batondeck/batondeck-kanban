@@ -126,6 +126,14 @@ describe('the wiring that makes the spinner correct', () => {
     expect(code, 'the snapshot must be written to the cache').toContain("qc.setQueryData(['feed', projectId, boardId]");
   });
 
+  it('POSITIVE CONTROL: the three refetches live in refetchBoard, which only resync and a rebuilt socket call', () => {
+    const fn = /const refetchBoard = useCallback\(\(\) => \{[\s\S]*?\n {2}\}, \[/.exec(boardSrc)?.[0] ?? '';
+    expect(fn, 'no refetchBoard found — the anchor moved').not.toBe('');
+    for (const k of ['board', 'tasks', 'feed']) expect(fn).toContain(`invalidateQueries({ queryKey: ['${k}', projectId, boardId] })`);
+    const call = /streamApi\.stream\([\s\S]*?\n {6}\),/.exec(boardSrc)?.[0] ?? '';
+    expect(call.trimEnd().split('\n').slice(-2)[0]!.trim(), 'refetchBoard is the onResync argument').toBe('refetchBoard,');
+  });
+
   /**
    * THE REBOUND. Reported from prod: on a successful drop the card visibly flew back to its ORIGINAL
    * column while simultaneously appearing in the target.

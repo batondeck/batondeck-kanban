@@ -730,6 +730,14 @@ export function Board() {
   // The initial fetch stays: a tab must render presence before the first tick arrives.
   const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit) });
 
+  // `resync`, or a rebuilt socket: no board frame comes until the next change, so the board, its tasks
+  // and its feed are refetched. Only then: the nudge below must not (card-pending.test.tsx).
+  const refetchBoard = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ['board', projectId, boardId] });
+    void qc.invalidateQueries({ queryKey: ['tasks', projectId, boardId] });
+    void qc.invalidateQueries({ queryKey: ['feed', projectId, boardId] });
+  }, [qc, projectId, boardId]);
+
   useEffect(
     () =>
       streamApi.stream(
@@ -777,12 +785,9 @@ export function Board() {
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
         },
-        // `resync`, or a rebuilt socket: no board frame comes until the next change, so refetch the three.
-        () => {
-          for (const k of [['board', projectId, boardId], ['tasks', projectId, boardId], ['feed', projectId, boardId]]) void qc.invalidateQueries({ queryKey: k });
-        },
+        refetchBoard,
       ),
-    [projectId, boardId, qc, limit],
+    [projectId, boardId, qc, limit, refetchBoard],
   );
 
   const [newPriority, setNewPriority] = useState('normal');
