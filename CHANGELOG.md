@@ -8,6 +8,12 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The R3.1 socket-wake spike findings (`docs/release/socket-wake-spike-2026-10.md`) and its scratch
+  writer (`docs/release/spikes/socket-wake/doorbell.py`), measured on Claude Code 2.1.309: a
+  newline-delimited `{"type":"user",…}` frame written to a session's `CLAUDE_CODE_MESSAGING_SOCKET`
+  starts a turn in an idle session (8–105 ms to dequeue) and is queued between tool calls in a busy
+  one; the auth line is optional on macOS; `crossSessionInbound` `hold`/`refuse` start no turn. No
+  product code.
 - The bus's project subscription and all-rows tap (R0.24, ADR-0004 B). `bus.SubscribeProjects(ctx,
   projectIDs, buffer)` receives every change-log row whose stored `ProjectID` is one of the bare ids
   (`"P-1"`), whatever its token scope: a `handoff_task` row scoped to its new assignee reaches it,
