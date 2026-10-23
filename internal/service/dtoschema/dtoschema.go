@@ -21,6 +21,7 @@ import (
 var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Optional[bool]](),
 	reflect.TypeFor[service.Optional[float64]](),
+	reflect.TypeFor[service.Optional[int64]](),
 	reflect.TypeFor[service.Nullable[string]](),
 	reflect.TypeFor[service.Nullable[int64]](),
 	reflect.TypeFor[service.Nullable[float64]](),
@@ -41,6 +42,7 @@ var OpenObjects = []reflect.Type{
 	reflect.TypeFor[service.ColumnSpec](),
 	reflect.TypeFor[service.Shard](),
 	reflect.TypeFor[service.ArtifactInput](),
+	reflect.TypeFor[service.ArtifactSelector](),
 	reflect.TypeFor[service.LargeArtifact](),
 }
 

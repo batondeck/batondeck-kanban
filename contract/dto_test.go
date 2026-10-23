@@ -65,6 +65,13 @@ var dtoTools = []struct {
 	{"list_attachments", reflect.TypeFor[service.Media](), "ListAttachments"},
 	{"search_tasks", reflect.TypeFor[service.Media](), "SearchTasks"},
 	{"list_agent_sessions", reflect.TypeFor[service.Sessions](), "ListAgentSessions"},
+	{"add_artifact", reflect.TypeFor[service.Artifacts](), "AddArtifact"},
+	{"retract_artifact", reflect.TypeFor[service.Artifacts](), "RetractArtifact"},
+	{"add_comment", reflect.TypeFor[service.Comments](), "AddComment"},
+	{"list_comments", reflect.TypeFor[service.Comments](), "ListComments"},
+	{"add_follow_up", reflect.TypeFor[service.FollowUps](), "AddFollowUp"},
+	{"ack_follow_up", reflect.TypeFor[service.FollowUps](), "AckFollowUp"},
+	{"list_follow_ups", reflect.TypeFor[service.FollowUps](), "ListFollowUps"},
 	{"create_chronicle_page", reflect.TypeFor[service.Chronicle](), "CreatePage"},
 	{"ingest_chronicle_page", reflect.TypeFor[service.Chronicle](), "IngestPage"},
 	{"edit_chronicle_page", reflect.TypeFor[service.Chronicle](), "EditPage"},
@@ -85,6 +92,7 @@ var dtoTools = []struct {
 var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Projects](), reflect.TypeFor[service.Boards](), reflect.TypeFor[service.Tasks](),
 	reflect.TypeFor[service.Lifecycle](), reflect.TypeFor[service.Context](), reflect.TypeFor[service.Media](),
+	reflect.TypeFor[service.Artifacts](), reflect.TypeFor[service.Comments](), reflect.TypeFor[service.FollowUps](),
 	reflect.TypeFor[service.Oncall](),
 }
 
@@ -155,8 +163,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 57 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 4 chronicle tools and the 9 on-call tools (57)", len(names))
+	if len(names) != 64 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 7 artifact, comment and follow-up tools (R2.1), the 4 chronicle tools and the 9 on-call tools (64)", len(names))
 	}
 }
 
