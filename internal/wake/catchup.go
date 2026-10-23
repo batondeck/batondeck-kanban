@@ -10,11 +10,16 @@ import (
 const replayPage = 1000
 
 // catchUp emits, oldest first and uncoalesced, every doorbell of scopes after since, read from the
-// change log through bus.Replay page by page until a page comes back short. It returns every id it
-// read, so that the live stream (subscribed before it) passes over the ones already emitted.
-func catchUp(ctx context.Context, b *bus.Bus, scopes []string, since int64, emit func(Frame) error) (map[int64]struct{}, error) {
+// change log through bus.Replay page by page until a page comes back short. check runs before each
+// page and after each frame with the id read up to; its error ends the catch-up, so a long replay
+// to a slow reader is rechecked like the live stream. It returns every id it read, so that the live
+// stream (subscribed before it) passes over the ones already emitted.
+func catchUp(ctx context.Context, b *bus.Bus, scopes []string, since int64, emit func(Frame) error, check func(readTo int64) error) (map[int64]struct{}, error) {
 	seen := map[int64]struct{}{}
 	for {
+		if err := check(since); err != nil {
+			return seen, err
+		}
 		rows, err := b.Replay(ctx, scopes, since, replayPage)
 		if err != nil {
 			return seen, err
@@ -26,10 +31,13 @@ func catchUp(ctx context.Context, b *bus.Bus, scopes []string, since int64, emit
 				if err := emit(f); err != nil {
 					return seen, err
 				}
+				if err := check(since); err != nil {
+					return seen, err
+				}
 			}
 		}
 		if len(rows) < replayPage {
-			return seen, nil
+			return seen, check(since)
 		}
 	}
 }

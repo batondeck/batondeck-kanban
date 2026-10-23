@@ -72,13 +72,13 @@ func Listen(a ListenAddr, logger *log.Logger) (net.Listener, error) {
 	return listenUnix(a.Address, os.Getuid(), logger)
 }
 
-// listenUnix is Listen for a socket path, admitting peers of uid alone.
+// listenUnix is Listen for a socket path in a directory uid owns, admitting peers of uid alone.
 func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
 	}
-	if err := privateDir(dir, os.Getuid()); err != nil {
+	if err := privateDir(dir, uid); err != nil {
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
 	}
 	if fi, err := os.Lstat(path); err == nil {
@@ -105,11 +105,15 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 }
 
 // privateDir refuses a socket directory that another user could replace the socket in: one not
-// owned by uid, or writable by group or other. A symlinked directory is judged by its target.
+// owned by uid, writable by group or other, or a symlink (whoever can write its parent can repoint
+// it). Its ancestors are not checked.
 func privateDir(dir string, uid int) error {
-	fi, err := os.Stat(dir)
+	fi, err := os.Lstat(dir)
 	if err != nil {
 		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("directory %s is a symlink: want the directory itself", dir)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !fi.IsDir() || !ok {

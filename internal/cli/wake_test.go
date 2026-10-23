@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -674,9 +676,18 @@ type recheckServer struct {
 	accounts *auth.Accounts
 	tokens   *auth.TokenService
 	tokenID  string
+	resolver *auth.Service
+	bus      *bus.Bus
 }
 
 func startRecheck(t *testing.T, recheck, accountTTL time.Duration) *recheckServer {
+	t.Helper()
+	return startRecheckWith(t, wake.Options{Recheck: recheck}, accountTTL)
+}
+
+// startRecheckWith is startRecheck with the handler's tunables in o (Bus, Resolver, Scopes and
+// Logger are filled in here).
+func startRecheckWith(t *testing.T, o wake.Options, accountTTL time.Duration) *recheckServer {
 	t.Helper()
 	ctx := context.Background()
 	st := &countedSQLite{SQLite: storetest.SQLite(t)}
@@ -699,9 +710,12 @@ func startRecheck(t *testing.T, recheck, accountTTL time.Duration) *recheckServe
 	t.Cleanup(func() { sc.Close(context.Background()) })
 	b := bus.New(st, bus.Options{Watcher: st})
 	t.Cleanup(b.Close)
-	h := wake.Handler(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Logger: quiet, Recheck: recheck, Quiet: 20 * time.Millisecond})
-	ws := &wakeServer{st: st, tcp: serveHandler(t, h), token: token, alice: user.ID, project: p.ID}
-	return &recheckServer{wakeServer: ws, accounts: accounts, tokens: tokens, tokenID: info.ID}
+	o.Bus, o.Resolver, o.Scopes, o.Logger = b, resolver, sc.WakeScopes, quiet
+	if o.Quiet == 0 {
+		o.Quiet = 20 * time.Millisecond
+	}
+	ws := &wakeServer{st: st, tcp: serveHandler(t, wake.Handler(o)), token: token, alice: user.ID, project: p.ID}
+	return &recheckServer{wakeServer: ws, accounts: accounts, tokens: tokens, tokenID: info.ID, resolver: resolver, bus: b}
 }
 
 // last waits for the stream's final comment and asserts the stream then ends.
@@ -734,7 +748,7 @@ func TestWakeRecheckEndsARevokedToken(t *testing.T) {
 	if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate" {
+	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate, reconnect" {
 		t.Fatalf("last comment %q, want reauthenticate", got)
 	}
 }
@@ -746,7 +760,7 @@ func TestWakeRecheckEndsADisabledUser(t *testing.T) {
 	if _, err := s.accounts.Disable(context.Background(), "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate" {
+	if got := w.last(t, 500*time.Millisecond); got != "reauthenticate, reconnect" {
 		t.Fatalf("last comment %q, want reauthenticate", got)
 	}
 }
@@ -859,5 +873,211 @@ func TestWakeRecheckEndsWhenItCannotConfirm(t *testing.T) {
 	w := s.open(t, "?since=0")
 	if got := w.last(t, 500*time.Millisecond); got != "recheck failed, reconnect with since=0" {
 		t.Fatalf("last comment %q", got)
+	}
+}
+
+// backlog commits n doorbells for alice in one transaction and returns the last id.
+func (s *recheckServer) backlog(t *testing.T, n int) int64 {
+	t.Helper()
+	ctx := context.Background()
+	var last int64
+	if err := s.st.Atomically(ctx, func(tx store.Store) error {
+		for i := range n {
+			payload, _ := json.Marshal(map[string]string{"kind": "assigned", "agent": s.alice, "taskId": fmt.Sprintf("T-%d", i), "projectId": s.project, "boardId": "B-1"})
+			id, err := tx.AppendChange(ctx, store.ChangeInput{Scope: s.alice, ProjectID: s.project, Kind: "assigned", Payload: payload, Ts: time.Now().UnixMilli()})
+			if err != nil {
+				return err
+			}
+			last = id
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return last
+}
+
+// rawWake opens GET path on a raw TCP connection with a 4 KiB receive buffer, so the server's writes
+// block on the reader's pace.
+func rawWake(t *testing.T, addr, token, path string) (net.Conn, *bufio.Reader) {
+	t.Helper()
+	d := net.Dialer{Control: func(_, _ string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) { _ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 4096) })
+	}}
+	c, err := d.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\n\r\n", path, token)
+	return c, bufio.NewReaderSize(c, 512)
+}
+
+// A stream still in catch-up is rechecked like a live one: revoked while it replays a backlog to a
+// slow reader, the server ends it within one Recheck of the revocation (its subscription closes),
+// no doorbell committed after the revocation reaches the reader later than that, and its last
+// comment names its cursor. The fast reader is the positive control (the reviewer's round-2 repro,
+// made a test). The slow reader still drains, after the end, frames written before it.
+func TestWakeCatchUpIsRechecked(t *testing.T) {
+	for _, slow := range []bool{true, false} {
+		t.Run(fmt.Sprintf("slow=%v", slow), func(t *testing.T) {
+			const every = 200 * time.Millisecond
+			s := startRecheck(t, every, every)
+			s.backlog(t, 8000)
+			_, r := rawWake(t, s.tcp, s.token, "/wake?since=0")
+			start := time.Now()
+			var revokedAt time.Time
+			var lastBefore int64 = -1
+			serverEnd := make(chan time.Duration, 1)
+			var end string
+			var late []string
+			for time.Since(start) < 30*time.Second {
+				line, err := r.ReadString('\n')
+				if err != nil {
+					t.Fatalf("the stream ended without a comment: %v", err)
+				}
+				if slow {
+					time.Sleep(150 * time.Microsecond)
+				}
+				if revokedAt.IsZero() && time.Since(start) > 500*time.Millisecond {
+					if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
+						t.Fatal(err)
+					}
+					revokedAt = time.Now()
+					lastBefore = s.backlog(t, 1) // every id above it commits after the revocation
+					s.backlog(t, 20)
+					go func() {
+						for s.bus.Running() && time.Since(revokedAt) < 10*time.Second {
+							time.Sleep(5 * time.Millisecond)
+						}
+						serverEnd <- time.Since(revokedAt)
+					}()
+				}
+				line = strings.TrimSpace(line)
+				if id, ok := strings.CutPrefix(line, "id: "); ok && lastBefore > 0 {
+					if n, _ := strconv.ParseInt(id, 10, 64); n > lastBefore && time.Since(revokedAt) > every {
+						late = append(late, fmt.Sprintf("id %d at +%v", n, time.Since(revokedAt).Round(time.Millisecond)))
+					}
+				}
+				if strings.HasPrefix(line, ": ") && line != ": ok" && line != ": keepalive" {
+					end = strings.TrimPrefix(line, ": ")
+					break
+				}
+			}
+			ended := <-serverEnd
+			t.Logf("slow=%v: the server ended the stream %v after the revocation (Recheck %v); the reader saw %q %v after it", slow, ended.Round(time.Millisecond), every, end, time.Since(revokedAt).Round(time.Millisecond))
+			if ended > every+100*time.Millisecond {
+				t.Fatalf("the server ended the stream %v after the revocation, want within one Recheck (%v)", ended, every)
+			}
+			if len(late) > 0 {
+				t.Fatalf("%d doorbell(s) committed after the revocation reached the reader more than one Recheck after it: %v", len(late), late)
+			}
+			if !strings.HasPrefix(end, "reauthenticate, reconnect with since=") {
+				t.Fatalf("last comment %q, want reauthenticate with a cursor", end)
+			}
+		})
+	}
+}
+
+// A peer that stops reading is cut off by the write deadline even when no recheck is due; a peer
+// that reads (the positive control) keeps its stream.
+func TestWakeWriteDeadlineCutsAStalledReader(t *testing.T) {
+	for _, stall := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stall=%v", stall), func(t *testing.T) {
+			s := startRecheckWith(t, wake.Options{Recheck: time.Hour, WriteTimeout: 300 * time.Millisecond}, time.Hour)
+			s.backlog(t, 8000)
+			_, r := rawWake(t, s.tcp, s.token, "/wake?since=0")
+			for { // through the response head and ": ok": the stream is subscribed
+				line, err := r.ReadString('\n')
+				if err != nil {
+					t.Fatal(err)
+				}
+				if line == ": ok\n" {
+					break
+				}
+			}
+			if !s.bus.Running() {
+				t.Fatal("the stream is not subscribed after its ok comment")
+			}
+			if !stall {
+				go func() { _, _ = io.Copy(io.Discard, r) }()
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for s.bus.Running() && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if stall && s.bus.Running() {
+				t.Fatal("a stalled reader's stream still holds its subscription 3 s after a 300 ms write deadline")
+			}
+			if !stall && !s.bus.Running() {
+				t.Fatal("a reading peer's stream was cut")
+			}
+		})
+	}
+}
+
+// A disable ends an open stream within one recheck even while other traffic keeps the resolver's
+// account cache warm: the recheck reads the account from the store.
+func TestWakeRecheckEndsADisabledUserWithAWarmCache(t *testing.T) {
+	const every = 200 * time.Millisecond
+	s := startRecheck(t, every, time.Minute)
+	w := s.open(t, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { // another of alice's clients, keeping the cache entry fresh
+		for ctx.Err() == nil {
+			_, _ = s.resolver.ResolveCaller(ctx, s.token)
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := s.accounts.Disable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now()
+	if _, err := s.resolver.ResolveCaller(context.Background(), s.token); err != nil {
+		t.Fatalf("the cache is not warm (the control): %v", err)
+	}
+	if got := w.last(t, every+150*time.Millisecond); got != "reauthenticate, reconnect" {
+		t.Fatalf("last comment %q", got)
+	}
+	t.Logf("disable -> end %v with a warm cache (Recheck %v)", time.Since(at).Round(time.Millisecond), every)
+}
+
+// Added to a project, alice's stream ends so that she reconnects into its broadcasts.
+func TestWakeRecheckEndsAnAddedMembership(t *testing.T) {
+	s := startRecheck(t, 200*time.Millisecond, time.Minute)
+	ctx := context.Background()
+	other, err := s.st.CreateProject(ctx, store.CreateProjectInput{Name: "Q", CreatedBy: "U-bob"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := s.open(t, "?since=0")
+	if _, err := s.st.AddMember(ctx, other.ID, s.alice, domain.RoleWorker, "U-bob"); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.last(t, 500*time.Millisecond); got != "scopes changed, reconnect with since=0" {
+		t.Fatalf("last comment %q", got)
+	}
+	w = s.open(t, "?since=0")
+	id := s.ring(t, service.BroadcastScope(other.ID), "broadcast", "", "T-1")
+	if f := w.frame(t, time.Second); f.Cursor != id {
+		t.Fatalf("after reconnecting: %+v, want the new project's broadcast %d", f, id)
+	}
+}
+
+// ": reauthenticate" names the cursor to resume from, as every other ending does.
+func TestWakeReauthenticateNamesTheCursor(t *testing.T) {
+	s := startRecheck(t, 200*time.Millisecond, time.Minute)
+	w := s.open(t, "?since=0")
+	id := s.ring(t, s.alice, "assigned", s.alice, "T-1")
+	if f := w.frame(t, time.Second); f.Cursor != id {
+		t.Fatalf("frame %+v", f)
+	}
+	if _, err := s.tokens.Revoke(context.Background(), s.tokenID); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := w.last(t, 500*time.Millisecond), fmt.Sprintf("reauthenticate, reconnect with since=%d", id); got != want {
+		t.Fatalf("last comment %q, want %q", got, want)
 	}
 }

@@ -118,15 +118,17 @@ func TestUnixSocketServesTheOwningUID(t *testing.T) {
 }
 
 // The peer-uid refusal: a listener admitting another uid closes this process's connection before
-// HTTP reads it, logs the refusal, and goes on accepting.
+// HTTP reads it, logs the refusal, and goes on accepting. listenUnix's socket, its peer check
+// pointed at another uid (that uid cannot own the directory here).
 func TestUnixSocketRefusesAnotherUID(t *testing.T) {
 	path := sockPath(t)
 	logs := &syncBuf{}
 	other := os.Getuid() + 1
-	ln, err := listenUnix(path, other, log.New(logs, "", 0))
+	ln, err := listenUnix(path, os.Getuid(), log.New(logs, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
+	ln.(*peerListener).uid = other
 	serveOn(t, ln)
 	for range 2 {
 		if body, err := get(unixClient(path), "http://x/"); err == nil {
@@ -205,5 +207,27 @@ func TestUnixSocketDirectoryMustBePrivate(t *testing.T) {
 	}
 	if err := privateDir(path+"-missing", os.Getuid()); err == nil {
 		t.Fatal("a missing directory was accepted")
+	}
+	// A symlinked socket directory is refused even when its target is private, as it would be in a
+	// 1777 parent; the same target named directly is used.
+	link := filepath.Join(filepath.Dir(dir), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Listen(ListenAddr{Network: NetworkUnix, Address: filepath.Join(link, "bk.sock")}, quiet)
+	if want := fmt.Sprintf("directory %s is a symlink", link); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a symlinked socket directory: %v, want %q", err, want)
+	}
+	ln, err := Listen(ListenAddr{Network: NetworkUnix, Address: path}, quiet)
+	if err != nil {
+		t.Fatalf("its target named directly: %v", err)
+	}
+	ln.Close()
+	// listenUnix judges the directory against the uid it is given.
+	if _, err := listenUnix(path, os.Getuid()+1, quiet); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("want one owned by uid %d", os.Getuid()+1)) {
+		t.Fatalf("listenUnix for another uid: %v", err)
 	}
 }

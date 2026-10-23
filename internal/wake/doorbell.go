@@ -10,11 +10,13 @@
 //	data: {"agent":"<assignee or empty>","kind":"assigned|broadcast","taskId":"T-1","projectId":"P-…","boardId":"B-…","cursor":<cursor>}
 //
 // The cursor is the change-log id of the doorbell's row (an integer, ids start at 1). Comments: ": ok"
-// once the subscription is live, ": keepalive" every Keepalive, and before the server ends a stream:
-// ": dropped, reconnect with since=<cursor>" (its subscription fell behind), ": scopes changed,
-// reconnect with since=<cursor>" (a membership changed), ": reauthenticate" (the bearer no longer
-// resolves) and ": recheck failed, reconnect with since=<cursor>". The cursor is omitted when the
-// stream knows none. Every Recheck the stream re-resolves its bearer and re-reads its scopes.
+// once the subscription is live, ": keepalive" every Keepalive, and, before the server ends a
+// stream, one of ": dropped" (its subscription fell behind), ": scopes changed" (a membership
+// changed), ": reauthenticate" (the bearer no longer resolves: revoked, expired, its user disabled)
+// or ": recheck failed", each followed by ", reconnect with since=<cursor>" (", reconnect" when the
+// stream knows no cursor). Every Recheck, in the catch-up as in the live stream, the stream
+// re-resolves its bearer (its account read from the store, not a cache) and re-reads its scopes;
+// each write has a deadline, so a peer that stops reading is cut off.
 //
 // The payload is zero-authority: a task id and a kind, never a title or a note. A woken agent calls
 // the tools, which enforce every check. broadcast is work assigned to nobody.
@@ -45,8 +47,9 @@ const (
 	// MaxHold bounds how long doorbells that never pause hold their frame.
 	MaxHold = time.Second
 	// Recheck is how often an open stream re-resolves its bearer and re-reads its scopes: a revoked
-	// token, a disabled user or a changed membership ends it within Recheck (plus the resolver's own
-	// account cache, auth.DefaultAccountCacheTTL). About 3 statements per stream per Recheck.
+	// token, a disabled user or a changed membership ends it within Recheck (the account is read
+	// uncached, auth.FreshAccount). 3 statements per stream per Recheck (GetToken or GetOAuthToken,
+	// GetUser, ListProjects), none in between.
 	Recheck = 60 * time.Second
 )
 

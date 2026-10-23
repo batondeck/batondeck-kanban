@@ -36,6 +36,8 @@ type Options struct {
 	MaxHold   time.Duration
 	Buffer    int
 	Recheck   time.Duration
+	// WriteTimeout bounds each write; 0 is 2×Keepalive.
+	WriteTimeout time.Duration
 }
 
 // Handler is GET /wake[?since=<cursor>]. The bearer is required; since, when given, is a
@@ -55,6 +57,9 @@ func Handler(o Options) http.Handler {
 	}
 	if o.Recheck <= 0 {
 		o.Recheck = Recheck
+	}
+	if o.WriteTimeout <= 0 {
+		o.WriteTimeout = 2 * o.Keepalive
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { o.serve(w, r) })
 }
@@ -97,7 +102,7 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sub.Close()
 
-	s := &stream{w: w, rc: http.NewResponseController(w)}
+	s := &stream{w: w, rc: http.NewResponseController(w), timeout: o.WriteTimeout}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
@@ -106,22 +111,8 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 	if s.comment("ok") != nil {
 		return
 	}
-	var seen map[int64]struct{}
-	if replay {
-		if seen, err = catchUp(ctx, o.Bus, scopes, since, s.frame); err != nil {
-			if ctx.Err() == nil {
-				o.Logger.Printf("wake: replaying %s from %d: %+v", caller.Identity, since, err)
-			}
-			return
-		}
-	}
-	co := newCoalescer(o.Quiet, o.MaxHold)
-	keep := time.NewTicker(o.Keepalive)
-	defer keep.Stop()
-	recheck := time.NewTicker(o.Recheck)
-	defer recheck.Stop()
 	// safe is a cursor every doorbell at or below which this stream has written (or coalesced
-	// away): the replay point it names when it ends behind. -1 until it knows one.
+	// away): the replay point it names when it ends. -1 until it knows one.
 	safe, recv := int64(-1), int64(0)
 	if replay {
 		safe = since
@@ -134,13 +125,49 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 			_ = s.comment(fmt.Sprintf("%s, reconnect with since=%d", reason, safe))
 		}
 	}
+	// confirmed is when the bearer and scopes were last confirmed: at connect, then at each recheck,
+	// which runs in the catch-up as in the live loop, so a stream is never trusted past Recheck.
+	confirmed := time.Now()
+	var why string
+	due := func() bool {
+		if time.Since(confirmed) < o.Recheck {
+			return false
+		}
+		why, confirmed = o.recheck(ctx, token, scopes), time.Now()
+		return why != ""
+	}
+	var seen map[int64]struct{}
+	if replay {
+		seen, err = catchUp(ctx, o.Bus, scopes, since, s.frame, func(readTo int64) error {
+			safe = readTo
+			if due() {
+				return errStop
+			}
+			return nil
+		})
+		switch {
+		case errors.Is(err, errStop):
+			end(why)
+			return
+		case err != nil:
+			if ctx.Err() == nil {
+				o.Logger.Printf("wake: replaying %s from %d: %+v", caller.Identity, since, err)
+			}
+			return
+		}
+	}
+	co := newCoalescer(o.Quiet, o.MaxHold)
+	keep := time.NewTicker(o.Keepalive)
+	defer keep.Stop()
+	recheck := time.NewTimer(time.Until(confirmed.Add(o.Recheck)))
+	defer recheck.Stop()
 	for {
 		if sub.Dropped() > 0 {
 			o.Logger.Printf("wake: the stream of %s dropped %d change(s); ending it, safe cursor %d", caller.Identity, sub.Dropped(), safe)
 			end("dropped")
 			return
 		}
-		if co.empty() && recv > safe {
+		if co.empty() && recv > 0 && recv > safe {
 			safe = recv
 		}
 		select {
@@ -168,25 +195,26 @@ func (o Options) serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-recheck.C:
-			switch why := o.recheck(ctx, token, scopes); why {
-			case "":
-			case "reauthenticate":
-				_ = s.comment(why)
-				return
-			default:
+			if due() {
 				end(why)
 				return
 			}
+			recheck.Reset(time.Until(confirmed.Add(o.Recheck)))
 		}
 	}
 }
+
+// errStop ends a catch-up whose recheck refused the stream.
+var errStop = errors.New("wake: the recheck ended the stream")
 
 // recheck re-resolves the stream's bearer and re-reads its scopes: "" while both hold, "reauthenticate"
 // when the bearer no longer resolves (revoked, expired, its user disabled), "scopes changed" when the
 // memberships moved, and "recheck failed" when either read failed (the stream ends rather than
 // trusting what it can no longer confirm).
 func (o Options) recheck(ctx context.Context, token string, scopes []string) string {
-	caller, err := o.Resolver.ResolveCaller(ctx, token)
+	// The account is read from the store, not the resolver's cache, so a disable ends the stream
+	// within one Recheck whatever other traffic keeps that cache warm.
+	caller, err := o.Resolver.ResolveCaller(auth.FreshAccount(ctx), token)
 	if err != nil {
 		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
 			return "reauthenticate"
@@ -224,10 +252,12 @@ func sameSet(a, b []string) bool {
 	return true
 }
 
-// stream writes SSE events and flushes each one.
+// stream writes SSE events and flushes each one, each write bounded by timeout: a peer that stops
+// reading is cut off rather than holding the stream (and its recheck) on a blocked write.
 type stream struct {
-	w  http.ResponseWriter
-	rc *http.ResponseController
+	w       http.ResponseWriter
+	rc      *http.ResponseController
+	timeout time.Duration
 }
 
 func (s *stream) frame(f Frame) error {
@@ -235,14 +265,16 @@ func (s *stream) frame(f Frame) error {
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(s.w, "id: %d\ndata: %s\n\n", f.Cursor, b); err != nil {
-		return err
-	}
-	return s.rc.Flush()
+	return s.write("id: %d\ndata: %s\n\n", f.Cursor, b)
 }
 
-func (s *stream) comment(text string) error {
-	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
+func (s *stream) comment(text string) error { return s.write(": %s\n\n", text) }
+
+func (s *stream) write(format string, args ...any) error {
+	if err := s.rc.SetWriteDeadline(time.Now().Add(s.timeout)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s.w, format, args...); err != nil {
 		return err
 	}
 	return s.rc.Flush()

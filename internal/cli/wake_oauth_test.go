@@ -185,7 +185,7 @@ func TestWakeRecheckEndsAnOAuthFamilyRevokedByRefreshReuse(t *testing.T) {
 	if m := tokenCall(t, public, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {clientID}}); m["error"] != "invalid_grant" {
 		t.Fatalf("refresh reuse: %v, want invalid_grant", m)
 	}
-	if got := w.last(t, 600*time.Millisecond); got != "reauthenticate" {
+	if got := w.last(t, 600*time.Millisecond); got != "reauthenticate, reconnect" {
 		t.Fatalf("the open stream's last comment %q, want reauthenticate", got)
 	}
 	if code := statusOf(t, http.MethodPost, public+"/mcp", access); code != http.StatusUnauthorized {
