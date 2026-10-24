@@ -81,6 +81,12 @@ export function topN(
 const OPEN: ReadonlySet<Status> = new Set(['TODO', 'IN_PROGRESS', 'BLOCKED', 'REVIEW']);
 const TERMINAL: ReadonlySet<Status> = new Set(['DONE']);
 
+/** Cancelled (ADR-0001): DONE with the `cancelled` label. Conductor's CANCELLED was never done, so it
+ *  counts in the total and in no done figure (P-208). */
+export function isCancelled(t: Pick<Task, 'status' | 'labels'>): boolean {
+  return t.status === 'DONE' && (t.labels ?? []).includes('cancelled');
+}
+
 export interface CensusCounts {
   total: number;
   open: number;
@@ -102,7 +108,7 @@ export function censusCounts(tasks: readonly Task[], now: number): CensusCounts 
   let open = 0, done = 0, blocked = 0, inProgress = 0, createdLast7 = 0, overdue = 0, unassigned = 0, activeLeases = 0;
   for (const t of tasks) {
     if (OPEN.has(t.status)) open += 1;
-    if (t.status === 'DONE') done += 1;
+    if (t.status === 'DONE' && !isCancelled(t)) done += 1;
     if (t.status === 'BLOCKED') blocked += 1;
     if (t.status === 'IN_PROGRESS') inProgress += 1;
     if (Date.parse(t.createdAt) >= weekAgo) createdLast7 += 1;

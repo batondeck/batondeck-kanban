@@ -280,6 +280,8 @@ export interface OpsSummary {
   byTool: Array<{ tool: string; calls: number; avgMs: number }>;
   byDay: Array<{ day: string; calls: number }>;
   byAgent: Array<{ agent: string; calls: number }>;
+  /** How long a tool_calls row is kept, and the oldest UTC day that reaches. */
+  retention: { days: number; oldestDay: string };
 }
 
 export interface AccessRequest {

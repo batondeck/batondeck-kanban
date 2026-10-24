@@ -163,6 +163,11 @@ describe('censusCounts', () => {
     expect(c).toMatchObject({ total: 4, open: 3, done: 1, blocked: 1, inProgress: 1, createdLast7: 2 });
   });
 
+  it('a cancelled task (DONE with the cancelled label) is in the total and not done (P-208)', () => {
+    const c = censusCounts([mk({ status: 'DONE' }), mk({ status: 'DONE', labels: ['cancelled'] })], NOW);
+    expect(c).toMatchObject({ total: 2, done: 1, open: 0 });
+  });
+
   it('does not count a past due date on a finished ticket as overdue', () => {
     const overdue = { dueAt: daysAgo(1) };
     expect(censusCounts([mk({ ...overdue, status: 'TODO' })], NOW).overdue).toBe(1);
