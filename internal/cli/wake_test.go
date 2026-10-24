@@ -280,7 +280,7 @@ func (c *client) none(t *testing.T, d time.Duration) {
 	}
 }
 
-// content is a doorbell's {kind, cursor, projectId}, read from its user frame's content.
+// content is a doorbell's frame, read from its user frame's content.
 func content(t *testing.T, b []byte) wake.Frame {
 	t.Helper()
 	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
@@ -397,7 +397,7 @@ func (s *dirServer) lastChange(t *testing.T) int64 {
 // AC1/AC2 (tested): a worker is in the directory once registered, its presence signal fires, and an
 // assignment by someone else writes EXACTLY the R3.1 frame into its socket within 1 s of the commit:
 // the auth line from the key file, then one user frame naming the registry's sessionId, whose content
-// is one plain line and the contentless {kind, cursor, projectId}.
+// is one plain line and the contentless {kind, cursor, projectId, boardId} (boardId since P-191).
 func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 	s := startDirectory(t, nil)
 	c := s.client(t, "f73a2587-0000-4000-8000-000000000001", "peer-token-xyz")
@@ -425,8 +425,8 @@ func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 		t.Fatalf("the doorbell came %v after the commit, want under 1s", d)
 	}
 	want := fmt.Sprintf(`{"type":"auth","token":"peer-token-xyz"}`+"\n"+
-		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\"}"}}`+"\n",
-		c.session, s.project, cur, cur, s.project)
+		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next {projectId: %s, boardId: %s}, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\",\"boardId\":\"%s\"}"}}`+"\n",
+		c.session, s.project, cur, s.project, s.board, cur, s.project, s.board)
 	if string(b) != want {
 		t.Fatalf("the doorbell bytes\n got %q\nwant %q", b, want)
 	}
@@ -698,7 +698,8 @@ func TestDirectoryDropsOnADeadSocket(t *testing.T) {
 }
 
 // The start-up rebuild: a restarted server restores a live entry from its row, drops a dead one's,
-// and catches the live one up from its last delivered cursor (an assignment made while it was down).
+// and catches the live one up from its last delivered cursor (assignments made while it was down, on
+// two boards: one frame naming both).
 func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
 	s := startDirectory(t, nil)
 	live, dead := s.client(t, "s-live", ""), s.client(t, "s-dead", "")
@@ -722,14 +723,21 @@ func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
 	s.stop()
 	_ = dead.cmd.Process.Kill()
 	_ = dead.cmd.Wait()
-	// While the server is down, bob assigns alice through the store's service on the same store.
+	// While the server is down, bob assigns alice a task on each of two boards through the store's
+	// service on the same store.
 	down := service.New(s.st, service.Options{Logger: log.New(io.Discard, "", 0), ToolCallFlush: -1})
-	got, err := down.Tasks().Create(context.Background(), s.bob.caller(), service.CreateTaskReq{ProjectID: s.project, BoardID: s.board, Title: "while down"})
+	other, err := down.Boards().Create(context.Background(), s.alice.caller(), service.CreateBoardReq{ProjectID: s.project, Name: "other"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := down.Tasks().Update(context.Background(), s.bob.caller(), service.UpdateTaskReq{ProjectID: s.project, TaskID: got.Task.ID, Version: int64(got.Task.Version), Patch: service.TaskPatch{Assignee: service.Value(s.alice.id)}}); err != nil {
-		t.Fatal(err)
+	for _, board := range []string{s.board, other.Board.ID} {
+		got, err := down.Tasks().Create(context.Background(), s.bob.caller(), service.CreateTaskReq{ProjectID: s.project, BoardID: board, Title: "while down"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := down.Tasks().Update(context.Background(), s.bob.caller(), service.UpdateTaskReq{ProjectID: s.project, TaskID: got.Task.ID, Version: int64(got.Task.Version), Patch: service.TaskPatch{Assignee: service.Value(s.alice.id)}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = down.Close(context.Background())
 	cur := s.lastChange(t)
@@ -738,8 +746,10 @@ func TestDirectoryRebuildsAndCatchesUp(t *testing.T) {
 		t.Fatalf("restored pids %v, want only %d", got, live.pid)
 	}
 	f := content(t, live.frame(t, 2*time.Second))
-	if f.Kind != wake.KindAssigned || f.Cursor != cur {
-		t.Fatalf("the catch-up rang %+v, want assigned at %d", f, cur)
+	boards := []string{s.board, other.Board.ID}
+	slices.Sort(boards)
+	if f.Kind != wake.KindAssigned || f.Cursor != cur || f.BoardID != "" || !slices.Equal(f.BoardIDs, boards) {
+		t.Fatalf("the catch-up rang %+v, want assigned at %d on boards %v (P-191)", f, cur, boards)
 	}
 	if !strings.Contains(again.logs.String(), fmt.Sprintf("dropped the row of pid %d at start-up", dead.pid)) {
 		t.Fatalf("the dead row's drop is not logged:\n%s", again.logs.String())
