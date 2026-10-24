@@ -1001,6 +1001,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Fixed
 
+- P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
+  The caller was resolved once at connect, so a copied session cookie kept receiving board frames
+  after logout (the R1.15 review measured the stream still open 20 s after it). The stream now
+  resolves the request's credential again before every ping, board, presence and notifications
+  frame, through the same resolver as the session check (`auth.Service.Reauthenticate`, new), and
+  closes without another frame once it is refused: a logout or a revoke at the next frame or ping
+  (20 s), a disable once the 60 s account cache has let the entry go. A store error keeps the stream
+  and skips that frame. The reconnect is 401.
+
 - P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
   window; ingest verifies with the current secret alone and logs why. A current secret that will not
   open refuses the delivery as `secret_unavailable`, on the delivery log.
