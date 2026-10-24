@@ -19,8 +19,10 @@ Notable changes to batondeck-kanban. The format follows
   so tool_calls and the change log grew without bound. The delivery and raw-body windows are config
   too: `retention.deliveries_days` (`BATONDECK_RETENTION_DELIVERIES_DAYS`, default 30, also an alert
   state's expiry) and `retention.raw_bodies_days` (`BATONDECK_RETENTION_RAW_BODIES_DAYS`, default 7),
-  stamped on each row when written, so a change applies to rows written after it. Boot logs the
-  interval and every window.
+  stamped on each row when written, so a change applies to rows written after it. Every window is
+  1 to 36500 days and the interval 1 to 86400 seconds; past a bound the config is refused, since a
+  window that overflows `time.Duration` would put the cutoff in the future and sweep a whole table.
+  Boot logs the interval and every window.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
