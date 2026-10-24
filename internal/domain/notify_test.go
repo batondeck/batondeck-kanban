@@ -27,6 +27,10 @@ func TestNotificationsForEvent(t *testing.T) {
 	if d := NotificationsForEvent(EventTaskReviewRequested, "u-ada", []byte(`{"targetIdentity":"u-grace","reviewer":"u-grace"}`)); len(d) != 1 || d[0].Type != NotificationReviewRequest {
 		t.Fatalf("review request %+v", d)
 	}
+	if d := NotificationsForEvent(EventTaskHandoff, "u-ada", []byte(`{"toAgent":"grace@x.test","targetIdentity":"u-grace"}`)); len(d) != 1 ||
+		d[0].Recipient != "u-grace" || d[0].Type != NotificationHandoff || d[0].Data["toAgent"] != "grace@x.test" {
+		t.Fatalf("handoff %+v", d)
+	}
 	for name, c := range map[string]struct {
 		typ  EventType
 		data string
@@ -34,7 +38,8 @@ func TestNotificationsForEvent(t *testing.T) {
 		"a follow-up with no verified target": {EventTaskFollowUp, `{"followUpId":"FU-1","targetIdentity":null,"target":"u-grace"}`},
 		"a review of nobody":                  {EventTaskReviewRequested, `{"targetIdentity":null,"reviewer":"agent-x"}`},
 		"a self-review":                       {EventTaskReviewRequested, `{"targetIdentity":"u-ada"}`},
-		"a handoff":                           {EventTaskHandoff, `{"toAgent":"u-grace","targetIdentity":"u-grace"}`},
+		"a handoff to a label":                {EventTaskHandoff, `{"toAgent":"reviewer-bot","targetIdentity":null}`},
+		"a handoff to yourself":               {EventTaskHandoff, `{"toAgent":"ada@x.test","targetIdentity":"u-ada"}`},
 		"an assignment":                       {EventTaskUpdated, `{"assignee":"u-grace"}`},
 		"malformed data":                      {EventCommentAdded, `[1]`},
 	} {

@@ -90,7 +90,7 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.CostClass]():            enumSchema(service.CostClassValues),
 		reflect.TypeFor[service.AnomalyKind]():          enumSchema(service.AnomalyKindValues),
 		reflect.TypeFor[service.AnomalySeverity]():      enumSchema(service.AnomalySeverityValues),
-		reflect.TypeFor[domain.NotificationType]():      enumSchema([]domain.NotificationType{domain.NotificationFollowUp, domain.NotificationMention, domain.NotificationReviewRequest}),
+		reflect.TypeFor[domain.NotificationType]():      enumSchema([]domain.NotificationType{domain.NotificationFollowUp, domain.NotificationMention, domain.NotificationReviewRequest, domain.NotificationHandoff}),
 		reflect.TypeFor[service.FollowUpStatus]():       enumSchema(service.FollowUpStatusValues),
 		reflect.TypeFor[service.MediaKind]():            enumSchema(service.MediaKindValues),
 		reflect.TypeFor[service.NextStrategy]():         enumSchema(service.NextStrategyValues),
