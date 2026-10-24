@@ -8,6 +8,14 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
+  sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
+  `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
+  It deletes, in bounded batches, memory past its expiry, change-log rows past
+  `retention.change_log_days`, tool_calls rows past `retention.tool_calls_days`, deliveries and raw
+  webhook bodies past the expiry stamped on each, and (with a blob store) the blobs unreferenced for
+  an hour. Before this, nothing ran it, so tool_calls and the change log grew without bound. Boot
+  logs the interval and both windows.
 - Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
   R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
   message for an unknown login, a wrong password and a disabled account) and the form shows it; on
@@ -480,8 +488,8 @@ Notable changes to batondeck-kanban. The format follows
   `attach_file` is INTERNAL and `downloadUrl` null, said once at boot. Both engines and memstore build
   the `Attachments` and `Blobs` store areas; delete_task's blob hook now removes each freed blob's row
   and file unless another attachment or memory entry holds it, and the retention sweep gains a step
-  handing the blobs unreferenced for an hour to the same collector (the sweep is not yet run by
-  `serve`).
+  handing the blobs unreferenced for an hour to the same collector (`serve` runs the sweep since
+  P-109).
 
 - The R3.1 socket-wake spike findings (`docs/release/socket-wake-spike-2026-10.md`) and its scratch
   writer (`docs/release/spikes/socket-wake/doorbell.py`), measured on Claude Code 2.1.309: a
