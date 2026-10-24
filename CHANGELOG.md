@@ -87,6 +87,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The operations summary (R2.11): `GET /api/analytics/operations?projectId&days` replaces R1.12's
+  stub with conductor's OpsSummary (`total`, `errors`, `errorRate`, `avgLatencyMs`, `byTool`,
+  `byDay`, `byAgent`, as `aggregateOps` rolls it up) over the `tool_calls` rows, plus a `retention`
+  row (`days` 45, `oldestDay`) naming how far back rows are kept. `days` defaults to 7 and is clamped
+  to 90. The membership check is the service's, under `get_project`'s posture: a non-member is 403
+  `FORBIDDEN`, never an empty summary. One statement per call on each engine
+  (`Store.SummarizeToolCalls`, grouped by tool, outcome, agent and UTC day), pinned in `test/perf`.
+  Each `tool_calls` row now carries the `projectId` the call named; it was always empty, so no
+  project could have counted a call. Analytics and Reports read the summary unchanged, and a
+  cancelled task (DONE with the `cancelled` label) counts in the total and in no done figure (P-208).
 - Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
   `get_my_settings`, `set_my_settings` and `list_audit_log` leave `contract/pending.json`.
   `disconnect_agent` closes every live MCP session of `(identityId, agentId)` and deletes its row:
