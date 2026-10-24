@@ -22,6 +22,15 @@ Notable changes to batondeck-kanban. The format follows
   (`list_notifications`, then `claim_next {projectId, boardId}`, no assignee needed), and the worker
   skill and the worker, work and work-assigned commands say the same and pass `assignee` only for an
   agent label; the plugin is `0.1.3`.
+- A handoff notifies its receiver (P-275, audit A12; migration 0006 owner-approved 2026-10-24, zone
+  Z2). `handoff_task` wrote a task memory and rang the socket doorbell, but no notification row, so a
+  client that pulls (every non-Claude client, `list_notifications` each turn) never learned of it.
+  It now writes one `handoff` notification (`data.toAgent`) for the member `toAgent` names, by member
+  key or by login in any case, and the receiver's `/api/stream` gets its notifications frame; the
+  sender, an agent label and a handoff to oneself notify nobody. Migration 0006 adds `handoff` to the
+  notifications type CHECK on both engines (SQLite rebuilds the table; down drops the handoff rows).
+  `list_notifications` declares the new type (`contract/deltas.json` gains `addedEnumValues`), and
+  the Notifications screen reads "X handed you T-n". The doorbell is unchanged.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
