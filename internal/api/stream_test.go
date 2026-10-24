@@ -69,10 +69,12 @@ type frame struct {
 	at              time.Time
 }
 
-// sseClient is an open /api/stream: its frames as they arrive.
+// sseClient is an open /api/stream: its frames as they arrive, the notifications frames apart (every
+// stream carries them, R2.3, so a test of the board or presence frames reads past none).
 type sseClient struct {
 	status int
 	frames chan frame
+	notes  chan frame
 	cancel func()
 	body   string // the error body when status is not 200
 }
@@ -86,7 +88,7 @@ func (h *harness) stream(t *testing.T, query string, header map[string]string) *
 		cancel()
 		t.Fatal(err)
 	}
-	c := &sseClient{status: resp.StatusCode, frames: make(chan frame, 64), cancel: func() { cancel(); resp.Body.Close() }}
+	c := &sseClient{status: resp.StatusCode, frames: make(chan frame, 64), notes: make(chan frame, 64), cancel: func() { cancel(); resp.Body.Close() }}
 	t.Cleanup(c.cancel)
 	if resp.StatusCode != http.StatusOK {
 		var b strings.Builder
@@ -107,7 +109,14 @@ func (h *harness) stream(t *testing.T, query string, header map[string]string) *
 			line := sc.Text()
 			switch {
 			case line == "":
-				if f.event != "" {
+				switch {
+				case f.event == "notifications":
+					f.at = time.Now()
+					select {
+					case c.notes <- f:
+					default: // a test that reads none never stalls the stream
+					}
+				case f.event != "":
 					f.at = time.Now()
 					c.frames <- f
 				}
