@@ -1144,6 +1144,9 @@ func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
 		if head, err := next(carl, ""); err != nil || head == nil || head.ID != open.ID {
 			t.Fatalf("carl's next_task head %+v %v, want the unassigned %s", head, err, open.ID)
 		}
+		if head, err := next(bob, ""); err != nil || head == nil || head.ID != bobs.ID {
+			t.Fatalf("bob's next_task head %+v %v, want his own by login %s", head, err, bobs.ID)
+		}
 		for i, want := range []string{open.ID, ""} {
 			got, err := claimNext(carl, "")
 			if err != nil || (got == nil) != (want == "") || (got != nil && got.ID != want) {
