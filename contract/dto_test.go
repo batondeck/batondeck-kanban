@@ -189,8 +189,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 85 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 7 artifact, comment and follow-up tools (R2.1), the 4 chronicle tools, the 9 on-call tools, the 10 runs and sprints tools and the 7 R2.3 tools and R2.5 4 (85)", len(names))
+	if len(names) != 86 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 7 artifact, comment and follow-up tools (R2.1), the 4 chronicle tools, the 9 on-call tools, the 10 runs and sprints tools and the 7 R2.3 tools, R2.5 4 and grant_capabilities (86)", len(names))
 	}
 }
 
