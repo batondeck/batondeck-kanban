@@ -323,6 +323,7 @@ func claims(t *testing.T, newStore Factory) {
 			"an absent assignee": {func(q *store.FrontierQuery) { q.Assignee = ptr("nobody") }, []string{}},
 		} {
 			q := f.frontier()
+			q.Caller = "bob" // T-4 is bob's: the frontier without an assignee is the caller's and the unassigned
 			c.edit(&q)
 			got, err := f.s.PreviewFrontier(ctx, q, 50)
 			mustOK(t, err)
@@ -332,6 +333,50 @@ func claims(t *testing.T, newStore Factory) {
 		}
 		_, err := f.s.PreviewFrontier(ctx, store.FrontierQuery{ProjectID: f.project, Now: taskClock}, 10)
 		wantCode(t, err, domain.CodeValidation, "")
+	})
+
+	// P-275 (audit A1): without an assignee nobody's frontier holds work routed to another, on the
+	// preview and on the claim statement alike; the caller's own (by id, or by its login in any case)
+	// and the unassigned stay in it.
+	t.Run("FrontierWithoutAssigneeIsTheCallersAndTheUnassigned", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		u := testUser("U-bob", "bob@x.test", 1)
+		mustOK(t, f.s.CreateUser(ctx, u))
+		f.add(t, "dave's", func(in *store.CreateTaskInput) { in.Assignee = ptr("dave@x.test"); in.OrderKey = "a1" })
+		f.add(t, "bob's by id", func(in *store.CreateTaskInput) { in.Assignee = ptr("U-bob"); in.OrderKey = "a2" })
+		f.add(t, "bob's by login", func(in *store.CreateTaskInput) { in.Assignee = ptr("Bob@X.test"); in.OrderKey = "a3" })
+		f.add(t, "anyone", func(in *store.CreateTaskInput) { in.OrderKey = "a4" })
+		for caller, want := range map[string][]string{
+			"U-bob":  {"T-2", "T-3", "T-4"},
+			"U-carl": {"T-4"},
+			"":       {"T-4"},
+		} {
+			q := f.frontier()
+			q.Caller = caller
+			got, err := f.s.PreviewFrontier(ctx, q, 50)
+			mustOK(t, err)
+			if ids := taskIDs(got); !reflect.DeepEqual(ids, want) {
+				t.Fatalf("caller %q: %v, want %v", caller, ids, want)
+			}
+		}
+		q := f.frontier()
+		q.Caller = "U-bob"
+		var won []string
+		for i := range 4 {
+			got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("U-bob", "a", fmt.Sprintf("L-%d", i)))
+			mustOK(t, err)
+			if ok {
+				won = append(won, got.ID)
+			}
+		}
+		if !reflect.DeepEqual(won, []string{"T-2", "T-3", "T-4"}) {
+			t.Fatalf("U-bob claimed %v, want [T-2 T-3 T-4] and never dave's T-1", won)
+		}
+		dave, err := f.s.GetTask(ctx, f.project, "T-1")
+		mustOK(t, err)
+		if dave.Status != domain.Todo || dave.Claim != nil {
+			t.Fatalf("dave's T-1 is %s claimed by %+v, want TODO and unclaimed", dave.Status, dave.Claim)
+		}
 	})
 
 	t.Run("ClaimNextTakesTheFrontierInOrderThenReportsItEmpty", func(t *testing.T) {
