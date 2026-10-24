@@ -1,6 +1,6 @@
 ---
 name: batondeck-worker
-description: "Plan and work a batondeck-kanban board as an agent over MCP. Five states (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE) and a fixed transition table; claim with claim_next, load get_task_context with includeUpstream, record as you go, complete with a deliverable and artifacts. A session on this device registered by the plugin's SessionStart hook is rung on its own socket when work is assigned to it (a worker) or a task in its projects changes (a master): on a doorbell, call claim_next, then list_notifications. Hosted clients pull each turn. Used by /batondeck-kanban:worker, :master, :work and :work-assigned."
+description: "Plan and work a batondeck-kanban board as an agent over MCP. Five states (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE) and a fixed transition table; claim with claim_next, load get_task_context with includeUpstream, record as you go, complete with a deliverable and artifacts. A session on this device registered by the plugin's SessionStart hook is rung on its own socket when work is assigned to it (a worker) or a task in its projects changes (a master): on a doorbell, call claim_next with the projectId and boardId it names, then list_notifications. Hosted clients pull each turn. Used by /batondeck-kanban:worker, :master, :work and :work-assigned."
 ---
 
 # batondeck-kanban worker
@@ -66,11 +66,13 @@ it the moment the process exits.
 - A **master** is rung when a task in its projects changes (`kind: "changed"`), except for claims,
   heartbeats, notes and its own changes.
 - The doorbell arrives as a message that starts a turn, even when the session is idle:
-  `batondeck: work was assigned to you on P-… (cursor N); call claim_next, then list_notifications.`
-  It is **contentless**: a kind, a cursor and a project id, never a task or a title. It says look,
-  never what happened. So every doorbell is followed by a read through the tools, where every check
-  applies: `claim_next`, then `list_notifications`. The doorbell names no board; if you do not know
-  it, `list_boards { projectId }`.
+  `batondeck: work was assigned to you on P-… (cursor N); call claim_next {projectId: P-…, boardId: B-…}, then list_notifications.`
+  It is **contentless**: a kind, a cursor, a project id and the board its changes are on (`boardId`,
+  or `boardIds` when several boards changed), never a task or a title. It says look, never what
+  happened. So every doorbell is followed by a read through the tools, where every check applies:
+  **take `projectId` and `boardId` from the doorbell** and call `claim_next { projectId, boardId }`
+  (once per id of `boardIds`), then `list_notifications`. A project id is never a board id. A
+  doorbell that names no board (a project-level change) means `list_boards { projectId }` first.
 - **After `broadcast`, probe the open frontier as well as your inbox**: the work is assigned to nobody,
   so `claim_next` without `assignee` is what finds it.
 - **Between doorbells, end your turn.** There is nothing to wait on and nothing to poll: the next

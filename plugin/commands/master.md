@@ -28,9 +28,10 @@ Setup:
 
 Supervision, each turn the doorbell starts:
 
-1. **Read the board; the doorbell says only that something changed.** `next_task { projectId,
-   boardId, includeInbox: true }` (the claimable task plus the `review`, `blocked` and `poisoned`
-   buckets), then `list_notifications` for what was addressed to you.
+1. **Read the board; the doorbell says only that something changed, and on which board.**
+   `next_task { projectId, boardId, includeInbox: true }`, with the doorbell's `projectId` and
+   `boardId` (each id of its `boardIds`; none → `list_boards`): the claimable task plus the `review`,
+   `blocked` and `poisoned` buckets. Then `list_notifications` for what was addressed to you.
 2. **Act by state:**
    - REVIEW → judge the deliverable and its `artifacts` (`get_task_context`, `get_task`); re-run one of
      its proofs rather than trusting it ran. Good → `move_task { projectId, taskId, version,
