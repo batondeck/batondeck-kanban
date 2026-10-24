@@ -87,6 +87,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The Chronicle routes and screens (R2.7): the eight routes `web/src/api/chronicle.ts` calls replace
+  R1.12's stubs in `internal/api/chronicle.go`, over R2.6's `service.Chronicle`: `GET` and `POST
+  /api/projects/{projectId}/chronicle` (the index, `?cursor=`, and create), `GET` and `DELETE
+  …/chronicle/{pageId}` (the page view, and delete pinned by `?expectedHeadVersionId=`, a moved head
+  `STALE`), `GET …/{pageId}/versions` and `…/versions/{versionId}` (the history, `?cursor=`, and one
+  version), `POST …/{pageId}/edit` and `POST …/{pageId}/revert`. A revert writes a new version
+  holding the chosen version's blocks over the head it read (an edit, never a rewind). A non-member
+  is 403 `FORBIDDEN` on each; a page asked for through another project is absent (`null`, or 404
+  `NOT_FOUND` on a write). `ingest_chronicle_page` stays MCP-only. The `/chronicle`,
+  `/chronicle/new`, `/chronicle/:pageId` and `/chronicle/:pageId/history` screens now load real
+  records: a mermaid fence renders as mermaid's SVG, and an image embedded by its signed blob URL
+  loads through `/blobs/…`.
 - The on-call routes and screen (R2.10): the ten `/api/oncall/…` routes of `internal/api/oncall.go`
   replace R1.12's stubs, each one `service.Oncall` call under the session and CSRF, workspace admin
   only (a project admin who is not one is 403 `FORBIDDEN`, as the tools are). `GET
