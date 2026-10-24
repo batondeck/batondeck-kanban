@@ -1013,6 +1013,24 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Fixed
 
+- Postgres claims and concurrent writes, one lease per task, heartbeats that keep their lease, NUL
+  refused (P-278; audit 2026-10-24 A2-A6, glitches G1 G2 G3 G6 G7). `claim_next`'s frontier locks
+  `FOR NO KEY UPDATE ... SKIP LOCKED`: under `FOR UPDATE` it passed over a TODO task whose row a
+  concurrent comment's foreign key check held `FOR KEY SHARE`, and answered no work (G1: 2/20 rounds
+  claimed, now 20/20). `LockTask` locks `FOR NO KEY UPDATE`, and every mutation that bumps a task
+  (not a comment, a follow-up or a claim) loads it with `Store.LockTask` (new, all three stores)
+  before it writes any row beside it: two `add_context_item` or `write_memory` calls each inserted
+  their row and then waited on the other's lock, a deadlock answered INTERNAL (G2: 30 INTERNAL in 36
+  calls, now 0). A mutation with no expected version whose versioned write loses a race is run again
+  inside the service instead of answering STALE (concurrent `add_follow_up {reopen}`). A NUL
+  character (U+0000) in any argument string, at any depth, is VALIDATION naming the field, on every
+  tool and every REST route (`domain.CheckText`): Postgres answered INTERNAL, retryable, on nine
+  fields of eight tools while SQLite stored it (G3). `claim_task` on a task whose live lease the
+  caller already holds answers that lease and writes nothing: a second session of one identity
+  minted a new lease and silently ended the first (G6, 20/20 rounds). `heartbeat_task` with no
+  `leaseSeconds` never moves the expiry earlier (`Store.Heartbeat` takes `keepLonger`): it cut a
+  3600 s claim to 300 s (G7); an explicit `leaseSeconds` still sets it, shorter included.
+
 - P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
   window; ingest verifies with the current secret alone and logs why. A current secret that will not
   open refuses the delivery as `secret_unavailable`, on the delivery log.
