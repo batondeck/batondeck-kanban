@@ -606,3 +606,66 @@ func TestStreamClosesWhenTheTokenIsRevoked(t *testing.T) {
 		}
 	})
 }
+
+// A presence change after logout, no ping being due, closes the stream before its presence frame
+// (P-219; the rev6667 review's probe).
+func TestStreamClosesOnAPresenceChangeAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		dir := newFakeDirectory()
+		l := newLive(t, s, Options{Ping: time.Minute, Presence: dir})
+		c := l.stream(t, "", nil)
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		if f := c.next(t, time.Second); f.event != "presence" {
+			t.Fatalf("%+v, want presence", f)
+		}
+		if st, body := l.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		dir.register(PresenceEntry{PID: 4242, Role: "worker", IdentityID: l.userID, AgentID: "b", RegisteredAt: "2026-10-23T00:00:00Z"})
+		c.closes(t, time.Second)
+	})
+}
+
+// A notification row after logout, no ping being due, closes the stream before its notifications
+// frame (P-219; the rev6667 review's probe).
+func TestStreamClosesOnANotificationAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		bob := l.as("bob")
+		ctx := context.Background()
+		if _, err := l.core.Projects().AddMember(ctx, l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+			t.Fatal(err)
+		}
+		task, err := l.core.Tasks().Create(ctx, l.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: "for bob"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.core.Tasks().Update(ctx, l.caller(), service.UpdateTaskReq{ProjectID: pid, TaskID: task.Task.ID, Version: int64(task.Task.Version),
+			Patch: service.TaskPatch{Assignee: service.Value(bob.userID)}}); err != nil {
+			t.Fatal(err)
+		}
+		mine := bob.stream(t, "", nil)
+		if mine.status != http.StatusOK {
+			t.Fatalf("stream: %d", mine.status)
+		}
+		if f := mine.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		mine.nextNote(t, time.Second)
+		if st, body := bob.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		if _, err := l.core.FollowUps().AddFollowUp(ctx, l.caller(), service.AddFollowUpReq{ProjectID: pid, TaskID: task.Task.ID, Body: "your turn"}); err != nil {
+			t.Fatal(err)
+		}
+		mine.closes(t, 2*time.Second)
+		select {
+		case n := <-mine.notes:
+			t.Fatalf("a notifications frame after the logout: %s", n.data)
+		default:
+		}
+	})
+}
