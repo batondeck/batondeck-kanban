@@ -1,4 +1,5 @@
-// Owner: R2.5 fills these bodies; R1.12 copied the signatures from api.ts.
+// The me area (internal/api/me.go): the caller's own settings and CLI tokens. No marketplace key:
+// the plan dropped it, and no route serves it.
 import type { MySettings } from '../types.js';
 import { req } from './http.js';
 
@@ -31,17 +32,3 @@ export interface CliTokenRow {
   revokedAt: string | null;
   status: 'live' | 'expired' | 'revoked';
 }
-
-// UNMOUNTED: the plan dropped /api/me/marketplace-key (routes.json); Settings still calls these three
-// until P-184 removes the panel. Kept so that screen compiles.
-export const getMarketplaceKey = () =>
-  req<{ key: string | null; createdAt: string | null; rotated: boolean; lastUsedAt: string | null; useCount: number; recentUses: Array<{ ts: string; kind: 'catalog' | 'archive'; pluginName?: string; semver?: string; ip?: string; userAgent?: string }> }>(
-    'GET',
-    '/api/me/marketplace-key',
-  );
-
-export const createMarketplaceKey = () =>
-  req<{ key: string; rotated: boolean }>('POST', '/api/me/marketplace-key', {});
-
-export const rotateMarketplaceKey = () =>
-  req<{ key: string; rotated: boolean }>('POST', '/api/me/marketplace-key/rotate', {});

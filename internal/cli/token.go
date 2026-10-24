@@ -65,7 +65,7 @@ func token(args []string, stdout, stderr io.Writer) int {
 	}
 	defer st.Close()
 	acc := &auth.Accounts{Store: st}
-	ts := &auth.TokenService{Store: st}
+	ts := &auth.TokenService{Store: st, Audit: st}
 	switch sub {
 	case "create":
 		u, err := acc.Lookup(ctx, login)
@@ -75,7 +75,7 @@ func token(args []string, stdout, stderr io.Writer) int {
 		if u.DisabledAt != 0 {
 			return fail(fmt.Errorf("%s is disabled", u.Email))
 		}
-		plain, info, err := ts.Create(ctx, u.ID, u.Email, label, ttl)
+		plain, info, err := ts.Mint(ctx, auth.HostActor, "cli", u.ID, u.Email, label, ttl)
 		if err != nil {
 			return fail(err)
 		}
@@ -115,7 +115,7 @@ func token(args []string, stdout, stderr io.Writer) int {
 		}
 		tw.Flush()
 	case "revoke":
-		info, err := ts.Revoke(ctx, fs.Arg(0))
+		info, err := ts.RevokeOwned(ctx, auth.HostActor, "cli", "", fs.Arg(0))
 		if err != nil {
 			return fail(err)
 		}

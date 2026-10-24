@@ -100,3 +100,37 @@ func TestUserAddAdminFlag(t *testing.T) {
 		}
 	}
 }
+
+// P-159: `token create` and `token revoke` each write their audit row, actor host, via cli,
+// subject the user the token acts for; a refused revoke writes none.
+func TestTokenSubcommandIsAudited(t *testing.T) {
+	path := migratedDB(t)
+	withStdin(t, "pw\n")
+	if code, _, errs := run("user", "add", "alice"); code != 0 {
+		t.Fatalf("user add: %s", errs)
+	}
+	_, out, _ := run("token", "create", "--user", "alice", "--label", "ci")
+	id := strings.TrimSpace(out)[3 : 3+16]
+	run("token", "revoke", "bd_0000000000000000")
+	if code, _, errs := run("token", "revoke", "bd_"+id); code != 0 {
+		t.Fatalf("revoke: %s", errs)
+	}
+	st, err := store.OpenSQLite(path, "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	page, err := st.ListAuditLog(context.Background(), store.AuditFilter{}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range page.Rows {
+		got = append(got, r.Action+" "+r.Actor+">"+strings.SplitN(r.Subject, "-", 2)[0]+" "+string(r.Data))
+	}
+	want := `cli_token.revoked host>U {"label":"ci","tokenId":"` + id + `","via":"cli"}` + "\n" +
+		`cli_token.minted host>U {"label":"ci","tokenId":"` + id + `","via":"cli"}`
+	if strings.Join(got, "\n") != want {
+		t.Fatalf("audit rows:\n%s\nwant\n%s", strings.Join(got, "\n"), want)
+	}
+}

@@ -66,6 +66,8 @@ func (f *Fake) Services() service.Services {
 		Oncall:    oncallFake{f},
 		Runs:      runsFake{f},
 		Sprints:   sprintsFake{f},
+		Me:        meFake{f},
+		Audit:     auditFake{f},
 	}
 }
 

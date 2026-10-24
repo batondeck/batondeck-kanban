@@ -34,3 +34,6 @@ func (h *harness) Log() string { return h.log.String() }
 // ToolError is toolError: the structured error of a call that must fail, checked against
 // contract/errors.json's shape.
 var ToolError = toolError
+
+// URL is the harness's /mcp endpoint, for a raw HTTP request.
+func (h *harness) URL() string { return h.url }

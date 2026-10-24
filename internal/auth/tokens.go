@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -41,6 +42,9 @@ const (
 // TokenService mints, validates, revokes and lists API tokens.
 type TokenService struct {
 	Store store.Tokens
+	// Audit receives Mint's cli_token.minted and RevokeOwned's cli_token.revoked rows; nil
+	// refuses both (INTERNAL), since an unrecorded mint is the thing they exist to prevent.
+	Audit store.Audit
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -204,4 +208,67 @@ func (t *TokenService) List(ctx context.Context, identityID string) ([]TokenInfo
 		out = append(out, tokenInfo(r, now))
 	}
 	return out, nil
+}
+
+// The audit actions of a token minted or revoked by a person or the host (P-159): the dropped
+// create_cli_token and revoke_cli_token tools recorded them, and these paths replace those tools.
+const (
+	AuditTokenMinted  = "cli_token.minted"
+	AuditTokenRevoked = "cli_token.revoked"
+)
+
+// HostActor is the audit actor of the host's `token` subcommand: whoever runs the binary on the
+// host, who holds no identity of their own.
+const HostActor = "host"
+
+// Mint is Create, recorded: a cli_token.minted row (actor, subject the identity the token acts for,
+// data {tokenId, label, via}) follows the token, and when that row cannot be written the token is
+// revoked before the error returns, so no token exists unrecorded.
+func (t *TokenService) Mint(ctx context.Context, actor, via, identityID, subject, label string, ttl time.Duration) (string, TokenInfo, error) {
+	if t.Audit == nil {
+		return "", TokenInfo{}, domain.NewError(domain.CodeInternal, "token mint: no audit log to record it in", nil)
+	}
+	plain, info, err := t.Create(ctx, identityID, subject, label, ttl)
+	if err != nil {
+		return "", TokenInfo{}, err
+	}
+	if err := t.audit(ctx, AuditTokenMinted, actor, info, via); err != nil {
+		_ = t.Store.RevokeToken(context.WithoutCancel(ctx), info.ID, t.now().UnixMilli())
+		return "", TokenInfo{}, err
+	}
+	return plain, info, nil
+}
+
+// RevokeOwned is Revoke of a token owner holds ("" for any owner: the host's `token revoke`); a
+// token of another identity is NOT_FOUND, as one that does not exist, so a session cannot learn
+// which ids are live. It records cli_token.revoked.
+func (t *TokenService) RevokeOwned(ctx context.Context, actor, via, owner, id string) (TokenInfo, error) {
+	if t.Audit == nil {
+		return TokenInfo{}, domain.NewError(domain.CodeInternal, "token revoke: no audit log to record it in", nil)
+	}
+	bare := strings.TrimPrefix(id, TokenPrefix)
+	if owner != "" && validTokenID(bare) {
+		row, err := t.Store.GetToken(ctx, bare)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && row.IdentityID != owner) {
+			return TokenInfo{}, domain.NotFound("token", bare)
+		}
+		if err != nil {
+			return TokenInfo{}, err
+		}
+	}
+	info, err := t.Revoke(ctx, id)
+	if err != nil {
+		return TokenInfo{}, err
+	}
+	return info, t.audit(ctx, AuditTokenRevoked, actor, info, via)
+}
+
+func (t *TokenService) audit(ctx context.Context, action, actor string, info TokenInfo, via string) error {
+	data, err := json.Marshal(map[string]string{"tokenId": info.ID, "label": info.Label, "via": via})
+	if err != nil {
+		return err
+	}
+	_, err = t.Audit.AppendAudit(ctx, store.AuditRow{TS: t.now().UnixMilli(), Action: action, Actor: actor, Subject: info.IdentityID,
+		Result: store.AuditOK, Data: data})
+	return err
 }

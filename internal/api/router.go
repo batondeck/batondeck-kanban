@@ -38,6 +38,8 @@ type Options struct {
 	Auth     Auth
 	// Users is the local accounts /api/users lists and adds to; nil answers those routes INTERNAL.
 	Users *auth.Accounts
+	// Tokens is the TokenService behind /api/me/cli-tokens; nil answers those routes INTERNAL.
+	Tokens *auth.TokenService
 	// Bus feeds /api/stream; nil answers the stream 503.
 	Bus *bus.Bus
 	// Presence is the device session directory /api/stream's presence frames read; nil sends none.
@@ -76,7 +78,7 @@ func Mount(mux *http.ServeMux, o Options) {
 func table(o *Options) []route {
 	var rs []route
 	for _, area := range []func(*Options) []route{sessionRoutes, userRoutes, projectRoutes, boardRoutes, taskRoutes, lifecycleRoutes, contextRoutes, mediaRoutes, feedRoutes,
-		meRoutes, agentRoutes, notificationRoutes, commentRoutes, followUpRoutes, sprintRoutes, runRoutes, oncallRoutes, chronicleRoutes, analyticsRoutes} {
+		meRoutes, agentRoutes, auditRoutes, notificationRoutes, commentRoutes, followUpRoutes, sprintRoutes, runRoutes, oncallRoutes, chronicleRoutes, analyticsRoutes} {
 		rs = append(rs, area(o)...)
 	}
 	return rs

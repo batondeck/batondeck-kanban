@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router';
 import * as agentsApi from '../api/agents.js';
 import * as boardsApi from '../api/boards.js';
+import * as feedApi from '../api/feed.js';
 import * as projectsApi from '../api/projects.js';
 import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
@@ -16,7 +17,7 @@ import { isAgent } from '../types.js';
 import { ConnectMcp } from '../connect-mcp.js';
 import { Cluster, Panel, Stack, Tile, Tiles } from '../ui.js';
 import type { ActivityEvent, AgentSession, Task } from '../types.js';
-import { replaceDevicePresence } from '../presenceMerge.js';
+import { mergePresence, replaceDevicePresence } from '../presenceMerge.js';
 
 export function Agents() {
   const { ui } = useAuth();
@@ -26,17 +27,23 @@ export function Agents() {
   const qc = useQueryClient();
   const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
 
+  // Composed here from get_project and each board's tasks and feed: no overview route is served
+  // (ui-backend's aggregate had no lane). One fetch per board, bounded by the boards list, as
+  // ActivityLog's feed is.
+  const boardIds = (boardsQ.data?.boards ?? []).map((b) => b.id);
   const data = useQuery({
-    queryKey: ['agentsdata', projectId],
-    enabled: !!projectId,
+    queryKey: ['agentsdata', projectId, boardIds.join(',')],
+    enabled: !!projectId && !!boardsQ.data,
     queryFn: async () => {
-      // One aggregate round-trip (the ui-backend composes project+boards+tasks+feeds server-side).
-      const o = await projectsApi.overview(projectId);
+      const [p, perBoard] = await Promise.all([
+        projectsApi.getProject(projectId),
+        Promise.all(boardIds.map((id) => Promise.all([boardsApi.listTasks(projectId, id, { limit: String(ui.taskPageLimit) }), feedApi.feed(projectId, id)]))),
+      ]);
       return {
-        project: o.project,
-        memberDisplay: o.memberDisplay ?? {},
-        tasks: o.perBoard.flatMap((b) => b.tasks),
-        events: o.perBoard.flatMap((b) => b.feed.events),
+        project: p.project,
+        memberDisplay: p.memberDisplay ?? {},
+        tasks: perBoard.flatMap(([t]) => t.tasks),
+        events: perBoard.flatMap(([, f]) => f.events),
       };
     },
   });
@@ -47,9 +54,15 @@ export function Agents() {
   // NO POLL. This screen is a standalone route, so no board stream is mounted here; it opens the
   // identity-keyed `/api/stream` below instead and the gateway pushes presence snapshots down it. The
   // initial fetch stays so the table renders before the first snapshot arrives.
+  // The fetch keeps the device rows a presence frame already put in the cache: a frame is sent only
+  // on a change, so a list answering after it would otherwise drop them until the next one.
   const sessionsQ = useQuery({
     queryKey: ['agentSessions'],
-    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit),
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(ui.sessionsLimit);
+      const devices = (qc.getQueryData<{ sessions: AgentSession[] }>(['agentSessions'])?.sessions ?? []).filter((s) => s.sessionKey.startsWith('device:'));
+      return { sessions: mergePresence(fresh.sessions, devices) };
+    },
   });
   // Presence + notifications for a screen with no board open. Snapshots land straight in the cache, so
   // they cost zero HTTP.
@@ -174,6 +187,7 @@ export function Agents() {
                       <th style={{ textAlign: 'right' }}>Conns</th>
                       <th style={{ textAlign: 'right' }}>Calls</th>
                       <th>Top operations</th>
+                      <th style={{ textAlign: 'right' }} title="The change-log cursor of the last doorbell written to a process on this device">Delivered</th>
                       <th style={{ textAlign: 'right' }}>Last seen</th>
                     </tr>
                   </thead>
@@ -209,6 +223,11 @@ export function Agents() {
                           <td style={{ textAlign: 'right' }} className="mono">{s.sessionCount}</td>
                           <td style={{ textAlign: 'right' }} className="mono">{s.requestCount}</td>
                           <td className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }} title={Object.entries(s.toolCounts).map(([t, n]) => `${t}: ${n}`).join('\n')}>{topTools(s.toolCounts)}</td>
+                          {/* A device process's last delivered doorbell (wake_sessions.last_cursor): one
+                              never rung reads "none", so a silent session is visible. MCP rows have none. */}
+                          <td style={{ textAlign: 'right' }} className="mono" data-testid="delivered-cursor">
+                            {s.lastDeliveredCursor === undefined ? '—' : s.lastDeliveredCursor > 0 ? `#${s.lastDeliveredCursor}` : 'none'}
+                          </td>
                           <td style={{ textAlign: 'right', fontSize: 12, color: online ? 'var(--done)' : 'var(--text-muted)' }} title={new Date(s.lastSeenAt).toLocaleString()}>
                             {online ? <span className="dot-online" aria-hidden="true" /> : null}{timeAgo(s.lastSeenAt)}
                           </td>
@@ -216,7 +235,7 @@ export function Agents() {
                       );
                     })}
                     {sessions.length === 0 && !sessionsQ.isLoading && (
-                      <tr><td colSpan={7}><EmptyState icon="⌘" title="No MCP sessions yet" hint="Agents that connect over MCP will appear here." /></td></tr>
+                      <tr><td colSpan={8}><EmptyState icon="⌘" title="No MCP sessions yet" hint="Agents that connect over MCP will appear here." /></td></tr>
                     )}
                   </tbody>
                 </table>
