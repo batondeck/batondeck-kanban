@@ -67,10 +67,10 @@ func (f Frame) boards() []string {
 	return f.BoardIDs
 }
 
-// withBoards is f naming the distinct non-empty boards of ids, sorted then capped at MaxBoards: one
-// as BoardID, several as BoardIDs, none as neither.
+// withBoards is f naming the distinct boards of ids, sorted then capped at MaxBoards: one as
+// BoardID, several as BoardIDs, none as neither.
 func (f Frame) withBoards(ids []string) Frame {
-	ids = slices.DeleteFunc(slices.Clone(ids), func(s string) bool { return s == "" })
+	ids = slices.Clone(ids) // ids may share a frame's BoardIDs array
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	ids = ids[:min(len(ids), MaxBoards)]
