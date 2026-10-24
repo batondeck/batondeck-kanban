@@ -46,6 +46,8 @@ type Store interface {
 	Artifacts
 	Comments
 	FollowUps
+	Notifications
+	AgentProfiles
 	Chronicle
 	Runs
 	Sprints
