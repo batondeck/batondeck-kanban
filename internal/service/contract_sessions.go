@@ -22,6 +22,15 @@ type Sessions interface {
 	// Not tenant-scoped; workspace admin for every identity, else the caller's own. Writes nothing.
 	ListAgentSessions(ctx context.Context, caller domain.Caller, req ListAgentSessionsReq) (ListAgentSessionsResp, error)
 
+	// DisconnectAgent is disconnect_agent: it ends every live MCP session of (identityId, agentId)
+	// (AgentSessionEnder) and deletes its agent_sessions row, so the agent's next request on an
+	// ended session is answered 404 session not found and it initialises again. Not sticky: unlike
+	// conductor's revocation, a new initialize is admitted. Not tenant-scoped; the caller's own
+	// identity, or any for a workspace admin, else FORBIDDEN (whether or not the identity exists).
+	// Neither a row nor a live session is NOT_FOUND. Event: none. Audit: agent.disconnected
+	// (domain.DescribeAudit). Doorbell: none.
+	DisconnectAgent(ctx context.Context, caller domain.Caller, req DisconnectAgentReq) (DisconnectAgentResp, error)
+
 	// RegisterWakeSession records a device session-directory entry for the caller: the client
 	// process the directory validated, where its doorbells are delivered, and the caller's bearer,
 	// sealed, so the entry can be re-resolved later. req.ID, when set, replaces that row.
@@ -177,3 +186,22 @@ type SessionKind string
 
 // SessionKindValues are SessionKind's values, in the schema's order.
 var SessionKindValues = []SessionKind{"dev", "oauth_user", "service_account"}
+
+// DisconnectAgentReq is disconnect_agent's input.
+type DisconnectAgentReq struct {
+	AgentID    string `json:"agentId"`
+	IdentityID string `json:"identityId"`
+}
+
+// DisconnectAgentResp is disconnect_agent's output.
+type DisconnectAgentResp struct {
+	Disconnected bool `json:"disconnected"`
+}
+
+// AgentSessionEnder ends the live MCP sessions of one agent session: internal/mcp's server, handed
+// to the core after both are built (SetAgentSessionEnder), since the service imports no transport.
+// EndAgentSessions returns how many it ended; a session other than the calling request's is closed
+// before it returns, the calling one right after its response.
+type AgentSessionEnder interface {
+	EndAgentSessions(ctx context.Context, identityID, agentID string) int
+}
