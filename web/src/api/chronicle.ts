@@ -1,4 +1,4 @@
-// Owner: R2.7 fills these bodies; R1.12 copied the signatures from api.ts.
+// The chronicle routes (internal/api/chronicle.go, R2.7); R1.12 copied the signatures from api.ts.
 import type { ChronicleBlockInput, ChronicleConflicts, ChroniclePage, ChroniclePageKind, ChronicleVersion, ChronicleVersionMeta } from '../types.js';
 import { req, P } from './http.js';
 
