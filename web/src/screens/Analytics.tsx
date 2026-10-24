@@ -172,7 +172,7 @@ export function Analytics() {
     for (const t of tasks) {
       byStatus.set(t.status, (byStatus.get(t.status) ?? 0) + 1);
       if (t.claim && new Date(t.claim.expiresAt).getTime() > Date.now()) activeLeases += 1;
-      // A cancelled task holds DONE (ADR-0001) but was never done: conductor's CANCELLED (P-208).
+      // A cancelled task holds DONE (ADR-0001) but was never done: conductor's cancelled state (P-208).
       if (t.status === 'DONE' && !isCancelled(t)) {
         done += 1;
         // Prefer explicit agent evidence (agent-held claim, agent-created) over name heuristics —

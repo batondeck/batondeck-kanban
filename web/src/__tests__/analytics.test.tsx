@@ -3,7 +3,7 @@
  *
  * Analytics shows the summary's total and error rate, and asks the BFF for exactly the reads it
  * composes: the summary, the board, its feed and the agent sessions. A cancelled task (DONE with the
- * `cancelled` label, ADR-0001) is in the total and in no done figure, as conductor's CANCELLED was
+ * `cancelled` label, ADR-0001) is in the total and in no done figure, as conductor's cancelled state was
  * (P-208). Reports renders the summary's calls and window.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
