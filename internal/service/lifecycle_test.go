@@ -81,9 +81,14 @@ func (e *lcEnv) lastChange(t *testing.T) (store.Change, changePayload) {
 	if err != nil || len(ch) == 0 {
 		t.Fatalf("changes: %v %d", err, len(ch))
 	}
+	// The last doorbell or change row: a notification row (R2.3) is the recipient's feed, not one.
+	last := ch[len(ch)-1]
+	for i := len(ch) - 1; i >= 0 && last.Kind == ChangeKindNotification; i-- {
+		last = ch[i]
+	}
 	var p changePayload
-	_ = json.Unmarshal(ch[len(ch)-1].Payload, &p)
-	return ch[len(ch)-1], p
+	_ = json.Unmarshal(last.Payload, &p)
+	return last, p
 }
 
 func (e *lcEnv) changeCount(t *testing.T) int {
