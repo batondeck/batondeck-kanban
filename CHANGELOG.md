@@ -100,6 +100,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Browser security headers on every response (P-250). One middleware around the composed handler
+  sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `X-Frame-Options: DENY`
+  everywhere, and a `Content-Security-Policy` on everything but `/mcp`, `/hooks/` and `/blobs/`:
+  `default-src 'self'`, the theme bootstrap's script hash, inline styles (React style props and
+  mermaid's SVG), Google Fonts, images from this origin, `data:` and `www.google.com` (the link
+  favicons) only, `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`. The app could be
+  framed before, and a chronicle page could make its readers load any external image. The OAuth
+  pages keep their stricter policy. A test recomputes the script hash from the embedded
+  `index.html`.
+
 - `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
   a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
   role. No `scope` writes the worker default, `null` removes the grant, an object replaces it; a
