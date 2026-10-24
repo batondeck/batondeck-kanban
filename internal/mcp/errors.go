@@ -61,7 +61,9 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
-// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil).
+// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
+// and the projectId the call named when countsInProject allows it, which the operations summary
+// groups by.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
@@ -80,6 +82,9 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 			}
 		}
 	}
+	if s.countsInProject(row) {
+		row.ProjectID = projectOf(req)
+	}
 	caller, _ := CallerFrom(ctx)
 	if _, rerr := s.services.ToolCalls.Record(ctx, caller, row); rerr != nil {
 		s.log.Printf("mcp: recording tool call %s failed: %+v", row.Tool, rerr)
@@ -95,6 +100,32 @@ func errorResult(e *domain.BatonDeckError) *mcp.CallToolResult {
 	r := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(text)}}, StructuredContent: json.RawMessage(text)}
 	r.SetError(e)
 	return r
+}
+
+// countsInProject is whether the row may carry the call's project: not for a tool nobody registered
+// (its name is the caller's free text) nor for a FORBIDDEN or UNAUTHENTICATED call, so a non-member
+// moves no project's summary.
+func (s *Server) countsInProject(row service.RecordToolCallReq) bool {
+	if row.Code == string(domain.CodeForbidden) || row.Code == string(domain.CodeUnauthenticated) {
+		return false
+	}
+	s.tools.mu.Lock()
+	defer s.tools.mu.Unlock()
+	return s.tools.known[row.Tool]
+}
+
+// projectOf is the call's projectId argument, the row's project; "" when it names none or no string.
+func projectOf(req mcp.Request) string {
+	p, ok := req.GetParams().(*mcp.CallToolParamsRaw)
+	if !ok || len(p.Arguments) == 0 {
+		return ""
+	}
+	var args struct {
+		ProjectID any `json:"projectId"`
+	}
+	_ = json.Unmarshal(p.Arguments, &args)
+	id, _ := args.ProjectID.(string)
+	return id
 }
 
 func toolName(req mcp.Request) string {

@@ -27,7 +27,14 @@ func (x auditFake) ListAuditLog(ctx context.Context, caller domain.Caller, req s
 	return call[service.ListAuditLogResp](x.f, "Audit.ListAuditLog", caller, req)
 }
 
+type analyticsFake struct{ f *Fake }
+
+func (x analyticsFake) Operations(ctx context.Context, caller domain.Caller, req service.OperationsReq) (service.OperationsResp, error) {
+	return call[service.OperationsResp](x.f, "Analytics.Operations", caller, req)
+}
+
 var (
-	_ service.Me    = meFake{}
-	_ service.Audit = auditFake{}
+	_ service.Me        = meFake{}
+	_ service.Audit     = auditFake{}
+	_ service.Analytics = analyticsFake{}
 )

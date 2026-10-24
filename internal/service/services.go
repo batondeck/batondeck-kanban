@@ -48,4 +48,6 @@ type Services struct {
 	Audit         Audit
 	// R2.4
 	Grants Grants
+	// R2.11
+	Analytics Analytics
 }
