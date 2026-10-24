@@ -95,6 +95,18 @@ func (e *autocloseEnv) claim(id string) string {
 	return r.LeaseID
 }
 
+// race starts n runs of id and answers their ids.
+func (e *autocloseEnv) race(id string, n int64) []string {
+	e.t.Helper()
+	r, err := e.c.Runs().Start(e.ctx, e.alice, StartRunsReq{ProjectID: e.project, TaskID: id, Version: e.version(id), Count: n})
+	must(e.t, err)
+	var ids []string
+	for _, run := range r.Runs {
+		ids = append(ids, run.ID)
+	}
+	return ids
+}
+
 func (e *autocloseEnv) other() string {
 	e.t.Helper()
 	r, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board, Title: "other"})
@@ -237,6 +249,38 @@ var taskWrites = map[string][]taskWrite{
 		must(e.t, err)
 		return nil
 	}}},
+	// The race tools (R2.2): each moves the incident's version, so the resolve annotates it, and the
+	// runs they made (or the winner pick_run keeps) outlive it.
+	"start_runs": {{name: "raced", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		return e.race(id, 2)
+	}}},
+	"open_run": {{name: "raced and a run opened", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		runs := e.race(id, 1)
+		r, err := e.c.Runs().Open(e.ctx, e.alice, OpenRunReq{ProjectID: e.project, TaskID: id})
+		must(e.t, err)
+		return append(runs, r.Run.ID)
+	}}},
+	"pick_run": {{name: "raced and a winner picked", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		runs := e.race(id, 2)
+		_, err := e.c.Lifecycle().Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: runs[0], LeaseID: e.claim(runs[0]), Deliverable: "the fix"})
+		must(e.t, err)
+		_, err = e.c.Runs().Pick(e.ctx, e.alice, PickRunReq{ProjectID: e.project, TaskID: id, RunTaskID: runs[0], Version: e.version(id)})
+		must(e.t, err)
+		return runs[:1]
+	}}},
+	"cancel_runs": {{name: "raced and the race cancelled (back TODO)", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		e.race(id, 2)
+		_, err := e.c.Runs().Cancel(e.ctx, e.alice, CancelRunsReq{ProjectID: e.project, TaskID: id, Version: e.version(id)})
+		must(e.t, err)
+		return nil
+	}}},
+	"set_sprint": {{name: "added to a sprint", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		sp, err := e.c.Sprints().Create(e.ctx, e.alice, CreateSprintReq{ProjectID: e.project, BoardID: e.board, Name: "s", Goal: "g", Acceptance: "a"})
+		must(e.t, err)
+		_, err = e.c.Sprints().Set(e.ctx, e.alice, SetSprintReq{ProjectID: e.project, TaskID: id, Version: e.version(id), SprintID: sp.Sprint.ID, Action: "add"})
+		must(e.t, err)
+		return nil
+	}}},
 	"set_summary": {{name: "a summary", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
 		_, err := e.c.Context().SetSummary(e.ctx, e.alice, SetSummaryReq{ProjectID: e.project, TaskID: id, Version: e.version(id), Summary: "on it"})
 		must(e.t, err)
@@ -276,7 +320,7 @@ var taskWrites = map[string][]taskWrite{
 // pendingWrites are task-taking write tools still in contract/pending.json: each needs a case in
 // taskWrites the day it leaves (add_comment is R2.1's), which TestAutocloseSparesEveryTaskWrite
 // enforces.
-var pendingWrites = []string{"cancel_runs", "detect_anomalies", "open_run", "orchestrate_subtasks", "pick_run", "set_sprint", "start_runs"}
+var pendingWrites = []string{"detect_anomalies", "orchestrate_subtasks"}
 
 func must(t *testing.T, err error) {
 	t.Helper()

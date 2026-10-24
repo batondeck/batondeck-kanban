@@ -82,6 +82,9 @@ type state struct {
 	chronicleVersions map[[3]string]store.ChronicleVersion // by (project, page, version); no body
 	chronicleObjects  map[[2]string][]byte                 // by (project, key)
 
+	runs    map[[2]string]store.Run    // by (project, run task)
+	sprints map[[2]string]store.Sprint // by (project, sprint)
+
 	oauthClients  map[string]store.OAuthClient // by client id
 	oauthCodes    map[string]store.OAuthCode   // by code hash
 	oauthFamilies map[string]store.OAuthFamily // by id
@@ -130,6 +133,9 @@ func newState() *state {
 		chroniclePages:    map[[2]string]store.ChroniclePage{},
 		chronicleVersions: map[[3]string]store.ChronicleVersion{},
 		chronicleObjects:  map[[2]string][]byte{},
+
+		runs:    map[[2]string]store.Run{},
+		sprints: map[[2]string]store.Sprint{},
 
 		oauthClients:  map[string]store.OAuthClient{},
 		oauthCodes:    map[string]store.OAuthCode{},
@@ -334,6 +340,10 @@ func (st *state) clone() *state {
 	}
 	for k, v := range st.chronicleObjects {
 		c.chronicleObjects[k] = cloneBytes(v)
+	}
+	maps.Copy(c.runs, st.runs)
+	for k, v := range st.sprints {
+		c.sprints[k] = cloneSprint(v)
 	}
 	for k, v := range st.integrations {
 		c.integrations[k] = cloneIntegration(v)

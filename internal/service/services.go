@@ -37,4 +37,6 @@ type Services struct {
 	Sessions  Sessions
 	ToolCalls ToolCalls
 	Oncall    Oncall
+	Runs      Runs
+	Sprints   Sprints
 }

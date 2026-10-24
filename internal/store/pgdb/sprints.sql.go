@@ -7,7 +7,48 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
+
+const addSprintMembers = `-- name: AddSprintMembers :one
+UPDATE sprints SET member_count = GREATEST(0, member_count + $1::bigint)
+WHERE project_id = $2 AND id = $3
+RETURNING project_id, id, board_id, name, goal, acceptance, status, proposal_task_id, approved_by, member_count, checkpoint, event_cursor, version, created_by, created_at, started_at, closed_at, updated_by, updated_at
+`
+
+type AddSprintMembersParams struct {
+	Delta     int64
+	ProjectID string
+	ID        string
+}
+
+// The member count moved by delta, never below 0; the version is kept.
+func (q *Queries) AddSprintMembers(ctx context.Context, arg AddSprintMembersParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, addSprintMembers, arg.Delta, arg.ProjectID, arg.ID)
+	var i Sprint
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.Name,
+		&i.Goal,
+		&i.Acceptance,
+		&i.Status,
+		&i.ProposalTaskID,
+		&i.ApprovedBy,
+		&i.MemberCount,
+		&i.Checkpoint,
+		&i.EventCursor,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.ClosedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
 
 const getSprint = `-- name: GetSprint :one
 SELECT project_id, id, board_id, name, goal, acceptance, status, proposal_task_id, approved_by, member_count, checkpoint, event_cursor, version, created_by, created_at, started_at, closed_at, updated_by, updated_at FROM sprints WHERE project_id = $1 AND id = $2
@@ -20,6 +61,327 @@ type GetSprintParams struct {
 
 func (q *Queries) GetSprint(ctx context.Context, arg GetSprintParams) (Sprint, error) {
 	row := q.db.QueryRow(ctx, getSprint, arg.ProjectID, arg.ID)
+	var i Sprint
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.Name,
+		&i.Goal,
+		&i.Acceptance,
+		&i.Status,
+		&i.ProposalTaskID,
+		&i.ApprovedBy,
+		&i.MemberCount,
+		&i.Checkpoint,
+		&i.EventCursor,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.ClosedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertSprint = `-- name: InsertSprint :one
+INSERT INTO sprints (project_id, id, board_id, name, goal, acceptance, status, member_count, version, created_by, created_at, updated_by, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'PROPOSED', 0, 1, $7, $8, $9, $10)
+RETURNING project_id, id, board_id, name, goal, acceptance, status, proposal_task_id, approved_by, member_count, checkpoint, event_cursor, version, created_by, created_at, started_at, closed_at, updated_by, updated_at
+`
+
+type InsertSprintParams struct {
+	ProjectID  string
+	ID         string
+	BoardID    string
+	Name       string
+	Goal       string
+	Acceptance string
+	CreatedBy  string
+	CreatedAt  int64
+	UpdatedBy  string
+	UpdatedAt  int64
+}
+
+func (q *Queries) InsertSprint(ctx context.Context, arg InsertSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, insertSprint,
+		arg.ProjectID,
+		arg.ID,
+		arg.BoardID,
+		arg.Name,
+		arg.Goal,
+		arg.Acceptance,
+		arg.CreatedBy,
+		arg.CreatedAt,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+	)
+	var i Sprint
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.Name,
+		&i.Goal,
+		&i.Acceptance,
+		&i.Status,
+		&i.ProposalTaskID,
+		&i.ApprovedBy,
+		&i.MemberCount,
+		&i.Checkpoint,
+		&i.EventCursor,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.StartedAt,
+		&i.ClosedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listSprintMembers = `-- name: ListSprintMembers :many
+SELECT t.project_id, t.id, t.board_id, t.column_id, t.title, t.description, t.status, t.blocked_reason, t.priority, t.assignee, t.labels, t.required_capabilities, t.estimate, t.due_at, t.parent_task_id, t.order_key, t.custom_fields, t.blocked_by, t.blocks, t.deliverable, t.reviewer, t.review, t.chars, t.model_hint, t.run_of, t.sprint_ids, t.racing, t.race_opened_at, t.claim_attempts, t.next_eligible_at, t.score, t.search_tokens, t.claim_owner, t.claim_agent, t.claim_agent_id, t.lease_id, t.lease_expires_at, t.version, t.created_by, t.created_by_agent, t.created_at, t.updated_by, t.updated_at
+FROM sprints s JOIN tasks t ON t.project_id = s.project_id AND t.board_id = s.board_id
+WHERE s.project_id = $1 AND s.id = $2
+  AND t.sprint_ids::jsonb @> jsonb_build_array(s.id)
+ORDER BY t.order_key COLLATE "C", t.id COLLATE "C"
+LIMIT $3::bigint
+`
+
+type ListSprintMembersParams struct {
+	ProjectID string
+	SprintID  string
+	PageLimit int64
+}
+
+type ListSprintMembersRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// The tasks of the sprint's board whose sprint_ids hold the sprint, (order key, id) ascending as bytes.
+func (q *Queries) ListSprintMembers(ctx context.Context, arg ListSprintMembersParams) ([]ListSprintMembersRow, error) {
+	rows, err := q.db.Query(ctx, listSprintMembers, arg.ProjectID, arg.SprintID, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSprintMembersRow
+	for rows.Next() {
+		var i ListSprintMembersRow
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.ColumnID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.BlockedReason,
+			&i.Priority,
+			&i.Assignee,
+			&i.Labels,
+			&i.RequiredCapabilities,
+			&i.Estimate,
+			&i.DueAt,
+			&i.ParentTaskID,
+			&i.OrderKey,
+			&i.CustomFields,
+			&i.BlockedBy,
+			&i.Blocks,
+			&i.Deliverable,
+			&i.Reviewer,
+			&i.Review,
+			&i.Chars,
+			&i.ModelHint,
+			&i.RunOf,
+			&i.SprintIds,
+			&i.Racing,
+			&i.RaceOpenedAt,
+			&i.ClaimAttempts,
+			&i.NextEligibleAt,
+			&i.Score,
+			&i.SearchTokens,
+			&i.ClaimOwner,
+			&i.ClaimAgent,
+			&i.ClaimAgentID,
+			&i.LeaseID,
+			&i.LeaseExpiresAt,
+			&i.Version,
+			&i.CreatedBy,
+			&i.CreatedByAgent,
+			&i.CreatedAt,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSprints = `-- name: ListSprints :many
+SELECT project_id, id, board_id, name, goal, acceptance, status, proposal_task_id, approved_by, member_count, checkpoint, event_cursor, version, created_by, created_at, started_at, closed_at, updated_by, updated_at FROM sprints s
+WHERE s.project_id = $1
+  AND ($2::text = '' OR s.board_id = $2::text)
+  AND ($3::text = '' OR s.status = $3::text)
+  AND ($4::text = '' OR s.created_at > $5::bigint
+       OR (s.created_at = $5::bigint AND s.id COLLATE "C" > $4::text))
+ORDER BY s.created_at, s.id COLLATE "C"
+LIMIT $6::bigint
+`
+
+type ListSprintsParams struct {
+	ProjectID    string
+	BoardID      string
+	Status       string
+	AfterID      string
+	AfterCreated int64
+	PageLimit    int64
+}
+
+// One page of the project's sprints, oldest first ((created_at, id) ascending, the id as bytes),
+// strictly after the cursor's (after_created, after_id); after_id ” is the first page, an empty
+// board or status every one.
+func (q *Queries) ListSprints(ctx context.Context, arg ListSprintsParams) ([]Sprint, error) {
+	rows, err := q.db.Query(ctx, listSprints,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Status,
+		arg.AfterID,
+		arg.AfterCreated,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Sprint
+	for rows.Next() {
+		var i Sprint
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.ID,
+			&i.BoardID,
+			&i.Name,
+			&i.Goal,
+			&i.Acceptance,
+			&i.Status,
+			&i.ProposalTaskID,
+			&i.ApprovedBy,
+			&i.MemberCount,
+			&i.Checkpoint,
+			&i.EventCursor,
+			&i.Version,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.ClosedAt,
+			&i.UpdatedBy,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateSprint = `-- name: UpdateSprint :one
+UPDATE sprints SET name = $1, goal = $2, acceptance = $3, status = $4, proposal_task_id = $5, approved_by = $6, checkpoint = $7, event_cursor = $8, started_at = $9, closed_at = $10, version = version + 1, updated_by = $11, updated_at = $12
+WHERE project_id = $13 AND id = $14 AND version = $15
+RETURNING project_id, id, board_id, name, goal, acceptance, status, proposal_task_id, approved_by, member_count, checkpoint, event_cursor, version, created_by, created_at, started_at, closed_at, updated_by, updated_at
+`
+
+type UpdateSprintParams struct {
+	Name           string
+	Goal           string
+	Acceptance     string
+	Status         string
+	ProposalTaskID sql.NullString
+	ApprovedBy     sql.NullString
+	Checkpoint     sql.NullString
+	EventCursor    sql.NullString
+	StartedAt      sql.NullInt64
+	ClosedAt       sql.NullInt64
+	UpdatedBy      string
+	UpdatedAt      int64
+	ProjectID      string
+	ID             string
+	Version        int64
+}
+
+// The whole row as the caller merged it, compare-and-set on version.
+func (q *Queries) UpdateSprint(ctx context.Context, arg UpdateSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, updateSprint,
+		arg.Name,
+		arg.Goal,
+		arg.Acceptance,
+		arg.Status,
+		arg.ProposalTaskID,
+		arg.ApprovedBy,
+		arg.Checkpoint,
+		arg.EventCursor,
+		arg.StartedAt,
+		arg.ClosedAt,
+		arg.UpdatedBy,
+		arg.UpdatedAt,
+		arg.ProjectID,
+		arg.ID,
+		arg.Version,
+	)
 	var i Sprint
 	err := row.Scan(
 		&i.ProjectID,

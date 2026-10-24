@@ -47,6 +47,8 @@ type Store interface {
 	Comments
 	FollowUps
 	Chronicle
+	Runs
+	Sprints
 	Tasks
 	Claims
 	Events

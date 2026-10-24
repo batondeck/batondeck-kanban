@@ -22,10 +22,10 @@ WHERE project_id = $23 AND id = $24
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;
 
 -- The write of SetStatus, SetOrderKey and ClaimTask: status, place, retry state, lease, and the
--- assignee, deliverable and review a SetStatus may carry with them.
+-- assignee, deliverable, review and race flag a SetStatus may carry with them.
 -- name: WriteTaskState :one
-UPDATE tasks SET status = $1, column_id = $2, order_key = $3, blocked_reason = $4, labels = $5, claim_attempts = $6, next_eligible_at = $7, claim_owner = $8, claim_agent = $9, claim_agent_id = $10, lease_id = $11, lease_expires_at = $12, assignee = $13, deliverable = $14, review = $15, version = $16, updated_by = $17, updated_at = $18
-WHERE project_id = $19 AND id = $20
+UPDATE tasks SET status = $1, column_id = $2, order_key = $3, blocked_reason = $4, labels = $5, claim_attempts = $6, next_eligible_at = $7, claim_owner = $8, claim_agent = $9, claim_agent_id = $10, lease_id = $11, lease_expires_at = $12, assignee = $13, deliverable = $14, review = $15, racing = $16, race_opened_at = $17, version = $18, updated_by = $19, updated_at = $20
+WHERE project_id = $21 AND id = $22
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;
 
 -- One page of a board's tasks: (order key, id) ascending, as bytes, strictly after the cursor's

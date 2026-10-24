@@ -108,4 +108,40 @@ describe('Runs — race start', () => {
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toContain('/runs/pick');
   });
+
+  it('lists what list_runs returns: the racing count is its length, no discarded state, a DONE run without a deliverable not pickable', async () => {
+    const listed = [
+      { taskId: 'T-2', status: 'IN_PROGRESS', assignee: 'a1', leaseHolder: 'a1', hasDeliverable: false, version: 2 },
+      { taskId: 'T-3', status: 'REVIEW', assignee: null, leaseHolder: null, hasDeliverable: true, deliverable: 'draft', version: 3 },
+      // cancel_task closes a run DONE with the cancelled label and no deliverable (ADR-0001).
+      { taskId: 'T-4', status: 'DONE', assignee: null, leaseHolder: null, hasDeliverable: false, version: 4 },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ runs: listed }) }) as Response));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <Runs projectId="p1" task={{ ...task, racing: true }} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/Racing · 3 runs open/)).toBeInTheDocument();
+    expect(screen.getByText('3 runs')).toBeInTheDocument();
+    expect(screen.queryByText('Discarded')).toBeNull();
+    expect(screen.getAllByText(/^\s*Pick\s*$/)).toHaveLength(1);
+    expect(screen.getAllByText('Submitted')).toHaveLength(1);
+    expect(screen.getByText('deletes the others.', { exact: false })).toBeInTheDocument();
+  });
+
+  it('after a pick the one run left is the winner', async () => {
+    const left = [{ taskId: 'T-3', status: 'REVIEW', assignee: null, leaseHolder: null, hasDeliverable: true, deliverable: 'draft', version: 3 }];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ runs: left }) }) as Response));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <Runs projectId="p1" task={task} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('Win')).toBeInTheDocument();
+    expect(screen.getByText('1 run')).toBeInTheDocument();
+    expect(screen.queryByText(/Racing ·/)).toBeNull();
+  });
 });

@@ -9,25 +9,73 @@ import (
 	"context"
 )
 
-const getRun = `-- name: GetRun :one
-SELECT project_id, run_task_id, parent_task_id, ordinal, opened_by, opened_at FROM runs WHERE project_id = ? AND run_task_id = ?
+const insertRun = `-- name: InsertRun :execrows
+INSERT INTO runs (project_id, run_task_id, parent_task_id, ordinal, opened_by, opened_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (project_id, run_task_id) DO NOTHING
 `
 
-type GetRunParams struct {
-	ProjectID string
-	RunTaskID string
+type InsertRunParams struct {
+	ProjectID    string
+	RunTaskID    string
+	ParentTaskID string
+	Ordinal      int64
+	OpenedBy     string
+	OpenedAt     int64
 }
 
-func (q *Queries) GetRun(ctx context.Context, arg GetRunParams) (Run, error) {
-	row := q.db.QueryRowContext(ctx, getRun, arg.ProjectID, arg.RunTaskID)
-	var i Run
-	err := row.Scan(
-		&i.ProjectID,
-		&i.RunTaskID,
-		&i.ParentTaskID,
-		&i.Ordinal,
-		&i.OpenedBy,
-		&i.OpenedAt,
+// A run's ordinal among its parent's runs; a second insert of one run task changes nothing.
+func (q *Queries) InsertRun(ctx context.Context, arg InsertRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertRun,
+		arg.ProjectID,
+		arg.RunTaskID,
+		arg.ParentTaskID,
+		arg.Ordinal,
+		arg.OpenedBy,
+		arg.OpenedAt,
 	)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const listRuns = `-- name: ListRuns :many
+SELECT project_id, run_task_id, parent_task_id, ordinal, opened_by, opened_at FROM runs WHERE project_id = ? AND parent_task_id = ? ORDER BY ordinal, run_task_id LIMIT 200
+`
+
+type ListRunsParams struct {
+	ProjectID    string
+	ParentTaskID string
+}
+
+// The parent's run rows, ordinal ascending, then run task id as bytes.
+func (q *Queries) ListRuns(ctx context.Context, arg ListRunsParams) ([]Run, error) {
+	rows, err := q.db.QueryContext(ctx, listRuns, arg.ProjectID, arg.ParentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Run
+	for rows.Next() {
+		var i Run
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.RunTaskID,
+			&i.ParentTaskID,
+			&i.Ordinal,
+			&i.OpenedBy,
+			&i.OpenedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

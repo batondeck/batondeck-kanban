@@ -21,7 +21,16 @@ import (
 // SQLite is a migrated SQLite store on a new file in t's temporary directory, closed at cleanup.
 func SQLite(t testing.TB) *store.SQLite {
 	t.Helper()
-	s, err := store.OpenSQLite(filepath.Join(t.TempDir(), "test.db"), "FULL")
+	s, _ := SQLiteFile(t)
+	return s
+}
+
+// SQLiteFile is SQLite and the path of its file, for a test that reads rows back on a connection of
+// its own (internal/cli's row counts).
+func SQLiteFile(t testing.TB) (*store.SQLite, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := store.OpenSQLite(path, "FULL")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +38,7 @@ func SQLite(t testing.TB) *store.SQLite {
 	if _, err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s, path
 }
 
 var seq atomic.Int64
@@ -37,6 +46,14 @@ var seq atomic.Int64
 // Postgres is a migrated Postgres store on a new database of the BATONDECK_TEST_POSTGRES_DSN
 // server, dropped at cleanup. Unset, the test skips and says so; set and unreachable, it fails.
 func Postgres(t testing.TB) *store.Postgres {
+	t.Helper()
+	s, _ := PostgresDSN(t)
+	return s
+}
+
+// PostgresDSN is Postgres and the DSN of its database, for a test that reads rows back on a
+// connection of its own.
+func PostgresDSN(t testing.TB) (*store.Postgres, string) {
 	t.Helper()
 	dsn := os.Getenv("BATONDECK_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -52,7 +69,8 @@ func Postgres(t testing.TB) *store.Postgres {
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}
-	s, err := store.OpenPostgres(ctx, withDB(dsn, name))
+	db := withDB(dsn, name)
+	s, err := store.OpenPostgres(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +89,7 @@ func Postgres(t testing.TB) *store.Postgres {
 	if _, err := s.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return s, db
 }
 
 // withDB is dsn naming the database db.
