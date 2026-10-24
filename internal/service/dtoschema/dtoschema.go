@@ -150,6 +150,7 @@ func For(typ reflect.Type) *jsonschema.Schema {
 		panic(fmt.Sprintf("dtoschema: decode %s: %v", typ, err))
 	}
 	unnullArrays(m)
+	nullableEnums(m)
 	if b, err = json.Marshal(m); err != nil {
 		panic(fmt.Sprintf("dtoschema: marshal %s: %v", typ, err))
 	}
@@ -158,6 +159,29 @@ func For(typ reflect.Type) *jsonschema.Schema {
 		panic(fmt.Sprintf("dtoschema: decode %s: %v", typ, err))
 	}
 	return out
+}
+
+// nullableEnums rewrites a nullable enum (a pointer to an enum type infers type [null, string]
+// beside the enum) as anyOf [the enum, null]: the enum keyword applies to null too, so the inferred
+// form refuses the null it declares, and go-sdk's output validation turns that into INTERNAL. The
+// rewrite canonicalises to the same node (contract/canonical.go merges the one-structured-branch
+// anyOf), as conductor's z.enum(...).nullable() does.
+func nullableEnums(v any) {
+	switch n := v.(type) {
+	case map[string]any:
+		if ts, ok := n["type"].([]any); ok && len(ts) == 2 && ts[0] == "null" && ts[1] == "string" && n["enum"] != nil {
+			n["anyOf"] = []any{map[string]any{"type": "string", "enum": n["enum"]}, map[string]any{"type": "null"}}
+			delete(n, "type")
+			delete(n, "enum")
+		}
+		for _, c := range n {
+			nullableEnums(c)
+		}
+	case []any:
+		for _, c := range n {
+			nullableEnums(c)
+		}
+	}
 }
 
 func unnullArrays(v any) {
