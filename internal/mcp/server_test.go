@@ -350,9 +350,9 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 	var got []string
 	for _, c := range calls(f, "ToolCalls.Record") {
 		r := c.Req.(service.RecordToolCallReq)
-		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code)
+		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code+" "+r.ProjectID)
 	}
-	want := []string{"u-ada whoami ok OK", "u-ada stale error STALE", "u-ada boom error INTERNAL", "u-ada plain error INTERNAL"}
+	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("tool_calls rows = %q, want %q", got, want)
 	}

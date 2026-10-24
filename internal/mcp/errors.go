@@ -61,7 +61,8 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
-// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil).
+// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
+// and the projectId the call named, which the operations summary groups by.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
@@ -70,7 +71,7 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 			s.log.Printf("mcp: recording tool call %s panicked: %v\n%s", toolName(req), p, debug.Stack())
 		}
 	}()
-	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds()}
+	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds(), ProjectID: projectOf(req)}
 	r, _ := res.(*mcp.CallToolResult)
 	if err != nil || r == nil || r.IsError {
 		row.Outcome, row.Code = "error", string(domain.CodeInternal)
@@ -95,6 +96,20 @@ func errorResult(e *domain.BatonDeckError) *mcp.CallToolResult {
 	r := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(text)}}, StructuredContent: json.RawMessage(text)}
 	r.SetError(e)
 	return r
+}
+
+// projectOf is the call's projectId argument, the row's project; "" when it names none or no string.
+func projectOf(req mcp.Request) string {
+	p, ok := req.GetParams().(*mcp.CallToolParamsRaw)
+	if !ok || len(p.Arguments) == 0 {
+		return ""
+	}
+	var args struct {
+		ProjectID any `json:"projectId"`
+	}
+	_ = json.Unmarshal(p.Arguments, &args)
+	id, _ := args.ProjectID.(string)
+	return id
 }
 
 func toolName(req mcp.Request) string {
