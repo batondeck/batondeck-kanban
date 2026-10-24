@@ -24,7 +24,7 @@ const session = (over: Record<string, unknown>) => ({
   toolCounts: { list_tasks: 69 }, ...over,
 });
 
-async function mount(path: string, admin: boolean, routes: Record<string, (init?: RequestInit) => unknown>, prefill?: (qc: import('@tanstack/react-query').QueryClient) => void): Promise<void> {
+async function mount(path: string, admin: boolean, routes: Record<string, (init?: RequestInit) => unknown>, prefill?: (qc: import('@tanstack/react-query').QueryClient) => void): Promise<import('@tanstack/react-query').QueryClient> {
   fetched = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const p = String(input).split('?')[0]!;
@@ -48,6 +48,7 @@ async function mount(path: string, admin: boolean, routes: Record<string, (init?
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return qc;
 }
 
 describe('Settings: CLI tokens and your MCP sessions', () => {
@@ -69,6 +70,23 @@ describe('Settings: CLI tokens and your MCP sessions', () => {
     expect(screen.queryByText(/marketplace/i)).toBeNull();
     expect(fetched.filter((f) => f.includes('marketplace'))).toEqual([]);
     expect(fetched).toContain('POST /api/me/cli-tokens');
+  });
+});
+
+describe('Settings: the minted plaintext leaves memory', () => {
+  it('is in no mutation once Done is pressed, nor after the screen unmounts', async () => {
+    const qc = await mount('/settings', false, {
+      'POST /api/me/cli-tokens': () => ({ id: 'fedcba9876543210', label: 'laptop', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live', token: MINTED, shownOnce: true }),
+    });
+    const held = () => qc.getMutationCache().getAll().filter((m) => JSON.stringify(m.state.data ?? null).includes(MINTED)).length;
+    fireEvent.change(await screen.findByLabelText('Token label'), { target: { value: 'laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mint token' }));
+    expect(await screen.findByDisplayValue(MINTED)).toBeInTheDocument();
+    expect(held(), 'the mint answer is held while it is shown').toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(held(), 'held after Done').toBe(0));
+    cleanup();
+    await waitFor(() => expect(held(), 'held after unmount').toBe(0));
   });
 });
 

@@ -330,7 +330,9 @@ function CliTokens() {
   const tokens = tokensQ.data?.tokens ?? [];
 
   const refresh = (): void => void qc.invalidateQueries({ queryKey: ['cliTokens'] });
+  // gcTime 0: the answer carries the plaintext, so it must not outlive Done in the mutation cache.
   const mint = useMutation({
+    gcTime: 0,
     mutationFn: () => meApi.createCliToken({ label: label.trim() }),
     onSuccess: (r) => { setMinted(r.token); setLabel(''); setErr(null); setCopied(false); refresh(); },
     onError: (e) => setErr(String(e instanceof Error ? e.message : e)),
@@ -417,7 +419,7 @@ function CliTokens() {
               )}
               <button
                 className={copied ? 'btn' : 'btn secondary'}
-                onClick={() => { setMinted(null); setCopied(false); }}
+                onClick={() => { setMinted(null); setCopied(false); mint.reset(); }}
               >
                 Done
               </button>
