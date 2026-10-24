@@ -12,10 +12,15 @@ Notable changes to batondeck-kanban. The format follows
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
   It deletes, in bounded batches, memory past its expiry, change-log rows past
-  `retention.change_log_days`, tool_calls rows past `retention.tool_calls_days`, deliveries and raw
-  webhook bodies past the expiry stamped on each, and (with a blob store) the blobs unreferenced for
-  an hour. Before this, nothing ran it, so tool_calls and the change log grew without bound. Boot
-  logs the interval and both windows.
+  `retention.change_log_days`, tool_calls rows past `retention.tool_calls_days`, agent sessions idle
+  for 30 minutes (ADR-0004's GC in place of `prune_agent_sessions`; `Store.DeleteIdleAgentSessions`
+  now takes a limit, longest idle first), deliveries and raw webhook bodies past the expiry stamped
+  on each, and (with a blob store) the blobs unreferenced for an hour. Before this, nothing ran it,
+  so tool_calls and the change log grew without bound. The delivery and raw-body windows are config
+  too: `retention.deliveries_days` (`BATONDECK_RETENTION_DELIVERIES_DAYS`, default 30, also an alert
+  state's expiry) and `retention.raw_bodies_days` (`BATONDECK_RETENTION_RAW_BODIES_DAYS`, default 7),
+  stamped on each row when written, so a change applies to rows written after it. Boot logs the
+  interval and every window.
 - Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
   R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
   message for an unknown login, a wrong password and a disabled account) and the form shows it; on
