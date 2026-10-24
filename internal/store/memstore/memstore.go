@@ -48,6 +48,7 @@ type state struct {
 
 	projects map[string]store.Project   // by id
 	members  map[[2]string]store.Member // by (project, identity)
+	grants   map[[2]string]store.Grant  // by (project, identity); gone with the member
 	counters map[string]int64           // last task number, by project
 	boards   map[[2]string]store.Board  // by (project, board); Columns unsorted
 	idem     map[[3]string]idemEntry    // by (project, identity, key)
@@ -110,6 +111,7 @@ func newState() *state {
 	return &state{
 		projects: map[string]store.Project{},
 		members:  map[[2]string]store.Member{},
+		grants:   map[[2]string]store.Grant{},
 		counters: map[string]int64{},
 		boards:   map[[2]string]store.Board{},
 		idem:     map[[3]string]idemEntry{},
@@ -284,6 +286,9 @@ func (st *state) clone() *state {
 	}
 	for k, v := range st.members {
 		c.members[k] = v
+	}
+	for k, v := range st.grants {
+		c.grants[k] = cloneGrant(v)
 	}
 	for k, v := range st.counters {
 		c.counters[k] = v

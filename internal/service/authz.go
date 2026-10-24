@@ -47,7 +47,8 @@ func checkGrant(g domain.CapabilityGrant, s domain.GrantSubject) error {
 // projectID (a missing project or membership is FORBIDDEN, never NOT_FOUND, so a project's
 // existence does not leak), the tier against the member's role capped by the caller's token role,
 // and the grant via domain.CheckGrant unless the tool is grant-exempt. Membership and grant are
-// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once.
+// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once. A grant on
+// a project admin is not enforced.
 // AdminOnly "conditional" tools are listed and gated in their handler, not here.
 func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, tool string, subject domain.GrantSubject, namesTask bool) (access, error) {
 	p, ok := domain.ToolPosture(tool)
@@ -75,7 +76,9 @@ func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, t
 		return access{}, forbidden("Role "+string(a.Role)+" cannot call "+tool,
 			map[string]any{"tool": tool, "role": a.Role, "requiredRole": domain.TierMinRole(p.Tier)})
 	}
-	if !a.hasGrant || p.GrantExempt {
+	// A project admin can rewrite any grant, so one on an admin is not enforced (conductor's decide.ts):
+	// enforcing it could lock the project's last admin out of granting.
+	if !a.hasGrant || p.GrantExempt || e.role == domain.RoleAdmin {
 		return a, nil
 	}
 	subject.Tool = tool
@@ -104,6 +107,7 @@ func effectiveRole(member domain.Role, token string) domain.Role {
 // role or grant change calls it (add_member, remove_member, grant_capabilities, delete_project).
 func (c *Core) InvalidateAccess(projectID, identityID string) {
 	c.access.invalidate(projectID, identityID)
+	c.hidden.invalidate(identityID)
 }
 
 // accessEntry is the cached membership and grant, read through on a miss or an expired entry.

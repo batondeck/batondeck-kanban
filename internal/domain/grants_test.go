@@ -211,3 +211,58 @@ func TestPostureFoldedRows(t *testing.T) {
 		}
 	}
 }
+
+// GrantHiddenTools hides a governed project tool only when every membership's grant refuses it by
+// name: one membership with no grant, or one whose allowlist names the tool, keeps it listed. Exempt
+// reads, unscoped tools and the per-call restrictions hide nothing.
+func TestGrantHiddenTools(t *testing.T) {
+	only := CapabilityGrant{Tools: []string{"claim_task"}}
+	hidden := GrantHiddenTools([]CapabilityGrant{only})
+	for _, name := range []string{"write_memory", "create_task", "grant_capabilities"} {
+		if !slices.Contains(hidden, name) {
+			t.Errorf("{tools:[claim_task]} lists %s", name)
+		}
+	}
+	for _, name := range []string{"claim_task", "get_task", "list_projects", "create_project", "list_notifications"} {
+		if slices.Contains(hidden, name) {
+			t.Errorf("{tools:[claim_task]} hides %s (granted, an exempt read or unscoped)", name)
+		}
+	}
+	if got := GrantHiddenTools([]CapabilityGrant{only, {Tools: []string{"claim_task", "write_memory"}}}); slices.Contains(got, "write_memory") ||
+		!slices.Contains(got, "create_task") {
+		t.Errorf("one membership granting write_memory: hidden %v, want write_memory listed and create_task hidden", got)
+	}
+	if got := GrantHiddenTools([]CapabilityGrant{only, {}}); got != nil {
+		t.Errorf("a membership with no grant: hidden %v, want none", got)
+	}
+	if got := GrantHiddenTools([]CapabilityGrant{{Deny: []string{"fail_task"}}}); !slices.Equal(got, []string{"fail_task"}) {
+		t.Errorf("{deny:[fail_task]} hides %v, want [fail_task]", got)
+	}
+	if got := GrantHiddenTools([]CapabilityGrant{{Statuses: []Status{Todo}, Labels: []string{"x"}, MemoryScopes: []MemoryScope{MemoryScopeTask}}}); got != nil {
+		t.Errorf("per-call restrictions hide %v, want none", got)
+	}
+	if got := GrantHiddenTools(nil); got != nil {
+		t.Errorf("no membership hides %v", got)
+	}
+}
+
+// CheckGrantEnforceable refuses a deny or tools entry naming a tool no grant reaches, naming the field
+// and the tools; a grant naming project tools only is the positive control.
+func TestCheckGrantEnforceable(t *testing.T) {
+	for _, c := range []struct {
+		g     CapabilityGrant
+		field string
+		tools []string
+	}{
+		{CapabilityGrant{Deny: []string{"claim_task", "list_projects"}}, "deny", []string{"list_projects"}},
+		{CapabilityGrant{Tools: []string{"disconnect_agent", "list_agent_sessions"}}, "tools", []string{"disconnect_agent", "list_agent_sessions"}},
+	} {
+		e, ok := AsBatonDeckError(CheckGrantEnforceable(c.g))
+		if !ok || e.Code != CodeValidation || e.Details["field"] != c.field || !reflect.DeepEqual(e.Details["tools"], c.tools) {
+			t.Errorf("CheckGrantEnforceable(%+v) = %v, want VALIDATION on %s naming %v", c.g, e, c.field, c.tools)
+		}
+	}
+	if err := CheckGrantEnforceable(WorkerDefaultGrant()); err != nil {
+		t.Errorf("the worker default grant: %v", err)
+	}
+}
