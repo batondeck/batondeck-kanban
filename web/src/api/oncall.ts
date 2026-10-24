@@ -1,4 +1,4 @@
-// Owner: R2.10 fills these bodies; R1.12 copied the signatures from api.ts.
+// The on-call routes of internal/api/oncall.go (R2.10): the source catalog, integrations, and each one's delivery log.
 import type { CreateIntegrationBody, Delivery, Integration, IntegrationPatchBody, OncallSource } from '../types.js';
 import { req, ON } from './http.js';
 
