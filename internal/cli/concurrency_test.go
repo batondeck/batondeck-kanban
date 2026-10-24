@@ -161,6 +161,50 @@ func TestUnversionedWritesToOneTaskNeverDeadlockOrAnswerInternal(t *testing.T) {
 	})
 }
 
+// G2's other half: add_follow_up {reopen} carries no version and writes the task after its own row
+// (the follow-up, whose foreign key check holds the task FOR KEY SHARE). Several at once on a task in
+// REVIEW: each lands, exactly one reopens it, and the others, having lost the version race to it,
+// are judged again rather than answered STALE or INTERNAL (a deadlock, under FOR UPDATE).
+func TestConcurrentReopeningFollowUpsAllLand(t *testing.T) {
+	onJoined(t, func(t *testing.T, j *joined) {
+		owner := j.user("ada")
+		b := j.board(owner, nil, nil)
+		sessions := []*agent{owner, j.session(owner), j.session(owner), j.session(owner)}
+		const rounds = 10
+		for r := range rounds {
+			id := asStr(b.task(fmt.Sprintf("r%d", r))["id"])
+			owner.call("complete_task", map[string]any{"projectId": b.project, "taskId": id, "leaseId": b.claim(owner, id), "deliverable": "d"})
+			reopened := make([]bool, len(sessions))
+			errs := make([]*toolErr, len(sessions))
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i, s := range sessions {
+				wg.Go(func() {
+					<-start
+					out, e := s.try("add_follow_up", map[string]any{"projectId": b.project, "taskId": id, "body": "again", "reopen": true})
+					errs[i] = e
+					reopened[i] = e == nil && asMap(out["followUp"])["reopened"] == true
+				})
+			}
+			close(start)
+			wg.Wait()
+			n := 0
+			for i := range sessions {
+				if errs[i] != nil {
+					t.Errorf("round %d session %d: add_follow_up: %+v", r, i, errs[i])
+				}
+				if reopened[i] {
+					n++
+				}
+			}
+			if got := b.get(id)["status"]; n != 1 || got != "TODO" {
+				t.Errorf("round %d: %d follow-ups reopened the task, now %v; want exactly 1 and TODO", r, n, got)
+			}
+		}
+		t.Logf("%s: %d rounds of %d concurrent reopening follow-ups", j.engine, rounds, len(sessions))
+	})
+}
+
 // G3 (nul.py): a NUL character (U+0000) in any text argument is VALIDATION on every engine. Postgres
 // cannot store it and answered INTERNAL (retryable) on each of these; SQLite stored it.
 func TestNULInTextIsValidationOnEveryEngine(t *testing.T) {
