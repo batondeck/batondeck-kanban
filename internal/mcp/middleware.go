@@ -35,6 +35,7 @@ func Tool[Req, Resp any](s *Server, area, name, description string, call Call[Re
 		Description:  description,
 		InputSchema:  dtoschema.For(reflect.TypeFor[Req]()),
 		OutputSchema: dtoschema.For(reflect.TypeFor[Resp]()),
+		Annotations:  annotations(posture),
 	}
 	var visible func(admin bool) bool
 	if posture.AdminOnly == domain.AdminOnlyOnly {
@@ -50,4 +51,18 @@ func Tool[Req, Resp any](s *Server, area, name, description string, call Call[Re
 		resp, err := call(ctx, caller, req)
 		return nil, resp, err
 	})
+}
+
+// annotations are the MCP hints for posture's Effect. All four are set: go-sdk omits a nil
+// destructiveHint or openWorldHint, and a client reads an absent one as true.
+func annotations(p domain.Posture) *mcp.ToolAnnotations {
+	read := p.Effect == domain.EffectRead
+	destructive := p.Effect == domain.EffectDestructive
+	closed := false
+	return &mcp.ToolAnnotations{
+		ReadOnlyHint:    read,
+		DestructiveHint: &destructive,
+		IdempotentHint:  read || p.Idempotent,
+		OpenWorldHint:   &closed,
+	}
 }

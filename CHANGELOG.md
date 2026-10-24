@@ -8,6 +8,14 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
+  Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
+  now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every
+  tool `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint: false` from them:
+  28 reads, 13 destructive (every `delete_*` and `remove_*`, `pick_run`, `cancel_runs`,
+  `retract_artifact`, `disconnect_agent`, `grant_capabilities`, `rotate_integration_secret`).
+  A row without an `Effect` fails `TestPostureEffect`. Annotations sit outside the contract's
+  canonical form, so no delta.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
