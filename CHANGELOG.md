@@ -101,7 +101,8 @@ Notable changes to batondeck-kanban. The format follows
   filters; no cursor (its schema has none). The `/api/agents/sessions`, `/api/me/settings` and
   `/api/me/cli-tokens` routes replace R1.12's stubs: a CLI token minted on the Settings page answers
   its plaintext once, is listed without it, and revoked there is 401 at the next MCP initialize;
-  another user's token id is 404. Minting and revoking a CLI token, on the page or with `token
+  another user's token id is 404; the page mints at most 10 live tokens per identity (conductor's cap,
+  400 `VALIDATION` past it) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
   create|revoke` (actor `host`), write `cli_token.minted` and `cli_token.revoked` (P-159). New `GET
   /api/audit`, list_audit_log for the Workspace Log's admin-only audit panel. A device entry in the
   presence frames carries `lastDeliveredCursor` (`wake_sessions.last_cursor`), and a delivery signals

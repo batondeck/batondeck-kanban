@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -28,6 +29,9 @@ func meRoutes(o *Options) []route {
 
 // cliTokenVia is the audit rows' via for a token minted or revoked on the Settings page.
 const cliTokenVia = "settings"
+
+// maxLiveCLITokens is the live tokens an identity may hold before the page refuses another mint.
+const maxLiveCLITokens = 10
 
 // cliTokenRow is one token as the page lists it (web/src/api/me.ts CliTokenRow): metadata only;
 // the secret is not on this shape. lastUsedAt is always null: no use is recorded.
@@ -102,6 +106,22 @@ func createCLIToken(o *Options, c domain.Caller, w http.ResponseWriter, r *http.
 	}
 	if in.TTLSeconds < 0 {
 		return domain.Validation("ttlSeconds cannot be negative", map[string]any{"field": "ttlSeconds"})
+	}
+	// Conductor's blast-radius cap (CLI_TOKEN_MAX_PER_IDENTITY, me.ts:247-252): a leaked token cannot
+	// mint an unbounded fan of tokens that outlive it. The host's `token create` is not capped.
+	infos, err := o.Tokens.List(r.Context(), c.Identity)
+	if err != nil {
+		return err
+	}
+	live := 0
+	for _, i := range infos {
+		if i.Status == "live" {
+			live++
+		}
+	}
+	if live >= maxLiveCLITokens {
+		return domain.Validation(fmt.Sprintf("You already hold %d live CLI tokens (max %d). Revoke one first.", live, maxLiveCLITokens),
+			map[string]any{"live": live, "max": maxLiveCLITokens})
 	}
 	plain, info, err := o.Tokens.Mint(r.Context(), c.Identity, cliTokenVia, c.Identity, login(o, r, c.Identity), in.Label, time.Duration(in.TTLSeconds)*time.Second)
 	if err != nil {

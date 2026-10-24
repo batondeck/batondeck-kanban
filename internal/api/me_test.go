@@ -122,3 +122,36 @@ func TestMeRoutesRefusals(t *testing.T) {
 }
 
 func str(v any) string { s, _ := v.(string); return s }
+
+// B2 of the #62 review: conductor's cap of 10 live CLI tokens per identity. The 11th mint is 400
+// VALIDATION and mints nothing (refusal); one revoked, the next mint goes through (control).
+func TestCLITokenMintIsCappedAtTenLive(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		var first string
+		for i := range 10 {
+			code, body := h.do("POST", "/api/me/cli-tokens", `{"label":"t"}`, nil)
+			if code != http.StatusOK {
+				t.Fatalf("mint %d: %d %s", i+1, code, body)
+			}
+			if i == 0 {
+				var m map[string]any
+				_ = json.Unmarshal([]byte(body), &m)
+				first = str(m["id"])
+			}
+		}
+		code, body := h.do("POST", "/api/me/cli-tokens", `{"label":"eleventh"}`, nil)
+		if code != http.StatusBadRequest || codeOf(t, body) != "VALIDATION" || !strings.Contains(body, "max 10") {
+			t.Fatalf("the 11th mint: %d %s, want 400 VALIDATION naming the cap", code, body)
+		}
+		if _, list := h.do("GET", "/api/me/cli-tokens", "", nil); strings.Contains(list, "eleventh") || strings.Count(list, `"status":"live"`) != 10 {
+			t.Fatalf("the refused mint left a token: %s", list)
+		}
+		if code, body := h.do("POST", "/api/me/cli-tokens/"+first+"/revoke", "", nil); code != http.StatusOK {
+			t.Fatalf("revoke: %d %s", code, body)
+		}
+		if code, body := h.do("POST", "/api/me/cli-tokens", `{"label":"after a revoke"}`, nil); code != http.StatusOK {
+			t.Fatalf("the mint after a revoke: %d %s, want 200", code, body)
+		}
+	})
+}
