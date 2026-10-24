@@ -71,6 +71,7 @@ type state struct {
 	toolCalls    []store.ToolCall                   // insertion order
 	agents       map[[2]string]store.AgentSession   // by (identity, agent)
 	wake         map[string]store.WakeSession       // by id
+	identities   map[string]identityRow             // by id
 	attachments  map[[3]string]store.Attachment     // by (project, task, attachment)
 	blobs        map[string]store.Blob              // by sha256
 	integrations map[[2]string]store.Integration    // by (project, integration)
@@ -123,6 +124,7 @@ func newState() *state {
 		edges:        map[[2]string]store.DependencyEdge{},
 		agents:       map[[2]string]store.AgentSession{},
 		wake:         map[string]store.WakeSession{},
+		identities:   map[string]identityRow{},
 		attachments:  map[[3]string]store.Attachment{},
 		blobs:        map[string]store.Blob{},
 		integrations: map[[2]string]store.Integration{},
@@ -324,6 +326,10 @@ func (st *state) clone() *state {
 	}
 	c.lastAudit = st.lastAudit
 	c.toolCalls = append([]store.ToolCall(nil), st.toolCalls...)
+	for k, v := range st.identities {
+		v.settings.StarredAssets = cloneStrings(v.settings.StarredAssets)
+		c.identities[k] = v
+	}
 	for k, v := range st.agents {
 		c.agents[k] = cloneAgentSession(v)
 	}
