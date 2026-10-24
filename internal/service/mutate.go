@@ -370,6 +370,11 @@ func (t *txn) writeNotified(tool string, ms int64) error {
 		if n.TaskID != nil {
 			d.TaskID = *n.TaskID
 		}
+		// The board too, so a process observing the row drops that board's snapshot alone, never
+		// every board of the project (P-260); /api/stream filters the kind out of its board frames.
+		if n.BoardID != nil {
+			d.BoardID = *n.BoardID
+		}
 		payload, err := json.Marshal(d)
 		if err != nil {
 			return err
