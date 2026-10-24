@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
@@ -50,8 +51,14 @@ func newHarness(t *testing.T, build func(st *memstore.Store) Options) *harness {
 // stack's store (R1.18: the engine servicetest selects).
 func newStackHarness(t *testing.T, s *servicetest.Stack, o Options) *harness {
 	t.Helper()
+	return newStackHarnessAt(t, s, o, nil)
+}
+
+// newStackHarnessAt is newStackHarness with now as the auth service's clock.
+func newStackHarnessAt(t *testing.T, s *servicetest.Stack, o Options, now func() time.Time) *harness {
+	t.Helper()
 	o.Services, o.Bus = s.Services, s.Bus
-	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store, Now: now}
 	return mountHarness(t, a, o)
 }
 
@@ -128,7 +135,7 @@ func (h *harness) login(login, password string) {
 	}
 }
 
-// request is a request of the signed-in user; header entries override the defaults (an empty
+// request is a request of the signed-in user (none when cookie is nil: a bearer caller); header entries override the defaults (an empty
 // value deletes one).
 func (h *harness) request(method, path, body string, header map[string]string) *http.Request {
 	h.t.Helper()
@@ -136,7 +143,9 @@ func (h *harness) request(method, path, body string, header map[string]string) *
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	req.AddCookie(h.cookie)
+	if h.cookie != nil {
+		req.AddCookie(h.cookie)
+	}
 	req.Header.Set(auth.CSRFHeader, h.csrf)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	if body != "" {

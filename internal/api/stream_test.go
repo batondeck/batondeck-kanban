@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
@@ -461,6 +463,146 @@ func TestStreamClosesWhenTheMemberIsRemoved(t *testing.T) {
 			case <-deadline:
 				t.Fatal("the stream is still open 1s after the member was removed")
 			}
+		}
+	})
+}
+
+// closes reads c until it ends within d, failing on any frame but ping: nothing reaches a caller
+// after the refusal (P-219). It answers the pings seen.
+func (c *sseClient) closes(t *testing.T, d time.Duration) (pings int) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case f, ok := <-c.frames:
+			if !ok {
+				return pings
+			}
+			if f.event != "ping" {
+				t.Fatalf("a %s frame after the refusal: %s", f.event, f.data)
+			}
+			pings++
+		case <-deadline:
+			t.Fatalf("the stream is still open %v after the refusal", d)
+		}
+	}
+}
+
+// pings reads n pings within d, failing on a close or a frame but ping: the stream is healthy.
+func (c *sseClient) pings(t *testing.T, n int, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for seen := 0; seen < n; {
+		select {
+		case f, ok := <-c.frames:
+			if !ok {
+				t.Fatalf("the stream closed after %d of %d pings", seen, n)
+			}
+			if f.event != "ping" {
+				t.Fatalf("a %s frame (%s), want ping", f.event, f.data)
+			}
+			seen++
+		case <-deadline:
+			t.Fatalf("%d of %d pings within %v", seen, n, d)
+		}
+	}
+}
+
+// openBoardStream is h's board stream, read past ready and its presence frame.
+func openBoardStream(t *testing.T, h *harness, pid, bid string, header map[string]string) *sseClient {
+	t.Helper()
+	c := h.stream(t, "?projectId="+pid+"&boardId="+bid, header)
+	if c.status != http.StatusOK {
+		t.Fatalf("stream: %d %s", c.status, c.body)
+	}
+	if f := c.next(t, time.Second); f.event != "ready" {
+		t.Fatalf("%+v, want ready", f)
+	}
+	return c
+}
+
+// The control: a stream whose caller still resolves stays open across pings (P-219).
+func TestStreamStaysOpenAcrossPings(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 100 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 5, 2*time.Second)
+	})
+}
+
+// A logout deletes the session row, so the stream it opened closes at the next ping and the
+// reconnect is 401 (P-219; rev54 finding 1).
+func TestStreamClosesAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 200 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 1, time.Second)
+		if st, body := l.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		at := time.Now()
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the logout", time.Since(at).Round(time.Millisecond))
+		if again := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
+		}
+	})
+}
+
+// A disable reaches an open stream within the account cache's bound: the cached entry keeps it
+// open until DefaultAccountCacheTTL has passed on the auth clock, then the next ping closes it.
+func TestStreamClosesWhenTheUserIsDisabled(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		var skew atomic.Int64
+		now := func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+		l := &live{harness: newStackHarnessAt(t, s, Options{Ping: 100 * time.Millisecond}, now), core: s.Core, bus: s.Bus}
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 1, time.Second)
+		if _, err := l.auth.Accounts.Disable(context.Background(), "alice"); err != nil {
+			t.Fatal(err)
+		}
+		c.pings(t, 3, 2*time.Second) // within the bound: the cached entry still holds
+		skew.Store(int64(auth.DefaultAccountCacheTTL + time.Second))
+		at := time.Now()
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the cache bound passed", time.Since(at).Round(time.Millisecond))
+		if again := l.stream(t, "", nil); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
+		}
+	})
+}
+
+// A revoked API token ends the bearer stream it opened before its next frame: here a board frame,
+// no ping being due, so a board change after the revoke reaches nobody (P-219).
+func TestStreamClosesWhenTheTokenIsRevoked(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		token, info, err := l.auth.Tokens.Create(context.Background(), l.userID, l.userID, "stream", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bearer := &harness{t: t, auth: l.auth, srv: l.srv, userID: l.userID} // no cookie
+		header := map[string]string{"Authorization": "Bearer " + token}
+		c := openBoardStream(t, bearer, pid, bid, header)
+		l.addTask(t, l.caller(), pid, bid, "before the revoke")
+		for _, want := range []string{"board", "updated"} {
+			if f := c.next(t, time.Second); f.event != want {
+				t.Fatalf("%+v, want the bearer's %s frame", f, want)
+			}
+		}
+		if _, err := l.auth.Tokens.Revoke(context.Background(), info.ID); err != nil {
+			t.Fatal(err)
+		}
+		at := time.Now()
+		l.addTask(t, l.caller(), pid, bid, "after the revoke")
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the revoke", time.Since(at).Round(time.Millisecond))
+		if again := bearer.stream(t, "", header); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
 		}
 	})
 }
