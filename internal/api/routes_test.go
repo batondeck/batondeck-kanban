@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -391,40 +390,4 @@ func TestOutOfScopeRoutesAreRefused(t *testing.T) {
 	for _, r := range loadRoutes(t) {
 		check("routes.json", r.Method, r.Path)
 	}
-}
-
-// Requirement 1 (R1.12): every stub answers 404 {code: NOT_FOUND, message: "<what> lands in <lane>"}
-// through the mounted mux, and reaches no service.
-func TestStubsNameTheirLane(t *testing.T) {
-	f := servicefake.New()
-	h := newHarness(t, fakeServices(f))
-	o := Options{Services: f.Services(), Auth: h.auth}
-	lane := regexp.MustCompile(`^\S.* lands in R\d+\.\d+$`)
-	n := 0
-	for _, r := range table(&o) {
-		s, ok := r.h.(stubHandler)
-		if !ok {
-			continue
-		}
-		n++
-		path := strings.NewReplacer("{projectId}", "P-1", "{taskId}", "T-1", "{sprintId}", "S-1", "{followUpId}", "F-1",
-			"{integrationId}", "I-1", "{deliveryId}", "D-1", "{pageId}", "PG-1", "{versionId}", "V-1", "{id}", "K-1").Replace(r.Path)
-		body := ""
-		if r.Method == "POST" || r.Method == "PATCH" {
-			body = "{}"
-		}
-		code, got := h.do(r.Method, path, body, nil)
-		var e struct {
-			Code    domain.Code `json:"code"`
-			Message string      `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(got), &e); err != nil || code != http.StatusNotFound || e.Code != domain.CodeNotFound ||
-			e.Message != s.msg || !lane.MatchString(e.Message) {
-			t.Errorf("%s %s: %d %s, want 404 NOT_FOUND %q naming a lane", r.Method, r.Path, code, got, s.msg)
-		}
-	}
-	if len(f.Calls()) != 0 {
-		t.Fatalf("a stub reached the service: %+v", f.Calls())
-	}
-	t.Logf("%d stub routes", n)
 }

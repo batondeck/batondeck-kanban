@@ -1,7 +1,7 @@
 /**
  * REPORTS — work-item reporting over a board's task census.
  *
- * Separate from `/analytics`, which is OPERATIONS telemetry (BigQuery tool calls, latency, error
+ * Separate from `/analytics`, which is OPERATIONS telemetry (the tool_calls log, latency, error
  * rate). Different question, different reader, different failure mode: analytics can be entirely
  * unavailable while every chart here still renders, and vice versa. A two-tab strip links them.
  *

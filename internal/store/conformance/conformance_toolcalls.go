@@ -2,7 +2,9 @@ package conformance
 
 import (
 	"context"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -10,9 +12,9 @@ import (
 
 func init() { register("toolcalls", toolCalls) }
 
-// toolCalls is the tool-call area: a batch lands whole, a bad row refuses the whole batch, and the
-// retention delete is by age and bounded. The contract has no reader, so the delete's count is what
-// proves the rows landed.
+// toolCalls is the tool-call area: a batch lands whole, a bad row refuses the whole batch, the
+// retention delete is by age and bounded, and the summary groups one project's rows since a time by
+// tool, outcome, agent and UTC day.
 func toolCalls(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error { return s.InsertToolCalls(ctx, nil) }
@@ -64,6 +66,41 @@ func toolCalls(t *testing.T, newStore Factory) {
 				t.Fatalf("refused batches left %d rows", n)
 			}
 			_, err := s.DeleteToolCallsOlderThan(ctx, 1<<62, 0)
+			wantErr(t, err, domain.CodeValidation, "")
+		})
+
+		t.Run("TheSummaryGroupsOneProjectSinceATimeByUTCDay", func(t *testing.T) {
+			s := migrated(t, newStore)
+			late := time.Date(2026, 10, 1, 23, 59, 0, 0, time.UTC).UnixMilli() // a minute before a UTC midnight
+			row := func(project, tool, agent string, ts int64, outcome store.ToolCallOutcome, code string, ms int64) store.ToolCall {
+				return store.ToolCall{TS: ts, Tool: tool, Identity: "alice", Agent: agent, Outcome: outcome, Code: code, LatencyMs: ms, ProjectID: project}
+			}
+			noErr(t, s.InsertToolCalls(ctx, []store.ToolCall{
+				row("P-1", "claim_next", "claude", late, store.ToolCallOK, "OK", 10),
+				row("P-1", "claim_next", "claude", late+30_000, store.ToolCallOK, "OK", 20),
+				row("P-1", "claim_next", "claude", late+120_000, store.ToolCallOK, "OK", 5),
+				row("P-1", "claim_next", "claude", late+120_000, store.ToolCallError, "STALE", 7),
+				row("P-1", "get_task", "", late, store.ToolCallOK, "OK", 3),
+				row("P-2", "claim_next", "claude", late, store.ToolCallOK, "OK", 100),
+				row("P-1", "get_task", "", late-24*3600_000, store.ToolCallOK, "OK", 9),
+			}))
+			got, err := s.SummarizeToolCalls(ctx, "P-1", late-3600_000)
+			noErr(t, err)
+			want := []store.ToolCallGroup{
+				{Tool: "claim_next", Outcome: store.ToolCallError, Agent: "claude", Day: "2026-10-02", Calls: 1, LatencySum: 7},
+				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Day: "2026-10-01", Calls: 2, LatencySum: 30},
+				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Day: "2026-10-02", Calls: 1, LatencySum: 5},
+				{Tool: "get_task", Outcome: store.ToolCallOK, Agent: "", Day: "2026-10-01", Calls: 1, LatencySum: 3},
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("summary = %+v\nwant      %+v", got, want)
+			}
+			none, err := s.SummarizeToolCalls(ctx, "P-404", 0)
+			noErr(t, err)
+			if none == nil || len(none) != 0 {
+				t.Fatalf("a project with no rows = %#v, want an empty, non-nil slice", none)
+			}
+			_, err = s.SummarizeToolCalls(ctx, "", 0)
 			wantErr(t, err, domain.CodeValidation, "")
 		})
 	})

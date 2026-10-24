@@ -1,4 +1,4 @@
-// Owner: R2.11 fills these bodies; R1.12 copied the signatures from api.ts.
+// The operations summary over the tool_calls log (R2.11; conductor api.ts:742).
 import type { OpsSummary } from '../types.js';
 import { req } from './http.js';
 
