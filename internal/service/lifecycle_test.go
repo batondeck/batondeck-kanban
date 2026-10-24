@@ -1109,15 +1109,21 @@ func TestRingForSkipsASelfAssignment(t *testing.T) {
 }
 
 // P-275 (audit A1): without an assignee claim_next and next_task never reach work routed to
-// another identity — a handoff stores the receiver's login, so bob's own is matched by login too —
-// and an assignee naming another is FORBIDDEN below master.
+// another identity or agent label — a handoff stores the receiver's login, so bob's own is matched
+// by login too — and an assignee naming another identity (account or member) is FORBIDDEN below master.
 func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
 		carl := e.member(t, e.project, "carl", domain.RoleWorker)
 		mia := e.member(t, e.project, "mia", domain.RoleMaster)
-		if err := e.st.CreateUser(e.ctx, store.User{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1}); err != nil {
-			t.Fatal(err)
+		e.member(t, e.project, "erin", domain.RoleWorker) // a member with no account
+		for _, u := range []store.User{
+			{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1},
+			{ID: "dave", Email: "dave@x.test", DisplayName: "Dave", PasswordHash: "x", CreatedAt: 1},
+		} {
+			if err := e.st.CreateUser(e.ctx, u); err != nil {
+				t.Fatal(err)
+			}
 		}
 		add := func(assignee *string, order string) store.Task {
 			task, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{
@@ -1129,9 +1135,10 @@ func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
 			}
 			return task
 		}
-		dave := "dave@x.test"
+		dave, erin, bot := "dave@x.test", "erin", "reviewer-bot"
 		bobLogin := "Bob@X.test"
 		daves, bobs, open := add(&dave, "a0"), add(&bobLogin, "a1"), add(nil, "a2")
+		erins, bots := add(&erin, "a3"), add(&bot, "a4")
 		lc := e.c.Lifecycle()
 		claimNext := func(who domain.Caller, assignee string) (*Task, error) {
 			r, err := lc.ClaimNext(e.ctx, who, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: assignee})
@@ -1159,13 +1166,21 @@ func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
 				t.Fatalf("bob's claim_next #%d = %+v %v, want %q", i, got, err, want)
 			}
 		}
-		if got, err := e.st.GetTask(e.ctx, e.project, daves.ID); err != nil || got.Status != domain.Todo || got.Claim != nil {
-			t.Fatalf("dave's %s is %+v %v, want TODO and unclaimed", daves.ID, got, err)
+		for _, id := range []string{daves.ID, erins.ID, bots.ID} {
+			if got, err := e.st.GetTask(e.ctx, e.project, id); err != nil || got.Status != domain.Todo || got.Claim != nil {
+				t.Fatalf("%s is %+v %v, want TODO and unclaimed", id, got, err)
+			}
 		}
-		_, err := claimNext(carl, dave)
-		wantCode(t, err, domain.CodeForbidden)
-		_, err = next(bob, dave)
-		wantCode(t, err, domain.CodeForbidden)
+		for _, other := range []string{dave, "DAVE@x.test", "dave", erin} {
+			_, err := claimNext(carl, other)
+			wantCode(t, err, domain.CodeForbidden)
+			_, err = next(bob, other)
+			wantCode(t, err, domain.CodeForbidden)
+		}
+		// An agent label names no identity, so it is not refused (audit A2: no caller carries its label yet).
+		if got, err := claimNext(carl, bot); err != nil || got == nil || got.ID != bots.ID {
+			t.Fatalf("carl's claim_next for the label %q = %+v %v, want %s", bot, got, err, bots.ID)
+		}
 		for _, own := range []string{"bob", "BOB@x.test"} {
 			if _, err := claimNext(bob, own); err != nil {
 				t.Fatalf("bob's claim_next for his own %q: %v", own, err)
