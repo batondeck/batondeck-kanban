@@ -511,3 +511,41 @@ func TestHookOverTheEngines(t *testing.T) {
 		})
 	}
 }
+
+// P-109: the delivery and raw-body windows come from Options. A delivery, accepted or refused,
+// expires DeliveryRetention after it was written and a refused delivery's raw body RawBodyRetention
+// after, so the sweep's expiry-keyed deletes take them then and not a millisecond before.
+func TestHookStampsTheConfiguredWindows(t *testing.T) {
+	const day = 24 * time.Hour
+	f := newFixture(t, Options{Sealer: oncallKeyring(t), DeliveryRetention: 2 * day, RawBodyRetention: day})
+	root := f.alice
+	root.WorkspaceAdmin = true
+	created := f.integration(t, root, CreateIntegrationReq{})
+	iid := created.Integration.ID
+	body := genericBody("disk-db-1", "firing", "Disk full on db-1")
+	if out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body)); out.Refusal != "" {
+		t.Fatalf("a signed delivery: %+v", out)
+	}
+	tampered := signedHook(created.Secret, f.clock.now(), body)
+	tampered.Body = append([]byte(nil), body...)
+	tampered.Body[len(tampered.Body)-3] ^= 0x01
+	if out := f.hook(t, iid, tampered); out.Refusal != HookUnauthorized {
+		t.Fatalf("one byte changed: %+v, want unauthorized", out)
+	}
+	ds := f.deliveries(t, iid)
+	if len(ds) != 2 {
+		t.Fatalf("%d deliveries, want the accepted one and the refused one", len(ds))
+	}
+	for _, d := range ds {
+		if got := time.Duration(d.ExpiresAt-d.TS) * time.Millisecond; got != 2*day {
+			t.Errorf("the %s delivery expires %s after it was written, want 2 days", d.Kind, got)
+		}
+	}
+	now := f.clock.now()
+	if n, err := f.st.DeleteExpiredDeliveryRawBodies(f.ctx, now.Add(day-time.Millisecond).UnixMilli(), 100); err != nil || n != 0 {
+		t.Fatalf("raw bodies past their expiry a millisecond before 1 day: %d, %v; want 0", n, err)
+	}
+	if n, err := f.st.DeleteExpiredDeliveryRawBodies(f.ctx, now.Add(day).UnixMilli(), 100); err != nil || n != 1 {
+		t.Fatalf("raw bodies past their expiry at 1 day: %d, %v; want the refused one", n, err)
+	}
+}

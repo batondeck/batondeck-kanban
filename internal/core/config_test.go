@@ -114,15 +114,15 @@ func TestRetentionWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Retention != (Retention{ChangeLogDays: 7, ToolCallsDays: 45, SweepIntervalSeconds: 3600}) {
+	if c.Retention != (Retention{ChangeLogDays: 7, ToolCallsDays: 45, DeliveriesDays: 30, RawBodiesDays: 7, SweepIntervalSeconds: 3600}) {
 		t.Fatalf("default retention %+v", c.Retention)
 	}
-	p := writeConfig(t, `{"retention":{"change_log_days":3,"tool_calls_days":90,"sweep_interval_seconds":60}}`)
-	if c, err = Load(p, env(nil)); err != nil || c.Retention != (Retention{ChangeLogDays: 3, ToolCallsDays: 90, SweepIntervalSeconds: 60}) {
+	p := writeConfig(t, `{"retention":{"change_log_days":3,"tool_calls_days":90,"deliveries_days":14,"raw_bodies_days":2,"sweep_interval_seconds":60}}`)
+	if c, err = Load(p, env(nil)); err != nil || c.Retention != (Retention{ChangeLogDays: 3, ToolCallsDays: 90, DeliveriesDays: 14, RawBodiesDays: 2, SweepIntervalSeconds: 60}) {
 		t.Fatalf("file retention %+v, %v", c.Retention, err)
 	}
-	if c, err = Load(p, env(map[string]string{"BATONDECK_RETENTION_CHANGE_LOG_DAYS": "1", "BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": "2"})); err != nil ||
-		c.Retention != (Retention{ChangeLogDays: 1, ToolCallsDays: 90, SweepIntervalSeconds: 2}) {
+	if c, err = Load(p, env(map[string]string{"BATONDECK_RETENTION_CHANGE_LOG_DAYS": "1", "BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": "2", "BATONDECK_RETENTION_RAW_BODIES_DAYS": "1"})); err != nil ||
+		c.Retention != (Retention{ChangeLogDays: 1, ToolCallsDays: 90, DeliveriesDays: 14, RawBodiesDays: 1, SweepIntervalSeconds: 2}) {
 		t.Fatalf("env retention %+v, %v", c.Retention, err)
 	}
 	for _, bad := range []map[string]string{
@@ -130,6 +130,8 @@ func TestRetentionWindows(t *testing.T) {
 		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS": "-1"},
 		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS": "week"},
 		{"BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": "0"},
+		{"BATONDECK_RETENTION_DELIVERIES_DAYS": "0"},
+		{"BATONDECK_RETENTION_RAW_BODIES_DAYS": "-7"},
 	} {
 		if _, err := Load("", env(bad)); err == nil || !strings.Contains(err.Error(), RuleRetention) {
 			t.Fatalf("%v: %v, want %s", bad, err, RuleRetention)

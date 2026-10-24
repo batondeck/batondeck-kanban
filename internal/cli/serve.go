@@ -68,16 +68,20 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 		logger.Printf("serve: public_url is unset, so the OAuth authorization server is off; /mcp takes API tokens only")
 	}
 	media.MaxBytes = cmp.Or(media.MaxBytes, core.DefaultBlobMaxBytes)
-	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media})
 	def := core.DefaultRetention
 	ret = core.Retention{ChangeLogDays: cmp.Or(ret.ChangeLogDays, def.ChangeLogDays), ToolCallsDays: cmp.Or(ret.ToolCallsDays, def.ToolCallsDays),
+		DeliveriesDays: cmp.Or(ret.DeliveriesDays, def.DeliveriesDays), RawBodiesDays: cmp.Or(ret.RawBodiesDays, def.RawBodiesDays),
 		SweepIntervalSeconds: cmp.Or(ret.SweepIntervalSeconds, def.SweepIntervalSeconds)}
+	day := 24 * time.Hour
+	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media,
+		DeliveryRetention: time.Duration(ret.DeliveriesDays) * day, RawBodyRetention: time.Duration(ret.RawBodiesDays) * day})
 	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
 	if media.Files != nil {
 		sweep.CollectBlobs = sc.CollectBlobs
 	}
 	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
-	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days", sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays)
+	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days, raw bodies %d days, agent sessions %s idle",
+		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle)
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,

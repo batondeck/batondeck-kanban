@@ -28,6 +28,7 @@ import (
 // signed delivery with no credential but its signature is 202 with the ticket; an unsigned one 401;
 // an id of the wrong shape and an unknown one the same flat 404; a body over the outer 512 KiB cap
 // 413 before the service sees it (an unknown id too); a body over the integration's own cap 413.
+// The delivery expires after the configured window.
 func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "bk.db"), "FULL")
@@ -44,7 +45,7 @@ func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := &lockedLog{}
-	a, err := compose(st, "x", "", log.New(logs, "", 0), keys, service.MediaOptions{}, core.Retention{})
+	a, err := compose(st, "x", "", log.New(logs, "", 0), keys, service.MediaOptions{}, core.Retention{DeliveriesDays: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +97,11 @@ func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 	task, err := st.GetTask(ctx, p.ProjectID, *accepted.Results[0].TaskID)
 	if err != nil || task.Title != "Queue backlog" {
 		t.Fatalf("the ticket: %+v, %v", task, err)
+	}
+	// P-109: the delivery's expiry is compose's retention.deliveries_days, not the 30-day default.
+	page, err := st.ListDeliveries(ctx, p.ProjectID, in.Integration.ID, store.DeliveryFilter{}, "", 10)
+	if err != nil || len(page.Deliveries) != 1 || page.Deliveries[0].ExpiresAt-page.Deliveries[0].TS != (3*24*time.Hour).Milliseconds() {
+		t.Fatalf("the delivery %+v, %v: want it to expire 3 days after it was written", page.Deliveries, err)
 	}
 	if code, got, _ := post(in.Integration.ID, body, false); code != http.StatusUnauthorized || !strings.Contains(got, `"UNAUTHENTICATED"`) {
 		t.Fatalf("an unsigned delivery: %d %s", code, got)
