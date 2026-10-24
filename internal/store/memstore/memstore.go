@@ -60,6 +60,9 @@ type state struct {
 	lastChg  int64                      // the last change id handed out
 
 	contextItems map[[3]string]store.ContextItem    // by (project, task, item)
+	artifacts    map[[3]string]store.Artifact       // by (project, task, artifact)
+	comments     map[[3]string]store.Comment        // by (project, task, comment)
+	followUps    map[[3]string]store.FollowUp       // by (project, task, follow-up)
 	memory       map[string]store.MemoryEntry       // by id
 	summaries    map[[2]string]store.Summary        // by (project, task)
 	edges        map[[2]string]store.DependencyEdge // by (project, edge)
@@ -109,6 +112,9 @@ func newState() *state {
 		events:   map[[2]string]store.Event{},
 
 		contextItems: map[[3]string]store.ContextItem{},
+		artifacts:    map[[3]string]store.Artifact{},
+		comments:     map[[3]string]store.Comment{},
+		followUps:    map[[3]string]store.FollowUp{},
 		memory:       map[string]store.MemoryEntry{},
 		summaries:    map[[2]string]store.Summary{},
 		edges:        map[[2]string]store.DependencyEdge{},
@@ -293,6 +299,14 @@ func (st *state) clone() *state {
 	}
 	c.lastChg = st.lastChg
 	maps.Copy(c.contextItems, st.contextItems)
+	// An artifact's and a follow-up's pointers are never written through: a retraction replaces the
+	// whole entry. A comment's mentions are copied.
+	maps.Copy(c.artifacts, st.artifacts)
+	maps.Copy(c.followUps, st.followUps)
+	for k, v := range st.comments {
+		v.Mentions = cloneStrings(v.Mentions)
+		c.comments[k] = v
+	}
 	for k, v := range st.memory {
 		c.memory[k] = cloneMemory(v)
 	}

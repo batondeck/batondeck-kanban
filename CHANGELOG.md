@@ -87,6 +87,23 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Artifacts, comments and follow-ups (R2.1): seven tools leave `contract/pending.json` (30 to 23)
+  and equal `contract/expected.json`. `add_artifact` binds a pr, branch, commit, file, doc or
+  attachment to a task (a url or a ref each, de-duplicated on kind, case-folded url and ref against
+  live entries, at most 50 a task) and `retract_artifact` tombstones the live entries a selector
+  matches (none at all is `NOT_FOUND`); both take an optional `version`. `get_task` now carries the
+  task's `artifacts` (its statement pin 2 to 3), the drawer's evidence list reads them, and
+  `list_tasks {missingArtifacts:true}` keeps the tasks with no live artifact in one statement for
+  the page. `add_comment`/`list_comments` hold a task's thread, its `@mentions` resolved against the
+  project's members; a comment rings nobody (ADR-0004), the master doorbell included.
+  `add_follow_up` (master tier) directs a note at the live lease holder, else the assignee, and rings
+  that target's `assigned` doorbell; `reopen:true` sends a REVIEW or DONE task back to TODO.
+  `ack_follow_up` is the target's or a project admin's; `list_follow_ups` takes `openOnly`. A
+  comment, a follow-up without a reopen and an ack leave the task's version as it was, as
+  conductor's do. The comment and follow-up routes under `/api/projects/{projectId}/tasks/{taskId}`
+  replace R1.12's stubs. No migration: 0001 holds the three tables. Autoclose (R2.9) now keeps an
+  incident that carries a comment or follow-up by anyone but the ingest, and annotates it instead,
+  since those writes leave the version its untouched stamp compares.
 - The webhook ingest, in-binary (R2.9, plan §Architecture "Oncall ingest is in-binary"): `POST
   /hooks/{integrationId}` is mounted by `serve` outside every bearer, session and CSRF check, over TCP
   and the socket, behind `api.CapBody` (512 KiB, hdtp's, read before any lookup). `service.Core.Hook`

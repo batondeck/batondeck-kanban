@@ -270,3 +270,37 @@ func (x chronicleFake) ListVersions(ctx context.Context, caller domain.Caller, r
 func (x chronicleFake) GetVersion(ctx context.Context, caller domain.Caller, req service.GetChronicleVersionReq) (service.ChronicleVersionView, error) {
 	return call[service.ChronicleVersionView](x.f, "Chronicle.GetVersion", caller, req)
 }
+
+type artifactsFake struct{ f *Fake }
+
+func (x artifactsFake) AddArtifact(ctx context.Context, caller domain.Caller, req service.AddArtifactReq) (service.AddArtifactResp, error) {
+	return call[service.AddArtifactResp](x.f, "Artifacts.AddArtifact", caller, req)
+}
+
+func (x artifactsFake) RetractArtifact(ctx context.Context, caller domain.Caller, req service.RetractArtifactReq) (service.RetractArtifactResp, error) {
+	return call[service.RetractArtifactResp](x.f, "Artifacts.RetractArtifact", caller, req)
+}
+
+type commentsFake struct{ f *Fake }
+
+func (x commentsFake) AddComment(ctx context.Context, caller domain.Caller, req service.AddCommentReq) (service.AddCommentResp, error) {
+	return call[service.AddCommentResp](x.f, "Comments.AddComment", caller, req)
+}
+
+func (x commentsFake) ListComments(ctx context.Context, caller domain.Caller, req service.ListCommentsReq) (service.ListCommentsResp, error) {
+	return call[service.ListCommentsResp](x.f, "Comments.ListComments", caller, req)
+}
+
+type followUpsFake struct{ f *Fake }
+
+func (x followUpsFake) AddFollowUp(ctx context.Context, caller domain.Caller, req service.AddFollowUpReq) (service.AddFollowUpResp, error) {
+	return call[service.AddFollowUpResp](x.f, "FollowUps.AddFollowUp", caller, req)
+}
+
+func (x followUpsFake) AckFollowUp(ctx context.Context, caller domain.Caller, req service.AckFollowUpReq) (service.AckFollowUpResp, error) {
+	return call[service.AckFollowUpResp](x.f, "FollowUps.AckFollowUp", caller, req)
+}
+
+func (x followUpsFake) ListFollowUps(ctx context.Context, caller domain.Caller, req service.ListFollowUpsReq) (service.ListFollowUpsResp, error) {
+	return call[service.ListFollowUpsResp](x.f, "FollowUps.ListFollowUps", caller, req)
+}

@@ -174,6 +174,23 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 			t.Fatal("search_tasks found none of the three tasks")
 		}
 
+		pr := map[string]any{"kind": "pr", "url": "https://example.com/pr/1"}
+		if got := c.call("add_artifact", map[string]any{"projectId": p, "taskId": id1, "artifacts": []any{pr, map[string]any{"kind": "branch", "ref": "feat/x"}}}); got["added"] != float64(2) {
+			t.Fatalf("add_artifact: %v", got)
+		}
+		if got := c.call("retract_artifact", map[string]any{"projectId": p, "taskId": id1, "artifact": map[string]any{"kind": "branch", "ref": "feat/x"}, "reason": "wrong branch"}); got["retracted"] != float64(1) {
+			t.Fatalf("retract_artifact: %v", got)
+		}
+		c.call("add_comment", map[string]any{"projectId": p, "taskId": id1, "body": "a comment"})
+		if n := len(c.call("list_comments", map[string]any{"projectId": p, "taskId": id1})["comments"].([]any)); n != 1 {
+			t.Fatalf("list_comments: %d, want 1", n)
+		}
+		fu := str(obj(c.call("add_follow_up", map[string]any{"projectId": p, "taskId": id1, "body": "a directive"})["followUp"])["id"])
+		c.call("ack_follow_up", map[string]any{"projectId": p, "taskId": id1, "followUpId": fu})
+		if n := len(c.call("list_follow_ups", map[string]any{"projectId": p, "taskId": id1, "openOnly": true})["followUps"].([]any)); n != 0 {
+			t.Fatalf("list_follow_ups openOnly after the ack: %d, want 0", n)
+		}
+
 		block := func(id, text string) map[string]any { return map[string]any{"id": id, "text": text} }
 		made := c.call("create_chronicle_page", map[string]any{"projectId": p, "kind": "adr", "slug": "adr/0001-stack", "title": "Stack", "blocks": []any{block("a-1", "by hand")}})
 		page := str(made["pageId"])

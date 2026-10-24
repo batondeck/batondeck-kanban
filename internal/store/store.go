@@ -43,6 +43,9 @@ type Store interface {
 	Attachments
 	Blobs
 	Search
+	Artifacts
+	Comments
+	FollowUps
 	Chronicle
 	Tasks
 	Claims

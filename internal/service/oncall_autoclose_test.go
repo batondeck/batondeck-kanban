@@ -120,6 +120,37 @@ type taskWrite struct {
 // each is a write a human or an agent makes to an incident ticket, which autoclose must then not
 // delete. A tool still in contract/pending.json is listed by pendingWrites until it lands.
 var taskWrites = map[string][]taskWrite{
+	// R2.1: a comment, a follow-up and an ack leave the version (KeepVersion), so incidentKeeps reads
+	// the comments and follow-ups; the artifact writes bump it.
+	"add_comment": {{name: "a comment", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		_, err := e.c.Comments().AddComment(e.ctx, e.alice, AddCommentReq{ProjectID: e.project, TaskID: id, Body: "I am looking at this"})
+		must(e.t, err)
+		return nil
+	}}},
+	"add_follow_up": {{name: "a directive, no reopen", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		_, err := e.c.FollowUps().AddFollowUp(e.ctx, e.alice, AddFollowUpReq{ProjectID: e.project, TaskID: id, Body: "check the disk"})
+		must(e.t, err)
+		return nil
+	}}},
+	"ack_follow_up": {{name: "a directive, acked", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		f, err := e.c.FollowUps().AddFollowUp(e.ctx, e.alice, AddFollowUpReq{ProjectID: e.project, TaskID: id, Body: "check the disk"})
+		must(e.t, err)
+		_, err = e.c.FollowUps().AckFollowUp(e.ctx, e.alice, AckFollowUpReq{ProjectID: e.project, TaskID: id, FollowUpID: f.FollowUp.ID})
+		must(e.t, err)
+		return nil
+	}}},
+	"add_artifact": {{name: "a pr", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		_, err := e.c.Artifacts().AddArtifact(e.ctx, e.alice, AddArtifactReq{ProjectID: e.project, TaskID: id, Artifacts: []ArtifactInput{{Kind: "pr", URL: "https://example.com/pr/1"}}})
+		must(e.t, err)
+		return nil
+	}}},
+	"retract_artifact": {{name: "a pr, retracted", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		_, err := e.c.Artifacts().AddArtifact(e.ctx, e.alice, AddArtifactReq{ProjectID: e.project, TaskID: id, Artifacts: []ArtifactInput{{Kind: "pr", URL: "https://example.com/pr/2"}}})
+		must(e.t, err)
+		_, err = e.c.Artifacts().RetractArtifact(e.ctx, e.alice, RetractArtifactReq{ProjectID: e.project, TaskID: id, Artifact: ArtifactSelector{Kind: "pr", URL: "https://example.com/pr/2"}, Reason: "wrong"})
+		must(e.t, err)
+		return nil
+	}}},
 	"add_context_item": {{name: "a note", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
 		_, err := e.c.Context().AddItem(e.ctx, e.alice, AddContextItemReq{ProjectID: e.project, TaskID: id, Kind: "note", Body: "mine"})
 		must(e.t, err)
@@ -245,8 +276,7 @@ var taskWrites = map[string][]taskWrite{
 // pendingWrites are task-taking write tools still in contract/pending.json: each needs a case in
 // taskWrites the day it leaves (add_comment is R2.1's), which TestAutocloseSparesEveryTaskWrite
 // enforces.
-var pendingWrites = []string{"ack_follow_up", "add_artifact", "add_comment", "add_follow_up", "cancel_runs", "detect_anomalies", "open_run",
-	"orchestrate_subtasks", "pick_run", "retract_artifact", "set_sprint", "start_runs"}
+var pendingWrites = []string{"cancel_runs", "detect_anomalies", "open_run", "orchestrate_subtasks", "pick_run", "set_sprint", "start_runs"}
 
 func must(t *testing.T, err error) {
 	t.Helper()

@@ -1,7 +1,7 @@
 /**
  * Follow-ups (Phase 3): a directed-directive section in the task drawer. Unlike comments (open
  * discussion), a follow-up targets the task's current holder/assignee, notifies them, is surfaced in
- * get_task_context.openFollowUps, and can optionally REOPEN completed work (REVIEW/DONE → In Progress).
+ * get_task_context.openFollowUps, and can optionally REOPEN completed work (REVIEW/DONE → TODO).
  *
  * Reads/writes through the gateway follow-up routes; invalidates the drawer's `followups`, `ctx`, `task`,
  * and `hist` queries on every mutation so the directive, its open/acked state, any reopen transition, and
@@ -180,7 +180,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
               <span style={{ display: 'flex', flexDirection: 'column' }}>
                 <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', lineHeight: 1.2 }}>Reopen task</span>
                 <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.3, maxWidth: 220 }}>
-                  Reopening moves {taskId} back to In Progress for {target ?? 'the holder'}.
+                  Reopening moves {taskId} back to TODO for {target ?? 'the holder'}.
                 </span>
               </span>
             </label>

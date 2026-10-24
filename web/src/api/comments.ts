@@ -1,4 +1,4 @@
-// Owner: R2.1 fills these bodies; R1.12 copied the signatures from api.ts.
+// The comment routes (internal/api/comments.go, R2.1); R1.12 copied the signatures from api.ts.
 import type { Comment } from '../types.js';
 import { req, P } from './http.js';
 
