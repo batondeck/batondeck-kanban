@@ -127,22 +127,25 @@ type WakeSessionRow struct {
 }
 
 // DeviceSessions is the device session directory as the web UI's presence frames read it (R1.11):
-// the live entries, and a signal on every register and unregister. Changed's channel is closed on
-// the next change; read Entries, then call Changed again.
+// the live entries, and a signal on every register, unregister and delivered cursor. Changed's
+// channel is closed on the next change; read Entries, then call Changed again.
 type DeviceSessions interface {
 	Entries() []DeviceSession
 	Changed() <-chan struct{}
 }
 
 // DeviceSession is one live entry: a CLI client process on this device. Adapter is "claude-code"
-// for a client the directory can ring, "" for one it lists only.
+// for a client the directory can ring, "" for one it lists only. LastDeliveredCursor is the
+// change-log id of the last doorbell written to it (wake_sessions.last_cursor), 0 for none: a
+// session that should have been rung and shows 0 is a silent one (plan: "silence is visible").
 type DeviceSession struct {
-	PID          int64  `json:"pid"`
-	Role         string `json:"role"`
-	IdentityID   string `json:"identityId"`
-	AgentID      string `json:"agentId"`
-	Adapter      string `json:"adapter,omitzero"`
-	RegisteredAt string `json:"registeredAt"`
+	PID                 int64  `json:"pid"`
+	Role                string `json:"role"`
+	IdentityID          string `json:"identityId"`
+	AgentID             string `json:"agentId"`
+	Adapter             string `json:"adapter,omitzero"`
+	RegisteredAt        string `json:"registeredAt"`
+	LastDeliveredCursor int64  `json:"lastDeliveredCursor"`
 }
 
 // ListAgentSessionsReq is list_agent_sessions's input.
