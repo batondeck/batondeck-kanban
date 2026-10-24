@@ -87,6 +87,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The Chronicle routes and screens (R2.7): the eight routes `web/src/api/chronicle.ts` calls replace
+  R1.12's stubs in `internal/api/chronicle.go`, over R2.6's `service.Chronicle`: `GET` and `POST
+  /api/projects/{projectId}/chronicle` (the index, `?cursor=`, and create), `GET` and `DELETE
+  …/chronicle/{pageId}` (the page view, and delete pinned by `?expectedHeadVersionId=`, a moved head
+  `STALE`), `GET …/{pageId}/versions` and `…/versions/{versionId}` (the history, `?cursor=`, and one
+  version), `POST …/{pageId}/edit` and `POST …/{pageId}/revert`. A revert writes a new version
+  holding the chosen version's blocks over the head it read (an edit, never a rewind). A non-member
+  is 403 `FORBIDDEN` on each; a page asked for through another project is absent (`null`, or 404
+  `NOT_FOUND` on a write). `ingest_chronicle_page` stays MCP-only. The `/chronicle`,
+  `/chronicle/new`, `/chronicle/:pageId` and `/chronicle/:pageId/history` screens now load real
+  records: a mermaid fence renders as mermaid's SVG, and an image embedded by its signed blob URL
+  loads through `/blobs/…`.
 - Runs and sprints (R2.2): `start_runs`, `open_run`, `pick_run`, `cancel_runs`, `list_runs`,
   `create_sprint`, `get_sprint`, `list_sprints`, `set_sprint` and `update_sprint`, with conductor's
   names and inputs, leave `contract/pending.json`. **Named deviation (plan §Fold 2):** a losing run is
