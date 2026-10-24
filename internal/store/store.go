@@ -56,6 +56,7 @@ type Store interface {
 	Events
 	ChangeLog
 	Oncall
+	Settings
 }
 
 // Lifecycle opens, migrates, transacts and closes: what every engine does before it holds anything.

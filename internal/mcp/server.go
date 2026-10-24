@@ -77,7 +77,7 @@ func New(o Options) *Server {
 	}
 	s := &Server{services: o.Services, log: o.Logger}
 	s.halted, s.halt = context.WithCancel(context.Background())
-	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}}
+	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}, keys: map[string]string{}, ending: map[string]bool{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, log: s.log}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
@@ -100,7 +100,7 @@ func New(o Options) *Server {
 		Stateless:      false,
 		SessionTimeout: o.SessionIdle,
 	})
-	s.handler = requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(streamable)
+	s.handler = requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(s.closeEnding(streamable))
 	return s
 }
 

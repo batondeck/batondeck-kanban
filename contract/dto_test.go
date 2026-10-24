@@ -66,6 +66,10 @@ var dtoTools = []struct {
 	{"list_attachments", reflect.TypeFor[service.Media](), "ListAttachments"},
 	{"search_tasks", reflect.TypeFor[service.Media](), "SearchTasks"},
 	{"list_agent_sessions", reflect.TypeFor[service.Sessions](), "ListAgentSessions"},
+	{"disconnect_agent", reflect.TypeFor[service.Sessions](), "DisconnectAgent"},
+	{"get_my_settings", reflect.TypeFor[service.Me](), "GetMySettings"},
+	{"set_my_settings", reflect.TypeFor[service.Me](), "SetMySettings"},
+	{"list_audit_log", reflect.TypeFor[service.Audit](), "ListAuditLog"},
 	{"add_artifact", reflect.TypeFor[service.Artifacts](), "AddArtifact"},
 	{"retract_artifact", reflect.TypeFor[service.Artifacts](), "RetractArtifact"},
 	{"add_comment", reflect.TypeFor[service.Comments](), "AddComment"},
@@ -114,6 +118,7 @@ var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Oncall](), reflect.TypeFor[service.Runs](), reflect.TypeFor[service.Sprints](),
 	reflect.TypeFor[service.Notifications](), reflect.TypeFor[service.Profiles](), reflect.TypeFor[service.Anomalies](),
 	reflect.TypeFor[service.Ranking](),
+	reflect.TypeFor[service.Me](), reflect.TypeFor[service.Audit](),
 }
 
 // dtoSchema is typ's schema as internal/service/dtoschema builds it for the tool registration,
@@ -183,8 +188,8 @@ func TestDTOCanonical(t *testing.T) {
 	}
 	slices.Sort(names)
 	t.Logf("%d tools compared, input and output, exactly: %s", len(names), strings.Join(names, " "))
-	if len(names) != 81 {
-		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 7 artifact, comment and follow-up tools (R2.1), the 4 chronicle tools, the 9 on-call tools, the 10 runs and sprints tools and the 7 R2.3 tools (81)", len(names))
+	if len(names) != 85 {
+		t.Errorf("compared %d tools; the table holds the 42 CORE tools, cancel_task, list_agent_sessions, the 7 artifact, comment and follow-up tools (R2.1), the 4 chronicle tools, the 9 on-call tools, the 10 runs and sprints tools and the 7 R2.3 tools and R2.5 4 (85)", len(names))
 	}
 }
 

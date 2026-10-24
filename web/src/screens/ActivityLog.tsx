@@ -3,6 +3,7 @@ import { useDisplayNames } from '../displayNames.js';
 import { Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
+import * as auditApi from '../api/audit.js';
 import * as boardsApi from '../api/boards.js';
 import * as feedApi from '../api/feed.js';
 import * as mediaApi from '../api/media.js';
@@ -15,7 +16,7 @@ import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { composeResults, descriptionSnippet, looksLikeTaskId, parseTicketQuery } from '../ticketSearch.js';
 import type { ActivityEvent, Task } from '../types.js';
-import { Stack } from '../ui.js';
+import { Panel, Stack } from '../ui.js';
 
 /** Human-readable label for a date-bucket key (YYYY-MM-DD). */
 function dayLabel(key: string): string {
@@ -49,7 +50,7 @@ const CRITICAL = new Set(['task.blocked']);
 const FILTER_CHIPS = ['status:done', 'status:in-progress', 'assignee:me', 'priority:high'];
 
 export function ActivityLog() {
-  const { identity, permissions, ui } = useAuth();
+  const { identity, isAdmin, permissions, ui } = useAuth();
   const { projectId, loading: projectsLoading } = useProject();
 
   const boardsQ = useQuery({
@@ -380,7 +381,66 @@ export function ActivityLog() {
         ))}
           </>
         )}
+        {isAdmin && <AuditLog />}
       </div>
     </>
+  );
+}
+
+/**
+ * The audit log (list_audit_log over GET /api/audit), the workspace admin's alone: the server refuses
+ * anyone else, so it is not rendered for them. Newest first, last 90 days; the action filter is the
+ * tool's exact-match `action`.
+ */
+export function AuditLog() {
+  const [action, setAction] = useState('');
+  const q = useQuery({
+    queryKey: ['auditLog', action],
+    queryFn: () => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100 }),
+  });
+  const entries = q.data?.entries ?? [];
+  return (
+    <section id="audit-log" style={{ marginTop: 24 }}>
+      <Panel
+        title="Audit log"
+        right={
+          <input
+            className="input"
+            style={{ width: 220 }}
+            placeholder="action, e.g. task.deleted"
+            aria-label="Filter the audit log by action"
+            value={action}
+            onChange={(e) => setAction(e.target.value)}
+          />
+        }
+      >
+        {q.isError && <p className="error" style={{ fontSize: 12, margin: '8px 12px' }}>Couldn’t load the audit log.</p>}
+        {q.isLoading && <WaitLoader />}
+        {!q.isLoading && !q.isError && entries.length === 0 && (
+          <p className="muted" style={{ fontSize: 12, padding: 12, margin: 0 }}>No audit rows in the last {q.data?.days ?? 90} days.</p>
+        )}
+        {entries.length > 0 && (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ whiteSpace: 'nowrap' }}>
+              <thead>
+                <tr><th>When</th><th>Action</th><th>Actor</th><th>Subject</th><th>Result</th><th>Data</th></tr>
+              </thead>
+              <tbody>
+                {entries.map((e, i) => (
+                  <tr key={`${e.ts}-${i}`} data-testid="audit-row">
+                    <td className="muted" title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</td>
+                    <td className="mono">{e.action}</td>
+                    <td className="mono">{e.actor}{e.agent ? ` (${e.agent})` : ''}</td>
+                    <td className="mono">{e.subject || '—'}</td>
+                    <td>{e.result}{e.errorCode ? ` ${e.errorCode}` : ''}</td>
+                    <td className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{e.data === '{}' ? '' : e.data}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </section>
   );
 }

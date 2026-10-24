@@ -44,4 +44,6 @@ type Services struct {
 	Profiles      Profiles
 	Anomalies     Anomalies
 	Ranking       Ranking
+	Me            Me
+	Audit         Audit
 }

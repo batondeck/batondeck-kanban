@@ -89,6 +89,7 @@ type Core struct {
 	blobGC  BlobGC
 	media   MediaOptions
 	devices atomic.Pointer[DeviceSessions]
+	enders  atomic.Pointer[AgentSessionEnder]
 	// limiter is the per-integration ingest budget: POST /hooks, send_test_event and
 	// replay_delivery all draw on it (Core.ingest).
 	limiter *oncall.RateLimiter
@@ -99,6 +100,18 @@ type Core struct {
 // SetDeviceSessions hands the core the device session directory, which internal/wake builds after
 // the core (the service imports no transport, ADR-0003 row 5).
 func (c *Core) SetDeviceSessions(d DeviceSessions) { c.devices.Store(&d) }
+
+// SetAgentSessionEnder hands the core what ends live MCP sessions (disconnect_agent): internal/mcp's
+// server, built after the core.
+func (c *Core) SetAgentSessionEnder(e AgentSessionEnder) { c.enders.Store(&e) }
+
+// endAgentSessions ends (identity, agent)'s live MCP sessions, 0 when no ender is set.
+func (c *Core) endAgentSessions(ctx context.Context, identityID, agentID string) int {
+	if e := c.enders.Load(); e != nil {
+		return (*e).EndAgentSessions(ctx, identityID, agentID)
+	}
+	return 0
+}
 
 // DeviceSessions is the device session directory, nil until SetDeviceSessions (R1.11's presence).
 func (c *Core) DeviceSessions() DeviceSessions {

@@ -30,6 +30,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
 	reflect.TypeFor[service.Nullable[domain.ChronicleCoverage]](),
 	reflect.TypeFor[service.Optional[service.SprintStatus]](),
+	reflect.TypeFor[service.Nullable[service.TokenPolicy]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
@@ -92,6 +93,7 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.RecallMemoryScope]():    enumSchema(service.RecallMemoryScopeValues),
 		reflect.TypeFor[service.SearchMode]():           enumSchema(service.SearchModeValues),
 		reflect.TypeFor[service.SessionKind]():          enumSchema(service.SessionKindValues),
+		reflect.TypeFor[service.TokenPolicy]():          enumSchema(service.TokenPolicyValues),
 		reflect.TypeFor[service.SprintStatus]():         enumSchema(service.SprintStatusValues),
 		reflect.TypeFor[service.SprintAction]():         enumSchema(service.SprintActionValues),
 		reflect.TypeFor[service.SprintInclude]():        enumSchema(service.SprintIncludeValues),

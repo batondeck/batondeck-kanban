@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,6 +22,8 @@ type sessionTable struct {
 	closed bool                          // Server.Close ran: no session is admitted again
 	live   map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
 	agents map[string]int                // agent-session key -> its live MCP sessions
+	keys   map[string]string             // MCP session id -> its agent-session key
+	ending map[string]bool               // sessions to close once the request in hand is answered
 	ends   sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
@@ -54,13 +58,47 @@ func (t *sessionTable) release(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.live, id)
+	delete(t.keys, id)
+	delete(t.ending, id)
 }
 
-// join counts one more live MCP session on an agent session.
-func (t *sessionTable) join(key string) {
+// endAfter marks ss to be closed once the HTTP request in hand has its answer.
+func (t *sessionTable) endAfter(ss *mcp.ServerSession) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ending[ss.ID()] = true
+}
+
+// takeEnding is the live session id marked by endAfter, unmarked, or nil.
+func (t *sessionTable) takeEnding(id string) *mcp.ServerSession {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ending[id] {
+		return nil
+	}
+	delete(t.ending, id)
+	return t.live[id]
+}
+
+// join counts one more live MCP session, id, on an agent session.
+func (t *sessionTable) join(key, id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.agents[key]++
+	t.keys[id] = key
+}
+
+// of is the live MCP sessions of an agent session.
+func (t *sessionTable) of(key string) []*mcp.ServerSession {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*mcp.ServerSession
+	for id, k := range t.keys {
+		if ss, ok := t.live[id]; ok && k == key {
+			out = append(out, ss)
+		}
+	}
+	return out
 }
 
 // leave counts one fewer and reports whether it was the agent session's last.
@@ -95,6 +133,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		caller, _ := CallerFrom(ctx)
+		ctx = context.WithValue(ctx, sessionIDKey{}, ss.ID())
 		switch {
 		case method == "initialize":
 			return s.initialize(ctx, ss, caller, method, req, next)
@@ -135,7 +174,7 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 	if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
 		s.log.Printf("mcp: create agent session %s failed: %+v", key, err)
 	}
-	s.sessions.join(key)
+	s.sessions.join(key, id)
 	s.sessions.ends.Add(1)
 	go func() {
 		defer s.sessions.ends.Done()
@@ -147,6 +186,9 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 		}
 		// The request's context is gone with its request; the removal outlives it.
 		_, err := s.services.Sessions.RemoveAgentSession(context.WithoutCancel(ctx), caller, service.RemoveAgentSessionReq{SessionKey: key})
+		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+			return // disconnect_agent deleted the row first
+		}
 		if err != nil {
 			s.log.Printf("mcp: remove agent session %s failed: %+v", key, err)
 		}
@@ -163,4 +205,55 @@ func agentName(c domain.Caller, p *mcp.InitializeParams) string {
 		return p.ClientInfo.Name
 	}
 	return "mcp"
+}
+
+// sessionIDKey carries the MCP session id of the request in hand to its tool handler, so
+// EndAgentSessions can tell the calling session from the others.
+type sessionIDKey struct{}
+
+// endWait bounds how long EndAgentSessions waits for another session to close: a close waits for
+// that session's in-flight handlers to return.
+const endWait = 5 * time.Second
+
+// EndAgentSessions ends every live MCP session of (identityID, agentID) and returns how many
+// (service.AgentSessionEnder, disconnect_agent). Each other session is closed before it returns
+// (up to endWait), so its next request is answered 404 session not found. The calling session, when
+// it is one of them, is closed by closeEnding once this HTTP request has its answer: closed from
+// its own handler, the close would wait on that handler, and closed beside it, the answer would be
+// lost with the transport. The end of each runs the usual bookkeeping (initialize's goroutine).
+func (s *Server) EndAgentSessions(ctx context.Context, identityID, agentID string) int {
+	self, _ := ctx.Value(sessionIDKey{}).(string)
+	live := s.sessions.of(service.SessionKey(identityID, agentID))
+	var others sync.WaitGroup
+	for _, ss := range live {
+		if ss.ID() == self {
+			s.sessions.endAfter(ss)
+			continue
+		}
+		others.Go(func() { _ = ss.Close() })
+	}
+	done := make(chan struct{})
+	go func() { others.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(endWait):
+		s.log.Printf("mcp: ending %s's sessions: still closing after %s", service.SessionKey(identityID, agentID), endWait)
+	case <-ctx.Done():
+	}
+	return len(live)
+}
+
+var _ service.AgentSessionEnder = (*Server)(nil)
+
+// closeEnding closes a session EndAgentSessions marked from inside its own request, once that
+// request's HTTP answer is written (next has returned).
+func (s *Server) closeEnding(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		if id := r.Header.Get("Mcp-Session-Id"); id != "" {
+			if ss := s.sessions.takeEnding(id); ss != nil {
+				go func() { _ = ss.Close() }()
+			}
+		}
+	})
 }

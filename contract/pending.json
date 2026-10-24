@@ -1,12 +1,7 @@
 {
   "tools": {
     "P5 NICE tools and the agents, me and audit reads": [
-      "disconnect_agent",
-      "get_my_settings",
-      "grant_capabilities",
-      "list_agent_sessions",
-      "list_audit_log",
-      "set_my_settings"
+      "grant_capabilities"
     ]
   }
 }

@@ -265,6 +265,9 @@ export interface AgentSession {
   /** T-94: is this agent's wake (push) subscription consumable? `false` = its IAM binding did not land,
    * so it receives no doorbell until it reconnects. ABSENT = no wake channel provisioned (not a fault). */
   wakeBound?: boolean;
+  /** A device row's last delivered doorbell cursor (`device:<pid>` rows only, from the presence
+   * frame): 0 is a process never rung, so a silent session is visible. Absent on an MCP session. */
+  lastDeliveredCursor?: number;
 }
 
 export interface OpsSummary {
