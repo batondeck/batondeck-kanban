@@ -38,12 +38,12 @@ func (s *Postgres) ClaimTask(ctx context.Context, projectID, taskID string, expe
 	return claimTask(ctx, s, projectID, taskID, expectedVersion, in)
 }
 
-func (s *SQLite) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
-	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now)
+func (s *SQLite) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
+	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now, keepLonger)
 }
 
-func (s *Postgres) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
-	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now)
+func (s *Postgres) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
+	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now, keepLonger)
 }
 
 func (s *SQLite) ReleaseLease(ctx context.Context, projectID, taskID, leaseID, owner string, now int64) (Task, error) {
@@ -195,13 +195,13 @@ func leaseRefusal(ctx context.Context, q sqlQueries, projectID, taskID, owner st
 	return LeaseExpired(taskID)
 }
 
-func heartbeat(ctx context.Context, e engine, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
+func heartbeat(ctx context.Context, e engine, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
 	if expiresAt <= now {
 		return Task{}, domain.Validation("a lease must expire after now", map[string]any{"expiresAt": expiresAt, "now": now})
 	}
 	q := e.queries(true)
 	row, err := q.HeartbeatLease(ctx, sqlitedb.HeartbeatLeaseParams{
-		ExpiresAt: expiresAt, ProjectID: projectID, ID: taskID, Owner: owner, LeaseID: leaseID, Now: now,
+		KeepLonger: boolInt(keepLonger), ExpiresAt: expiresAt, ProjectID: projectID, ID: taskID, Owner: owner, LeaseID: leaseID, Now: now,
 	})
 	switch {
 	case isNoRows(err):

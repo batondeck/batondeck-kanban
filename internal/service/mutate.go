@@ -87,7 +87,8 @@ type mutation struct {
 	LockProject bool
 	// KeepVersion loads and checks the task but leaves its version where it was when fn wrote nothing
 	// to it: a write beside the task (a comment, a follow-up, an ack) is not a change of the task,
-	// as conductor's addComment, addFollowUp and ackFollowUp never move it.
+	// as conductor's addComment, addFollowUp and ackFollowUp never move it. Such a mutation reads the
+	// task without locking it, so claim_next's SKIP LOCKED does not pass over a task being commented.
 	KeepVersion bool
 }
 
@@ -200,7 +201,14 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 			}
 		}
 		if m.TaskID != "" {
-			cur, err := tx.GetTask(ctx, m.ProjectID, m.TaskID)
+			// A mutation that bumps the task locks it first, before fn writes any row that references
+			// it, so its version cannot move before the bump (P-119: two writers that each inserted a
+			// child row and then locked the task deadlocked on Postgres).
+			load := tx.LockTask
+			if m.KeepVersion {
+				load = tx.GetTask
+			}
+			cur, err := load(ctx, m.ProjectID, m.TaskID)
 			if err != nil {
 				return zero, err
 			}
@@ -230,10 +238,12 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 
 	if m.IdempotencyKey == "" {
 		var out R
-		err := c.store.Atomically(ctx, func(tx store.Store) error {
-			r, err := run(tx)
-			out = r
-			return err
+		err := unversionedRetry(m, func() error {
+			return c.store.Atomically(ctx, func(tx store.Store) error {
+				r, err := run(tx)
+				out = r
+				return err
+			})
 		})
 		if err != nil {
 			return zero, c.mapErr(m.Tool, err)
@@ -247,12 +257,17 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 	if scope == "" {
 		scope = store.GlobalScope
 	}
-	raw, err := c.store.WithIdempotency(ctx, scope, caller.Identity, m.Tool+":"+m.IdempotencyKey, c.idemTTL, func(tx store.Store) ([]byte, error) {
-		r, err := run(tx)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(r)
+	var raw []byte
+	err := unversionedRetry(m, func() error {
+		var err error
+		raw, err = c.store.WithIdempotency(ctx, scope, caller.Identity, m.Tool+":"+m.IdempotencyKey, c.idemTTL, func(tx store.Store) ([]byte, error) {
+			r, err := run(tx)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(r)
+		})
+		return err
 	})
 	if err != nil {
 		return zero, c.mapErr(m.Tool, err)
@@ -263,6 +278,24 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		return zero, c.mapErr(m.Tool, err)
 	}
 	return out, nil
+}
+
+// unversionedRetry runs a mutation's transaction again when it carries no expected version and a
+// versioned write inside it lost a race (STALE): the caller sent no version, so the STALE is not
+// theirs to resolve, and the next run judges the task as it now is (P-119). A versioned mutation's
+// STALE goes to its caller.
+func unversionedRetry(m mutation, run func() error) error {
+	if m.Version != nil {
+		return run()
+	}
+	var err error
+	for range staleAttempts {
+		err = run()
+		if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeStale {
+			return err
+		}
+	}
+	return err
 }
 
 // finish writes what fn did not: the bump, the events, the audit row and the change-log rows.

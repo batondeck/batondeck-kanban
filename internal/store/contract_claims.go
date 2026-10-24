@@ -56,10 +56,10 @@ type Claims interface {
 	// TODO nor IN_PROGRESS with an expired lease or the caller's own, is INVALID_TRANSITION;
 	// re-claiming one's own live lease replaces it. A version that is not the task's is STALE.
 	ClaimTask(ctx context.Context, projectID, taskID string, expectedVersion int64, in ClaimInput) (Task, error)
-	// Heartbeat moves the lease's expiry to expiresAt and returns the task. The lease must be
-	// leaseID, held by owner and live at now; another owner is CONFLICT_LOCKED, an expiresAt not
-	// after now VALIDATION.
-	Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error)
+	// Heartbeat moves the lease's expiry to expiresAt and returns the task; with keepLonger an
+	// expiry already later than expiresAt stays. The lease must be leaseID, held by owner and live at
+	// now; another owner is CONFLICT_LOCKED, an expiresAt not after now VALIDATION.
+	Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error)
 	// ReleaseLease drops the lease after the same checks as Heartbeat and returns the task.
 	ReleaseLease(ctx context.Context, projectID, taskID, leaseID, owner string, now int64) (Task, error)
 	// ListExpiredLeases is the tasks of the project (of boardID, or every board when it is "")

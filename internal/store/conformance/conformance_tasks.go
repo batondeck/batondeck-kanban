@@ -223,6 +223,21 @@ func tasks(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("LockTaskReadsAsGetTaskInsideATransaction", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		want := f.add(t, "locked", nil)
+		mustOK(t, f.s.Atomically(ctx, func(tx store.Store) error {
+			got, err := tx.LockTask(ctx, f.project, want.ID)
+			if err != nil {
+				return err
+			}
+			sameTask(t, got, want)
+			_, err = tx.LockTask(ctx, f.project, "T-99")
+			wantCode(t, err, domain.CodeNotFound, "Task")
+			return nil
+		}))
+	})
+
 	t.Run("GetTaskIsKeyedByProject", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		g := taskBoardOn(t, f.s)
