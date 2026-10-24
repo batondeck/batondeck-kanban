@@ -45,6 +45,14 @@ func (s *Postgres) GetTask(ctx context.Context, projectID, taskID string) (Task,
 	return getTask(ctx, s, projectID, taskID)
 }
 
+func (s *SQLite) LockTask(ctx context.Context, projectID, taskID string) (Task, error) {
+	return lockTask(ctx, s, projectID, taskID)
+}
+
+func (s *Postgres) LockTask(ctx context.Context, projectID, taskID string) (Task, error) {
+	return lockTask(ctx, s, projectID, taskID)
+}
+
 func (s *SQLite) UpdateTask(ctx context.Context, projectID, taskID string, expectedVersion int64, patch TaskPatch) (Task, error) {
 	return updateTask(ctx, s, projectID, taskID, expectedVersion, patch)
 }
@@ -289,14 +297,22 @@ func getTask(ctx context.Context, e engine, projectID, taskID string) (Task, err
 	return taskFromRow(row)
 }
 
-// taskAt is the task at expectedVersion, read for a write inside the transaction: NotFound when
-// there is none, Stale when its version is another.
-func taskAt(ctx context.Context, q sqlQueries, projectID, taskID string, expectedVersion int64) (Task, error) {
+func lockTask(ctx context.Context, e engine, projectID, taskID string) (Task, error) {
+	return lockedTask(ctx, e.queries(true), projectID, taskID)
+}
+
+func lockedTask(ctx context.Context, q sqlQueries, projectID, taskID string) (Task, error) {
 	row, err := q.LockTask(ctx, sqlitedb.LockTaskParams{ProjectID: projectID, ID: taskID})
 	if err := found(err, "Task", taskID); err != nil {
 		return Task{}, err
 	}
-	t, err := taskFromRow(sqlitedb.GetTaskRow(row))
+	return taskFromRow(sqlitedb.GetTaskRow(row))
+}
+
+// taskAt is the task at expectedVersion, read for a write inside the transaction: NotFound when
+// there is none, Stale when its version is another.
+func taskAt(ctx context.Context, q sqlQueries, projectID, taskID string, expectedVersion int64) (Task, error) {
+	t, err := lockedTask(ctx, q, projectID, taskID)
 	if err != nil {
 		return Task{}, err
 	}

@@ -33,7 +33,7 @@ WHERE t.id = (
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
   LIMIT 1
-  FOR UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
+  FOR NO KEY UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -104,9 +104,11 @@ type ClaimNextRow struct {
 // (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 // valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
 // high, normal, low), then order key and id COLLATE "C", as bytes.
-// ClaimNext in ONE statement: the frontier's first row that no other transaction holds (FOR
+// ClaimNext in ONE statement: the frontier's first row that no other claim holds (FOR NO KEY
 // UPDATE OF f SKIP LOCKED), locked and claimed, so concurrent callers never win the same task and
-// never wait on each other. column_id ” keeps the task's column; a column that is not the board's matches no
+// never wait on each other. NO KEY UPDATE, not UPDATE: the FOR KEY SHARE a concurrent child insert's
+// foreign key check takes on the task (a comment, an event) does not conflict with it, so that task
+// is not skipped (P-96). column_id ” keeps the task's column; a column that is not the board's matches no
 // row, and the caller tells that apart from an empty frontier.
 func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNextRow, error) {
 	row := q.db.QueryRow(ctx, claimNext,
@@ -172,19 +174,21 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 }
 
 const heartbeatLease = `-- name: HeartbeatLease :one
-UPDATE tasks SET lease_expires_at = $1::bigint
-WHERE project_id = $2 AND id = $3 AND claim_owner = $4::text
-  AND lease_id = $5::text AND lease_expires_at > $6::bigint
+UPDATE tasks SET lease_expires_at = CASE WHEN $1::bigint <> 0
+  THEN GREATEST(lease_expires_at, $2::bigint) ELSE $2::bigint END
+WHERE project_id = $3 AND id = $4 AND claim_owner = $5::text
+  AND lease_id = $6::text AND lease_expires_at > $7::bigint
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
 type HeartbeatLeaseParams struct {
-	ExpiresAt int64
-	ProjectID string
-	ID        string
-	Owner     string
-	LeaseID   string
-	Now       int64
+	KeepLonger int64
+	ExpiresAt  int64
+	ProjectID  string
+	ID         string
+	Owner      string
+	LeaseID    string
+	Now        int64
 }
 
 type HeartbeatLeaseRow struct {
@@ -234,9 +238,11 @@ type HeartbeatLeaseRow struct {
 }
 
 // The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
-// caller reads the task to name. Neither the version nor updated_at moves.
+// caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.
+// Neither the version nor updated_at moves.
 func (q *Queries) HeartbeatLease(ctx context.Context, arg HeartbeatLeaseParams) (HeartbeatLeaseRow, error) {
 	row := q.db.QueryRow(ctx, heartbeatLease,
+		arg.KeepLonger,
 		arg.ExpiresAt,
 		arg.ProjectID,
 		arg.ID,

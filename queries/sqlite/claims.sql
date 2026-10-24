@@ -55,9 +55,11 @@ ORDER BY f.score DESC,
 LIMIT sqlc.arg(page_limit);
 
 -- The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
--- caller reads the task to name. Neither the version nor updated_at moves.
+-- caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.
+-- Neither the version nor updated_at moves.
 -- name: HeartbeatLease :one
-UPDATE tasks SET lease_expires_at = CAST(sqlc.arg(expires_at) AS INTEGER)
+UPDATE tasks SET lease_expires_at = CASE WHEN CAST(sqlc.arg(keep_longer) AS INTEGER) <> 0
+  THEN MAX(lease_expires_at, CAST(sqlc.arg(expires_at) AS INTEGER)) ELSE CAST(sqlc.arg(expires_at) AS INTEGER) END
 WHERE project_id = sqlc.arg(project_id) AND id = sqlc.arg(id) AND claim_owner = CAST(sqlc.arg(owner) AS TEXT)
   AND lease_id = CAST(sqlc.arg(lease_id) AS TEXT) AND lease_expires_at > CAST(sqlc.arg(now) AS INTEGER)
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;
