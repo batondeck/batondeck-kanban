@@ -24,7 +24,7 @@ const session = (over: Record<string, unknown>) => ({
   toolCounts: { list_tasks: 69 }, ...over,
 });
 
-async function mount(path: string, admin: boolean, routes: Record<string, (init?: RequestInit) => unknown>): Promise<void> {
+async function mount(path: string, admin: boolean, routes: Record<string, (init?: RequestInit) => unknown>, prefill?: (qc: import('@tanstack/react-query').QueryClient) => void): Promise<void> {
   fetched = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const p = String(input).split('?')[0]!;
@@ -38,6 +38,7 @@ async function mount(path: string, admin: boolean, routes: Record<string, (init?
   const { AuthProvider } = await import('../auth.js');
   const { App } = await import('../App.js');
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  prefill?.(qc);
   render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
@@ -89,6 +90,13 @@ describe('Agents: the delivered cursor', () => {
     expect(cells.sort()).toEqual(['#42', 'none', '—']);
     expect(screen.getByRole('columnheader', { name: 'Delivered' })).toBeInTheDocument();
     expect(fetched.filter((f) => f.includes('/overview'))).toEqual([]);
+  });
+
+  it('a session list answering after a presence frame keeps the frame\'s device rows', async () => {
+    const frame = presenceSessions({ sessions: [{ pid: 4242, role: 'worker', identityId: 'U-1', agentId: 'claude', adapter: 'claude-code', registeredAt: '2026-10-24T08:00:00Z', lastDeliveredCursor: 8 }] }, '2026-10-24T08:00:00Z');
+    await mount('/agents', false, { 'GET /api/agents/sessions': () => ({ sessions: [session({})] }) }, (qc) => qc.setQueryData(['agentSessions'], { sessions: frame }));
+    await waitFor(() => expect(screen.getAllByText('69')).not.toHaveLength(0));
+    expect(screen.getAllByTestId('delivered-cursor').map((c) => c.textContent).sort()).toEqual(['#8', '—']);
   });
 
   it('presenceSessions carries the frame cursor, 0 when the frame has none', () => {

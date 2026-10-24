@@ -17,7 +17,7 @@ import { isAgent } from '../types.js';
 import { ConnectMcp } from '../connect-mcp.js';
 import { Cluster, Panel, Stack, Tile, Tiles } from '../ui.js';
 import type { ActivityEvent, AgentSession, Task } from '../types.js';
-import { replaceDevicePresence } from '../presenceMerge.js';
+import { mergePresence, replaceDevicePresence } from '../presenceMerge.js';
 
 export function Agents() {
   const { ui } = useAuth();
@@ -54,9 +54,15 @@ export function Agents() {
   // NO POLL. This screen is a standalone route, so no board stream is mounted here; it opens the
   // identity-keyed `/api/stream` below instead and the gateway pushes presence snapshots down it. The
   // initial fetch stays so the table renders before the first snapshot arrives.
+  // The fetch keeps the device rows a presence frame already put in the cache: a frame is sent only
+  // on a change, so a list answering after it would otherwise drop them until the next one.
   const sessionsQ = useQuery({
     queryKey: ['agentSessions'],
-    queryFn: () => agentsApi.agentSessions(ui.sessionsLimit),
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(ui.sessionsLimit);
+      const devices = (qc.getQueryData<{ sessions: AgentSession[] }>(['agentSessions'])?.sessions ?? []).filter((s) => s.sessionKey.startsWith('device:'));
+      return { sessions: mergePresence(fresh.sessions, devices) };
+    },
   });
   // Presence + notifications for a screen with no board open. Snapshots land straight in the cache, so
   // they cost zero HTTP.
