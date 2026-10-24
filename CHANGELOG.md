@@ -87,6 +87,20 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- The on-call routes and screen (R2.10): the ten `/api/oncall/…` routes of `internal/api/oncall.go`
+  replace R1.12's stubs, each one `service.Oncall` call under the session and CSRF, workspace admin
+  only (a project admin who is not one is 403 `FORBIDDEN`, as the tools are). `GET
+  /api/oncall/sources` serves `oncall.Sources` with each source's modes, note and guide name
+  (`oncall-<id>`); create, update (an auth switch to hmac) and rotate answer a minted secret once
+  with `shownOnce`, and the listing never carries one. `DELETE …/integrations/{integrationId}`
+  takes its `version` in the query, as the SPA sends it: the BFF now reads a DELETE route's named
+  query keys (`api.in.query`) over its empty body. `GET …/deliveries/{deliveryId}/raw` answers the
+  kept bytes themselves as an `application/octet-stream` attachment with `nosniff` and `private,
+  no-store`, which the setup drawer's viewer reads as text; a body no longer kept is 404
+  `NOT_FOUND`. An integration addressed under another project is 404 and its log an empty page; a
+  member of another project only is 403. The Oncall screen and setup drawer run unchanged on these
+  routes, and a delivery whose `taskId` autoclose deleted shows the id as text with no link and no
+  lookup (`web/src/__tests__/oncall.test.tsx`).
 - Runs and sprints (R2.2): `start_runs`, `open_run`, `pick_run`, `cancel_runs`, `list_runs`,
   `create_sprint`, `get_sprint`, `list_sprints`, `set_sprint` and `update_sprint`, with conductor's
   names and inputs, leave `contract/pending.json`. **Named deviation (plan §Fold 2):** a losing run is
