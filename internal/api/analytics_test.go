@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // GET /api/analytics/operations on each engine, through the real login: a member gets the summary
@@ -23,11 +21,17 @@ func TestAnalyticsOperationsRoute(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		now := time.Now().UnixMilli()
-		call := func(outcome store.ToolCallOutcome, code string) store.ToolCall {
-			return store.ToolCall{TS: now, Tool: "claim_next", Identity: h.userID, Agent: "claude", Outcome: outcome, Code: code, LatencyMs: 8, ProjectID: p.ProjectID}
+		// Three calls through the recorder the MCP middleware uses, flushed to the store.
+		for _, r := range []service.RecordToolCallReq{
+			{Tool: "claim_next", Outcome: "ok", Code: "OK", LatencyMs: 8, ProjectID: p.ProjectID},
+			{Tool: "claim_next", Outcome: "ok", Code: "OK", LatencyMs: 8, ProjectID: p.ProjectID},
+			{Tool: "claim_next", Outcome: "error", Code: "STALE", LatencyMs: 8, ProjectID: p.ProjectID},
+		} {
+			if _, err := s.Services.ToolCalls.Record(ctx, h.caller(), r); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if err := s.Store.InsertToolCalls(ctx, []store.ToolCall{call(store.ToolCallOK, "OK"), call(store.ToolCallOK, "OK"), call(store.ToolCallError, "STALE")}); err != nil {
+		if err := s.Core.FlushToolCalls(ctx); err != nil {
 			t.Fatal(err)
 		}
 		path := "/api/analytics/operations?projectId=" + p.ProjectID + "&days=365"
