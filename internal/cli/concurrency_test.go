@@ -290,6 +290,7 @@ func TestOneIdentityTwoSessionsHoldOneLease(t *testing.T) {
 			}
 			if len(distinct) > 1 {
 				twoLeases++
+				continue
 			}
 			for l := range distinct {
 				owner.call("heartbeat_task", map[string]any{"projectId": b.project, "taskId": id, "leaseId": l})
