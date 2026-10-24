@@ -271,15 +271,59 @@ func GrantNeedsTask(g CapabilityGrant) bool {
 	return g.Labels != nil || g.Boards != nil || g.MaxPriority != ""
 }
 
+// GrantRefusesTool reports whether g refuses tool by its name alone: deny lists it (deny wins), or a
+// tools allowlist leaves it out.
+func GrantRefusesTool(g CapabilityGrant, tool string) bool {
+	return slices.Contains(g.Deny, tool) || (g.Tools != nil && !slices.Contains(g.Tools, tool))
+}
+
+// GrantHiddenTools is what tools/list leaves out for an identity, given one grant per membership (the
+// zero grant for a membership a grant does not bind): the governed project tools every grant refuses
+// by name. A tool any membership may call stays listed, and the task, status and memory restrictions
+// are decided per call, so they hide nothing. No membership hides nothing.
+func GrantHiddenTools(grants []CapabilityGrant) []string {
+	if len(grants) == 0 {
+		return nil
+	}
+	var out []string
+	for _, name := range sortedTools(func(_ string, p Posture) bool { return p.TenantScoped && !p.GrantExempt }) {
+		if !slices.ContainsFunc(grants, func(g CapabilityGrant) bool { return !GrantRefusesTool(g, name) }) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// CheckGrantEnforceable refuses a grant whose deny or tools names a tool no grant reaches
+// (GrantUnscopedTools): a grant is stored on a project and those tools take no projectId, so the
+// entry would be stored and never enforced. Their reach is the role's.
+func CheckGrantEnforceable(g CapabilityGrant) error {
+	unscoped := GrantUnscopedTools()
+	for _, f := range []struct {
+		field string
+		tools []string
+	}{{"deny", g.Deny}, {"tools", g.Tools}} {
+		var named []string
+		for _, t := range f.tools {
+			if slices.Contains(unscoped, t) {
+				named = append(named, t)
+			}
+		}
+		if len(named) > 0 {
+			return Validation(f.field+" names "+strings.Join(named, ", ")+", which a grant never restricts: a grant is stored on a project and "+
+				"these tools take no projectId, so the entry would never be enforced; their reach is governed by role",
+				map[string]any{"field": f.field, "tools": named})
+		}
+	}
+	return nil
+}
+
 // CheckGrant decides one call against one grant: "" when permitted, else the capability the caller
 // lacks (details.requiredCapability on the FORBIDDEN). What it cannot resolve it refuses: an
 // unclassified or undecidable landing under a statuses grant, a task-scoped grant on a call that
 // names neither a task nor a board.
 func CheckGrant(g CapabilityGrant, s GrantSubject) string {
-	if slices.Contains(g.Deny, s.Tool) {
-		return "tool:" + s.Tool
-	}
-	if g.Tools != nil && !slices.Contains(g.Tools, s.Tool) {
+	if GrantRefusesTool(g, s.Tool) {
 		return "tool:" + s.Tool
 	}
 	if g.Statuses != nil {

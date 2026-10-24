@@ -13,13 +13,16 @@
 //     claim's, a non-change's and their own (masterSilent). A claim or self-assignment writes no
 //     assigned row (service.RingAssigned), so it rings no worker either.
 //
-// The frame is contentless, {kind, cursor, projectId}: coalescing loses nothing, and the frame
-// grants nothing; the woken agent calls the tools, which enforce every check.
+// The frame is contentless, {kind, cursor, projectId} and the board(s) its rows name (P-191): no
+// task, no title. Coalescing loses nothing, and the frame grants nothing; the woken agent calls the
+// tools, which enforce every check.
 package wake
 
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -43,15 +46,68 @@ const (
 	Sweep = 60 * time.Second
 )
 
-// Frame is one doorbell: its kind, the bus's safe cursor at its release, and its project.
+// MaxBoards caps a frame's boardIds; past it the frame names no board (list_boards first).
+const MaxBoards = 20
+
+// Frame is one doorbell: its kind, the bus's safe cursor at its release, its project, and the
+// board its rows name (BoardID) or boards, sorted (BoardIDs). A frame naming none means "look at
+// every board": a project-level row, ringAll after dropped rows, or more than MaxBoards boards.
 type Frame struct {
-	Kind      string `json:"kind"`
-	Cursor    int64  `json:"cursor"`
-	ProjectID string `json:"projectId"`
+	Kind      string   `json:"kind"`
+	Cursor    int64    `json:"cursor"`
+	ProjectID string   `json:"projectId"`
+	BoardID   string   `json:"boardId,omitempty"`
+	BoardIDs  []string `json:"boardIds,omitempty"`
+}
+
+// boards is the frame's board set.
+func (f Frame) boards() []string {
+	if f.BoardID != "" {
+		return []string{f.BoardID}
+	}
+	return f.BoardIDs
+}
+
+// withBoards is f naming the distinct boards of ids, sorted: one as BoardID, several as BoardIDs,
+// none (or more than MaxBoards, never a partial list) as neither.
+func (f Frame) withBoards(ids []string) Frame {
+	ids = slices.Clone(ids) // ids may share a frame's BoardIDs array
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	f.BoardID, f.BoardIDs = "", nil
+	if len(ids) > MaxBoards {
+		return f
+	}
+	if len(ids) == 1 {
+		f.BoardID = ids[0]
+	} else if len(ids) > 1 {
+		f.BoardIDs = ids
+	}
+	return f
+}
+
+// merge is the frame two doorbells of one entry and kind coalesce into: the higher cursor's (a's on
+// a tie), with both frames' boards when they name one project, and none when either names none (a
+// "look at every board" frame is never narrowed to the boards already held). A frame of another
+// project brings only its own boards, so no board is ever paired with a project it is not in.
+func merge(a, b Frame) Frame {
+	hi := a
+	if b.Cursor > a.Cursor {
+		hi = b
+	}
+	if a.ProjectID != b.ProjectID {
+		return hi
+	}
+	if len(a.boards()) == 0 || len(b.boards()) == 0 {
+		return hi.withBoards(nil)
+	}
+	return hi.withBoards(append(a.boards(), b.boards()...))
 }
 
 // Line is the frame as the receiving model reads it: one plain sentence, then the frame's JSON. It
-// is a prompt (R3.1 §3.2), so it says only what to do next, never a title or a note.
+// is a prompt (R3.1 §3.2), so it says only what to do next, never a title or a note: claim_next (a
+// master's changed: next_task with its inbox, as the master command does) on the frame's board(s),
+// or list_boards first when it names none.
 func (f Frame) Line() string {
 	b, _ := json.Marshal(f)
 	what := map[string]string{
@@ -59,7 +115,20 @@ func (f Frame) Line() string {
 		KindBroadcast: "open work is waiting",
 		KindChanged:   "tasks changed",
 	}[f.Kind]
-	return fmt.Sprintf("batondeck: %s on %s (cursor %d); call claim_next, then list_notifications.\n%s", what, f.ProjectID, f.Cursor, b)
+	call, extra := "claim_next", ""
+	if f.Kind == KindChanged {
+		call, extra = "next_task", ", includeInbox: true"
+	}
+	var next string
+	switch bs := f.boards(); len(bs) {
+	case 0:
+		next = fmt.Sprintf("call list_boards {projectId: %s}, then %s {projectId, boardId%s} on each board", f.ProjectID, call, extra)
+	case 1:
+		next = fmt.Sprintf("call %s {projectId: %s, boardId: %s%s}", call, f.ProjectID, bs[0], extra)
+	default:
+		next = fmt.Sprintf("call %s {projectId: %s, boardId%s} for each boardId of %s", call, f.ProjectID, extra, strings.Join(bs, ", "))
+	}
+	return fmt.Sprintf("batondeck: %s on %s (cursor %d); %s, then list_notifications.\n%s", what, f.ProjectID, f.Cursor, next, b)
 }
 
 // row is what the dispatcher reads of a change-log row (service.changePayload).
@@ -68,6 +137,7 @@ type row struct {
 	Scope     string
 	Kind      string
 	ProjectID string
+	BoardID   string
 	Tool      string
 	Actor     string
 }
@@ -76,11 +146,12 @@ type row struct {
 func rowOf(id int64, scope string, projectID *string, kind string, payload []byte) row {
 	var p struct {
 		ProjectID string `json:"projectId"`
+		BoardID   string `json:"boardId"`
 		Tool      string `json:"tool"`
 		Actor     string `json:"actor"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	r := row{ID: id, Scope: scope, Kind: kind, ProjectID: p.ProjectID, Tool: p.Tool, Actor: p.Actor}
+	r := row{ID: id, Scope: scope, Kind: kind, ProjectID: p.ProjectID, BoardID: p.BoardID, Tool: p.Tool, Actor: p.Actor}
 	if projectID != nil {
 		r.ProjectID = *projectID
 	}

@@ -21,6 +21,19 @@ Notable changes to batondeck-kanban. The format follows
   state's expiry) and `retention.raw_bodies_days` (`BATONDECK_RETENTION_RAW_BODIES_DAYS`, default 7),
   stamped on each row when written, so a change applies to rows written after it. Boot logs the
   interval and every window.
+- The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
+  projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
+  two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
+  every row coalesced into it is on one board, and `boardIds` (sorted, distinct) when they are on
+  several, up to 20. A frame naming no board means every board: a project-level row, the frame rung
+  after the dispatcher dropped rows, or more than 20 boards (never a partial list); it absorbs a
+  board frame it coalesces with rather than being narrowed to it. A frame of another project brings
+  only its own boards, so no board is paired with a project it is not in. The line names the exact
+  call, `claim_next {projectId: P-…, boardId: B-…}` (a master's `changed`: `next_task {…,
+  includeInbox: true}`; each id of `boardIds`; `list_boards` first when no board is named). Still no
+  task id and no title. Coalescing windows are unchanged; the start-up catch-up merges the same way.
+  The served MCP instructions, the worker skill and the worker and master commands say to take
+  `boardId` from the doorbell; the plugin is `0.1.2`.
 - Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
   R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
   message for an unknown login, a wrong password and a disabled account) and the form shows it; on
@@ -100,6 +113,31 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
+  a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
+  role. No `scope` writes the worker default, `null` removes the grant, an object replaces it; a
+  non-member is `VALIDATION`, and so is a `tools`/`deny` entry naming a tool that takes no projectId.
+  The grant is the new `Grants` store area (`capability_grants`, both engines and memstore, its
+  conformance battery) and the core now reads it on every governed call: until this change no grant
+  could be written and none was enforced. A grant on a project admin is stored and not enforced, as
+  in conductor. `tools/list` is narrowed too: a governed project tool is left out when the grant of
+  every membership the caller holds refuses it by name, so a tool callable in any project stays
+  listed. The change sends the member's sessions `notifications/tools/list_changed` at their next
+  request (R1.7's mechanism, its audience now the admin flag plus the hidden tools), read through a
+  per-identity cache dropped by the grant, a membership change or `create_project`. The router
+  facade (`find_tools`, `get_tool_schema`, `invoke_tool`) is not registered (ADR-0004).
+- The operations summary (R2.11): `GET /api/analytics/operations?projectId&days` replaces R1.12's
+  stub with conductor's OpsSummary (`total`, `errors`, `errorRate`, `avgLatencyMs`, `byTool`,
+  `byDay`, `byAgent`, as `aggregateOps` rolls it up) over the `tool_calls` rows, plus a `retention`
+  row (`days` 45, `oldestDay`) naming how far back rows are kept. `days` defaults to 7 and is clamped
+  to 90. The membership check is the service's, under `get_project`'s posture: a non-member is 403
+  `FORBIDDEN`, never an empty summary. One statement per call on each engine
+  (`Store.SummarizeToolCalls`, grouped by tool, outcome, agent and UTC day), pinned in `test/perf`.
+  Each `tool_calls` row now carries the `projectId` the call named (it was always empty, so no
+  project could have counted a call), except for a tool nobody registered and a call refused
+  `FORBIDDEN` or `UNAUTHENTICATED`, so a non-member moves no project's summary. Analytics and Reports read the summary unchanged, and a
+  cancelled task (DONE with the `cancelled` label) counts in the total and in no done figure (P-208).
+  This was the last stubbed route, so R1.12's stub handler and `TestStubsNameTheirLane` are gone.
 - Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
   `get_my_settings`, `set_my_settings` and `list_audit_log` leave `contract/pending.json`.
   `disconnect_agent` closes every live MCP session of `(identityId, agentId)` and deletes its row:

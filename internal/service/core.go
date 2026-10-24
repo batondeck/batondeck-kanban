@@ -28,14 +28,15 @@ const (
 	DefaultWakeSessionTTL = 24 * time.Hour
 	// DefaultToolCallBatch rows fill one InsertToolCalls; DefaultToolCallFlush is the longest a row
 	// waits; DefaultToolCallBuffer is the most rows held while the store is failing.
-	DefaultToolCallBatch  = 100
-	DefaultToolCallFlush  = time.Second
-	DefaultToolCallBuffer = 10_000
+	DefaultToolCallBatch = 100
+	// DefaultToolCallRetentionDays is core.Config's default retention.tool_calls_days.
+	DefaultToolCallRetentionDays = 45
+	DefaultToolCallFlush         = time.Second
+	DefaultToolCallBuffer        = 10_000
 )
 
 // GrantLookup reads one member's capability grant: ok false is no grant, which restricts nothing.
-// The store contract has no grant reader yet, so the composition root supplies one; nil is "no
-// member has a grant".
+// nil is the store's grant (store.Grants); a test supplies its own.
 type GrantLookup func(ctx context.Context, projectID, identityID string) (grant domain.CapabilityGrant, ok bool, err error)
 
 // Sealer seals a secret that must be read back later, bound to aad (core.Keyring is the one).
@@ -73,6 +74,9 @@ type Options struct {
 	// JWKSFetch is how a jwt-mode integration's key set is fetched (POST /hooks); nil is
 	// auth.SafeFetch, the SSRF-guarded https GET. A test stubs it.
 	JWKSFetch auth.Fetch
+	// ToolCallRetentionDays is the tool_calls window the operations summary reports; 0 is
+	// DefaultToolCallRetentionDays.
+	ToolCallRetentionDays int64
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -87,6 +91,7 @@ type Core struct {
 	wakeTTL time.Duration
 	grants  GrantLookup
 	access  *accessCache
+	hidden  *hiddenCache
 	calls   *toolCalls
 	boards  *snapshotCache
 	sealer  Sealer
@@ -99,6 +104,8 @@ type Core struct {
 	limiter *oncall.RateLimiter
 	// jwt verifies a jwt-mode integration's bearer, its JWKS cached per URL.
 	jwt *auth.Verifier
+	// toolCallRetentionDays is the window the operations summary's retention row names.
+	toolCallRetentionDays int64
 	// deliveryTTL and rawBodyTTL are Options.DeliveryRetention and RawBodyRetention.
 	deliveryTTL, rawBodyTTL time.Duration
 }
@@ -143,8 +150,9 @@ func New(st store.Store, o Options) *Core {
 		blobGC:  o.BlobGC,
 		media:   o.Media,
 
-		deliveryTTL: orDefault(o.DeliveryRetention, DeliveryRetention),
-		rawBodyTTL:  orDefault(o.RawBodyRetention, RawBodyRetention),
+		toolCallRetentionDays: orDefault(o.ToolCallRetentionDays, DefaultToolCallRetentionDays),
+		deliveryTTL:           orDefault(o.DeliveryRetention, DeliveryRetention),
+		rawBodyTTL:            orDefault(o.RawBodyRetention, RawBodyRetention),
 	}
 	c.media.MaxBytes = orDefault(c.media.MaxBytes, core.DefaultBlobMaxBytes)
 	switch {
@@ -163,6 +171,10 @@ func New(st store.Store, o Options) *Core {
 	c.limiter = oncall.NewRateLimiter()
 	c.jwt = &auth.Verifier{Fetch: o.JWKSFetch, Logf: c.log.Printf, Now: c.now}
 	c.access = newAccessCache(orDefault(o.AccessTTL, DefaultAccessTTL))
+	c.hidden = &hiddenCache{entries: map[string]hiddenEntry{}}
+	if c.grants == nil {
+		c.grants = c.storeGrant
+	}
 	c.boards = newSnapshotCache()
 	c.calls = newToolCalls(c, orDefault(o.ToolCallBatch, DefaultToolCallBatch), orDefault(o.ToolCallBuffer, DefaultToolCallBuffer), orDefault(o.ToolCallFlush, DefaultToolCallFlush))
 	return c

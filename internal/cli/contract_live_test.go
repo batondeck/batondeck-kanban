@@ -179,7 +179,7 @@ var (
 		"claim_next", "claim_task", "complete_task", "create_board", "create_chronicle_page", "create_project",
 		"create_sprint", "create_task", "delete_chronicle_page", "delete_project", "delete_task",
 		"detect_anomalies", "disconnect_agent", "edit_chronicle_page", "fail_task", "get_board", "get_my_settings",
-		"get_project", "get_skill_stats", "get_sprint", "get_task", "get_task_context", "handoff_task",
+		"get_project", "get_skill_stats", "get_sprint", "get_task", "get_task_context", "grant_capabilities", "handoff_task",
 		"heartbeat_task", "ingest_chronicle_page", "list_agent_sessions", "list_attachments", "list_boards",
 		"list_comments", "list_follow_ups", "list_notifications", "list_projects", "list_runs", "list_sprints",
 		"list_subtasks", "list_tasks", "mark_notifications_read", "move_task", "next_task", "open_run",

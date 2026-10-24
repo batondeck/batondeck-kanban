@@ -18,6 +18,7 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -440,5 +441,31 @@ func TestServeRunsTheRetentionSweepUntilItStops(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := st.n.Load(); n != after {
 		t.Fatalf("%d sweeps after serveUntil returned: the sweep outlived the server", n-after)
+	}
+}
+
+// The analytics retention row and the sweep read the one configured tool_calls window (R2.11, P-109).
+func TestTheAnalyticsRetentionRowIsTheSweepWindow(t *testing.T) {
+	ctx := context.Background()
+	st := memstore.New()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{ToolCallsDays: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.core.Close(ctx)
+	admin := domain.Caller{Identity: "root", WorkspaceAdmin: true}
+	p, err := a.core.Projects().Create(ctx, admin, service.CreateProjectReq{Name: "P"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops, err := a.core.Analytics().Operations(ctx, admin, service.OperationsReq{ProjectID: p.ProjectID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ops.Retention.Days != 12 || a.sweep.Windows.ToolCalls != 12*24*time.Hour {
+		t.Fatalf("analytics retention %d days, sweep window %s; want both 12 days", ops.Retention.Days, a.sweep.Windows.ToolCalls)
 	}
 }

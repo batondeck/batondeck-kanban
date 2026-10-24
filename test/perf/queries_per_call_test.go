@@ -49,6 +49,8 @@ const (
 	pinGetTaskContext = 6
 	// next_task: the frontier preview and the summary of the task it names.
 	pinNextTask = 3
+	// GET /api/analytics/operations (service.Analytics, no tool): the one GROUP BY over tool_calls.
+	pinAnalyticsOperations = 1
 )
 
 // snapshot is the board snapshot cache's state when a call is measured.
@@ -164,6 +166,8 @@ func (cl call) pin(engine string) int64 {
 		return pinGetTaskContext
 	case "next_task":
 		return pinNextTask
+	case "analytics operations":
+		return pinAnalyticsOperations
 	}
 	panic("no pin for " + cl.tool)
 }
@@ -193,6 +197,10 @@ var calls = []call{
 	}},
 	{"next_task", cached, func(ctx context.Context, c *service.Core, f *fixture) error {
 		_, err := c.Lifecycle().Next(ctx, f.alice, service.NextTaskReq{ProjectID: f.project, BoardID: f.board})
+		return err
+	}},
+	{"analytics operations", cached, func(ctx context.Context, c *service.Core, f *fixture) error {
+		_, err := c.Analytics().Operations(ctx, f.alice, service.OperationsReq{ProjectID: f.project, Days: 90})
 		return err
 	}},
 	// Last, since it writes: each claim takes another TODO task.

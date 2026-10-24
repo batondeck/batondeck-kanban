@@ -72,6 +72,8 @@ func (f *Fake) Services() service.Services {
 		Ranking:       rankingFake{f},
 		Me:            meFake{f},
 		Audit:         auditFake{f},
+		Grants:        grantsFake{f},
+		Analytics:     analyticsFake{f},
 	}
 }
 

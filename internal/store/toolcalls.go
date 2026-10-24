@@ -16,6 +16,7 @@ import (
 type toolCallQueries interface {
 	InsertToolCall(ctx context.Context, arg sqlitedb.InsertToolCallParams) error
 	DeleteToolCallsOlderThan(ctx context.Context, arg sqlitedb.DeleteToolCallsOlderThanParams) (int64, error)
+	SummarizeToolCalls(ctx context.Context, arg sqlitedb.SummarizeToolCallsParams) ([]sqlitedb.SummarizeToolCallsRow, error)
 }
 
 func (s *SQLite) InsertToolCalls(ctx context.Context, batch []ToolCall) error {
@@ -32,6 +33,14 @@ func (s *SQLite) DeleteToolCallsOlderThan(ctx context.Context, before int64, lim
 
 func (s *Postgres) DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error) {
 	return deleteToolCallsOlderThan(ctx, s, before, limit)
+}
+
+func (s *SQLite) SummarizeToolCalls(ctx context.Context, projectID string, since int64) ([]ToolCallGroup, error) {
+	return summarizeToolCalls(ctx, s, projectID, since)
+}
+
+func (s *Postgres) SummarizeToolCalls(ctx context.Context, projectID string, since int64) ([]ToolCallGroup, error) {
+	return summarizeToolCalls(ctx, s, projectID, since)
 }
 
 func validToolCall(c ToolCall) error {
@@ -80,10 +89,32 @@ func deleteToolCallsOlderThan(ctx context.Context, e engine, before int64, limit
 	return n, nil
 }
 
+func summarizeToolCalls(ctx context.Context, e engine, projectID string, since int64) ([]ToolCallGroup, error) {
+	if projectID == "" {
+		return nil, domain.Validation("a summary needs a project id", map[string]any{"field": "projectId"})
+	}
+	rows, err := e.queries(false).SummarizeToolCalls(ctx, sqlitedb.SummarizeToolCallsParams{ProjectID: projectID, SinceMs: since})
+	if err != nil {
+		return nil, fmt.Errorf("store: summarize tool calls: %w", err)
+	}
+	out := make([]ToolCallGroup, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ToolCallGroup{Tool: r.Tool, Outcome: ToolCallOutcome(r.Outcome), Agent: r.Agent, Day: r.Day, Calls: r.Calls, LatencySum: r.LatencySum})
+	}
+	return out, nil
+}
+
 func (p pgQueries) InsertToolCall(ctx context.Context, arg sqlitedb.InsertToolCallParams) error {
 	return p.q.InsertToolCall(ctx, pgdb.InsertToolCallParams(arg))
 }
 
 func (p pgQueries) DeleteToolCallsOlderThan(ctx context.Context, arg sqlitedb.DeleteToolCallsOlderThanParams) (int64, error) {
 	return p.q.DeleteToolCallsOlderThan(ctx, pgdb.DeleteToolCallsOlderThanParams(arg))
+}
+
+func (p pgQueries) SummarizeToolCalls(ctx context.Context, arg sqlitedb.SummarizeToolCallsParams) ([]sqlitedb.SummarizeToolCallsRow, error) {
+	rows, err := p.q.SummarizeToolCalls(ctx, pgdb.SummarizeToolCallsParams(arg))
+	return convert(rows, func(r pgdb.SummarizeToolCallsRow) sqlitedb.SummarizeToolCallsRow {
+		return sqlitedb.SummarizeToolCallsRow(r)
+	}), err
 }

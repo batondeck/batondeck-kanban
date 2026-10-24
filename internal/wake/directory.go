@@ -435,7 +435,11 @@ func (d *Directory) catchUp(ctx context.Context, e *entry) {
 	got := map[string]released{}
 	if _, err := catchUp(ctx, replay, e.lastCursor, func(r row) {
 		if k := e.kind(r); k != "" {
-			got[k] = released{pid: e.pid, frame: Frame{Kind: k, Cursor: r.ID, ProjectID: r.ProjectID}}
+			f := Frame{Kind: k, Cursor: r.ID, ProjectID: r.ProjectID, BoardID: r.BoardID}
+			if old, ok := got[k]; ok {
+				f = merge(old.frame, f)
+			}
+			got[k] = released{pid: e.pid, frame: f}
 		}
 	}); err != nil {
 		d.o.Logger.Printf("wake: catching pid %d up from %d: %+v", e.pid, e.lastCursor, err)
@@ -499,7 +503,7 @@ func (d *Directory) route(co *coalescer, r row) {
 		for pid := range d.index[k] {
 			if e := d.entries[pid]; e != nil {
 				if kind := e.kind(r); kind != "" {
-					hits = append(hits, released{pid: pid, frame: Frame{Kind: kind, Cursor: r.ID, ProjectID: r.ProjectID}})
+					hits = append(hits, released{pid: pid, frame: Frame{Kind: kind, Cursor: r.ID, ProjectID: r.ProjectID, BoardID: r.BoardID}})
 				}
 			}
 		}

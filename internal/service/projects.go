@@ -31,7 +31,8 @@ func (p projects) Create(ctx context.Context, caller domain.Caller, req CreatePr
 		return CreateProjectResp{}, err
 	}
 	// ProjectID "" keeps the idempotency key under store.GlobalScope; fn names the new project so the
-	// change-log row is scoped to it.
+	// change-log row is scoped to it. A new membership can list tools the caller's grants hid.
+	defer p.c.hidden.invalidate(caller.Identity)
 	return mutate(ctx, p.c, caller, mutation{
 		Tool: "create_project", Args: map[string]any{"name": req.Name}, IdempotencyKey: req.IdempotencyKey,
 	}, func(t *txn) (CreateProjectResp, error) {

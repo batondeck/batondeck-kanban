@@ -74,7 +74,8 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 		SweepIntervalSeconds: cmp.Or(ret.SweepIntervalSeconds, def.SweepIntervalSeconds)}
 	day := 24 * time.Hour
 	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media,
-		DeliveryRetention: time.Duration(ret.DeliveriesDays) * day, RawBodyRetention: time.Duration(ret.RawBodiesDays) * day})
+		DeliveryRetention: time.Duration(ret.DeliveriesDays) * day, RawBodyRetention: time.Duration(ret.RawBodiesDays) * day,
+		ToolCallRetentionDays: int64(ret.ToolCallsDays)})
 	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
 	if media.Files != nil {
 		sweep.CollectBlobs = sc.CollectBlobs
@@ -86,8 +87,9 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 		Version:  version,
 		Resolver: resolver,
 		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Artifacts: sc.Artifacts(), Comments: sc.Comments(), FollowUps: sc.FollowUps(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall(), Runs: sc.Runs(), Sprints: sc.Sprints(),
-			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit()},
-		Logger: logger,
+			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit(), Grants: sc.Grants(), Analytics: sc.Analytics()},
+		Logger:      logger,
+		HiddenTools: sc.HiddenTools,
 	}
 	if as != nil {
 		opts.ResourceMetadataURL = as.ResourceMetadataURL()
