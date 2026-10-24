@@ -77,6 +77,8 @@ var areas = []struct{ name, owner string }{
 	{"oncall", "R2.8"},
 	{"runs", "R2.2"},
 	{"sprints", "R2.2"},
+	{"notifications", "R2.3"},
+	{"profiles", "R2.3"},
 	{"settings", "R2.5"},
 }
 

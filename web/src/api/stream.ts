@@ -162,7 +162,7 @@ function reconcile(): void {
       updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
       board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
       presence: (d) => fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
-      // No notifications frame is sent until the notifications lane (R2.3) lands; the listener waits.
+      // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
       notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
       resync: () => fanout('onResync', (h) => h.onResync?.()),
     },

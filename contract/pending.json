@@ -1,14 +1,7 @@
 {
   "tools": {
     "P5 NICE tools and the agents, me and audit reads": [
-      "detect_anomalies",
-      "get_skill_stats",
-      "grant_capabilities",
-      "list_notifications",
-      "mark_notifications_read",
-      "orchestrate_subtasks",
-      "rank_tasks",
-      "register_agent_profile"
+      "grant_capabilities"
     ]
   }
 }

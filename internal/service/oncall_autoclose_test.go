@@ -251,6 +251,23 @@ var taskWrites = map[string][]taskWrite{
 	}}},
 	// The race tools (R2.2): each moves the incident's version, so the resolve annotates it, and the
 	// runs they made (or the winner pick_run keeps) outlive it.
+	// R2.3: a fan-out keeps the ticket (its children are subtasks) and the children outlive the
+	// resolve; a quiet anomaly scan of the ticket writes nothing to it, so the resolve still closes it
+	// (a first sighting would append an event, which holds nothing open either).
+	"orchestrate_subtasks": {{name: "claimed and fanned out", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
+		r, err := e.c.Ranking().Orchestrate(e.ctx, e.alice, OrchestrateSubtasksReq{ProjectID: e.project, ParentTaskID: id, LeaseID: e.claim(id),
+			Children: []OrchestrateChild{{Title: "check replica lag"}, {Title: "page the DBA"}}})
+		must(e.t, err)
+		return []string{r.Children[0].ID, r.Children[1].ID}
+	}}},
+	"detect_anomalies": {{name: "a quiet scan of the ticket", want: "closed", apply: func(e *autocloseEnv, id string) []string {
+		r, err := e.c.Anomalies().Detect(e.ctx, e.alice, DetectAnomaliesReq{ProjectID: e.project, TaskID: id})
+		must(e.t, err)
+		if len(r.Anomalies) != 0 {
+			e.t.Fatalf("a fresh incident has anomalies: %+v", r.Anomalies)
+		}
+		return nil
+	}}},
 	"start_runs": {{name: "raced", want: "annotated", apply: func(e *autocloseEnv, id string) []string {
 		return e.race(id, 2)
 	}}},
@@ -320,7 +337,7 @@ var taskWrites = map[string][]taskWrite{
 // pendingWrites are task-taking write tools still in contract/pending.json: each needs a case in
 // taskWrites the day it leaves (add_comment is R2.1's), which TestAutocloseSparesEveryTaskWrite
 // enforces.
-var pendingWrites = []string{"detect_anomalies", "orchestrate_subtasks"}
+var pendingWrites = []string{}
 
 func must(t *testing.T, err error) {
 	t.Helper()

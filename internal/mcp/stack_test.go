@@ -227,6 +227,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 
 		oncallOnTheStack(t, h, s, c, p, b)
 		runsAndSprintsOnTheStack(t, c, p, b, task, get)
+		r23OnTheStack(t, h, c, p, b, task, get)
 
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
 		sessionsMeAuditOnTheStack(t, h, c, id1)

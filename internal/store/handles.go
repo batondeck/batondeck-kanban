@@ -56,6 +56,8 @@ type sqlQueries interface {
 	artifactQueries
 	commentQueries
 	followUpQueries
+	notificationQueries
+	profileQueries
 	chronicleQueries
 	oncallQueries
 	runQueries
