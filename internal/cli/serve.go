@@ -51,7 +51,7 @@ type app struct {
 // 401 names no resource metadata. sealer seals a wake session's inbox token; nil refuses one. media
 // is the blob store; with its Files and Signer set, the signed PUT and GET /blobs/{id} are mounted.
 func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) (*app, error) {
-	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st}, Sessions: st}
+	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	var as *oauth.Server
 	if publicURL != "" {
 		var err error
@@ -85,7 +85,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	sc.SetAgentSessionEnder(srv)
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
-	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Bus: b, Presence: dir, Logger: logger}
+	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger}
 	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
