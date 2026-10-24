@@ -1,7 +1,7 @@
 /**
  * A DELIVERY WHOSE TICKET IS GONE STILL RENDERS (plan §Fold 2).
  *
- * Autoclose DELETES an untouched incident ticket (BACKLOG or READY, nothing written) when the
+ * Autoclose DELETES an untouched incident ticket (TODO, unclaimed, never attempted, nothing written) when the
  * source resolves it, and the delivery log keeps the row — so a delivery may carry a `taskId` that
  * no longer resolves. The log shows that id as text: no link to a ticket that 404s, no lookup of
  * it, and nothing on the console. The fixture is the wire shape the BFF answers
