@@ -91,8 +91,10 @@ func TestFrameBytes(t *testing.T) {
 
 // P-191 AC1: rows read from the change log carry their board into the frame, and the coalescer
 // merges a key's frames into the union of one project's boards: one board is boardId, several are
-// boardIds (sorted, distinct, the lowest MaxBoards), a project-level row adds neither, and a frame of
-// another project brings only its own boards.
+// boardIds (sorted, distinct, at most MaxBoards), and a frame of another project brings only its own
+// boards. A frame naming no board (a project-level row, ringAll's after dropped rows, more than
+// MaxBoards boards) means every board, so it absorbs a board frame rather than being narrowed to it
+// (review of #64, B1), and the line says list_boards first. A master's changed line names next_task.
 func TestFrameBoards(t *testing.T) {
 	frameOf := func(id int64, project, board string) Frame {
 		payload, _ := json.Marshal(map[string]string{"projectId": project, "boardId": board})
@@ -125,19 +127,27 @@ func TestFrameBoards(t *testing.T) {
 	if got := js(project); got != `{"kind":"assigned","cursor":6,"projectId":"P-1"}` {
 		t.Fatalf("a project-level row: %s", got)
 	}
-	if got := js(coalesce(frameOf(7, "P-1", ""), frameOf(8, "P-1", "B-1"))); got != `{"kind":"assigned","cursor":8,"projectId":"P-1","boardId":"B-1"}` {
+	if got := js(coalesce(frameOf(7, "P-1", ""), frameOf(8, "P-1", "B-1"))); got != `{"kind":"assigned","cursor":8,"projectId":"P-1"}` {
 		t.Fatalf("a project-level row then a board's: %s", got)
+	}
+	// ringAll's frame after dropped rows, the shape directory.go builds: it must not be narrowed to B-1.
+	all := coalesce(frameOf(9, "P-1", "B-1"), Frame{Kind: KindAssigned, Cursor: 9, ProjectID: "P-1"})
+	if got := js(all); got != `{"kind":"assigned","cursor":9,"projectId":"P-1"}` || strings.Contains(all.Line(), "boardId: B-1") {
+		t.Fatalf("a board's row then ringAll's: %s\n%s", got, all.Line())
 	}
 	if got := js(coalesce(frameOf(9, "P-1", "B-1"), frameOf(10, "P-2", "B-2"))); got != `{"kind":"assigned","cursor":10,"projectId":"P-2","boardId":"B-2"}` {
 		t.Fatalf("another project's frame: %s", got)
 	}
 	var many []Frame
-	for i := 25; i > 0; i-- {
+	for i := MaxBoards + 1; i > 0; i-- {
 		many = append(many, frameOf(int64(100+i), "P-1", fmt.Sprintf("B-%02d", i)))
 	}
-	capped := coalesce(many...)
-	if len(capped.BoardIDs) != MaxBoards || capped.BoardIDs[0] != "B-01" || capped.BoardIDs[MaxBoards-1] != "B-20" || capped.Cursor != 125 {
-		t.Fatalf("25 boards: %+v, want B-01..B-20 at cursor 125", capped)
+	if full := coalesce(many[1:]...); len(full.BoardIDs) != MaxBoards || full.BoardIDs[0] != "B-01" || full.BoardIDs[MaxBoards-1] != "B-20" {
+		t.Fatalf("%d boards: %+v, want B-01..B-20", MaxBoards, full)
+	}
+	over := coalesce(many...)
+	if got := js(over); got != `{"kind":"assigned","cursor":121,"projectId":"P-1"}` {
+		t.Fatalf("%d boards: %s, want no partial list", MaxBoards+1, got)
 	}
 
 	for _, c := range []struct {
@@ -147,6 +157,10 @@ func TestFrameBoards(t *testing.T) {
 		{one, "; call claim_next {projectId: P-1, boardId: B-1}, then list_notifications."},
 		{two, "; call claim_next {projectId: P-1, boardId} for each boardId of B-a, B-b, then list_notifications."},
 		{project, "; call list_boards {projectId: P-1}, then claim_next {projectId, boardId} on each board, then list_notifications."},
+		{over, "; call list_boards {projectId: P-1}, then claim_next {projectId, boardId} on each board, then list_notifications."},
+		{Frame{Kind: KindChanged, ProjectID: "P-1", BoardID: "B-1"}, "; call next_task {projectId: P-1, boardId: B-1, includeInbox: true}, then list_notifications."},
+		{Frame{Kind: KindChanged, ProjectID: "P-1", BoardIDs: []string{"B-a", "B-b"}}, "; call next_task {projectId: P-1, boardId, includeInbox: true} for each boardId of B-a, B-b, then list_notifications."},
+		{Frame{Kind: KindChanged, ProjectID: "P-1"}, "; call list_boards {projectId: P-1}, then next_task {projectId, boardId, includeInbox: true} on each board, then list_notifications."},
 	} {
 		if line := c.f.Line(); !strings.Contains(line, c.want) {
 			t.Fatalf("line %q\nwant it to hold %q", line, c.want)

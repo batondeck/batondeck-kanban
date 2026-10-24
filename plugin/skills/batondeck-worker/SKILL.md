@@ -72,7 +72,9 @@ it the moment the process exits.
   happened. So every doorbell is followed by a read through the tools, where every check applies:
   **take `projectId` and `boardId` from the doorbell** and call `claim_next { projectId, boardId }`
   (once per id of `boardIds`), then `list_notifications`. A project id is never a board id. A
-  doorbell that names no board (a project-level change) means `list_boards { projectId }` first.
+  doorbell that names no board (a project-level change, or more than 20 boards) means
+  `list_boards { projectId }` first. A master's `changed` doorbell names
+  `next_task { projectId, boardId, includeInbox: true }` instead of `claim_next`.
 - **After `broadcast`, probe the open frontier as well as your inbox**: the work is assigned to nobody,
   so `claim_next` without `assignee` is what finds it.
 - **Between doorbells, end your turn.** There is nothing to wait on and nothing to poll: the next

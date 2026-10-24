@@ -46,11 +46,12 @@ const (
 	Sweep = 60 * time.Second
 )
 
-// MaxBoards caps a frame's boardIds; past it the lowest MaxBoards ids are kept.
+// MaxBoards caps a frame's boardIds; past it the frame names no board (list_boards first).
 const MaxBoards = 20
 
 // Frame is one doorbell: its kind, the bus's safe cursor at its release, its project, and the
-// board its rows name (BoardID) or boards, sorted (BoardIDs). A project-level row adds neither.
+// board its rows name (BoardID) or boards, sorted (BoardIDs). A frame naming none means "look at
+// every board": a project-level row, ringAll after dropped rows, or more than MaxBoards boards.
 type Frame struct {
 	Kind      string   `json:"kind"`
 	Cursor    int64    `json:"cursor"`
@@ -67,14 +68,16 @@ func (f Frame) boards() []string {
 	return f.BoardIDs
 }
 
-// withBoards is f naming the distinct boards of ids, sorted then capped at MaxBoards: one as
-// BoardID, several as BoardIDs, none as neither.
+// withBoards is f naming the distinct boards of ids, sorted: one as BoardID, several as BoardIDs,
+// none (or more than MaxBoards, never a partial list) as neither.
 func (f Frame) withBoards(ids []string) Frame {
 	ids = slices.Clone(ids) // ids may share a frame's BoardIDs array
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
-	ids = ids[:min(len(ids), MaxBoards)]
 	f.BoardID, f.BoardIDs = "", nil
+	if len(ids) > MaxBoards {
+		return f
+	}
 	if len(ids) == 1 {
 		f.BoardID = ids[0]
 	} else if len(ids) > 1 {
@@ -84,8 +87,9 @@ func (f Frame) withBoards(ids []string) Frame {
 }
 
 // merge is the frame two doorbells of one entry and kind coalesce into: the higher cursor's (a's on
-// a tie), with both frames' boards when they name one project. A frame of another project brings
-// only its own boards, so no board is ever paired with a project it is not in.
+// a tie), with both frames' boards when they name one project, and none when either names none (a
+// "look at every board" frame is never narrowed to the boards already held). A frame of another
+// project brings only its own boards, so no board is ever paired with a project it is not in.
 func merge(a, b Frame) Frame {
 	hi := a
 	if b.Cursor > a.Cursor {
@@ -94,12 +98,16 @@ func merge(a, b Frame) Frame {
 	if a.ProjectID != b.ProjectID {
 		return hi
 	}
+	if len(a.boards()) == 0 || len(b.boards()) == 0 {
+		return hi.withBoards(nil)
+	}
 	return hi.withBoards(append(a.boards(), b.boards()...))
 }
 
 // Line is the frame as the receiving model reads it: one plain sentence, then the frame's JSON. It
-// is a prompt (R3.1 §3.2), so it says only what to do next, never a title or a note: claim_next on
-// the frame's board(s), or list_boards first when it names none.
+// is a prompt (R3.1 §3.2), so it says only what to do next, never a title or a note: claim_next (a
+// master's changed: next_task with its inbox, as the master command does) on the frame's board(s),
+// or list_boards first when it names none.
 func (f Frame) Line() string {
 	b, _ := json.Marshal(f)
 	what := map[string]string{
@@ -107,14 +115,18 @@ func (f Frame) Line() string {
 		KindBroadcast: "open work is waiting",
 		KindChanged:   "tasks changed",
 	}[f.Kind]
+	call, extra := "claim_next", ""
+	if f.Kind == KindChanged {
+		call, extra = "next_task", ", includeInbox: true"
+	}
 	var next string
 	switch bs := f.boards(); len(bs) {
 	case 0:
-		next = fmt.Sprintf("call list_boards {projectId: %s}, then claim_next {projectId, boardId} on each board", f.ProjectID)
+		next = fmt.Sprintf("call list_boards {projectId: %s}, then %s {projectId, boardId%s} on each board", f.ProjectID, call, extra)
 	case 1:
-		next = fmt.Sprintf("call claim_next {projectId: %s, boardId: %s}", f.ProjectID, bs[0])
+		next = fmt.Sprintf("call %s {projectId: %s, boardId: %s%s}", call, f.ProjectID, bs[0], extra)
 	default:
-		next = fmt.Sprintf("call claim_next {projectId: %s, boardId} for each boardId of %s", f.ProjectID, strings.Join(bs, ", "))
+		next = fmt.Sprintf("call %s {projectId: %s, boardId%s} for each boardId of %s", call, f.ProjectID, extra, strings.Join(bs, ", "))
 	}
 	return fmt.Sprintf("batondeck: %s on %s (cursor %d); %s, then list_notifications.\n%s", what, f.ProjectID, f.Cursor, next, b)
 }

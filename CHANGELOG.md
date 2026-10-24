@@ -11,13 +11,16 @@ Notable changes to batondeck-kanban. The format follows
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
-  every row coalesced into it is on one board, and `boardIds` (sorted, distinct, the lowest 20) when
-  they are on several; a project-level row adds neither, and a frame of another project brings only
-  its own boards, so no board is paired with a project it is not in. The line names the exact call,
-  `claim_next {projectId: P-…, boardId: B-…}` (each id of `boardIds`; `list_boards` first when no
-  board is named). Still no task id and no title. Coalescing windows are unchanged; the start-up
-  catch-up merges the same way. The served MCP instructions, the worker skill and the worker and
-  master commands say to take `boardId` from the doorbell; the plugin is `0.1.1`.
+  every row coalesced into it is on one board, and `boardIds` (sorted, distinct) when they are on
+  several, up to 20. A frame naming no board means every board: a project-level row, the frame rung
+  after the dispatcher dropped rows, or more than 20 boards (never a partial list); it absorbs a
+  board frame it coalesces with rather than being narrowed to it. A frame of another project brings
+  only its own boards, so no board is paired with a project it is not in. The line names the exact
+  call, `claim_next {projectId: P-…, boardId: B-…}` (a master's `changed`: `next_task {…,
+  includeInbox: true}`; each id of `boardIds`; `list_boards` first when no board is named). Still no
+  task id and no title. Coalescing windows are unchanged; the start-up catch-up merges the same way.
+  The served MCP instructions, the worker skill and the worker and master commands say to take
+  `boardId` from the doorbell; the plugin is `0.1.2`.
 - Local sign-in, sign-out and Settings → Users (R1.15). The sign-in screen is a login form posting
   R0.12's form fields to `POST /api/login`, which now answers a refusal as `{code, message}` (one
   message for an unknown login, a wrong password and a disabled account) and the form shows it; on
