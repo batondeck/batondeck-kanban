@@ -148,6 +148,7 @@ func (s *Store) DeleteProjectRecursive(ctx context.Context, projectID string) er
 		delete(st.projects, projectID)
 		delete(st.counters, projectID)
 		maps.DeleteFunc(st.members, func(k [2]string, _ store.Member) bool { return k[0] == projectID })
+		maps.DeleteFunc(st.grants, func(k [2]string, _ store.Grant) bool { return k[0] == projectID })
 		maps.DeleteFunc(st.boards, func(k [2]string, _ store.Board) bool { return k[0] == projectID })
 		maps.DeleteFunc(st.idem, func(k [3]string, _ idemEntry) bool { return k[0] == projectID })
 		maps.DeleteFunc(st.tasks, func(k [2]string, _ store.Task) bool { return k[0] == projectID })
@@ -207,6 +208,7 @@ func (s *Store) RemoveMember(ctx context.Context, projectID, identityID string) 
 			return domain.NotFound("Member", identityID)
 		}
 		delete(st.members, k)
+		delete(st.grants, k)
 		return nil
 	})
 }
