@@ -181,6 +181,8 @@ interface DeviceSession {
   agentId: string;
   adapter?: string;
   registeredAt: string;
+  /** The change-log id of the last doorbell written to the process, 0 for none (wake_sessions.last_cursor). */
+  lastDeliveredCursor?: number;
 }
 
 /**
@@ -203,6 +205,7 @@ export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
     sessionCount: 1,
     requestCount: 0,
     toolCounts: {},
+    lastDeliveredCursor: e.lastDeliveredCursor ?? 0,
   }));
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toolKey } from '../ToolLogo.js';
 import { Icon } from '../icons.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +8,7 @@ import * as meApi from '../api/me.js';
 import * as projectsApi from '../api/projects.js';
 import * as usersApi from '../api/users.js';
 import { WaitLoader } from '../brand.js';
-import { Avatar, ConfirmButton, timeAgo } from '../components.js';
+import { Avatar } from '../components.js';
 import type { Status } from '../types.js';
 import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
@@ -320,109 +320,6 @@ export function UsersSection() {
 const display = (token: string): string => `${token.split('_').slice(0, 2).join('_')}…`;
 
 
-/**
- * The STABLE marketplace credential (owner spec 2026-09-06): one mk_… key per user per org, no
- * expiry, re-showable BY DESIGN — unlike a CLI token it is stored KEK-encrypted server-side so a
- * new laptop gets the same URL. Anonymous in the link, accountable on the record: the usage table
- * below is the leak story — every fetch names this user, with IP, client and what was downloaded.
- */
-function MarketplaceAccess() {
-  const { pullBase } = useAuth();
-  const qc = useQueryClient();
-  const invalidate = (): void => void qc.invalidateQueries({ queryKey: ['marketplaceKey'] });
-  // The key is contractually STABLE, so refetch-on-focus buys nothing and costs the full usage
-  // read every alt-tab: fetch once, refresh only through the mutations and the explicit button.
-  const q = useQuery({ queryKey: ['marketplaceKey'], queryFn: () => meApi.getMarketplaceKey(), staleTime: Infinity });
-  const create = useMutation({ mutationFn: () => meApi.createMarketplaceKey(), onSuccess: invalidate });
-  const rotate = useMutation({ mutationFn: () => meApi.rotateMarketplaceKey(), onSuccess: invalidate });
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const copyTimer = useRef<number | null>(null);
-  useEffect(() => () => { if (copyTimer.current !== null) window.clearTimeout(copyTimer.current); }, []);
-  const flashCopy = (state: 'copied' | 'failed'): void => {
-    setCopyState(state);
-    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-    copyTimer.current = window.setTimeout(() => setCopyState('idle'), 1500);
-  };
-  // Read defensively: the harness's stub fetch answers {} for unknown endpoints, and a screen that
-  // throws on that blanks EVERY Settings panel, not just this one.
-  const key = typeof q.data?.key === 'string' ? q.data.key : null;
-  const uses = q.data?.recentUses ?? [];
-  const url = key !== null && pullBase !== null ? `${pullBase}/pull/k/${key}` : null;
-  const mutationErr = rotate.isError ? 'Rotate failed — the old URL is still live. Retry.' : create.isError ? 'Could not create the key. Retry.' : null;
-  return (
-    <section id="marketplace-access">
-      <Panel
-        title="Marketplace access"
-        right={typeof q.data?.useCount === 'number' && key !== null ? <span className="muted" style={{ fontSize: 12 }}>{q.data.useCount} uses</span> : undefined}
-      >
-        <p className="muted" style={{ fontSize: 12, padding: '8px 12px', margin: 0 }}>
-          Your personal plugin-marketplace URL. It never expires, stays the same on every device, and
-          serves only the plugins your audiences receive. The link itself is the credential — anyone
-          holding it pulls as you, and every use lands in the record below, so treat it like a key
-          and rotate it if it leaks.
-        </p>
-        {q.isError && (
-          /* A failed read must not read as "no key": the endpoint can fail while the key keeps
-           * serving pulls, and Rotate is exactly the recovery that works without the read. */
-          <Cluster gap={8} style={{ padding: '0 12px 12px' }}>
-            <span style={{ fontSize: 12, color: 'var(--blocked)' }}>
-              Could not load your marketplace key{q.error instanceof Error ? ` — ${q.error.message}` : ''}.
-            </span>
-            <button className="btn secondary" onClick={() => void q.refetch()}>Retry</button>
-            <ConfirmButton className="btn secondary" label="Rotate anyway" confirmLabel="Rotate — old URL dies" onConfirm={() => rotate.mutate()} />
-          </Cluster>
-        )}
-        {!q.isError && q.data !== undefined && key === null && (
-          <Cluster gap={8} style={{ padding: '0 12px 12px' }}>
-            <span className="muted" style={{ fontSize: 12 }}>No key yet — creating one is an explicit act, nothing is minted by just looking.</span>
-            <button className="btn" disabled={create.isPending} onClick={() => create.mutate()}>
-              {create.isPending ? 'Creating…' : 'Create marketplace URL'}
-            </button>
-          </Cluster>
-        )}
-        {url !== null && (
-          <Cluster gap={8} style={{ padding: '0 12px 8px' }}>
-            <input className="input mono" readOnly value={url} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1, minWidth: 260, fontSize: 12 }} aria-label="Your marketplace URL" />
-            <button
-              className="btn"
-              onClick={() => {
-                if (!navigator.clipboard) { flashCopy('failed'); return; }
-                navigator.clipboard.writeText(url).then(() => flashCopy('copied'), () => flashCopy('failed'));
-              }}
-            >
-              {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed — select it' : 'Copy'}
-            </button>
-            <ConfirmButton className="btn secondary" label="Rotate" confirmLabel="Rotate — old URL dies" onConfirm={() => rotate.mutate()} />
-          </Cluster>
-        )}
-        {mutationErr !== null && (
-          <p style={{ fontSize: 12, color: 'var(--blocked)', padding: '0 12px 8px', margin: 0 }}>{mutationErr}</p>
-        )}
-        {uses.length > 0 && (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ whiteSpace: 'nowrap' }}>
-              <thead><tr><th>When</th><th>What</th><th>From</th><th>Client</th></tr></thead>
-              <tbody>
-                {uses.map((u, i) => (
-                  <tr key={i}>
-                    <td className="muted">{timeAgo(u.ts)}</td>
-                    <td>{u.kind === 'archive' ? `${u.pluginName ?? ''} ${u.semver ?? ''}` : 'catalogue'}</td>
-                    <td className="mono">{u.ip ?? '—'}</td>
-                    <td className="muted" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.userAgent ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {key !== null && uses.length === 0 && (
-          <p className="muted" style={{ fontSize: 12, padding: '0 12px 12px', margin: 0 }}>Never used yet.</p>
-        )}
-      </Panel>
-    </section>
-  );
-}
-
 function CliTokens() {
   const qc = useQueryClient();
   const tokensQ = useQuery({ queryKey: ['cliTokens'], queryFn: () => meApi.listCliTokens() });
@@ -662,7 +559,9 @@ export function Settings() {
   }, []);
 
   const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => agentsApi.agentSessions(100) });
-  const mySessions = sessionsQ.data?.sessions ?? [];
+  // MCP sessions only: the device rows a presence frame merges into the same cache (`device:<pid>`,
+  // presenceMerge.ts) are processes on this machine, not sessions disconnect_agent can end.
+  const mySessions = (sessionsQ.data?.sessions ?? []).filter((s) => !s.sessionKey.startsWith('device:'));
   const [endErr, setEndErr] = useState<string | null>(null);
   const endSession = useMutation({
     mutationFn: (v: { identityId: string; agentId: string }) => agentsApi.disconnectOwnSession(v.identityId, v.agentId),
@@ -942,9 +841,9 @@ export function Settings() {
           </Panel>
         </section>
 
+        <CliTokens />
+
         {/* Anchored so `/settings#sessions` from the Agents screen lands here. */}
-        <MarketplaceAccess />
-      <CliTokens />
 
         <section id="sessions">
           <Panel
@@ -990,7 +889,7 @@ export function Settings() {
                               className="btn secondary"
                               disabled={endSession.isPending}
                               onClick={() => endSession.mutate({ identityId: s.identityId, agentId: s.agentId })}
-                              title="Revoke this session. The agent must reconnect (and rotate its id) to come back."
+                              title="End this session's MCP connection. The agent's next request is refused and it initialises again."
                             >
                               Disconnect
                             </button>

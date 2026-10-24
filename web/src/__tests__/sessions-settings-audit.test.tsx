@@ -1,0 +1,118 @@
+/**
+ * R2.5: the Agents, Settings and Workspace Log screens over the session, CLI-token and audit routes.
+ * Rendering is not authorization: the BFF's 403 is the control (internal/api/me_test.go). These pin
+ * what the screens show from what the routes answer, and which routes they call.
+ */
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { presenceSessions } from '../api/stream.js';
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+let fetched: string[] = [];
+// A fake minted token, assembled so no line holds the token format.
+const MINTED = ['bd', 'fedcba9876543210', 'secret-shown-once'].join('_');
+const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as Response;
+
+const session = (over: Record<string, unknown>) => ({
+  sessionKey: 'U-1::agent-a', agentId: 'agent-a', agentName: 'agent-a', identityId: 'U-1', kind: 'service_account',
+  firstSeenAt: '2026-10-24T08:00:00.000Z', lastSeenAt: '2026-10-24T08:00:00.000Z', sessionCount: 1, requestCount: 69,
+  toolCounts: { list_tasks: 69 }, ...over,
+});
+
+async function mount(path: string, admin: boolean, routes: Record<string, (init?: RequestInit) => unknown>): Promise<void> {
+  fetched = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const p = String(input).split('?')[0]!;
+    fetched.push(`${init?.method ?? 'GET'} ${String(input)}`);
+    if (p === '/api/session') return json({ identity: 'U-1', csrfToken: 'c', isAdmin: admin, permissions: admin ? ['batondeck:superadmin'] : [], subscriptionsEnabled: false, uiSettings: {} });
+    const key = `${init?.method ?? 'GET'} ${p}`;
+    if (routes[key]) return json(routes[key]!(init));
+    return json({ projects: [], boards: [], sessions: [], tokens: [], events: [], tasks: [] });
+  }));
+  const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+  const { AuthProvider } = await import('../auth.js');
+  const { App } = await import('../App.js');
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe('Settings: CLI tokens and your MCP sessions', () => {
+  it('counts the live token and the logged session, shows a minted token once, and calls no marketplace route', async () => {
+    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live' }];
+    await mount('/settings', false, {
+      'GET /api/me/cli-tokens': () => ({ tokens }),
+      'POST /api/me/cli-tokens': () => ({ ...tokens[0], id: 'fedcba9876543210', label: 'laptop', token: MINTED, shownOnce: true }),
+      'GET /api/agents/sessions': () => ({ sessions: [session({})] }),
+      'GET /api/me/settings': () => ({ maxTicketTokens: null, tokenPolicy: null, starredAssets: [], defaults: { maxTicketTokens: 50000, tokenPolicy: 'warn', charsPerToken: 4 }, estimated: true }),
+    });
+    expect(await screen.findByText('1 live')).toBeInTheDocument();
+    expect(await screen.findByText('1 logged')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Token label'), { target: { value: 'laptop' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mint token' }));
+    expect(await screen.findByDisplayValue(MINTED)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.queryByDisplayValue(MINTED)).toBeNull();
+    expect(screen.queryByText(/marketplace/i)).toBeNull();
+    expect(fetched.filter((f) => f.includes('marketplace'))).toEqual([]);
+    expect(fetched).toContain('POST /api/me/cli-tokens');
+  });
+});
+
+describe('Agents: the delivered cursor', () => {
+  it('a device row shows its last delivered cursor, a never-rung one "none", an MCP session "—"', async () => {
+    await mount('/agents', false, {
+      'GET /api/agents/sessions': () => ({
+        sessions: [
+          session({}),
+          ...presenceSessions({ sessions: [
+            { pid: 4242, role: 'worker', identityId: 'U-1', agentId: 'claude', adapter: 'claude-code', registeredAt: '2026-10-24T08:00:00Z', lastDeliveredCursor: 42 },
+            { pid: 4343, role: 'master', identityId: 'U-1', agentId: 'claude-m', registeredAt: '2026-10-24T08:00:00Z', lastDeliveredCursor: 0 },
+          ] }, '2026-10-24T08:00:00Z'),
+        ],
+      }),
+    });
+    await waitFor(() => expect(screen.getAllByTestId('delivered-cursor')).toHaveLength(3));
+    const cells = screen.getAllByTestId('delivered-cursor').map((c) => c.textContent);
+    expect(cells.sort()).toEqual(['#42', 'none', '—']);
+    expect(screen.getByRole('columnheader', { name: 'Delivered' })).toBeInTheDocument();
+    expect(fetched.filter((f) => f.includes('/overview'))).toEqual([]);
+  });
+
+  it('presenceSessions carries the frame cursor, 0 when the frame has none', () => {
+    const rows = presenceSessions({ sessions: [{ pid: 1, role: 'worker', identityId: 'U-1', agentId: 'a', registeredAt: 'x', lastDeliveredCursor: 7 }, { pid: 2, role: 'worker', identityId: 'U-1', agentId: 'b', registeredAt: 'x' }] }, 'now');
+    expect(rows.map((r) => [r.sessionKey, r.lastDeliveredCursor])).toEqual([['device:1', 7], ['device:2', 0]]);
+  });
+});
+
+describe('Workspace Log: the audit panel', () => {
+  const rows = { days: 90, entries: [{ ts: '2026-10-24T08:00:00.000Z', action: 'task.deleted', actor: 'U-1', agent: 'claude', subject: 'T-7', projectId: 'P-1', result: 'ok', errorCode: '', data: '{}' }] };
+
+  it('the workspace admin sees the rows list_audit_log answers', async () => {
+    await mount('/activity', true, { 'GET /api/audit': () => rows });
+    const table = await screen.findByRole('table');
+    const row = within(table).getByTestId('audit-row');
+    expect(within(row).getByText('task.deleted')).toBeInTheDocument();
+    expect(within(row).getByText('T-7')).toBeInTheDocument();
+    expect(within(row).getByText('U-1 (claude)')).toBeInTheDocument();
+  });
+
+  it('REFUSAL: a member sees no audit panel and never asks for it', async () => {
+    await mount('/activity', false, { 'GET /api/audit': () => rows });
+    await screen.findByRole('heading', { name: 'Workspace Log' });
+    expect(screen.queryByText('Audit log')).toBeNull();
+    expect(fetched.filter((f) => f.includes('/api/audit'))).toEqual([]);
+  });
+});

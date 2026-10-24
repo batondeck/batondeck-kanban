@@ -1,4 +1,4 @@
-// Owner: R2.5 fills these bodies; R1.12 copied the signatures from api.ts.
+// The agent-session area (internal/api/agents.go): list_agent_sessions and disconnect_agent.
 import type { AgentSession } from '../types.js';
 import { req } from './http.js';
 
@@ -10,11 +10,8 @@ export const agentSessions = (limit?: number, all?: boolean) =>
   );
 
 /**
- * Disconnect one of YOUR OWN sessions. Distinct endpoint from `adminDisconnectAgent`, and the core
- * enforces owner-or-admin on it — so a member can end their own agent without the admin console.
- *
- * The gateway route has existed since the sessions work; the SPA only ever wired the ADMIN one, which
- * is why "Manage sessions" pointed at /admin and non-admins had no way to stop a session at all.
+ * End an agent session's live MCP connections: your own, or anyone's as the workspace admin (the
+ * service enforces it). Its next request is refused and it initialises again.
  */
 export const disconnectOwnSession = (identityId: string, agentId: string) =>
-  req<{ disconnected: boolean; wakeRevoked?: boolean }>('POST', '/api/agents/sessions/disconnect', { identityId, agentId });
+  req<{ disconnected: boolean }>('POST', '/api/agents/sessions/disconnect', { identityId, agentId });
