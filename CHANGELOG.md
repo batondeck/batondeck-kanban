@@ -1013,6 +1013,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Fixed
 
+- /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
+  request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
+  proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an
+  equivalent check in front of the bearer that also admits the host of `public_url` (any port, any
+  case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
+  JSON instead of text/plain. No new config key.
+
 - P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
   window; ingest verifies with the current secret alone and logs why. A current secret that will not
   open refuses the delivery as `secret_unavailable`, on the delivery log.
