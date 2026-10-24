@@ -21,6 +21,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/mcp/tools"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/wake"
@@ -40,6 +41,9 @@ type app struct {
 	bus  *bus.Bus
 	// dir is the device session directory (R0.25); serveUntil starts it.
 	dir *wake.Directory
+	// sweep is the retention sweep, run every sweepEvery while serveUntil serves.
+	sweep      *retention.Sweeper
+	sweepEvery time.Duration
 	// engine is the store's, which /healthz names.
 	engine string
 	// mount adds the OAuth routes, the socket-only POST and DELETE /internal/wake-session and the
@@ -50,7 +54,8 @@ type app struct {
 // compose builds the app over st. With publicURL unset there is no authorization server and /mcp's
 // 401 names no resource metadata. sealer seals a wake session's inbox token; nil refuses one. media
 // is the blob store; with its Files and Signer set, the signed PUT and GET /blobs/{id} are mounted.
-func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) (*app, error) {
+// ret is the retention sweep's windows and interval; a zero field is core.DefaultRetention's.
+func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention) (*app, error) {
 	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	var as *oauth.Server
 	if publicURL != "" {
@@ -64,6 +69,15 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	}
 	media.MaxBytes = cmp.Or(media.MaxBytes, core.DefaultBlobMaxBytes)
 	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media})
+	def := core.DefaultRetention
+	ret = core.Retention{ChangeLogDays: cmp.Or(ret.ChangeLogDays, def.ChangeLogDays), ToolCallsDays: cmp.Or(ret.ToolCallsDays, def.ToolCallsDays),
+		SweepIntervalSeconds: cmp.Or(ret.SweepIntervalSeconds, def.SweepIntervalSeconds)}
+	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
+	if media.Files != nil {
+		sweep.CollectBlobs = sc.CollectBlobs
+	}
+	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
+	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days", sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays)
 	opts := mcp.Options{
 		Version:  version,
 		Resolver: resolver,
@@ -87,7 +101,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
 	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger}
-	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, engine: engineOf(st),
+	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
 			if as != nil {
@@ -227,16 +241,17 @@ func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) 
 }
 
 // runServer serves the app over st on every listener until ctx ends or one fails.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions) error {
-	a, err := compose(st, version, publicURL, logger, sealer, media)
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention) error {
+	a, err := compose(st, version, publicURL, logger, sealer, media, ret)
 	if err != nil {
 		return err
 	}
 	return serveUntil(ctx, lns, a, version, logger)
 }
 
-// serveUntil serves one handler on every listener until ctx ends or one fails, then stops in
-// order: the MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
+// serveUntil serves one handler on every listener, with the retention sweep running beside it, until
+// ctx ends or one fails, then stops in order: the sweep (it returns before the store can close), the
+// MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
 // deadline; a handler still running at the deadline is cancelled), the bus (which stops the
 // session directory's dispatcher and the board snapshot cache's feed), the HTTP server, and the
 // tool-call flush. The cache's feed is the bus's second tap, so it adds no statement. It returns the first
@@ -252,6 +267,9 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	}
 	a.core.ResetSnapshots(true)
 	go feedSnapshots(snaps, a.core, logger)
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	swept := make(chan struct{})
+	go func() { defer close(swept); a.sweep.Run(sweepCtx, a.sweepEvery) }()
 	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
@@ -264,6 +282,8 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 		failed = err
 	case <-ctx.Done():
 	}
+	stopSweep()
+	<-swept
 	shutdown, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 	defer cancel()
 	if err := a.mcp.Close(shutdown); err != nil && failed == nil {

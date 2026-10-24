@@ -44,7 +44,7 @@ func TestServeMountsHooksOutsideEverySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := &lockedLog{}
-	a, err := compose(st, "x", "", log.New(logs, "", 0), keys, service.MediaOptions{})
+	a, err := compose(st, "x", "", log.New(logs, "", 0), keys, service.MediaOptions{}, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}

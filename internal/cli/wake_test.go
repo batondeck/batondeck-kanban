@@ -167,7 +167,7 @@ func startDirectoryWith(t *testing.T, from *dirServer, oauth bool) *dirServer {
 	if oauth {
 		public = "http://" + s.tcp
 	}
-	a, err := compose(s.st, "x", public, logger, s.keys, media)
+	a, err := compose(s.st, "x", public, logger, s.keys, media, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,12 +10,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/mcp"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -181,7 +183,7 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{})
+		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{})
 	}()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
@@ -368,9 +370,75 @@ func TestFlushOutlivesASpentShutdown(t *testing.T) {
 // mustCompose is compose with no keyring, failing the test on an error.
 func mustCompose(t *testing.T, st store.Store, publicURL string, logger *log.Logger) *app {
 	t.Helper()
-	a, err := compose(st, "x", publicURL, logger, nil, service.MediaOptions{})
+	a, err := compose(st, "x", publicURL, logger, nil, service.MediaOptions{}, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// sweepCount is a store counting the retention sweep's change-log deletes.
+type sweepCount struct {
+	*memstore.Store
+	n atomic.Int64
+}
+
+func (s *sweepCount) DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error) {
+	s.n.Add(1)
+	return s.Store.DeleteChangesOlderThan(ctx, before, limit)
+}
+
+// serveUntil runs the retention sweep with the windows compose was given: the change-log row past
+// the configured 2 days goes and the 1-day-old one stays, the sweep repeats on its interval, and it
+// stops when serveUntil returns.
+func TestServeRunsTheRetentionSweepUntilItStops(t *testing.T) {
+	ctx := context.Background()
+	st := &sweepCount{Store: memstore.New()}
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	var ids []int64
+	for _, ago := range []time.Duration{3 * 24 * time.Hour, 24 * time.Hour} {
+		id, err := st.AppendChange(ctx, store.ChangeInput{Scope: "project:P-1", Kind: "changed", Ts: now.Add(-ago).UnixMilli()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{ChangeLogDays: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.sweepEvery = 10 * time.Millisecond
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- serveUntil(serveCtx, []net.Listener{ln}, a, "x", log.New(io.Discard, "", 0)) }()
+	for deadline := time.Now().Add(5 * time.Second); st.n.Load() < 3; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			stop()
+			<-done
+			t.Fatalf("%d sweeps in 5s at a 10ms interval: serve does not run the retention sweep", st.n.Load())
+		}
+	}
+	left, err := st.ReadChanges(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].ID != ids[1] {
+		t.Fatalf("change log after the sweep: %+v, want only the 1-day-old row %d", left, ids[1])
+	}
+	stop()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	after := st.n.Load()
+	time.Sleep(100 * time.Millisecond)
+	if n := st.n.Load(); n != after {
+		t.Fatalf("%d sweeps after serveUntil returned: the sweep outlived the server", n-after)
+	}
 }

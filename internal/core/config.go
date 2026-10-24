@@ -47,7 +47,12 @@ type Retention struct {
 	ChangeLogDays int `json:"change_log_days"`
 	// ToolCallsDays is tool_calls' window: 45 days by default (conductor's BigQuery table expiry).
 	ToolCallsDays int `json:"tool_calls_days"`
+	// SweepIntervalSeconds is how often serve sweeps: 3600 (hourly) by default.
+	SweepIntervalSeconds int `json:"sweep_interval_seconds"`
 }
+
+// DefaultRetention is the retention object unset.
+var DefaultRetention = Retention{ChangeLogDays: 7, ToolCallsDays: 45, SweepIntervalSeconds: 3600}
 
 // DefaultBlobMaxBytes is blob.max_bytes unset: conductor's ATTACHMENT_MAX_BYTES, 50 MiB.
 const DefaultBlobMaxBytes = 50 << 20
@@ -84,7 +89,7 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	c := Config{
 		Database:  Database{Synchronous: "FULL"},
 		Listen:    []string{"tcp://127.0.0.1:8080"},
-		Retention: Retention{ChangeLogDays: 7, ToolCallsDays: 45},
+		Retention: DefaultRetention,
 		Blob:      Blob{MaxBytes: DefaultBlobMaxBytes},
 	}
 
@@ -136,6 +141,9 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	if err := envDays("BATONDECK_RETENTION_TOOL_CALLS_DAYS", &c.Retention.ToolCallsDays); err != nil {
 		return nil, err
 	}
+	if err := envDays("BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS", &c.Retention.SweepIntervalSeconds); err != nil {
+		return nil, err
+	}
 	envStr("BATONDECK_BLOB_DIR", &c.Blob.Dir)
 	if v, ok := lookup("BATONDECK_BLOB_MAX_BYTES"); ok {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -157,8 +165,9 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("%s: database.synchronous %q (want FULL|NORMAL)", RuleEnum, c.Database.Synchronous)
 	}
-	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 {
-		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d (each must be at least 1)", RuleRetention, c.Retention.ChangeLogDays, c.Retention.ToolCallsDays)
+	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 || c.Retention.SweepIntervalSeconds <= 0 {
+		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d, sweep_interval_seconds %d (each must be at least 1)", RuleRetention,
+			c.Retention.ChangeLogDays, c.Retention.ToolCallsDays, c.Retention.SweepIntervalSeconds)
 	}
 	if c.Blob.MaxBytes <= 0 {
 		return fmt.Errorf("%s: blob.max_bytes %d (must be at least 1)", RuleBlob, c.Blob.MaxBytes)
