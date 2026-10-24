@@ -280,7 +280,7 @@ func (c *client) none(t *testing.T, d time.Duration) {
 	}
 }
 
-// content is a doorbell's {kind, cursor, projectId}, read from its user frame's content.
+// content is a doorbell's frame, read from its user frame's content.
 func content(t *testing.T, b []byte) wake.Frame {
 	t.Helper()
 	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
@@ -397,7 +397,7 @@ func (s *dirServer) lastChange(t *testing.T) int64 {
 // AC1/AC2 (tested): a worker is in the directory once registered, its presence signal fires, and an
 // assignment by someone else writes EXACTLY the R3.1 frame into its socket within 1 s of the commit:
 // the auth line from the key file, then one user frame naming the registry's sessionId, whose content
-// is one plain line and the contentless {kind, cursor, projectId}.
+// is one plain line and the contentless {kind, cursor, projectId, boardId} (boardId since P-191).
 func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 	s := startDirectory(t, nil)
 	c := s.client(t, "f73a2587-0000-4000-8000-000000000001", "peer-token-xyz")
@@ -425,8 +425,8 @@ func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 		t.Fatalf("the doorbell came %v after the commit, want under 1s", d)
 	}
 	want := fmt.Sprintf(`{"type":"auth","token":"peer-token-xyz"}`+"\n"+
-		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\"}"}}`+"\n",
-		c.session, s.project, cur, cur, s.project)
+		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next {projectId: %s, boardId: %s}, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\",\"boardId\":\"%s\"}"}}`+"\n",
+		c.session, s.project, cur, s.project, s.board, cur, s.project, s.board)
 	if string(b) != want {
 		t.Fatalf("the doorbell bytes\n got %q\nwant %q", b, want)
 	}

@@ -7,9 +7,10 @@ import (
 )
 
 // coalescer holds the live doorbells of every entry, one per key (an entry and a kind): a doorbell
-// of a key already held keeps the higher cursor, and the key is released once it has been quiet for
-// its quiet period, or maxHold after its first doorbell, whichever is sooner. It is used from one
-// goroutine (#27's coalescer, keyed and windowed per key for the directory).
+// of a key already held merges into it (merge: the higher cursor, one project's boards unioned), and
+// the key is released once it has been quiet for its quiet period, or maxHold after its first
+// doorbell, whichever is sooner. It is used from one goroutine (#27's coalescer, keyed and windowed
+// per key for the directory).
 type coalescer struct {
 	held    map[string]held
 	timer   *time.Timer
@@ -49,8 +50,8 @@ func (c *coalescer) add(pid int64, f Frame, now time.Time, quiet, maxHold time.D
 	h, ok := c.held[key]
 	if !ok {
 		h = held{pid: pid, frame: f, first: now}
-	} else if f.Cursor > h.frame.Cursor {
-		h.frame = f
+	} else {
+		h.frame = merge(h.frame, f)
 	}
 	h.due = minTime(now.Add(quiet), h.first.Add(maxHold))
 	c.held[key] = h
