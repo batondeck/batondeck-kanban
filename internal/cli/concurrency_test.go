@@ -229,9 +229,10 @@ func TestNULInTextIsValidationOnEveryEngine(t *testing.T) {
 			{"complete_task", "deliverable", map[string]any{"projectId": b.project, "taskId": id, "leaseId": lease}},
 		}
 		for _, c := range cases {
-			e := owner.refused(c.tool, with(c.args, map[string]any{c.field: nul}), "VALIDATION")
-			if e.Details["field"] != c.field || e.Retryable {
-				t.Errorf("%s.%s: %+v, want VALIDATION naming the field, not retryable", c.tool, c.field, e)
+			_, e := owner.try(c.tool, with(c.args, map[string]any{c.field: nul}))
+			if e == nil || e.Code != "VALIDATION" || e.Details["field"] != c.field || e.Retryable {
+				t.Errorf("%s.%s with a NUL: %+v, want VALIDATION naming the field, not retryable", c.tool, c.field, e)
+				continue
 			}
 			t.Logf("%s: %s.%s = %q → %s %q", j.engine, c.tool, c.field, nul, e.Code, e.Message)
 		}
