@@ -29,6 +29,9 @@ type Services struct {
 	Lifecycle Lifecycle
 	Context   Context
 	Media     Media
+	Artifacts Artifacts
+	Comments  Comments
+	FollowUps FollowUps
 	Chronicle Chronicle
 	Feed      Feed
 	Sessions  Sessions

@@ -53,6 +53,9 @@ type sqlQueries interface {
 	attachmentQueries
 	blobQueries
 	searchQueries
+	artifactQueries
+	commentQueries
+	followUpQueries
 	chronicleQueries
 	oncallQueries
 	runQueries

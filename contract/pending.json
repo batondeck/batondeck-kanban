@@ -1,10 +1,6 @@
 {
   "tools": {
     "P5 NICE tools and the agents, me and audit reads": [
-      "ack_follow_up",
-      "add_artifact",
-      "add_comment",
-      "add_follow_up",
       "detect_anomalies",
       "disconnect_agent",
       "get_my_settings",
@@ -12,14 +8,11 @@
       "grant_capabilities",
       "list_agent_sessions",
       "list_audit_log",
-      "list_comments",
-      "list_follow_ups",
       "list_notifications",
       "mark_notifications_read",
       "orchestrate_subtasks",
       "rank_tasks",
       "register_agent_profile",
-      "retract_artifact",
       "set_my_settings"
     ]
   }

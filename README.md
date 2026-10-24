@@ -41,23 +41,27 @@ Measured by `make bench` on Mac14,5: Apple M2 Max, 12 cores, 32 GiB, macOS 27.0.
 | Number | sqlite | postgres | Gate |
 |---|---:|---:|---|
 | claim race winners (of 50) | 50 | 50 | recorded |
-| claim race p50 | 22.2 ms | 51.6 ms | fails beyond +20 % |
-| claim race p95 | 33.9 ms | 61.4 ms | fails beyond +20 % |
-| claim race max | 34.8 ms | 62.0 ms | recorded |
-| claim race wall | 35.1 ms | 62.4 ms | recorded |
+| claim race p50 | 21.5 ms | 50.2 ms | fails beyond +20 % |
+| claim race p95 | 32.4 ms | 60.3 ms | fails beyond +20 % |
+| claim race max | 33.4 ms | 61.3 ms | recorded |
+| claim race wall | 33.9 ms | 61.6 ms | recorded |
 | idle: directory entries | 200 | 200 | recorded |
 | idle: /api/stream clients | 10 | 10 | recorded |
 | idle: hold | 60.0 s | 60.0 s | recorded |
 | idle: statements per entry per sweep | 3 | 3 | fails on any rise |
 | idle: statements between sweeps | 0 | 0 | fails on any rise |
-| get_task: snapshot cached | 2 | 2 | fails on any rise |
-| get_task: snapshot dropped | 2 | 2 | fails on any rise |
-| get_task: fresh core | 3 | 3 | fails on any rise |
-| get_task: pin | 2 | 2 | recorded |
+| get_task: snapshot cached | 3 | 3 | fails on any rise |
+| get_task: snapshot dropped | 3 | 3 | fails on any rise |
+| get_task: fresh core | 4 | 4 | fails on any rise |
+| get_task: pin | 3 | 3 | recorded |
 | list_tasks: snapshot cached | 1 | 1 | fails on any rise |
 | list_tasks: snapshot dropped | 1 | 1 | fails on any rise |
 | list_tasks: fresh core | 2 | 2 | fails on any rise |
 | list_tasks: pin | 2 | 2 | recorded |
+| list_tasks missingArtifacts: snapshot cached | 2 | 2 | fails on any rise |
+| list_tasks missingArtifacts: snapshot dropped | 2 | 2 | fails on any rise |
+| list_tasks missingArtifacts: fresh core | 3 | 3 | fails on any rise |
+| list_tasks missingArtifacts: pin | 2 | 2 | recorded |
 | get_board: snapshot dropped | 2 | 2 | fails on any rise |
 | get_board: snapshot cached | 0 | 0 | fails on any rise |
 | get_board: fresh core | 3 | 3 | fails on any rise |
@@ -75,7 +79,7 @@ Measured by `make bench` on Mac14,5: Apple M2 Max, 12 cores, 32 GiB, macOS 27.0.
 | claim_next: fresh core | 7 | 8 | fails on any rise |
 | claim_next: pin | 4 | 5 | recorded |
 
-The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (33.9 ms).
+The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (32.4 ms).
 <!-- bench:end -->
 
 License: Apache-2.0 (`LICENSE`, `NOTICE`).
