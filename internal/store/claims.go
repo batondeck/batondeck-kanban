@@ -120,7 +120,7 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 	row, err := q.ClaimNext(ctx, sqlitedb.ClaimNextParams{
 		ColumnID: in.ColumnID, Owner: in.Owner, Agent: nullStr(in.Agent), AgentID: nullStr(in.AgentID),
 		LeaseID: in.LeaseID, ExpiresAt: in.ExpiresAt, Now: in.Now, ProjectID: fq.ProjectID, BoardID: fq.BoardID,
-		Assignee: nullStr(fq.Assignee), Caps: capsParam(fq.Capabilities),
+		Assignee: nullStr(fq.Assignee), Caller: fq.Caller, Caps: capsParam(fq.Capabilities),
 	})
 	switch {
 	case err == nil:
@@ -241,7 +241,7 @@ func previewFrontier(ctx context.Context, e engine, fq FrontierQuery, limit int)
 		return nil, err
 	}
 	rows, err := e.queries(false).PreviewFrontier(ctx, sqlitedb.PreviewFrontierParams{
-		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee),
+		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee), Caller: fq.Caller,
 		Caps: capsParam(fq.Capabilities), PageLimit: int64(clamp(limit, 50, 200)),
 	})
 	if err != nil {

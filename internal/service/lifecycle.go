@@ -295,7 +295,7 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	if err := required("boardId", req.BoardID); err != nil {
 		return ClaimNextResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return ClaimNextResp{}, err
 	}
@@ -395,10 +395,17 @@ func storeBoard(b Board) store.Board {
 	return out
 }
 
-func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
-	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Capabilities: caps}
+// frontierQuery is claim_next's and next_task's frontier for caller: without an assignee the
+// unassigned tasks and the caller's own (the store matches its id and its login), so nobody takes
+// work routed to another. An assignee naming someone else is a master's question (FORBIDDEN below
+// it); conductor filters nothing without one, which let any agent claim a task handed to another.
+func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a access, projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
+	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Caller: caller.Identity, Capabilities: caps}
 	if assignee != "" {
 		if err := checkLabel("assignee", assignee); err != nil {
+			return q, err
+		}
+		if err := l.ownAssignee(ctx, caller, a, assignee); err != nil {
 			return q, err
 		}
 		q.Assignee = &assignee
@@ -410,6 +417,23 @@ func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID 
 		return q, unsupported("sprintId", "the frontier has no sprint filter")
 	}
 	return q, nil
+}
+
+// ownAssignee refuses an assignee that is neither the caller's id nor its login (one GetUser, read
+// only then) unless the caller is a master.
+func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a access, assignee string) error {
+	if assignee == caller.Identity || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
+		return nil
+	}
+	u, err := l.c.store.GetUser(ctx, caller.Identity)
+	switch {
+	case err == nil && strings.EqualFold(assignee, u.Email):
+		return nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return l.c.mapErr("assignee", err)
+	}
+	return forbidden("assignee names another identity: only a master may read or claim another's work",
+		map[string]any{"field": "assignee", "requiredRole": domain.RoleMaster, "role": a.Role})
 }
 
 // Heartbeat is heartbeat_task: the lease's expiry moves to now + leaseSeconds (store.Heartbeat, one
@@ -522,7 +546,7 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	if err := required("boardId", req.BoardID); err != nil {
 		return NextTaskResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return NextTaskResp{}, err
 	}
