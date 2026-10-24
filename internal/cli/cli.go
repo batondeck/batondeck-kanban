@@ -143,6 +143,7 @@ func engineHandler(version, engine string, mcp http.Handler, mounts ...func(*htt
 		m(mux)
 	}
 	// One pattern per method the transport answers: a bare "/mcp" conflicts with the SPA's "GET /".
+	mcp = web.WithoutCSP(mcp)
 	for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
 		mux.Handle(m+" /mcp", mcp)
 	}

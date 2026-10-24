@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -12,12 +14,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/web"
 )
 
 // TestSecurityHeaders drives the composed handler: the SPA, the REST BFF's 401, the OAuth login page
-// and an unknown /api path carry all four headers; /mcp, /hooks and /blobs carry nosniff and no CSP.
+// and an unknown /api path carry all four headers; the /mcp, /hooks and /blobs routes all but the CSP.
 func TestSecurityHeaders(t *testing.T) {
 	st, err := store.OpenSQLite(filepath.Join(t.TempDir(), "bk.db"), "FULL")
 	if err != nil {
@@ -29,7 +32,20 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 	srv := httptest.NewUnstartedServer(nil)
 	public := "http://" + srv.Listener.Addr().String()
-	a := mustCompose(t, st, public, log.New(io.Discard, "", 0))
+	env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32))
+	keys, err := core.OpenKeyring("", func(k string) (string, bool) { return env, k == core.MasterKeyEnv })
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := log.New(io.Discard, "", 0)
+	media, err := mediaOptions(&core.Config{PublicURL: public, Blob: core.Blob{Dir: t.TempDir()}}, keys, nil, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := compose(st, "x", public, logger, keys, media)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer a.core.Close(context.Background())
 	defer a.bus.Close()
 	srv.Config.Handler = a.handler("x")
@@ -59,9 +75,13 @@ func TestSecurityHeaders(t *testing.T) {
 		{"GET", "/api/projects", "", web.AppCSP},
 		{"GET", "/api/nope", "", web.AppCSP},
 		{"GET", authorize, "text/html", consentCSP}, // the OAuth page keeps its stricter policy
-		{"POST", "/mcp", "", ""},
-		{"POST", "/hooks/I-none", "", ""},
-		{"GET", "/blobs/x", "", ""},
+		{"POST", "/mcp", "text/plain", ""},
+		{"POST", "/hooks/I-none", "application/json", ""},
+		{"GET", "/blobs/x", "application/json", ""},
+		{"PUT", "/blobs/x", "application/json", ""},
+		// A path under an exempt route that no route answers is the SPA shell, a page: it has the policy.
+		{"GET", "/hooks/I-none", "text/html", web.AppCSP},
+		{"GET", "/blobs/x/y", "text/html", web.AppCSP},
 	} {
 		req, _ := http.NewRequest(c.method, public+c.path, strings.NewReader("{}"))
 		resp, err := http.DefaultClient.Do(req)

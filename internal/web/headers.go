@@ -1,9 +1,6 @@
 package web
 
-import (
-	"net/http"
-	"strings"
-)
+import "net/http"
 
 // AppCSP is the policy for every page the app serves. Each source is one the built SPA loads:
 // script-src hashes web/dist/index.html's theme bootstrap (headers_test.go recomputes it); style-src
@@ -18,19 +15,25 @@ const AppCSP = "default-src 'self'; " +
 	"connect-src 'self'; " +
 	"object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 
-// SecurityHeaders sets nosniff, no-referrer and X-Frame-Options DENY on every response, and AppCSP on
-// all but /mcp, /hooks/ and /blobs/, which answer JSON, SSE or attachments. They are set before next
-// runs, so a handler may narrow them (the OAuth pages set a stricter policy of their own).
+// SecurityHeaders sets nosniff, no-referrer, X-Frame-Options DENY and AppCSP on every response. They
+// are set before next runs, so a handler may narrow them (the OAuth pages set a stricter policy).
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Frame-Options", "DENY")
-		p := r.URL.Path
-		if p != "/mcp" && !strings.HasPrefix(p, "/hooks/") && !strings.HasPrefix(p, "/blobs/") {
-			h.Set("Content-Security-Policy", AppCSP)
-		}
+		h.Set("Content-Security-Policy", AppCSP)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// WithoutCSP drops the policy from a route that answers JSON, SSE or an attachment, never a page
+// (/mcp, /hooks, /blobs). It wraps the route, not a path prefix, so an unmounted path under one of
+// them still falls through to the SPA shell with the policy.
+func WithoutCSP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Del("Content-Security-Policy")
 		next.ServeHTTP(w, r)
 	})
 }
