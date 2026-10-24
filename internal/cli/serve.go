@@ -65,8 +65,9 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	media.MaxBytes = cmp.Or(media.MaxBytes, core.DefaultBlobMaxBytes)
 	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media})
 	opts := mcp.Options{
-		Version:  version,
-		Resolver: resolver,
+		Version:   version,
+		PublicURL: publicURL,
+		Resolver:  resolver,
 		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Artifacts: sc.Artifacts(), Comments: sc.Comments(), FollowUps: sc.FollowUps(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall(), Runs: sc.Runs(), Sprints: sc.Sprints(),
 			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit(), Grants: sc.Grants(), Analytics: sc.Analytics()},
 		Logger:      logger,
