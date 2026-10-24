@@ -341,18 +341,24 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver())
 	plant(h)
+	AddTool(h.srv, &mcp.Tool{Name: "denied"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		return nil, plantOut{}, domain.NewError(domain.CodeForbidden, "not a member", nil)
+	})
 	cs := h.connect(t, tokenAda)
-	for _, name := range []string{"whoami", "stale", "boom", "plain"} {
+	for _, name := range []string{"whoami", "stale", "boom", "plain", "denied"} {
 		if _, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"projectId": "P-1"}}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// A name nobody registered: go-sdk refuses it, and the caller's free text names no project.
+	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "BUY-CHEAP-PILLS-example.com", Arguments: map[string]any{"projectId": "P-1"}})
 	var got []string
 	for _, c := range calls(f, "ToolCalls.Record") {
 		r := c.Req.(service.RecordToolCallReq)
 		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code+" "+r.ProjectID)
 	}
-	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1"}
+	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1",
+		"u-ada denied error FORBIDDEN ", "u-ada BUY-CHEAP-PILLS-example.com error INTERNAL "}
 	if !slices.Equal(got, want) {
 		t.Errorf("tool_calls rows = %q, want %q", got, want)
 	}

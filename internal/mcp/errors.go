@@ -62,7 +62,8 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
 // client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
-// and the projectId the call named, which the operations summary groups by.
+// and the projectId the call named when countsInProject allows it, which the operations summary
+// groups by.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
@@ -71,7 +72,7 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 			s.log.Printf("mcp: recording tool call %s panicked: %v\n%s", toolName(req), p, debug.Stack())
 		}
 	}()
-	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds(), ProjectID: projectOf(req)}
+	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds()}
 	r, _ := res.(*mcp.CallToolResult)
 	if err != nil || r == nil || r.IsError {
 		row.Outcome, row.Code = "error", string(domain.CodeInternal)
@@ -80,6 +81,9 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 				row.Code = string(e.Code)
 			}
 		}
+	}
+	if s.countsInProject(row) {
+		row.ProjectID = projectOf(req)
 	}
 	caller, _ := CallerFrom(ctx)
 	if _, rerr := s.services.ToolCalls.Record(ctx, caller, row); rerr != nil {
@@ -96,6 +100,18 @@ func errorResult(e *domain.BatonDeckError) *mcp.CallToolResult {
 	r := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(text)}}, StructuredContent: json.RawMessage(text)}
 	r.SetError(e)
 	return r
+}
+
+// countsInProject is whether the row may carry the call's project: not for a tool nobody registered
+// (its name is the caller's free text) nor for a FORBIDDEN or UNAUTHENTICATED call, so a non-member
+// moves no project's summary.
+func (s *Server) countsInProject(row service.RecordToolCallReq) bool {
+	if row.Code == string(domain.CodeForbidden) || row.Code == string(domain.CodeUnauthenticated) {
+		return false
+	}
+	s.tools.mu.Lock()
+	defer s.tools.mu.Unlock()
+	return s.tools.known[row.Tool]
 }
 
 // projectOf is the call's projectId argument, the row's project; "" when it names none or no string.
