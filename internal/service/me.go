@@ -116,9 +116,9 @@ func mySettings(s store.IdentitySettings) MySettings {
 		v := s.MaxTicketTokens
 		out.MaxTicketTokens = &v
 	}
+	out.TokenPolicy = Null[TokenPolicy]()
 	if s.TokenPolicy != "" {
-		v := TokenPolicy(s.TokenPolicy)
-		out.TokenPolicy = &v
+		out.TokenPolicy = Value(TokenPolicy(s.TokenPolicy))
 	}
 	return out
 }

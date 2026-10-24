@@ -36,13 +36,14 @@ type SetMySettingsReq struct {
 	TokenPolicy     Nullable[TokenPolicy] `json:"tokenPolicy,omitzero"`
 }
 
-// MySettings is get_my_settings's and set_my_settings's output.
+// MySettings is get_my_settings's and set_my_settings's output. TokenPolicy is always Set: Null
+// where unset (a Nullable, not a pointer, so its schema admits null beside the enum).
 type MySettings struct {
-	Defaults        MySettingsDefaults `json:"defaults"`
-	Estimated       True               `json:"estimated"`
-	MaxTicketTokens *int64             `json:"maxTicketTokens"`
-	StarredAssets   []string           `json:"starredAssets"`
-	TokenPolicy     *TokenPolicy       `json:"tokenPolicy"`
+	Defaults        MySettingsDefaults    `json:"defaults"`
+	Estimated       True                  `json:"estimated"`
+	MaxTicketTokens *int64                `json:"maxTicketTokens"`
+	StarredAssets   []string              `json:"starredAssets"`
+	TokenPolicy     Nullable[TokenPolicy] `json:"tokenPolicy"`
 }
 
 // MySettingsDefaults is what applies where a setting is unset.

@@ -90,16 +90,13 @@ func (s sessions) RemoveAgentSession(ctx context.Context, caller domain.Caller, 
 	if err != nil {
 		return resp, err
 	}
-	err = s.c.store.DeleteAgentSession(ctx, caller.Identity, agent)
-	if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
-		return resp, nil // disconnect_agent deleted it first
-	}
-	return resp, s.c.mapErr("remove_agent_session", err)
+	return resp, s.c.mapErr("remove_agent_session", s.c.store.DeleteAgentSession(ctx, caller.Identity, agent))
 }
 
 // DisconnectAgent ends the live sessions before it deletes the row, so a tool call racing it cannot
 // touch the row back into being on a session that is still open; the end of the last session
-// deletes the row too (RemoveAgentSession), and whichever runs second finds it gone.
+// deletes the row too (RemoveAgentSession), and whichever runs second finds it gone (NOT_FOUND,
+// which the transport's end ignores).
 func (s sessions) DisconnectAgent(ctx context.Context, caller domain.Caller, req DisconnectAgentReq) (resp DisconnectAgentResp, err error) {
 	defer s.c.recovered("disconnect_agent", &err)
 	if _, err := s.c.authorize(ctx, caller, "", "disconnect_agent", domain.GrantSubject{}, false); err != nil {

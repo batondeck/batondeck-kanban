@@ -112,6 +112,11 @@ func build() *jsonschema.ForOptions {
 			elem = reflect.PointerTo(elem)
 		}
 		s := infer(elem, opts)
+		if e := opts.TypeSchemas[v.Type]; elem.Kind() == reflect.Pointer && e != nil && len(e.Enum) > 0 {
+			// A nullable enum: [null, string] with the enum would refuse null itself (the enum lacks
+			// it), so it is the enum or null. contract/canonical.go reduces both forms alike.
+			s = &jsonschema.Schema{AnyOf: []*jsonschema.Schema{e.CloneSchemas(), {Type: "null"}}}
+		}
 		if v.Type.Kind() == reflect.Struct {
 			s.AdditionalProperties = nil // conductor's nested objects are open, as OpenObjects below
 		}
