@@ -37,7 +37,7 @@ const INTEGRATION: Integration = {
 /** The firing that filed T-gone, and the resolve that autoclosed (deleted) it. */
 const DELIVERIES: Delivery[] = [
   {
-    deliveryId: 'disk-full:resolved', ts: '2026-10-24T09:05:00.000Z', kind: 'resolved', result: 'autoclosed',
+    deliveryId: 'disk-full:resolved', ts: '2026-10-24T09:05:00.000Z', kind: 'resolved', result: 'closed',
     taskId: 'T-gone', fingerprint: 'disk-full', title: 'Disk full', severity: 'critical',
   },
   {
@@ -98,7 +98,7 @@ describe('the delivery log with a dangling taskId', () => {
     // Both rows render whole: the resolve that deleted the ticket, and the firing that filed it.
     const rows = cells.map((c) => c.closest('tr')!.textContent ?? '');
     expect(rows[0]).toMatch(/resolved · disk-full/);
-    expect(rows[0]).toMatch(/autoclosed/);
+    expect(rows[0]).toMatch(/closed/);
     expect(rows[1]).toMatch(/firing · disk-full/);
     expect(
       [...document.querySelectorAll('a')].filter((a) => (a.getAttribute('href') ?? '').includes('T-gone')),
