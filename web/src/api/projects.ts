@@ -1,6 +1,5 @@
-// The projects area (internal/api/projects.go): projects, members, settings. `overview` has no
-// mounted route (P-182, Agents.tsx's caller); kept so that screen compiles.
-import type { ActivityEvent, Board, Project, Task } from '../types.js';
+// The projects area (internal/api/projects.go): projects, members, settings.
+import type { Project } from '../types.js';
 import { req, P } from './http.js';
 
 // `members` / `memberDisplay` / `color` are what the Projects CARD renders — carried here so the grid
@@ -34,9 +33,3 @@ export const removeMember = (projectId: string, identityId: string) =>
 
 export const updateSettings = (projectId: string, patch: Record<string, unknown>) =>
   req<{ settings: Project['settings'] }>('PATCH', `${P(projectId)}/settings`, patch);
-
-export const overview = (projectId: string) =>
-  req<{ project: Project; memberDisplay?: Record<string, string>; boards: Board[]; perBoard: Array<{ board: Board; tasks: Task[]; feed: { events: ActivityEvent[] } }> }>(
-    'GET',
-    `${P(projectId)}/overview`,
-  );

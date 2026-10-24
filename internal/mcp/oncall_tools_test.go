@@ -181,9 +181,9 @@ func TestOncallToolsAreAdminOnlyInToolsList(t *testing.T) {
 		}
 	}
 	for _, n := range admin {
-		if !slices.Contains(oncallTools, n) && !slices.Contains(ada, n) {
-			t.Errorf("%s is listed to the admin only, and is not an on-call tool", n)
+		if !slices.Contains(oncallTools, n) && n != "list_audit_log" && !slices.Contains(ada, n) {
+			t.Errorf("%s is listed to the admin only, and is neither an on-call tool nor list_audit_log", n)
 		}
 	}
-	t.Logf("workspace admin lists %d tools, the non-admin %d: the difference is the %d on-call tools", len(admin), len(ada), len(oncallTools))
+	t.Logf("workspace admin lists %d tools, the non-admin %d: the difference is the %d on-call tools and list_audit_log", len(admin), len(ada), len(oncallTools))
 }

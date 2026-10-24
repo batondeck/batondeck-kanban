@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -90,6 +91,46 @@ func (s sessions) RemoveAgentSession(ctx context.Context, caller domain.Caller, 
 		return resp, err
 	}
 	return resp, s.c.mapErr("remove_agent_session", s.c.store.DeleteAgentSession(ctx, caller.Identity, agent))
+}
+
+// DisconnectAgent ends the live sessions before it deletes the row, so a tool call racing it cannot
+// touch the row back into being on a session that is still open; the end of the last session
+// deletes the row too (RemoveAgentSession), and whichever runs second finds it gone (NOT_FOUND,
+// which the transport's end ignores).
+func (s sessions) DisconnectAgent(ctx context.Context, caller domain.Caller, req DisconnectAgentReq) (resp DisconnectAgentResp, err error) {
+	defer s.c.recovered("disconnect_agent", &err)
+	if _, err := s.c.authorize(ctx, caller, "", "disconnect_agent", domain.GrantSubject{}, false); err != nil {
+		return resp, err
+	}
+	switch {
+	case req.IdentityID == "":
+		return resp, domain.Validation("identityId is required", map[string]any{"field": "identityId"})
+	case req.AgentID == "":
+		return resp, domain.Validation("agentId is required", map[string]any{"field": "agentId"})
+	case req.IdentityID != caller.Identity && !caller.WorkspaceAdmin:
+		return resp, forbidden("You may only disconnect your own agents (workspace admin required for others)", map[string]any{"requiredCapability": "workspace-admin"})
+	}
+	ended := s.c.endAgentSessions(ctx, req.IdentityID, req.AgentID)
+	err = s.c.store.DeleteAgentSession(ctx, req.IdentityID, req.AgentID)
+	if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+		if ended == 0 {
+			return resp, err
+		}
+		err = nil
+	}
+	if err != nil {
+		return resp, s.c.mapErr("disconnect_agent", err)
+	}
+	d, _ := domain.DescribeAudit("disconnect_agent", map[string]any{"identityId": req.IdentityID, "agentId": req.AgentID})
+	data, err := json.Marshal(d.Data)
+	if err != nil {
+		return resp, s.c.mapErr("disconnect_agent", err)
+	}
+	if _, err := s.c.store.AppendAudit(ctx, store.AuditRow{TS: s.c.nowMs(), Action: d.Action, Actor: caller.Identity, Agent: caller.Agent,
+		Subject: d.Subject, Result: store.AuditOK, Data: data}); err != nil {
+		return resp, s.c.mapErr("disconnect_agent", err)
+	}
+	return DisconnectAgentResp{Disconnected: true}, nil
 }
 
 // ListAgentSessions is the caller's own sessions, or every identity's for a workspace admin asking

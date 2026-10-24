@@ -39,6 +39,7 @@ func bootStack(t *testing.T, s *servicetest.Stack) *bk.Harness {
 	t.Helper()
 	h := bk.BootHarness(t, s.Services, stackResolver())
 	tools.Register(h.Server(), s.Services)
+	s.Core.SetAgentSessionEnder(h.Server())
 	return h
 }
 
@@ -228,6 +229,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 		runsAndSprintsOnTheStack(t, c, p, b, task, get)
 
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
+		sessionsMeAuditOnTheStack(t, h, c, id1)
 		c.call("remove_member", map[string]any{"projectId": p, "identityId": "u-grace"})
 		c.call("delete_project", map[string]any{"projectId": p})
 
@@ -296,5 +298,40 @@ func oncallOnTheStack(t *testing.T, h *bk.Harness, s *servicetest.Stack, c *call
 	if e := bk.ToolError(t, c.cs, "create_integration", map[string]any{"projectId": p, "name": "x", "source": "generic", "boardId": b,
 		"auth": map[string]any{"mode": "hmac"}, "routing": map[string]any{"mode": "broadcast"}}); e["code"] != "FORBIDDEN" {
 		t.Fatalf("a non-admin's create_integration by name = %v, want FORBIDDEN", e)
+	}
+}
+
+// sessionsMeAuditOnTheStack drives the agent-session, settings and audit tools (R2.5): the caller's
+// own sessions listed, its settings set and read back, grace's session ended by the workspace admin,
+// and the audit log naming delete_task's row and the disconnect.
+func sessionsMeAuditOnTheStack(t *testing.T, h *bk.Harness, c *caller, deleted string) {
+	t.Helper()
+	root := &caller{t: t, cs: h.Connect(t, stackRoot), called: c.called}
+	if n := len(c.call("list_agent_sessions", map[string]any{})["sessions"].([]any)); n != 1 {
+		t.Fatalf("list_agent_sessions: %d sessions, want ada's agent-ada", n)
+	}
+	if got := c.call("set_my_settings", map[string]any{"maxTicketTokens": 4000, "tokenPolicy": "enforce"}); got["maxTicketTokens"] != float64(4000) {
+		t.Fatalf("set_my_settings answered %v", got)
+	}
+	if got := c.call("get_my_settings", map[string]any{}); got["tokenPolicy"] != "enforce" || got["estimated"] != true {
+		t.Fatalf("get_my_settings answered %v", got)
+	}
+	grace := h.Connect(t, stackGrace)
+	if _, err := grace.ListTools(testCtx(t), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := root.call("disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "id:u-grace"}); got["disconnected"] != true {
+		t.Fatalf("disconnect_agent answered %v", got)
+	}
+	if _, err := grace.ListTools(testCtx(t), nil); err == nil {
+		t.Fatal("grace's session answered after disconnect_agent ended it")
+	}
+	rows := root.call("list_audit_log", map[string]any{"days": 1})["entries"].([]any)
+	var actions []string
+	for _, r := range rows {
+		actions = append(actions, str(obj(r)["action"])+":"+str(obj(r)["subject"]))
+	}
+	if !slices.Contains(actions, "task.deleted:"+deleted) || !slices.Contains(actions, "agent.disconnected:u-grace") {
+		t.Fatalf("list_audit_log: %v, want task.deleted:%s and agent.disconnected:u-grace", actions, deleted)
 	}
 }

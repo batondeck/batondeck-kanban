@@ -401,14 +401,12 @@ func TestUnclassifiedToolIsRefused(t *testing.T) {
 
 func contains(p any, s string) bool { return p != nil && strings.Contains(fmt.Sprint(p), s) }
 
-// TestAdminOnlyToolHiddenFromOthers: a tool whose posture is AdminOnlyOnly is in a workspace
-// admin's tools/list and in no one else's; every other tool is in both.
+// TestAdminOnlyToolHiddenFromOthers: a tool whose posture is AdminOnlyOnly (list_audit_log, as the
+// audit area registers it) is in a workspace admin's tools/list and in no one else's; every other
+// tool is in both.
 func TestAdminOnlyToolHiddenFromOthers(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
-	bk.Tool(h.Server(), "test", "list_audit_log", "", func(context.Context, domain.Caller, service.ListProjectsReq) (service.ListProjectsResp, error) {
-		return service.ListProjectsResp{Projects: []service.ProjectListing{}}, nil
-	})
 	listed := func(bearer string) map[string]bool {
 		res, err := h.Connect(t, bearer).ListTools(testCtx(t), nil)
 		if err != nil {

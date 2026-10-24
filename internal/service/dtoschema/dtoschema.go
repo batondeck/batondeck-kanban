@@ -30,6 +30,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
 	reflect.TypeFor[service.Nullable[domain.ChronicleCoverage]](),
 	reflect.TypeFor[service.Optional[service.SprintStatus]](),
+	reflect.TypeFor[service.Nullable[service.TokenPolicy]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
@@ -88,6 +89,7 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.RecallMemoryScope]():    enumSchema(service.RecallMemoryScopeValues),
 		reflect.TypeFor[service.SearchMode]():           enumSchema(service.SearchModeValues),
 		reflect.TypeFor[service.SessionKind]():          enumSchema(service.SessionKindValues),
+		reflect.TypeFor[service.TokenPolicy]():          enumSchema(service.TokenPolicyValues),
 		reflect.TypeFor[service.SprintStatus]():         enumSchema(service.SprintStatusValues),
 		reflect.TypeFor[service.SprintAction]():         enumSchema(service.SprintActionValues),
 		reflect.TypeFor[service.SprintInclude]():        enumSchema(service.SprintIncludeValues),
@@ -110,6 +112,11 @@ func build() *jsonschema.ForOptions {
 			elem = reflect.PointerTo(elem)
 		}
 		s := infer(elem, opts)
+		if e := opts.TypeSchemas[v.Type]; elem.Kind() == reflect.Pointer && e != nil && len(e.Enum) > 0 {
+			// A nullable enum: [null, string] with the enum would refuse null itself (the enum lacks
+			// it), so it is the enum or null. contract/canonical.go reduces both forms alike.
+			s = &jsonschema.Schema{AnyOf: []*jsonschema.Schema{e.CloneSchemas(), {Type: "null"}}}
+		}
 		if v.Type.Kind() == reflect.Struct {
 			s.AdditionalProperties = nil // conductor's nested objects are open, as OpenObjects below
 		}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 func TestTokenPlaintextIsShownOnceAndListShowsThePrefix(t *testing.T) {
@@ -128,4 +129,51 @@ func TestTokenExpiredWrongSecretAndMalformedAreUnauthenticated(t *testing.T) {
 	f.clk.add(time.Hour)
 	_, err := f.svc.ResolveCaller(ctx, plain)
 	wantCode(t, err, domain.CodeUnauthenticated)
+}
+
+// P-159: Mint and RevokeOwned each write one audit row naming the actor, the token's identity and
+// how (via); a revoke of another identity's token is NOT_FOUND and revokes nothing; with no audit
+// log both refuse INTERNAL and mint nothing.
+func TestMintAndRevokeOwnedAreAudited(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	alice, bob := f.addUser(t, "alice", "pw"), f.addUser(t, "bob", "pw")
+	ts := &TokenService{Store: f.st, Audit: f.st, Now: f.clk.now}
+
+	plain, info, err := ts.Mint(ctx, alice.ID, "settings", alice.ID, alice.Email, "laptop", 0)
+	if err != nil || !strings.HasPrefix(plain, TokenPrefix+info.ID+"_") {
+		t.Fatalf("mint: %v %+v", err, info)
+	}
+	wantCode(t, func() error { _, err := ts.RevokeOwned(ctx, bob.ID, "settings", bob.ID, info.ID); return err }(), domain.CodeNotFound)
+	if _, err := ts.Validate(ctx, plain); err != nil {
+		t.Fatalf("bob's refused revoke revoked alice's token: %v", err)
+	}
+	if _, err := ts.RevokeOwned(ctx, alice.ID, "settings", alice.ID, info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.Validate(ctx, plain); err == nil {
+		t.Fatal("a revoked token still validates")
+	}
+	page, err := f.st.ListAuditLog(ctx, store.AuditFilter{}, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range page.Rows {
+		got = append(got, r.Action+" "+r.Actor+">"+r.Subject+" "+string(r.Data))
+	}
+	want := []string{
+		AuditTokenRevoked + " " + alice.ID + ">" + alice.ID + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
+		AuditTokenMinted + " " + alice.ID + ">" + alice.ID + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("audit rows (newest first):\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	bare := &TokenService{Store: f.st, Now: f.clk.now}
+	_, _, err = bare.Mint(ctx, alice.ID, "settings", alice.ID, alice.Email, "x", 0)
+	wantCode(t, err, domain.CodeInternal)
+	if infos, _ := bare.List(ctx, alice.ID); len(infos) != 1 {
+		t.Fatalf("an unaudited mint left a token: %d tokens, want the one", len(infos))
+	}
 }

@@ -101,6 +101,14 @@ var expectedPosture = map[string]pinnedPosture{
 	"read_delivery_raw":         {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
 	"replay_delivery":           {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
 	"send_test_event":           {tier: domain.TierMaster, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},
+	// The agent-session, settings and audit tools (R2.5) are workspace-scoped: the sessions gate on
+	// the caller's own identity or the workspace admin in the service, the settings are the caller's
+	// own row, and list_audit_log is the workspace admin's alone.
+	"list_agent_sessions": {tier: "", tenantScoped: false, adminOnly: domain.AdminOnlyConditional},
+	"disconnect_agent":    {tier: "", tenantScoped: false, adminOnly: domain.AdminOnlyConditional},
+	"get_my_settings":     {tier: "", tenantScoped: false},
+	"set_my_settings":     {tier: "", tenantScoped: false},
+	"list_audit_log":      {tier: "", tenantScoped: false, adminOnly: domain.AdminOnlyOnly},
 }
 
 // TestAuthzMatrix: every registered tool's posture, read from domain.ToolPosture through the

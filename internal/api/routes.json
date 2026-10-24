@@ -248,6 +248,11 @@
     },
     {
       "method": "GET",
+      "path": "/api/audit",
+      "source": "new: R2.5's audit panel on the ActivityLog screen, list_audit_log over GET, workspace admin only (conductor read it through the tool alone)"
+    },
+    {
+      "method": "GET",
       "path": "/api/notifications",
       "source": "app.ts:2667"
     },

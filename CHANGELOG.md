@@ -87,6 +87,30 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
+  `get_my_settings`, `set_my_settings` and `list_audit_log` leave `contract/pending.json`.
+  `disconnect_agent` closes every live MCP session of `(identityId, agentId)` and deletes its row:
+  the next request on an ended session is 404 `session not found` and the agent initialises again
+  (**named deviation:** conductor's revocation was sticky; here a new initialize is admitted). Your
+  own agents, or anyone's as the workspace admin; it writes `agent.disconnected`. A session that
+  disconnects itself gets its answer first. `get_my_settings`/`set_my_settings` store the ticket-token
+  ceiling, rung and starred assets on the caller's `identities` row (a new `Settings` store area, both
+  engines and memstore, no migration); nothing enforces the ceiling yet. `list_audit_log` is the
+  workspace admin's (hidden from anyone else's `tools/list`, `FORBIDDEN` by `service.authorize` when
+  called by name), with conductor's `actor`, `subject`, `action`, `days` (90, max 365) and `limit`
+  filters; no cursor (its schema has none). The `/api/agents/sessions`, `/api/me/settings` and
+  `/api/me/cli-tokens` routes replace R1.12's stubs: a CLI token minted on the Settings page answers
+  its plaintext once, is listed without it, and revoked there is 401 at the next MCP initialize;
+  another user's token id is 404; the page mints at most 10 live tokens per identity (conductor's cap,
+  400 `VALIDATION` past it) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
+  create|revoke` (actor `host`), write `cli_token.minted` and `cli_token.revoked` (P-159). New `GET
+  /api/audit`, list_audit_log for the Workspace Log's admin-only audit panel. A device entry in the
+  presence frames carries `lastDeliveredCursor` (`wake_sessions.last_cursor`), and a delivery signals
+  the frames, so the Agents screen shows each device session's last delivered doorbell ("none" when
+  never rung). The Agents screen composes its data from `get_project` and each board's tasks and feed
+  (no overview route, P-182); Settings no longer shows or calls the marketplace key (P-184). A nullable
+  enum field's schema (`tokenPolicy`, chronicle `coverage`) now admits `null` beside its values.
+
 - The Chronicle routes and screens (R2.7): the eight routes `web/src/api/chronicle.ts` calls replace
   R1.12's stubs in `internal/api/chronicle.go`, over R2.6's `service.Chronicle`: `GET` and `POST
   /api/projects/{projectId}/chronicle` (the index, `?cursor=`, and create), `GET` and `DELETE

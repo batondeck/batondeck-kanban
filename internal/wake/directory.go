@@ -382,13 +382,13 @@ func (d *Directory) Entries() []service.DeviceSession {
 	out := make([]service.DeviceSession, 0, len(d.entries))
 	for _, e := range d.entries {
 		out = append(out, service.DeviceSession{PID: e.pid, Role: e.role, IdentityID: e.identity, AgentID: e.agent, Adapter: e.adapter,
-			RegisteredAt: e.registered.UTC().Format(time.RFC3339Nano)})
+			RegisteredAt: e.registered.UTC().Format(time.RFC3339Nano), LastDeliveredCursor: e.lastCursor})
 	}
 	slices.SortFunc(out, func(a, b service.DeviceSession) int { return strings.Compare(a.RegisteredAt, b.RegisteredAt) })
 	return out
 }
 
-// Changed is closed on the next register or unregister (service.DeviceSessions).
+// Changed is closed on the next register, unregister or delivered cursor (service.DeviceSessions).
 func (d *Directory) Changed() <-chan struct{} {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -633,6 +633,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	if f.Cursor > e.lastCursor {
 		d.mu.Lock()
 		e.lastCursor = f.Cursor
+		d.signal() // the presence frames carry the cursor (R2.5): a delivery is a change to show
 		d.mu.Unlock()
 		if err := d.o.Sessions.SetWakeSessionCursor(ctx, e.id, f.Cursor); err != nil {
 			d.o.Logger.Printf("wake: recording pid %d's cursor: %+v", e.pid, err)
