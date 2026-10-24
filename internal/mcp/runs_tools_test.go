@@ -366,3 +366,63 @@ func TestRaceResolvesWithParentEdges(t *testing.T) {
 		t.Logf("%s: pick_run and cancel_runs resolved under 4 edge shapes each; delete_task control ok", r.s.Engine)
 	})
 }
+
+// Review B3 (rev5758): pick_run promotes the winner's live artifacts onto the parent in the same
+// one-version write, leaving a retracted one behind. A parent with no evidence is listed by
+// list_tasks {missingArtifacts:true} before the pick and not after. A second race checks the
+// de-duplication: the winner's pr, already on the parent (its url in another case), is not copied.
+func TestPickRunPromotesTheWinnersArtifacts(t *testing.T) {
+	raceStacks(t, func(t *testing.T, r *raceRig) {
+		missing := func(id string) bool {
+			for _, x := range r.ada.call("list_tasks", map[string]any{"projectId": r.p, "boardId": r.b, "missingArtifacts": true, "limit": 200})["tasks"].([]any) {
+				if str(obj(x)["id"]) == id {
+					return true
+				}
+			}
+			return false
+		}
+		live := func(task map[string]any) []string {
+			var out []string
+			for _, a := range task["artifacts"].([]any) {
+				if obj(a)["retracted"] == nil {
+					out = append(out, str(obj(a)["kind"]))
+				}
+			}
+			slices.Sort(out)
+			return out
+		}
+		pr := map[string]any{"kind": "pr", "url": "https://example.com/pr/1"}
+
+		parent := r.task("parent", nil)
+		win := r.start(parent, 2)[0]
+		r.ada.call("add_artifact", map[string]any{"projectId": r.p, "taskId": win, "artifacts": []any{pr,
+			map[string]any{"kind": "branch", "ref": "feat/win"}, map[string]any{"kind": "commit", "ref": "abc123"}}})
+		r.ada.call("retract_artifact", map[string]any{"projectId": r.p, "taskId": win, "artifact": map[string]any{"kind": "commit", "ref": "abc123"}, "reason": "wrong sha"})
+		r.submit(win, "the winning draft")
+		if !missing(parent) {
+			t.Fatalf("before the pick, missingArtifacts:true does not list %s: the check would pass vacuously", parent)
+		}
+		v := r.get(parent)["version"].(float64)
+		picked := obj(r.ada.call("pick_run", map[string]any{"projectId": r.p, "taskId": parent, "runTaskId": win, "version": v})["task"])
+		if got := live(picked); strings.Join(got, " ") != "branch pr" || picked["version"] != v+1 {
+			t.Fatalf("the picked parent's live artifacts %v at v%v, want branch and pr (the retracted commit left) at v%v", got, picked["version"], v+1)
+		}
+		if got := live(r.get(parent)); strings.Join(got, " ") != "branch pr" {
+			t.Fatalf("get_task: the parent's artifacts %v, want branch and pr", got)
+		}
+		if missing(parent) {
+			t.Fatalf("list_tasks missingArtifacts:true still lists the picked parent %s", parent)
+		}
+
+		dup := r.task("parent with its own pr", nil)
+		win2 := r.start(dup, 2)[0]
+		r.ada.call("add_artifact", map[string]any{"projectId": r.p, "taskId": dup, "artifacts": []any{map[string]any{"kind": "pr", "url": "https://EXAMPLE.com/pr/1"}}})
+		r.ada.call("add_artifact", map[string]any{"projectId": r.p, "taskId": win2, "artifacts": []any{pr}})
+		r.submit(win2, "again")
+		got := obj(r.ada.call("pick_run", map[string]any{"projectId": r.p, "taskId": dup, "runTaskId": win2, "version": r.get(dup)["version"]})["task"])
+		if n := len(got["artifacts"].([]any)); n != 1 {
+			t.Fatalf("the winner's pr, already on the parent, was copied: %v", got["artifacts"])
+		}
+		t.Logf("%s: parent %s carries %v after the pick (v%v), no longer missing artifacts; the duplicate pr not copied", r.s.Engine, parent, live(picked), picked["version"])
+	})
+}

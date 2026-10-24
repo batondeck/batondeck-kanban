@@ -120,9 +120,13 @@ func TestRaceLosersLeaveNoRow(t *testing.T) {
 			t.Fatal(err)
 		}
 		owner.call("add_dependency", map[string]any{"projectId": b.project, "fromTaskId": losers[0], "toTaskId": after})
+		owner.call("add_artifact", map[string]any{"projectId": b.project, "taskId": losers[0], "artifacts": []any{map[string]any{"kind": "branch", "ref": "feat/lost"}}})
+		owner.call("add_comment", map[string]any{"projectId": b.project, "taskId": losers[0], "body": "a comment"})
+		owner.call("add_follow_up", map[string]any{"projectId": b.project, "taskId": losers[0], "body": "a follow-up"})
 		will.call("claim_task", map[string]any{"projectId": b.project, "taskId": losers[1]})
 		before := c.rows(b.project, losers...)
-		for _, k := range []string{"tasks.id", "runs.run_task_id", "context_items.task_id", "summaries.task_id", "attachments.task_id", "dependencies.blocker_id", "task_events.task_id"} {
+		for _, k := range []string{"tasks.id", "runs.run_task_id", "context_items.task_id", "summaries.task_id", "attachments.task_id", "dependencies.blocker_id", "task_events.task_id",
+			"artifacts.task_id", "comments.task_id", "follow_ups.task_id"} {
 			if before[k] == 0 {
 				t.Fatalf("before the pick %s holds no row of the losers: the probe would pass vacuously (%v)", k, before)
 			}

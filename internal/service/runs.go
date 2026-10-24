@@ -333,8 +333,9 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 // still races, task.deleted on the board), then the parent takes the winner's deliverable and lands
 // REVIEW (reviewEnabled, with the handover record) or DONE with racing false, in one write
 // (run.picked); DONE unblocks its dependents. A DONE loser is deleted too: conductor kept it only
-// because CANCELLED would have overwritten it. The winner keeps runOf. Artifact promotion is R2.1's
-// (there is no artifact store yet).
+// because CANCELLED would have overwritten it. The winner keeps runOf. The winner's live artifacts
+// are promoted onto the parent (promoteArtifacts), so a picked parent is not a second completion path
+// that lands REVIEW or DONE carrying no evidence (conductor T-52).
 func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq) (PickRunResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "pick_run", domain.GrantSubject{}, true)
 	if err != nil {
@@ -392,6 +393,10 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 			}
 			blobs = append(blobs, freed...)
 		}
+		promoted, err := t.promoteArtifacts(cur, winner)
+		if err != nil {
+			return PickRunResp{}, err
+		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 		if err != nil {
 			return PickRunResp{}, err
@@ -412,7 +417,7 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 			return PickRunResp{}, err
 		}
 		t.Wrote(after)
-		if err := t.event(after, domain.EventRunPicked, map[string]any{"runTaskId": winner.ID, "to": target}); err != nil {
+		if err := t.event(after, domain.EventRunPicked, map[string]any{"runTaskId": winner.ID, "to": target, "artifacts": promoted}); err != nil {
 			return PickRunResp{}, err
 		}
 		t.ringChanged(after)
@@ -421,7 +426,7 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 				return PickRunResp{}, err
 			}
 		}
-		task, err := withSummary(ctx, t.Tx, after)
+		task, err := t.taskWithContext(after)
 		if err != nil {
 			return PickRunResp{}, err
 		}
@@ -432,6 +437,43 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 	}
 	s.c.blobGC(ctx, blobs)
 	return out, nil
+}
+
+// promoteArtifacts is conductor's mergeArtifacts(parent.artifacts, winner.artifacts) (runs.ts:473):
+// each live artifact of the winner whose key (artifactKey) the parent's live artifacts do not hold is
+// appended to the parent, its author kept, until the parent holds maxArtifactsPerTask, the cap
+// add_artifact counts tombstones against. It answers how many it appended. The rows are the
+// artifact area's own; the parent's one versioned write is pick_run's.
+// ponytail: past the cap the rest are left on the winner, which keeps them; raise it with the cap.
+func (t *txn) promoteArtifacts(parent, winner store.Task) (int, error) {
+	from, err := t.Tx.ListArtifacts(t.ctx, winner.ProjectID, winner.ID)
+	if err != nil {
+		return 0, err
+	}
+	have, err := t.Tx.ListArtifacts(t.ctx, parent.ProjectID, parent.ID)
+	if err != nil {
+		return 0, err
+	}
+	seen := map[string]bool{}
+	for _, a := range have {
+		if a.Retraction == nil {
+			seen[artifactKey(ArtifactKind(a.Kind), a.URL, a.Ref)] = true
+		}
+	}
+	n := 0
+	for _, a := range from {
+		k := artifactKey(ArtifactKind(a.Kind), a.URL, a.Ref)
+		if a.Retraction != nil || seen[k] || len(have)+n >= maxArtifactsPerTask {
+			continue
+		}
+		seen[k] = true
+		if _, err := t.Tx.AddArtifact(t.ctx, store.AddArtifactInput{ProjectID: parent.ProjectID, TaskID: parent.ID, Kind: a.Kind, URL: a.URL,
+			Ref: a.Ref, Repo: a.Repo, Title: a.Title, AddedBy: a.AddedBy, AddedByAgent: a.AddedByAgent}); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 // pickReview is the handover record a picked parent lands REVIEW with (conductor T-109): completed

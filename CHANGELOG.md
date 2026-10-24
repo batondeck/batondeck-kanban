@@ -101,7 +101,10 @@ Notable changes to batondeck-kanban. The format follows
   and update_sprint's close warning names the members not DONE. New: `store.Runs` and `store.Sprints`
   with their batteries, `service.Runs` and `service.Sprints`, `internal/domain/sprints.go` (the sprint
   table, the membership and activation gates), the eight routes `internal/api/{runs,sprints}.go` in
-  place of R1.12's stubs, and the Runs screen without a discarded state.
+  place of R1.12's stubs, and the Runs screen without a discarded state. `pick_run` promotes the
+  winner's live artifacts onto the parent (conductor's `mergeArtifacts`, de-duplicated, up to 50), so
+  a picked parent carries its evidence; a race resolves when its parent shares a dependency edge with
+  a losing run or that run's subtask (the cascade strips the parent's caches into its one write).
 - Artifacts, comments and follow-ups (R2.1): seven tools leave `contract/pending.json` (30 to 23)
   and equal `contract/expected.json`. `add_artifact` binds a pr, branch, commit, file, doc or
   attachment to a task (a url or a ref each, de-duplicated on kind, case-folded url and ref against
