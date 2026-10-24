@@ -57,6 +57,14 @@ type Retention struct {
 	SweepIntervalSeconds int `json:"sweep_interval_seconds"`
 }
 
+// The retention bounds: a window is at most a century, far inside time.Duration's ~106,751 days, so
+// no window overflows into a cutoff in the future (which would sweep a whole table); the sweep runs at
+// least daily.
+const (
+	MaxRetentionDays        = 36500
+	MaxSweepIntervalSeconds = 86400
+)
+
 // DefaultRetention is the retention object unset.
 var DefaultRetention = Retention{ChangeLogDays: 7, ToolCallsDays: 45, DeliveriesDays: 30, RawBodiesDays: 7, SweepIntervalSeconds: 3600}
 
@@ -177,9 +185,10 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("%s: database.synchronous %q (want FULL|NORMAL)", RuleEnum, c.Database.Synchronous)
 	}
-	if r := c.Retention; min(r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, r.SweepIntervalSeconds) <= 0 {
-		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d, deliveries_days %d, raw_bodies_days %d, sweep_interval_seconds %d (each must be at least 1)",
-			RuleRetention, r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, r.SweepIntervalSeconds)
+	if r := c.Retention; min(r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, r.SweepIntervalSeconds) <= 0 ||
+		max(r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays) > MaxRetentionDays || r.SweepIntervalSeconds > MaxSweepIntervalSeconds {
+		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d, deliveries_days %d, raw_bodies_days %d (each 1 to %d), sweep_interval_seconds %d (1 to %d)",
+			RuleRetention, r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, MaxRetentionDays, r.SweepIntervalSeconds, MaxSweepIntervalSeconds)
 	}
 	if c.Blob.MaxBytes <= 0 {
 		return fmt.Errorf("%s: blob.max_bytes %d (must be at least 1)", RuleBlob, c.Blob.MaxBytes)

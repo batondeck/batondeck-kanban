@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,7 +109,8 @@ func TestRefusals(t *testing.T) {
 }
 
 // The retention windows: 7 and 45 days and an hourly sweep by default, the file's object over them,
-// the environment over the file, and anything below one (or not a number) refused by name.
+// the environment over the file, anything below one, past the bounds (a day past a century would
+// overflow time.Duration's cutoff) or not a number refused by name, and the bounds themselves loaded.
 func TestRetentionWindows(t *testing.T) {
 	c, err := Load("", env(nil))
 	if err != nil {
@@ -132,10 +134,23 @@ func TestRetentionWindows(t *testing.T) {
 		{"BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": "0"},
 		{"BATONDECK_RETENTION_DELIVERIES_DAYS": "0"},
 		{"BATONDECK_RETENTION_RAW_BODIES_DAYS": "-7"},
+		{"BATONDECK_RETENTION_CHANGE_LOG_DAYS": "36501"},
+		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS": "200000"},
+		{"BATONDECK_RETENTION_DELIVERIES_DAYS": "36501"},
+		{"BATONDECK_RETENTION_RAW_BODIES_DAYS": "36501"},
+		{"BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": "86401"},
 	} {
 		if _, err := Load("", env(bad)); err == nil || !strings.Contains(err.Error(), RuleRetention) {
 			t.Fatalf("%v: %v, want %s", bad, err, RuleRetention)
 		}
+	}
+	atMax := map[string]string{"BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS": strconv.Itoa(MaxSweepIntervalSeconds)}
+	for _, k := range []string{"CHANGE_LOG", "TOOL_CALLS", "DELIVERIES", "RAW_BODIES"} {
+		atMax["BATONDECK_RETENTION_"+k+"_DAYS"] = strconv.Itoa(MaxRetentionDays)
+	}
+	want := Retention{ChangeLogDays: MaxRetentionDays, ToolCallsDays: MaxRetentionDays, DeliveriesDays: MaxRetentionDays, RawBodiesDays: MaxRetentionDays, SweepIntervalSeconds: MaxSweepIntervalSeconds}
+	if c, err := Load("", env(atMax)); err != nil || c.Retention != want {
+		t.Fatalf("every bound at its maximum: %+v, %v", c, err)
 	}
 }
 
