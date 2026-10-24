@@ -76,13 +76,16 @@ it the moment the process exits.
   `list_boards { projectId }` first. A master's `changed` doorbell names
   `next_task { projectId, boardId, includeInbox: true }` instead of `claim_next`.
 - **After `broadcast`, probe the open frontier as well as your inbox**: the work is assigned to nobody,
-  so `claim_next` without `assignee` is what finds it.
+  so `claim_next` without `assignee` is what finds it. A session registered with an agent label
+  (`BATONDECK_AGENT`) is rung for work assigned to that label: call `claim_next` with
+  `assignee: "<label>"` as well, since work routed to a label is in no one's default frontier.
 - **Between doorbells, end your turn.** There is nothing to wait on and nothing to poll: the next
   doorbell starts the next turn. An empty board means "end the turn", never "end the shift".
 - Coalesced: several changes inside a short window arrive as one doorbell. After a long gap (a laptop
   that slept), sweep the board once rather than assuming silence means no work.
-- **A hosted client** (claude.ai, ChatGPT) or Cursor is never rung: pull each turn, calling
-  `claim_next` and `list_notifications` at the start of every turn.
+- **Any other client** (claude.ai, ChatGPT, Codex, Gemini, Cursor) is never rung: pull each turn,
+  calling `list_notifications`, then `claim_next { projectId, boardId }` (no `assignee` needed) at
+  the start of every turn.
 
 A session started with `--dangerously-skip-permissions` holds a doorbell instead of starting a turn
 unless it was also started with `--settings '{"crossSessionInbound":"accept"}'`.
@@ -136,7 +139,10 @@ If a fact is needed to do the task, it lives on the task.
 
 - **`claim_next { projectId, boardId }`** selects and claims the best claimable TODO task in one call
   (unleased, unblocked, past its backoff) and returns the lease and `resume`. `{ task: null }` means
-  nothing is claimable right now. Pass `assignee` to take only what was routed to you, `capabilities`
+  nothing is claimable right now. It takes only unassigned work and work assigned to you (your id or
+  your login), never another's, so no `assignee` is needed; a session with an agent label passes
+  `assignee: "<label>"` for the work routed to that label (an assignee naming another member is
+  FORBIDDEN below master). `capabilities`
   or `useProfile: true` to match your skills, `sprintId` while a sprint is ACTIVE.
 - `next_task { projectId, boardId, assignee?, includeInbox: true }` shows without claiming: the best
   claimable task plus your **inbox**, the `review`, `blocked` and `poisoned` buckets. Then

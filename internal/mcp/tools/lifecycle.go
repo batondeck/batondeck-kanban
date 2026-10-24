@@ -14,7 +14,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Claim a TODO task with an exclusive lease; it moves to IN_PROGRESS. Another live lease is CONFLICT_LOCKED. A retry with the same idempotencyKey replays the original lease.",
 		l.Claim)
 	mcp.Tool(s, "lifecycle", "claim_next",
-		"Claim the board's best claimable TODO task in one call: unleased, unblocked, past its backoff, and unassigned or assigned to you (no assignee needed). task is null when none is. An assignee naming someone else is FORBIDDEN below master. sprintId, maxConcurrency and shard.count > 1 are refused.",
+		"Claim the board's best claimable TODO task: unleased, unblocked, past its backoff, unassigned or yours (no assignee needed); null when none is. sprintId, maxConcurrency, shard.count > 1 refused.",
 		l.ClaimNext)
 	mcp.Tool(s, "lifecycle", "heartbeat_task",
 		"Extend your live lease to now plus leaseSeconds without bumping the task version. A lease that has expired or is not yours is LEASE_EXPIRED.",
@@ -23,7 +23,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Release your lease; the task returns to TODO with no backoff. A retry with the same idempotencyKey replays the original result.",
 		l.Release)
 	mcp.Tool(s, "lifecycle", "next_task",
-		"Preview the board's best claimable TODO task without claiming it, or null: unassigned or yours, or assignee's for a master. includeInbox adds its REVIEW, blocked and poisoned tasks (assignee's, when given). strategy score and explain are refused.",
+		"Preview the best claimable TODO task, unassigned or yours, without claiming it, or null. includeInbox adds REVIEW, blocked and poisoned tasks (assignee's, if given). strategy score, explain: refused.",
 		l.Next)
 	mcp.Tool(s, "lifecycle", "complete_task",
 		"Complete your leased task: REVIEW when the project reviews (the reviewer becomes the assignee), else DONE, which unblocks its dependents. artifacts are refused.",
