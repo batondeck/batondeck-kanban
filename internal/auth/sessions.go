@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,10 +31,10 @@ const (
 	maxLoginBody = 64 << 10
 )
 
-// Login checks the credentials and opens a session. It returns the cookie's secret, which is stored
-// only as its SHA-256.
-func (s *Service) Login(ctx context.Context, login, password string) (secret string, sess store.Session, err error) {
-	u, err := s.Accounts.Authenticate(ctx, login, password)
+// Login checks the credentials from the client address addr and opens a session. It returns the
+// cookie's secret, which is stored only as its SHA-256.
+func (s *Service) Login(ctx context.Context, addr, login, password string) (secret string, sess store.Session, err error) {
+	u, err := s.Accounts.Authenticate(ctx, addr, login, password)
 	if err != nil {
 		return "", store.Session{}, err
 	}
@@ -90,7 +91,8 @@ func requestIsTLS(r *http.Request) bool {
 }
 
 // LoginHandler answers POST with the form fields `login` and `password`: 204 and the two cookies
-// on success, 401 {code, message} otherwise (the BFF's error body, which the SPA's form shows). With a `next` field that is a path on this server (the OAuth
+// on success, 401 {code, message} otherwise (the BFF's error body, which the SPA's form shows), or 429
+// RATE_LIMITED with Retry-After past the sign-in limits (LoginLimits). With a `next` field that is a path on this server (the OAuth
 // server's sign-in page sends one), success is instead 303 to next, and failure 303 to next with
 // `login=failed` added, so a plain HTML form lands back where it started. Any other next is 400.
 // Wrap it in CSRF, so a page of another site cannot sign a browser in.
@@ -111,9 +113,19 @@ func (s *Service) LoginHandler() http.Handler {
 			http.Error(w, "next is not a path on this server", http.StatusBadRequest)
 			return
 		}
-		secret, sess, err := s.Login(r.Context(), r.PostForm.Get("login"), r.PostForm.Get("password"))
+		secret, sess, err := s.Login(r.Context(), clientAddr(r), r.PostForm.Get("login"), r.PostForm.Get("password"))
 		if err != nil {
-			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
+			e, ok := domain.AsBatonDeckError(err)
+			if ok && e.Code == domain.CodeRateLimited {
+				w.Header().Set("Retry-After", fmt.Sprint(e.Details["retryAfterSeconds"]))
+				if next != "" {
+					http.Redirect(w, r, withQuery(next, "login", "failed"), http.StatusSeeOther)
+					return
+				}
+				WriteError(w, http.StatusTooManyRequests, domain.CodeRateLimited, e.Message)
+				return
+			}
+			if ok && e.Code == domain.CodeUnauthenticated {
 				if next != "" {
 					http.Redirect(w, r, withQuery(next, "login", "failed"), http.StatusSeeOther)
 					return

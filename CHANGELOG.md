@@ -8,6 +8,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Sign-in is bounded (P-220, audit G4). Each password check allocates argon2id's 64 MiB, and 64
+  concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most GOMAXPROCS checks (never
+  fewer than 2) run at once process-wide, and a caller that waits 3 s for a slot is refused. Every
+  attempt debits a token bucket per client address (10 a minute) and per login (30 a minute, so one
+  address cannot lock another out of an account) before the password is checked; a success refunds
+  both. Past either, `POST /api/login` and the OAuth sign-in's `POST /login` answer 429
+  `{"code":"RATE_LIMITED"}` with `Retry-After` (the OAuth page's form with `next` gets its
+  `login=failed` redirect). The address is the TCP peer: behind a proxy every client shares its
+  budget.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
