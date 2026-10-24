@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, cleanup, within } from '@testing-library/react';
+import { render, screen, cleanup, within, fireEvent, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { OncallSetup } from '../screens/oncall/OncallSetup.js';
 import type { Delivery, Integration } from '../types.js';
@@ -106,5 +106,36 @@ describe('the delivery log with a dangling taskId', () => {
     expect(fetched.filter((u) => u.includes('T-gone')), 'nothing resolves the gone ticket').toEqual([]);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(errors).not.toHaveBeenCalled();
+  });
+});
+
+describe('a rotated secret is shown once', () => {
+  it('leaves the mutation cache when the drawer closes', async () => {
+    const SECRET = 'whsec_rotated_once';
+    stub();
+    const base = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).endsWith('/rotate-secret')
+          ? new Response(JSON.stringify({ integration: { ...INTEGRATION, version: 2 }, secret: SECRET, shownOnce: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          : base(input, init),
+      ),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const held = () => qc.getMutationCache().getAll().filter((m) => JSON.stringify(m.state.data ?? null).includes(SECRET));
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <OncallSetup projectId="P-1" integrations={[INTEGRATION]} onClose={() => {}} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate secret' }));
+    await screen.findByText(SECRET);
+    expect(held()).toHaveLength(1);
+    view.unmount();
+    await waitFor(() => expect(held(), 'the secret outlives the drawer in the mutation cache').toEqual([]));
   });
 });

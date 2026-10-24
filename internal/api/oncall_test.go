@@ -155,7 +155,8 @@ func TestOncallRoutesOnTheStack(t *testing.T) {
 		resp.Body.Close()
 		hd := resp.Header
 		if resp.StatusCode != http.StatusOK || string(raw) != string(refused) || hd.Get("Content-Type") != "application/octet-stream" ||
-			!strings.HasPrefix(hd.Get("Content-Disposition"), "attachment; filename=delivery-") || hd.Get("X-Content-Type-Options") != "nosniff" {
+			!strings.HasPrefix(hd.Get("Content-Disposition"), "attachment; filename=delivery-") || hd.Get("X-Content-Type-Options") != "nosniff" ||
+			hd.Get("Cache-Control") != "private, no-store" {
 			t.Fatalf("GET raw: %d %v %q, want the refused bytes as an octet-stream attachment", resp.StatusCode, hd, raw)
 		}
 		code, body = root.do("GET", one+"/deliveries/"+url.PathEscape(testID)+"/raw", "", nil)

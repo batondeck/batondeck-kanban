@@ -100,7 +100,9 @@ Notable changes to batondeck-kanban. The format follows
   `NOT_FOUND`. An integration addressed under another project is 404 and its log an empty page; a
   member of another project only is 403. The Oncall screen and setup drawer run unchanged on these
   routes, and a delivery whose `taskId` autoclose deleted shows the id as text with no link and no
-  lookup (`web/src/__tests__/oncall.test.tsx`).
+  lookup (`web/src/__tests__/oncall.test.tsx`). The setup drawer's create, save and rotate mutations
+  set `gcTime: 0`, so a secret in their response or variables leaves react-query's cache when the
+  drawer closes rather than 5 minutes later.
 - Runs and sprints (R2.2): `start_runs`, `open_run`, `pick_run`, `cancel_runs`, `list_runs`,
   `create_sprint`, `get_sprint`, `list_sprints`, `set_sprint` and `update_sprint`, with conductor's
   names and inputs, leave `contract/pending.json`. **Named deviation (plan §Fold 2):** a losing run is
