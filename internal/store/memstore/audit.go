@@ -5,6 +5,7 @@ import (
 	"context"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -150,5 +151,41 @@ func (s *Store) DeleteToolCallsOlderThan(ctx context.Context, before int64, limi
 		}
 		st.toolCalls = kept
 		return int64(len(idx)), nil
+	})
+}
+
+func (s *Store) SummarizeToolCalls(ctx context.Context, projectID string, since int64) ([]store.ToolCallGroup, error) {
+	if projectID == "" {
+		return nil, domain.Validation("a summary needs a project id", map[string]any{"field": "projectId"})
+	}
+	return get(ctx, s, func(st *state) ([]store.ToolCallGroup, error) {
+		type key struct {
+			tool    string
+			outcome store.ToolCallOutcome
+			agent   string
+			day     string
+		}
+		groups := map[key]*store.ToolCallGroup{}
+		for _, c := range st.toolCalls {
+			if c.ProjectID != projectID || c.TS < since {
+				continue
+			}
+			k := key{c.Tool, c.Outcome, c.Agent, time.UnixMilli(c.TS).UTC().Format(time.DateOnly)}
+			g := groups[k]
+			if g == nil {
+				g = &store.ToolCallGroup{Tool: k.tool, Outcome: k.outcome, Agent: k.agent, Day: k.day}
+				groups[k] = g
+			}
+			g.Calls++
+			g.LatencySum += c.LatencyMs
+		}
+		out := make([]store.ToolCallGroup, 0, len(groups))
+		for _, g := range groups {
+			out = append(out, *g)
+		}
+		slices.SortFunc(out, func(a, b store.ToolCallGroup) int {
+			return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.Outcome, b.Outcome), cmp.Compare(a.Agent, b.Agent), cmp.Compare(a.Day, b.Day))
+		})
+		return out, nil
 	})
 }

@@ -83,7 +83,7 @@ func New(o Options) *Server {
 	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}, keys: map[string]string{}, ending: map[string]bool{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
-	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, log: s.log,
+	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log,
 		hidden: o.HiddenTools}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
 		Instructions: Instructions,
@@ -171,6 +171,7 @@ type toolList struct {
 	memo    map[audience]*mcp.ListToolsResult
 	visible map[string]func(audience) bool // tool name -> who sees it; absent: everyone
 	seen    map[string]audience            // MCP session id -> its audience
+	known   map[string]bool                // every registered tool name
 	send    mcp.MethodHandler              // go-sdk's sending handler
 	log     *log.Logger
 	hidden  func(context.Context, domain.Caller) ([]string, error)
@@ -198,6 +199,7 @@ func AddTool[In, Out any](s *Server, t *mcp.Tool, visible func(admin bool) bool,
 	s.tools.mu.Lock()
 	defer s.tools.mu.Unlock()
 	mcp.AddTool(s.sdk, t, wrapped)
+	s.tools.known[t.Name] = true
 	name := "," + t.Name + ","
 	s.tools.visible[t.Name] = func(a audience) bool {
 		return (visible == nil || visible(a.admin)) && !strings.Contains(","+a.hidden+",", name)

@@ -25,9 +25,10 @@ type ToolCall struct {
 }
 
 // ToolCalls is the tool-call analytics table: written in batches by service.ToolCalls.Record
-// (ADR-0003), swept by retention. No reader is part of the contract yet. Errors: a row with an
-// empty tool, identity or code, an outcome other than ok or error, or a negative latency is
-// domain.Validation, and the whole batch is refused; a delete limit <= 0 is domain.Validation.
+// (ADR-0003), swept by retention, read by service.Analytics. Errors: a row with an empty tool,
+// identity or code, an outcome other than ok or error, or a negative latency is
+// domain.Validation, and the whole batch is refused; a delete limit <= 0 is domain.Validation; a
+// summary of an empty project id is domain.Validation.
 type ToolCalls interface {
 	// InsertToolCalls writes the batch in one transaction: every row or none. An empty batch writes
 	// nothing and is no error.
@@ -35,6 +36,20 @@ type ToolCalls interface {
 	// DeleteToolCallsOlderThan deletes at most limit rows whose TS is before before, oldest first,
 	// and returns how many it deleted.
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
+	// SummarizeToolCalls is projectID's rows with TS >= since, one group per (tool, outcome, agent,
+	// UTC day), ordered by those four: one statement.
+	SummarizeToolCalls(ctx context.Context, projectID string, since int64) ([]ToolCallGroup, error)
+}
+
+// ToolCallGroup is one group of a summary: Day is the UTC date "YYYY-MM-DD", LatencySum the sum of
+// its rows' LatencyMs.
+type ToolCallGroup struct {
+	Tool       string
+	Outcome    ToolCallOutcome
+	Agent      string
+	Day        string
+	Calls      int64
+	LatencySum int64
 }
 
 var (

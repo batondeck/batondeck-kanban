@@ -15,6 +15,7 @@ import { SUPERADMIN, can } from '../permissions.js';
 import { STATUSES, isAgent } from '../types.js';
 import type { ActivityEvent, Status } from '../types.js';
 import { Cluster, Stack, Tabs } from '../ui.js';
+import { isCancelled } from '../reports.js';
 
 const STATUS_ORDER: Status[] = [...STATUSES];
 const STATUS_COLOR: Record<Status, string> = {
@@ -136,7 +137,7 @@ export function Analytics() {
     queryFn: () => feedApi.feed(projectId, boardId!),
     enabled: !!projectId && !!boardId,
   });
-  // Historical operations (last 7d) from the BigQuery-backed analytics service — what the live tools
+  // Historical operations (last 7d) from the tool_calls log (GET /api/analytics/operations) — what the live tools
   // can't show (throughput trend, per-tool usage, error rate over time). Scoped to this project.
   const opsQ = useQuery({
     queryKey: ['analytics-ops', projectId],
@@ -167,10 +168,13 @@ export function Analytics() {
     let activeLeases = 0;
     let agentDone = 0;
     let humanDone = 0;
+    let done = 0;
     for (const t of tasks) {
       byStatus.set(t.status, (byStatus.get(t.status) ?? 0) + 1);
       if (t.claim && new Date(t.claim.expiresAt).getTime() > Date.now()) activeLeases += 1;
-      if (t.status === 'DONE') {
+      // A cancelled task holds DONE (ADR-0001) but was never done: conductor's cancelled state (P-208).
+      if (t.status === 'DONE' && !isCancelled(t)) {
+        done += 1;
         // Prefer explicit agent evidence (agent-held claim, agent-created) over name heuristics —
         // assignee/createdBy alone misses tasks agents create on behalf of humans.
         if (t.claim?.agent || t.createdByAgent || isAgent(t.assignee ?? '')) agentDone += 1;
@@ -180,7 +184,6 @@ export function Analytics() {
     const total = tasks.length;
     const inProgress = byStatus.get('IN_PROGRESS') ?? 0;
     const blocked = byStatus.get('BLOCKED') ?? 0;
-    const done = byStatus.get('DONE') ?? 0;
     return { byStatus, activeLeases, agentDone, humanDone, total, inProgress, blocked, done };
   }, [tasks]);
 
@@ -413,11 +416,11 @@ export function Analytics() {
           </div>
         </div>
 
-        {/* Operations (BigQuery-backed, last 7d) — the historical/throughput view the live tools can't give */}
+        {/* Operations (the tool_calls log, last 7d) — the historical/throughput view the live tools can't give */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Cluster justify='space-between'>
             <h2 style={{ fontSize: 14, margin: 0 }}>Operations · last 7 days</h2>
-            <span className="muted mono" style={{ fontSize: 11 }}>via BigQuery</span>
+            <span className="muted mono" style={{ fontSize: 11 }}>via the tool-call log</span>
           </Cluster>
           {opsQ.isLoading && <span className="muted" style={{ fontSize: 12 }}>Loading…</span>}
           {opsQ.isError && <span className="muted" style={{ fontSize: 12 }}>Analytics service unavailable.</span>}
