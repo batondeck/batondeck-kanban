@@ -1107,3 +1107,69 @@ func TestRingForSkipsASelfAssignment(t *testing.T) {
 		}
 	}
 }
+
+// P-275 (audit A1): without an assignee claim_next and next_task never reach work routed to
+// another identity — a handoff stores the receiver's login, so bob's own is matched by login too —
+// and an assignee naming another is FORBIDDEN below master.
+func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		carl := e.member(t, e.project, "carl", domain.RoleWorker)
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		if err := e.st.CreateUser(e.ctx, store.User{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+		add := func(assignee *string, order string) store.Task {
+			task, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{
+				ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "t", Status: domain.Todo,
+				Assignee: assignee, OrderKey: order, CreatedBy: "alice", CreatedAt: time.Now().UnixMilli(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return task
+		}
+		dave := "dave@x.test"
+		bobLogin := "Bob@X.test"
+		daves, bobs, open := add(&dave, "a0"), add(&bobLogin, "a1"), add(nil, "a2")
+		lc := e.c.Lifecycle()
+		claimNext := func(who domain.Caller, assignee string) (*Task, error) {
+			r, err := lc.ClaimNext(e.ctx, who, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: assignee})
+			return r.Task, err
+		}
+		next := func(who domain.Caller, assignee string) (*Task, error) {
+			r, err := lc.Next(e.ctx, who, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: assignee})
+			return r.Task, err
+		}
+		if head, err := next(carl, ""); err != nil || head == nil || head.ID != open.ID {
+			t.Fatalf("carl's next_task head %+v %v, want the unassigned %s", head, err, open.ID)
+		}
+		for i, want := range []string{open.ID, ""} {
+			got, err := claimNext(carl, "")
+			if err != nil || (got == nil) != (want == "") || (got != nil && got.ID != want) {
+				t.Fatalf("carl's claim_next #%d = %+v %v, want %q", i, got, err, want)
+			}
+		}
+		for i, want := range []string{bobs.ID, ""} {
+			got, err := claimNext(bob, "")
+			if err != nil || (got == nil) != (want == "") || (got != nil && got.ID != want) {
+				t.Fatalf("bob's claim_next #%d = %+v %v, want %q", i, got, err, want)
+			}
+		}
+		if got, err := e.st.GetTask(e.ctx, e.project, daves.ID); err != nil || got.Status != domain.Todo || got.Claim != nil {
+			t.Fatalf("dave's %s is %+v %v, want TODO and unclaimed", daves.ID, got, err)
+		}
+		_, err := claimNext(carl, dave)
+		wantCode(t, err, domain.CodeForbidden)
+		_, err = next(bob, dave)
+		wantCode(t, err, domain.CodeForbidden)
+		for _, own := range []string{"bob", "BOB@x.test"} {
+			if _, err := claimNext(bob, own); err != nil {
+				t.Fatalf("bob's claim_next for his own %q: %v", own, err)
+			}
+		}
+		if head, err := next(mia, dave); err != nil || head == nil || head.ID != daves.ID {
+			t.Fatalf("the master's next_task for dave = %+v %v, want %s", head, err, daves.ID)
+		}
+	})
+}
