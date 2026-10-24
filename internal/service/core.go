@@ -34,8 +34,7 @@ const (
 )
 
 // GrantLookup reads one member's capability grant: ok false is no grant, which restricts nothing.
-// The store contract has no grant reader yet, so the composition root supplies one; nil is "no
-// member has a grant".
+// nil is the store's grant (store.Grants); a test supplies its own.
 type GrantLookup func(ctx context.Context, projectID, identityID string) (grant domain.CapabilityGrant, ok bool, err error)
 
 // Sealer seals a secret that must be read back later, bound to aad (core.Keyring is the one).
@@ -83,6 +82,7 @@ type Core struct {
 	wakeTTL time.Duration
 	grants  GrantLookup
 	access  *accessCache
+	hidden  *hiddenCache
 	calls   *toolCalls
 	boards  *snapshotCache
 	sealer  Sealer
@@ -154,6 +154,10 @@ func New(st store.Store, o Options) *Core {
 	c.limiter = oncall.NewRateLimiter()
 	c.jwt = &auth.Verifier{Fetch: o.JWKSFetch, Logf: c.log.Printf, Now: c.now}
 	c.access = newAccessCache(orDefault(o.AccessTTL, DefaultAccessTTL))
+	c.hidden = &hiddenCache{entries: map[string]hiddenEntry{}}
+	if c.grants == nil {
+		c.grants = c.storeGrant
+	}
 	c.boards = newSnapshotCache()
 	c.calls = newToolCalls(c, orDefault(o.ToolCallBatch, DefaultToolCallBatch), orDefault(o.ToolCallBuffer, DefaultToolCallBuffer), orDefault(o.ToolCallFlush, DefaultToolCallFlush))
 	return c

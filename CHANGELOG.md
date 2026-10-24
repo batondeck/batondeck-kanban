@@ -87,6 +87,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
+  a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
+  role. No `scope` writes the worker default, `null` removes the grant, an object replaces it; a
+  non-member is `VALIDATION`, and so is a `tools`/`deny` entry naming a tool that takes no projectId.
+  The grant is the new `Grants` store area (`capability_grants`, both engines and memstore, its
+  conformance battery) and the core now reads it on every governed call: until this change no grant
+  could be written and none was enforced. A grant on a project admin is stored and not enforced, as
+  in conductor. `tools/list` is narrowed too: a governed project tool is left out when the grant of
+  every membership the caller holds refuses it by name, so a tool callable in any project stays
+  listed. The change sends the member's sessions `notifications/tools/list_changed` at their next
+  request (R1.7's mechanism, its audience now the admin flag plus the hidden tools), read through a
+  per-identity cache dropped by the grant, a membership change or `create_project`. The router
+  facade (`find_tools`, `get_tool_schema`, `invoke_tool`) is not registered (ADR-0004).
 - Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
   `get_my_settings`, `set_my_settings` and `list_audit_log` leave `contract/pending.json`.
   `disconnect_agent` closes every live MCP session of `(identityId, agentId)` and deletes its row:

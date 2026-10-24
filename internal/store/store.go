@@ -24,6 +24,7 @@ type Store interface {
 	Locks
 	Projects
 	Members
+	Grants
 	Boards
 	Counters
 	Idempotency

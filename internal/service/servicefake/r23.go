@@ -42,3 +42,9 @@ func (x rankingFake) Rank(ctx context.Context, caller domain.Caller, req service
 func (x rankingFake) Orchestrate(ctx context.Context, caller domain.Caller, req service.OrchestrateSubtasksReq) (service.OrchestrateSubtasksResp, error) {
 	return call[service.OrchestrateSubtasksResp](x.f, "Ranking.Orchestrate", caller, req)
 }
+
+type grantsFake struct{ f *Fake }
+
+func (x grantsFake) Grant(ctx context.Context, caller domain.Caller, req service.GrantCapabilitiesReq) (service.GrantCapabilitiesResp, error) {
+	return call[service.GrantCapabilitiesResp](x.f, "Grants.Grant", caller, req)
+}

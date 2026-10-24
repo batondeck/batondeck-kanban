@@ -47,6 +47,7 @@ func Run(t *testing.T, newStore Factory) {
 var areas = []struct{ name, owner string }{
 	{"projects", "R0.8"},
 	{"members", "R0.8"}, // conformance_projects.go, beside projects
+	{"grants", "R2.4"},
 	{"boards", "R0.8"},
 	{"counters", "R0.8"},
 	{"idempotency", "R0.8"},

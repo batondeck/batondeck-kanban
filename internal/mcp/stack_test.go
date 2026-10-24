@@ -34,10 +34,11 @@ func stackResolver() authfake.Resolver {
 	}}
 }
 
-// bootStack is the harness with every registered area's tools over the stack's real services.
+// bootStack is the harness with every registered area's tools over the stack's real services, its
+// tools/list narrowed by the real grants as the binary's is.
 func bootStack(t *testing.T, s *servicetest.Stack) *bk.Harness {
 	t.Helper()
-	h := bk.BootHarness(t, s.Services, stackResolver())
+	h := bk.BootHarness(t, s.Services, stackResolver(), func(o *bk.Options) { o.HiddenTools = s.Core.HiddenTools })
 	tools.Register(h.Server(), s.Services)
 	s.Core.SetAgentSessionEnder(h.Server())
 	return h
@@ -228,6 +229,7 @@ func TestEveryToolOnTheRealStack(t *testing.T) {
 		oncallOnTheStack(t, h, s, c, p, b)
 		runsAndSprintsOnTheStack(t, c, p, b, task, get)
 		r23OnTheStack(t, h, c, p, b, task, get)
+		grantsOnTheStack(t, c, p)
 
 		c.call("delete_task", map[string]any{"projectId": p, "taskId": id1, "version": get(id1)["version"]})
 		sessionsMeAuditOnTheStack(t, h, c, id1)

@@ -57,7 +57,8 @@ func TestCheckLive(t *testing.T) {
 
 // TestPendingIsInTheContract: every name pending.json lists is a tool of expected.json (templates:
 // of tools.json), once, and no list it carries is empty, so the file says what it claims: the
-// templates' list is gone since R2.6 served the last of them.
+// templates' list is gone since R2.6 served the last of them, and every lane's tools since R2.4, which
+// leaves "tools" with no lane.
 func TestPendingIsInTheContract(t *testing.T) {
 	var p Pending
 	if err := ReadJSON("pending.json", &p); err != nil {
@@ -65,8 +66,15 @@ func TestPendingIsInTheContract(t *testing.T) {
 	}
 	exp := committed(t)
 	names := p.ToolNames()
-	if len(names) == 0 || (p.ResourceTemplates != nil && len(p.TemplateNames()) == 0) {
-		t.Fatalf("pending.json lists %d tools and %d templates; remove an empty list rather than keep it", len(names), len(p.TemplateNames()))
+	if p.ResourceTemplates != nil && len(p.TemplateNames()) == 0 {
+		t.Fatalf("pending.json lists %d templates; remove an empty list rather than keep it", len(p.TemplateNames()))
+	}
+	for _, byLane := range []map[string][]string{p.Tools, p.ResourceTemplates} {
+		for lane, ns := range byLane {
+			if len(ns) == 0 {
+				t.Errorf("pending.json's lane %q lists nothing; remove an empty list rather than keep it", lane)
+			}
+		}
 	}
 	for i, n := range names {
 		if _, ok := exp.Tools[n]; !ok {

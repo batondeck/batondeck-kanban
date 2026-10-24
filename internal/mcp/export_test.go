@@ -25,6 +25,11 @@ func (h *harness) Connect(t testing.TB, bearer string) *mcp.ClientSession {
 	return h.connect(t, bearer)
 }
 
+// ConnectNotified is Connect for a session that sends bearer to n on each tools/list_changed.
+func (h *harness) ConnectNotified(t *testing.T, bearer string, n chan<- string) *mcp.ClientSession {
+	return dialNotified(t, h, bearer, n)
+}
+
 // Server is the harness's server, for registering tools.
 func (h *harness) Server() *Server { return h.srv }
 

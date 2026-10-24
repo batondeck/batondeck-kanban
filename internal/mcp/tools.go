@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
 // middleware filters tools/list to the caller's audience and memoises the first page per audience;
@@ -14,7 +17,7 @@ import (
 func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		c, _ := CallerFrom(ctx)
-		a := audience{admin: c.WorkspaceAdmin}
+		a := l.audienceOf(ctx, c)
 		if ss, ok := req.GetSession().(*mcp.ServerSession); ok && ss.ID() != "" {
 			l.note(ss, a, method == "initialize")
 		}
@@ -47,10 +50,33 @@ func (l *toolList) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 			}
 		}
 		if first && gen == l.gen {
+			if len(l.memo) >= maxMemo {
+				clear(l.memo)
+			}
 			l.memo[a] = &out
 		}
 		return &out, nil
 	}
+}
+
+// maxMemo bounds the memoised lists: an audience per distinct grant shape, so a project admin
+// writing many grants grows it; past the bound it starts again.
+const maxMemo = 256
+
+// audienceOf is c's audience. A failed grant read is logged and hides nothing: the list is
+// visibility, and the call is still refused by its grant (service.authorize).
+func (l *toolList) audienceOf(ctx context.Context, c domain.Caller) audience {
+	a := audience{admin: c.WorkspaceAdmin}
+	if l.hidden == nil {
+		return a
+	}
+	tools, err := l.hidden(ctx, c)
+	if err != nil {
+		l.log.Printf("mcp: the tools hidden from %s: %+v", c.Identity, err)
+		return a
+	}
+	a.hidden = strings.Join(tools, ",")
+	return a
 }
 
 // note records ss's audience a, and when its previous request carried another, sends ss
