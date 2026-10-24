@@ -123,6 +123,29 @@ Notable changes to batondeck-kanban. The format follows
   `/chronicle/new`, `/chronicle/:pageId` and `/chronicle/:pageId/history` screens now load real
   records: a mermaid fence renders as mermaid's SVG, and an image embedded by its signed blob URL
   loads through `/blobs/…`.
+- Notifications, agent profiles, anomalies, rank and orchestrate (R2.3): seven tools leave
+  `contract/pending.json`. `list_notifications` and `mark_notifications_read` read and clear the
+  caller's own in-app feed across projects (no projectId); the rows are written in the event's own
+  transaction by `service.mutate` from the events conductor materialised them from
+  (`domain.NotificationsForEvent`): a comment's resolved @mentions, a follow-up's verified target
+  and a completion's reviewer, never the actor. A handoff or an assignment writes no row (conductor's
+  notify.ts), and comments still ring no device. `mark_notifications_read` answers the rows it
+  flipped from unread. Each row adds a change-log row of kind `notification` scoped to its
+  recipient, and every `/api/stream` (board or none) sends a `notifications` frame, the caller's
+  `list_notifications {limit:50}`, on open and per such row; `GET /api/notifications` and `POST
+  /api/notifications/read` replace R1.12's stubs. Delivery to SendGrid and Slack is dropped (plan
+  §Target surface): in-app and the stream only. `register_agent_profile` and `get_skill_stats` keep
+  an agent's capability profile and its per-capability outcomes; `complete_task` and `block_task`
+  roll the outcome up, in their transaction, when the task names required capabilities.
+  `detect_anomalies` ports conductor's six detectors over one board (at most 1,000 tasks and the
+  last 200 feed events), with a dependent of a poisoned task (`blockedReason: "poison"`) a `warn`
+  `dep_deadlock` and no `CANCELLED` row, an all-zero `anomalyPolicy` read as the defaults, and
+  `task.anomaly_detected` appended once per first sighting. `rank_tasks` ports the cost-aware
+  scorer and the profile match (exact, alias, tag) over the board's claimable TODO tasks.
+  `orchestrate_subtasks` creates the children TODO under the held parent with a blocks edge each
+  and parks the parent BLOCKED, lease dropped, assigned to the caller; each child rings broadcast and
+  the parent's unblock rings the caller. A nullable enum in a tool's output (`costClass`,
+  `maxEffort`) now accepts null: the schema is `anyOf [enum, null]`, the same canonical node.
 - The on-call routes and screen (R2.10): the ten `/api/oncall/…` routes of `internal/api/oncall.go`
   replace R1.12's stubs, each one `service.Oncall` call under the session and CSRF, workspace admin
   only (a project admin who is not one is 403 `FORBIDDEN`, as the tools are). `GET

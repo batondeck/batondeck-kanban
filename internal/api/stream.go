@@ -69,8 +69,10 @@ func feedURI(projectID, boardID string) string {
 // non-member gets 403, an unknown board 404), and again at every board frame: a caller who has lost
 // the board has the stream closed. Each board frame's SSE id is the last change-log id it covers;
 // a reconnect with that cursor (Last-Event-ID, or ?cursor=) replays what it missed as one board
-// frame, or, past ReplayCap rows, gets resync. Notifications frames wait for a notifications
-// service (R2.3).
+// frame, or, past ReplayCap rows, gets resync. Every stream, board or none, carries the caller's
+// notifications frame (conductor's identity-routed notifications hub): list_notifications {limit:
+// 50} as the caller, once on open and again per StreamCoalesce of the caller's notification rows,
+// read from the bus by the caller's identity scope. A notification row is never a board change.
 type stream struct {
 	o         *Options
 	coalesce  time.Duration
@@ -86,15 +88,20 @@ func newStream(o *Options) http.Handler {
 type change struct {
 	id      int64
 	boardID string // "" for a row naming only the project
+	kind    string
 }
 
 func changeOf(id int64, payload []byte) change {
 	var p struct {
 		BoardID string `json:"boardId"`
+		Kind    string `json:"kind"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	return change{id: id, boardID: p.BoardID}
+	return change{id: id, boardID: p.BoardID, kind: p.Kind}
 }
+
+// notified reports whether c is a notification row: the recipient's feed, not the board.
+func (c change) notified() bool { return c.kind == service.ChangeKindNotification }
 
 func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger := s.o.logger()
@@ -140,6 +147,18 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer sub.Close()
 		live = rows(ctx, sub)
 	}
+	// The caller's own scope, on every stream: the notification rows. It also carries the caller's
+	// assigned doorbells, which are left to the board subscription.
+	var feed <-chan change
+	if s.o.Bus != nil && s.o.Services.Notifications != nil {
+		sub, err := s.o.Bus.Subscribe(ctx, []string{caller.Identity}, streamBuffer)
+		if err != nil {
+			writeServiceError(w, err, logger)
+			return
+		}
+		defer sub.Close()
+		feed = rows(ctx, sub)
+	}
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -162,7 +181,7 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			for _, c := range missed {
 				replayed[c.id] = true
-				if c.boardID == "" || c.boardID == boardID {
+				if !c.notified() && (c.boardID == "" || c.boardID == boardID) {
 					pending++
 					last = max(last, c.id)
 				}
@@ -190,6 +209,19 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sendPresence()
+	sendNotifications := func() {
+		if s.o.Services.Notifications == nil {
+			return
+		}
+		snap, err := s.o.Services.Notifications.List(ctx, caller, service.ListNotificationsReq{Limit: service.FeedSnapshotLimit})
+		if err != nil {
+			logger.Printf("api: stream notifications frame for %s: %+v", caller.Identity, err)
+			return
+		}
+		out.event("notifications", 0, snap)
+	}
+	sendNotifications()
+	var feedFlush <-chan time.Time
 
 	ping := time.NewTicker(s.ping)
 	defer ping.Stop()
@@ -212,7 +244,7 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if replayed[c.id] || (c.boardID != "" && c.boardID != boardID) {
+			if replayed[c.id] || c.notified() || (c.boardID != "" && c.boardID != boardID) {
 				continue
 			}
 			pending++
@@ -231,6 +263,16 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			out.event("board", last, frame)
 			out.event("updated", 0, updatedFrame{URI: feedURI(projectID, boardID), Count: pending})
 			pending = 0
+		case c, ok := <-feed:
+			if !ok {
+				return
+			}
+			if c.notified() && feedFlush == nil {
+				feedFlush = time.After(s.coalesce)
+			}
+		case <-feedFlush:
+			feedFlush = nil
+			sendNotifications()
 		case <-ping.C:
 			out.event("ping", 0, struct{}{})
 		case <-presenceChanged:

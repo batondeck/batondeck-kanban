@@ -39,6 +39,11 @@ type Services struct {
 	Oncall    Oncall
 	Runs      Runs
 	Sprints   Sprints
-	Me        Me
-	Audit     Audit
+	// R2.3
+	Notifications Notifications
+	Profiles      Profiles
+	Anomalies     Anomalies
+	Ranking       Ranking
+	Me            Me
+	Audit         Audit
 }
