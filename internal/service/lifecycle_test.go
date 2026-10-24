@@ -1191,3 +1191,59 @@ func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
 		}
 	})
 }
+
+// P-275 (audit A12): a handoff writes one handoff notification for its receiver, named by member
+// key or by login in any case, with the change row that is the receiver's /api/stream frame; the
+// sender, an agent label and a handoff to oneself notify nobody.
+func TestHandoffNotifiesItsReceiver(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		if err := e.st.CreateUser(e.ctx, store.User{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+		lc, nf := e.c.Lifecycle(), e.c.Notifications()
+		feed := func(who domain.Caller) []Notification {
+			t.Helper()
+			r, err := nf.List(e.ctx, who, ListNotificationsReq{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r.Notifications
+		}
+		task := e.task(t, domain.Todo)
+		handoff := func(who domain.Caller, to string) {
+			t.Helper()
+			c := e.claim(t, who, task.ID, 0)
+			if _, err := lc.Handoff(e.ctx, who, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: to, MemoryNote: "over to you"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		handoff(e.alice, "Bob@X.test")
+		got := feed(bob)
+		if len(got) != 1 || got[0].Type != domain.NotificationHandoff || got[0].Actor != "alice" || got[0].TaskID == nil || *got[0].TaskID != task.ID {
+			t.Fatalf("bob's feed after the handoff: %+v, want one handoff of %s from alice", got, task.ID)
+		}
+		if d, _ := got[0].Data.(map[string]any); d["toAgent"] != "Bob@X.test" {
+			t.Fatalf("handoff data %+v", got[0].Data)
+		}
+		if n := len(feed(e.alice)); n != 0 {
+			t.Fatalf("the sender's feed holds %d rows, want none", n)
+		}
+		ch, err := e.st.ReadChanges(e.ctx, 0, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last := ch[len(ch)-1]; last.Kind != ChangeKindNotification || last.Scope != "bob" {
+			t.Fatalf("last change row %+v, want bob's notification row", last)
+		}
+		handoff(bob, "reviewer-bot")
+		handoff(e.alice, "alice")
+		if a, b := len(feed(e.alice)), len(feed(bob)); a != 0 || b != 1 {
+			t.Fatalf("after a handoff to a label and one to oneself: alice %d rows, bob %d, want 0 and 1", a, b)
+		}
+		handoff(e.alice, "bob")
+		if b := feed(bob); len(b) != 2 || b[0].Type != domain.NotificationHandoff {
+			t.Fatalf("bob's feed after a handoff by member key: %+v", b)
+		}
+	})
+}

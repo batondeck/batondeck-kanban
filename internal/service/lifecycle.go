@@ -1117,7 +1117,13 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 				return HandoffTaskResp{}, err
 			}
 			t.Wrote(after)
-			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote}); err != nil {
+			// The receiver's handoff notification (P-275): toAgent as a member key, or the member whose
+			// login it is; an agent label or a non-member notifies nobody.
+			target, err := t.handoffTarget(to)
+			if err != nil {
+				return HandoffTaskResp{}, err
+			}
+			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote, "targetIdentity": target}); err != nil {
 				return HandoffTaskResp{}, err
 			}
 			value, err := json.Marshal(map[string]any{"note": req.MemoryNote, "toAgent": to, "from": caller.Identity})
@@ -1132,6 +1138,23 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 			return HandoffTaskResp{Task: out}, err
 		})
 	})
+}
+
+// handoffTarget is the member identity toAgent names: itself when a member, else the member whose
+// account email it is (a handoff stores the login as given), else nil.
+func (t *txn) handoffTarget(to string) (*string, error) {
+	id, err := t.memberOrNil(to)
+	if id != nil || err != nil {
+		return id, err
+	}
+	u, err := t.Tx.GetUserByEmail(t.ctx, strings.ToLower(to))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return t.memberOrNil(u.ID)
 }
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note
