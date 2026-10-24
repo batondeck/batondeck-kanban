@@ -129,7 +129,8 @@ func Open(t testing.TB, engine string) *Stack {
 // ServicesOf is c's Services bundle, every interface the real service implements.
 func ServicesOf(c *service.Core) service.Services {
 	return service.Services{Projects: c.Projects(), Boards: c.Boards(), Tasks: c.Tasks(), Lifecycle: c.Lifecycle(),
-		Context: c.Context(), Media: c.Media(), Artifacts: c.Artifacts(), Comments: c.Comments(), FollowUps: c.FollowUps(), Chronicle: c.Chronicle(), Feed: c.Feed(), Sessions: c.Sessions(), ToolCalls: c.ToolCalls(), Oncall: c.Oncall()}
+		Context: c.Context(), Media: c.Media(), Artifacts: c.Artifacts(), Comments: c.Comments(), FollowUps: c.FollowUps(), Chronicle: c.Chronicle(), Feed: c.Feed(), Sessions: c.Sessions(), ToolCalls: c.ToolCalls(), Oncall: c.Oncall(),
+		Runs: c.Runs(), Sprints: c.Sprints()}
 }
 
 // Run runs fn once per engine Engines selects, each a subtest named for its engine over a fresh

@@ -58,6 +58,8 @@ type sqlQueries interface {
 	followUpQueries
 	chronicleQueries
 	oncallQueries
+	runQueries
+	sprintQueries
 }
 
 // pgQueries is the Postgres sqlc queries behind sqlQueries; its methods are in the area files.

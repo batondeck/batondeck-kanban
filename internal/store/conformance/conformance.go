@@ -75,6 +75,8 @@ var areas = []struct{ name, owner string }{
 	{"followups", "R2.1"},
 	{"chronicle", "R2.6"},
 	{"oncall", "R2.8"},
+	{"runs", "R2.2"},
+	{"sprints", "R2.2"},
 }
 
 // batteries is each registered area's battery, by name.

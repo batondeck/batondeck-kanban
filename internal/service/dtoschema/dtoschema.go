@@ -29,6 +29,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Nullable[service.ModelHintInput]](),
 	reflect.TypeFor[service.Optional[service.AnomalyPolicyPatch]](),
 	reflect.TypeFor[service.Nullable[domain.ChronicleCoverage]](),
+	reflect.TypeFor[service.Optional[service.SprintStatus]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
@@ -44,6 +45,7 @@ var OpenObjects = []reflect.Type{
 	reflect.TypeFor[service.ArtifactInput](),
 	reflect.TypeFor[service.ArtifactSelector](),
 	reflect.TypeFor[service.LargeArtifact](),
+	reflect.TypeFor[service.SprintPatchIn](),
 }
 
 func enumSchema[T ~string](values []T) *jsonschema.Schema {
@@ -87,6 +89,9 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.SearchMode]():           enumSchema(service.SearchModeValues),
 		reflect.TypeFor[service.SessionKind]():          enumSchema(service.SessionKindValues),
 		reflect.TypeFor[service.SprintStatus]():         enumSchema(service.SprintStatusValues),
+		reflect.TypeFor[service.SprintAction]():         enumSchema(service.SprintActionValues),
+		reflect.TypeFor[service.SprintInclude]():        enumSchema(service.SprintIncludeValues),
+		reflect.TypeFor[service.AttentionWhy]():         enumSchema(service.AttentionWhyValues),
 		reflect.TypeFor[service.IntegrationSource]():    enumSchema(service.IntegrationSourceValues),
 		reflect.TypeFor[service.IntegrationAuthMode]():  enumSchema(service.IntegrationAuthModeValues),
 		reflect.TypeFor[service.IntegrationLifecycle](): enumSchema(service.IntegrationLifecycleValues),

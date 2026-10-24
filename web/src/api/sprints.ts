@@ -1,4 +1,3 @@
-// Owner: R2.2 fills these bodies; R1.12 copied the signatures from api.ts.
 import type { Sprint, SprintStatus } from '../types.js';
 import { req, P } from './http.js';
 

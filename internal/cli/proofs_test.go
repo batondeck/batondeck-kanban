@@ -42,7 +42,12 @@ type joined struct {
 
 func join(t *testing.T, engine string) *joined {
 	t.Helper()
-	st := servicetest.OpenStore(t, engine)
+	return joinStore(t, engine, servicetest.OpenStore(t, engine))
+}
+
+// joinStore is join over a store the caller opened (to read its rows back on its own connection).
+func joinStore(t *testing.T, engine string, st store.Store) *joined {
+	t.Helper()
 	a := mustCompose(t, st, "", log.New(io.Discard, "", 0))
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -491,9 +496,8 @@ func TestJoinDeleteTask(t *testing.T) {
 		cases = append(cases, fmt.Sprintf("4 parent %s deleted → subtasks %v NOT_FOUND", parent, subs))
 
 		// 5. A racing parent's last run deleted: the run is gone, the parent TODO with racing false.
-		// Run tools land in R2.2, so the run is seeded through the store.
 		rp := asStr(b.task("racing parent")["id"])
-		run := j.seedRun(b, rp)
+		run := asStr(asMap(owner.call("start_runs", map[string]any{"projectId": b.project, "taskId": rp, "version": b.get(rp)["version"]})["runs"].([]any)[0])["id"])
 		if p := b.get(rp); p["racing"] != true {
 			t.Fatalf("5: the seeded parent is not racing: %v", p)
 		}
@@ -545,25 +549,6 @@ func taskNum(t *testing.T, id string) int {
 		t.Fatalf("task id %q: %v", id, err)
 	}
 	return n
-}
-
-// seedRun makes parent racing with one run of it, through the store.
-func (j *joined) seedRun(b *board, parent string) string {
-	j.t.Helper()
-	ctx := context.Background()
-	p, err := j.st.GetTask(ctx, b.project, parent)
-	if err != nil {
-		j.t.Fatal(err)
-	}
-	now, on := time.Now().UnixMilli(), true
-	if _, err := j.st.UpdateTask(ctx, b.project, parent, p.Version, store.TaskPatch{Racing: &on, RaceOpenedAt: &store.Nullable[int64]{Value: &now}, UpdatedBy: b.owner.id, UpdatedAt: now}); err != nil {
-		j.t.Fatal(err)
-	}
-	r, err := j.st.CreateTask(ctx, store.CreateTaskInput{ProjectID: b.project, BoardID: b.bid, ColumnID: p.ColumnID, Title: "run", Status: p.Status, OrderKey: "a0", RunOf: &parent, CreatedBy: b.owner.id, CreatedAt: now})
-	if err != nil {
-		j.t.Fatal(err)
-	}
-	return r.ID
 }
 
 // TestJoinTwoClaimsOneWinner: two agents claim_task the same TODO task at once, 20 rounds: each round

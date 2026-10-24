@@ -37,8 +37,8 @@ func TestRegisterRefusesUnknownAndDuplicateAreas(t *testing.T) {
 }
 
 // TestRegisterAddsEveryAreasTools: Register adds the projects, boards, tasks, lifecycle, context,
-// media, search, artifacts, comments, follow-ups, chronicle, integrations and deliveries tools, each
-// under its area.
+// media, search, artifacts, comments, follow-ups, chronicle, integrations, deliveries, runs and
+// sprints tools, each under its area.
 func TestRegisterAddsEveryAreasTools(t *testing.T) {
 	svc := servicefake.New().Services()
 	s := mcp.New(mcp.Options{Version: "test", Resolver: authfake.Resolver{}, Services: svc})
@@ -63,9 +63,11 @@ func TestRegisterAddsEveryAreasTools(t *testing.T) {
 		"artifacts":    "add_artifact retract_artifact",
 		"comments":     "add_comment list_comments",
 		"followups":    "ack_follow_up add_follow_up list_follow_ups",
+		"runs":         "cancel_runs list_runs open_run pick_run start_runs",
+		"sprints":      "create_sprint get_sprint list_sprints set_sprint update_sprint",
 	}
 	if len(got) != len(want) {
-		t.Errorf("areas registered = %v, want projects, boards, tasks, lifecycle, context, media, search, artifacts, comments, followups, chronicle, integrations and deliveries", got)
+		t.Errorf("areas registered = %v, want projects, boards, tasks, lifecycle, context, media, search, artifacts, comments, followups, chronicle, integrations, deliveries, runs and sprints", got)
 	}
 	for area, names := range want {
 		if strings.Join(got[area], " ") != names {

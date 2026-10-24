@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 	"time"
 
@@ -64,12 +65,25 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 //  4. root's parent: root stripped from its blockedBy and the same unblock;
 //  5. each member's task-scope memory and attachments, then the task (its events, context items,
 //     summary, edges, comments and follow-ups go with it: the schema cascades);
-//  6. a run's parent: if no run is left and it is racing, racing:false and TODO (cancel_runs);
+//  6. a run's parent: if no run is left and it is racing, racing:false and TODO (endRace);
 //  7. the board-level task.deleted {id, title, status} on root, a change-log row per deleted task.
 //
 // It returns the blob hashes the deleted attachments held. Idempotency keys are kept: they are keyed
 // (project, identity, key), not by task, so a create replayed within the TTL answers the deleted task.
+// root is the mutation's task: it is recorded as deleted.
 func (t *txn) deleteCascade(root store.Task) ([]string, error) {
+	blobs, err := t.deleteTree(root)
+	if err != nil {
+		return nil, err
+	}
+	t.Deleted()
+	return blobs, nil
+}
+
+// deleteTree is deleteCascade for a root that need not be the mutation's task: pick_run and
+// cancel_runs delete each losing run through it inside the parent's mutation (plan §Fold 2: one
+// delete path).
+func (t *txn) deleteTree(root store.Task) ([]string, error) {
 	set, err := t.deletionSet(root)
 	if err != nil {
 		return nil, err
@@ -78,16 +92,30 @@ func (t *txn) deleteCascade(root store.Task) ([]string, error) {
 	for _, x := range set {
 		in[x.ID] = true
 	}
+	// The mutation's own task, when it is outside the set (pick_run's and cancel_runs's parent), is
+	// skipped by the per-member writes: its one versioned write is the mutation's, so its caches are
+	// stripped versionless (stripOwn) and move with that write.
+	skip := in
+	own := t.Task != nil && !in[t.Task.ID]
+	if own {
+		skip = maps.Clone(in)
+		skip[t.Task.ID] = true
+	}
 	for _, x := range set {
-		if err := t.unblockDependentsOf(x.ID, in); err != nil {
+		if err := t.unblockDependentsOf(x.ID, skip); err != nil {
 			return nil, err
 		}
-		if err := t.stripFromBlockers(x.ID, in); err != nil {
+		if err := t.stripFromBlockers(x.ID, skip); err != nil {
 			return nil, err
 		}
 	}
-	if root.ParentTaskID != nil && !in[*root.ParentTaskID] {
+	if root.ParentTaskID != nil && !skip[*root.ParentTaskID] {
 		if err := t.unblockOne(*root.ParentTaskID, root.ID); err != nil {
+			return nil, err
+		}
+	}
+	if own {
+		if err := t.stripOwn(in); err != nil {
 			return nil, err
 		}
 	}
@@ -116,7 +144,6 @@ func (t *txn) deleteCascade(root store.Task) ([]string, error) {
 		return nil, err
 	}
 	t.BoardEvent(store.EventInput{BoardID: root.BoardID, Type: domain.EventTaskDeleted, Data: data})
-	t.Deleted()
 	return blobs, nil
 }
 
@@ -155,6 +182,36 @@ func (t *txn) deletionSet(root store.Task) ([]store.Task, error) {
 		}
 	}
 	return set, nil
+}
+
+// stripOwn removes the ids of in from the mutation's own task's blockedBy and blocks caches,
+// versionless (Dependencies.SetCaches), with task.dependency_cleared {clearedBy, autoReady: false}
+// for each blocker it drops: the status the task lands in is the mutation's own write.
+func (t *txn) stripOwn(in map[string]bool) error {
+	cur, err := t.Tx.GetTask(t.ctx, t.ProjectID, t.Task.ID)
+	if err != nil {
+		return err
+	}
+	gone := func(id string) bool { return in[id] }
+	blockedBy := slices.DeleteFunc(slices.Clone(cur.BlockedBy), gone)
+	blocks := slices.DeleteFunc(slices.Clone(cur.Blocks), gone)
+	if len(blockedBy) == len(cur.BlockedBy) && len(blocks) == len(cur.Blocks) {
+		return nil
+	}
+	if err := t.Tx.SetCaches(t.ctx, cur.ProjectID, cur.ID, blockedBy, blocks); err != nil {
+		return err
+	}
+	for _, id := range cur.BlockedBy {
+		if !in[id] {
+			continue
+		}
+		data, err := json.Marshal(map[string]any{"clearedBy": id, "autoReady": false})
+		if err != nil {
+			return err
+		}
+		t.Event(store.EventInput{TaskID: cur.ID, BoardID: cur.BoardID, Type: domain.EventTaskDependencyCleared, Data: data})
+	}
+	return nil
 }
 
 // runsOf is every run of x (the tasks of x's board whose runOf is x), paged to the end.
@@ -224,11 +281,8 @@ func (t *txn) deleteAttachments(x store.Task) ([]string, error) {
 	return hashes, nil
 }
 
-// settleRace is cancel_runs's parent write (conductor runs.ts:540-555) when a run of parentID was
-// deleted and none is left: racing false, raceOpenedAt cleared, TODO in the board's TODO column,
-// the lease dropped. Event run.discarded {runId, reason: "deleted"} on the parent whenever it is
-// racing. The parent moves two versions when it was not TODO (UpdateTask, then SetStatus): no store
-// call writes racing and status together.
+// settleRace is run when a run of parentID was deleted: event run.discarded {runId, reason:
+// "deleted"} on the parent whenever it is racing, and, when no run is left, endRace.
 func (t *txn) settleRace(parentID, runID string) error {
 	p, err := t.Tx.GetTask(t.ctx, t.ProjectID, parentID)
 	if err != nil {
@@ -250,23 +304,29 @@ func (t *txn) settleRace(parentID, runID string) error {
 		t.Ring(Doorbell{Kind: ChangeKindChanged, TaskID: p.ID, BoardID: p.BoardID})
 		return nil
 	}
+	return t.endRace(p)
+}
+
+// endRace is cancel_runs's parent write (conductor runs.ts:540-555), in one versioned write: racing
+// false, raceOpenedAt cleared, TODO (in the board's TODO column when it was not TODO), the lease
+// dropped. When p is the mutation's own task it is recorded as written (cancel_runs).
+func (t *txn) endRace(p store.Task) error {
 	off := false
-	after, err := t.Tx.UpdateTask(t.ctx, p.ProjectID, p.ID, p.Version, store.TaskPatch{
-		Racing: &off, RaceOpenedAt: &store.Nullable[int64]{}, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
-	})
-	if err != nil {
-		return err
-	}
-	if after.Status != domain.Todo || after.Claim != nil {
+	ch := store.StatusChange{Status: domain.Todo, ClearClaim: true, Racing: &off, RaceOpenedAt: &store.Nullable[int64]{},
+		UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli()}
+	if p.Status != domain.Todo {
 		board, _, err := t.Tx.GetBoard(t.ctx, p.ProjectID, p.BoardID)
 		if err != nil {
 			return err
 		}
-		if after, err = t.Tx.SetStatus(t.ctx, p.ProjectID, p.ID, after.Version, store.StatusChange{
-			Status: domain.Todo, ColumnID: todoColumn(board), ClearClaim: true, UpdatedBy: t.Caller.Identity, UpdatedAt: t.Now.UnixMilli(),
-		}); err != nil {
-			return err
-		}
+		ch.ColumnID = todoColumn(board)
+	}
+	after, err := t.Tx.SetStatus(t.ctx, p.ProjectID, p.ID, p.Version, ch)
+	if err != nil {
+		return err
+	}
+	if t.Task != nil && t.Task.ID == p.ID {
+		t.Wrote(after)
 	}
 	bells := doorbellsFor(&p, after, false)
 	if len(bells) == 0 && after.Status == domain.Todo && after.Assignee == nil {
