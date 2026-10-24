@@ -470,6 +470,7 @@ export function OncallSetup({
   };
 
   const create = useMutation({
+    gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
     mutationFn: (body: Parameters<typeof oncallApi.createIntegration>[1]) =>
       oncallApi.createIntegration(projectId, body),
     onSuccess: (res) => {
@@ -495,6 +496,7 @@ export function OncallSetup({
     onError: (e: Error) => setError(e.message),
   });
   const save = useMutation({
+    gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
     mutationFn: ({ i, patch }: { i: Integration; patch: Parameters<typeof oncallApi.updateIntegration>[3] }) =>
       oncallApi.updateIntegration(projectId, i.id, i.version, patch),
     onSuccess: (res) => {
@@ -508,6 +510,7 @@ export function OncallSetup({
     onError: (e: Error) => setError(e.message),
   });
   const rotate = useMutation({
+    gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
     mutationFn: ({ i, externalSecret }: { i: Integration; externalSecret?: string }) =>
       oncallApi.rotateIntegrationSecret(projectId, i.id, i.version, {
         ...(externalSecret ? { externalSecret } : {}),

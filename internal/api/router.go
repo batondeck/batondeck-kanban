@@ -92,8 +92,9 @@ func (o *Options) logger() *log.Logger {
 }
 
 // in is where a route's arguments come from: the named path values (bound to the arguments of
-// the same name, or of as's names where as is set), the query keys a GET takes, and whether the
-// body may carry fields (noBody: every argument is in the URL, conductor's refusedUnknownBodyKeys
+// the same name, or of as's names where as is set), the query keys a GET or a DELETE takes (a
+// DELETE has no body, so a field it needs, delete_integration's version, rides the query), and
+// whether the body may carry fields (noBody: every argument is in the URL, conductor's refusedUnknownBodyKeys
 // with an empty allow-list).
 type in struct {
 	path   []string
@@ -157,28 +158,50 @@ func call[Req, Resp any](o *Options, fn func(context.Context, domain.Caller, Req
 
 // arguments is the request's arguments before the path parameters: on a GET the route's query
 // keys typed by schema (any other key is ignored, as conductor's coerceQuery does), the body's JSON
-// object otherwise.
+// object otherwise, and on a DELETE the route's query keys over that body.
 func arguments(w http.ResponseWriter, r *http.Request, schema *jsonschema.Schema, spec in) (map[string]any, error) {
-	args := map[string]any{}
 	if r.Method == http.MethodGet {
-		q := r.URL.Query()
-		for _, k := range spec.query {
-			p, ok := schema.Properties[k]
-			if !ok {
-				panic("api: query key " + k + " is not in the request schema")
-			}
-			vs := q[k]
-			if len(vs) == 0 {
-				continue
-			}
-			v, err := queryValue(p, vs[0])
-			if err != nil {
-				return nil, domain.Validation(fmt.Sprintf("query %s: %v", k, err), map[string]any{"field": k})
-			}
-			args[k] = v
-		}
-		return args, nil
+		return queryArguments(r, schema, spec)
 	}
+	args, err := bodyArguments(w, r, spec)
+	if err != nil || r.Method != http.MethodDelete || len(spec.query) == 0 {
+		return args, err
+	}
+	q, err := queryArguments(r, schema, spec)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range q {
+		args[k] = v
+	}
+	return args, nil
+}
+
+// queryArguments is the route's query keys, typed by schema.
+func queryArguments(r *http.Request, schema *jsonschema.Schema, spec in) (map[string]any, error) {
+	args := map[string]any{}
+	q := r.URL.Query()
+	for _, k := range spec.query {
+		p, ok := schema.Properties[k]
+		if !ok {
+			panic("api: query key " + k + " is not in the request schema")
+		}
+		vs := q[k]
+		if len(vs) == 0 {
+			continue
+		}
+		v, err := queryValue(p, vs[0])
+		if err != nil {
+			return nil, domain.Validation(fmt.Sprintf("query %s: %v", k, err), map[string]any{"field": k})
+		}
+		args[k] = v
+	}
+	return args, nil
+}
+
+// bodyArguments is the body's JSON object; an empty body is no arguments.
+func bodyArguments(w http.ResponseWriter, r *http.Request, spec in) (map[string]any, error) {
+	args := map[string]any{}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
 		return nil, domain.Validation("the body is unreadable or over 1 MiB", nil)
