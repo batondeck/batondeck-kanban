@@ -15,8 +15,8 @@ import (
 // dtoTools maps each tool to the service method whose request and response types are its input and
 // output schemas: the 42 CORE tools of plan §Target surface, cancel_task (ADR-0001, after the 42
 // was counted), list_agent_sessions (service.Sessions.ListAgentSessions), the 4 chronicle tools
-// (R2.6), the nine on-call tools (service.Oncall, R2.8), the ten runs and sprints tools (R2.2) and the seven
-// notification, profile, anomaly and ranking tools (R2.3).
+// (R2.6), the nine on-call tools (service.Oncall, R2.8), the ten runs and sprints tools (R2.2), the seven
+// notification, profile, anomaly and ranking tools (R2.3) and grant_capabilities (R2.4).
 var dtoTools = []struct {
 	tool   string
 	iface  reflect.Type
@@ -107,6 +107,7 @@ var dtoTools = []struct {
 	{"detect_anomalies", reflect.TypeFor[service.Anomalies](), "Detect"},
 	{"rank_tasks", reflect.TypeFor[service.Ranking](), "Rank"},
 	{"orchestrate_subtasks", reflect.TypeFor[service.Ranking](), "Orchestrate"},
+	{"grant_capabilities", reflect.TypeFor[service.Grants](), "Grant"},
 }
 
 // toolShaped are the interfaces every method of which is one tool: a method added to one without a
@@ -118,7 +119,7 @@ var toolShaped = []reflect.Type{
 	reflect.TypeFor[service.Oncall](), reflect.TypeFor[service.Runs](), reflect.TypeFor[service.Sprints](),
 	reflect.TypeFor[service.Notifications](), reflect.TypeFor[service.Profiles](), reflect.TypeFor[service.Anomalies](),
 	reflect.TypeFor[service.Ranking](),
-	reflect.TypeFor[service.Me](), reflect.TypeFor[service.Audit](),
+	reflect.TypeFor[service.Me](), reflect.TypeFor[service.Audit](), reflect.TypeFor[service.Grants](),
 }
 
 // dtoSchema is typ's schema as internal/service/dtoschema builds it for the tool registration,

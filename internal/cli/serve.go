@@ -68,8 +68,9 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 		Version:  version,
 		Resolver: resolver,
 		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Artifacts: sc.Artifacts(), Comments: sc.Comments(), FollowUps: sc.FollowUps(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall(), Runs: sc.Runs(), Sprints: sc.Sprints(),
-			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit()},
-		Logger: logger,
+			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit(), Grants: sc.Grants()},
+		Logger:      logger,
+		HiddenTools: sc.HiddenTools,
 	}
 	if as != nil {
 		opts.ResourceMetadataURL = as.ResourceMetadataURL()

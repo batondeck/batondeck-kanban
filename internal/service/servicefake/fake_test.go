@@ -95,8 +95,8 @@ func TestTriggerReturnsEveryCode(t *testing.T) {
 	}
 	f := New()
 	ms := allMethods(t, f)
-	if len(ms) != 95 {
-		t.Errorf("Services has %d methods; the nine interfaces of ADR-0003 B3 hold 50, Artifacts, Comments and FollowUps (R2.1) 7, Chronicle (R2.6) 8, Oncall (R2.8) 9, Runs and Sprints (R2.2) 5 each, Notifications, Profiles, Anomalies and Ranking (R2.3) 7, R2.5 4", len(ms))
+	if len(ms) != 96 {
+		t.Errorf("Services has %d methods; the nine interfaces of ADR-0003 B3 hold 50, Artifacts, Comments and FollowUps (R2.1) 7, Chronicle (R2.6) 8, Oncall (R2.8) 9, Runs and Sprints (R2.2) 5 each, Notifications, Profiles, Anomalies and Ranking (R2.3) 7, R2.5 4, Grants (R2.4) 1", len(ms))
 	}
 	var stringless []string
 	for _, m := range ms {

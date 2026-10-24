@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -14,6 +15,10 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 )
+
+// StrictObjects are the nested objects of an Optional or Nullable that refuse unknown properties
+// (conductor's .strict()): grant_capabilities' scope.
+var StrictObjects = []reflect.Type{reflect.TypeFor[service.Grant]()}
 
 // Optionals are the tri-state request fields' instantiations (service.Optional, service.Nullable).
 // Each is typed as its value: Optional[T] as T, Nullable[T] as *T (T or null), so a field keeps the
@@ -31,6 +36,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Nullable[domain.ChronicleCoverage]](),
 	reflect.TypeFor[service.Optional[service.SprintStatus]](),
 	reflect.TypeFor[service.Nullable[service.TokenPolicy]](),
+	reflect.TypeFor[service.Nullable[service.Grant]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct
@@ -116,7 +122,7 @@ func build() *jsonschema.ForOptions {
 			elem = reflect.PointerTo(elem)
 		}
 		s := infer(elem, opts)
-		if v.Type.Kind() == reflect.Struct {
+		if v.Type.Kind() == reflect.Struct && !slices.Contains(StrictObjects, v.Type) {
 			s.AdditionalProperties = nil // conductor's nested objects are open, as OpenObjects below
 		}
 		opts.TypeSchemas[typ] = s
