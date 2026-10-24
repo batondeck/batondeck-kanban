@@ -16,6 +16,9 @@ const (
 	DoorbellAssigned  = "assigned"
 	DoorbellBroadcast = "broadcast"
 	ChangeKindChanged = "changed"
+	// ChangeKindNotification is the row of one in-app notification, scoped to its recipient's
+	// identity: /api/stream's notifications frame, never a doorbell.
+	ChangeKindNotification = "notification"
 )
 
 // BroadcastScope is the token scope of a project's broadcast doorbell and of a change that rings
@@ -103,6 +106,8 @@ type txn struct {
 	deleted bool
 	events  []pendingEvent
 	bells   []Doorbell
+	// notified is every notification row the events materialised (notify).
+	notified []store.Notification
 	// boards is every (project, board) the mutation's change rows name ("" board: the project),
 	// and its task's board: what mutate drops from the snapshot cache once the transaction commits.
 	boards [][2]string
@@ -291,19 +296,25 @@ func (t *txn) finish(c *Core, m mutation) error {
 		if e.Ts == 0 {
 			e.Ts = ms
 		}
-		var err error
+		var (
+			got store.Event
+			err error
+		)
 		if p.board {
 			if e.BoardID == "" && t.Task != nil {
 				e.BoardID = t.Task.BoardID
 			}
-			_, err = t.Tx.AppendBoardEvent(t.ctx, e)
+			got, err = t.Tx.AppendBoardEvent(t.ctx, e)
 		} else {
 			if e.TaskID == "" && t.Task != nil {
 				e.TaskID = t.Task.ID
 			}
-			_, err = t.Tx.AppendTaskEvent(t.ctx, e)
+			got, err = t.Tx.AppendTaskEvent(t.ctx, e)
 		}
 		if err != nil {
+			return err
+		}
+		if err := t.notify(got); err != nil {
 			return err
 		}
 	}
@@ -326,7 +337,48 @@ func (t *txn) finish(c *Core, m mutation) error {
 			t.boards = append(t.boards, [2]string{t.ProjectID, x.BoardID})
 		}
 	}
-	return t.writeChanges(m.Tool, ms)
+	if err := t.writeChanges(m.Tool, ms); err != nil {
+		return err
+	}
+	return t.writeNotified(m.Tool, ms)
+}
+
+// notify writes the in-app rows an appended event materialises (domain.NotificationsForEvent,
+// conductor's notify.ts at its one event-write choke point), in the event's transaction.
+func (t *txn) notify(e store.Event) error {
+	for _, d := range domain.NotificationsForEvent(e.Type, e.Actor, e.Data) {
+		data, err := json.Marshal(d.Data)
+		if err != nil {
+			return err
+		}
+		n, err := t.Tx.AddNotification(t.ctx, store.AddNotificationInput{IdentityID: d.Recipient, ProjectID: e.ProjectID,
+			BoardID: e.BoardID, TaskID: e.TaskID, Type: d.Type, Actor: e.Actor, Data: data, TS: e.Ts})
+		if err != nil {
+			return err
+		}
+		t.notified = append(t.notified, n)
+	}
+	return nil
+}
+
+// writeNotified appends one ChangeKindNotification row per notification written, scoped to its
+// recipient: the signal /api/stream turns into that recipient's notifications frame. No device is
+// rung for it (internal/wake rings assigned and broadcast only; ADR-0004: comments ring nobody).
+func (t *txn) writeNotified(tool string, ms int64) error {
+	for _, n := range t.notified {
+		d := changePayload{Kind: ChangeKindNotification, ProjectID: n.ProjectID, Tool: tool, Actor: t.Caller.Identity}
+		if n.TaskID != nil {
+			d.TaskID = *n.TaskID
+		}
+		payload, err := json.Marshal(d)
+		if err != nil {
+			return err
+		}
+		if _, err := t.Tx.AppendChange(t.ctx, store.ChangeInput{Scope: n.IdentityID, ProjectID: n.ProjectID, Kind: ChangeKindNotification, Payload: payload, Ts: ms}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // changePayload is a change-log row's payload: the /wake frame's fields but the cursor, which is

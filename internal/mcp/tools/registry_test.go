@@ -55,19 +55,23 @@ func TestRegisterAddsEveryAreasTools(t *testing.T) {
 			"next_task reap_stale_leases release_task",
 		"context": "add_context_item add_dependency add_subtask get_task_context list_subtasks read_memory recall_memory " +
 			"remove_dependency set_summary write_memory",
-		"media":        "attach_file list_attachments",
-		"search":       "search_tasks",
-		"integrations": "create_integration delete_integration list_integrations rotate_integration_secret update_integration",
-		"deliveries":   "list_deliveries read_delivery_raw replay_delivery send_test_event",
-		"chronicle":    "create_chronicle_page delete_chronicle_page edit_chronicle_page ingest_chronicle_page",
-		"artifacts":    "add_artifact retract_artifact",
-		"comments":     "add_comment list_comments",
-		"followups":    "ack_follow_up add_follow_up list_follow_ups",
-		"runs":         "cancel_runs list_runs open_run pick_run start_runs",
-		"sprints":      "create_sprint get_sprint list_sprints set_sprint update_sprint",
+		"media":          "attach_file list_attachments",
+		"search":         "search_tasks",
+		"integrations":   "create_integration delete_integration list_integrations rotate_integration_secret update_integration",
+		"deliveries":     "list_deliveries read_delivery_raw replay_delivery send_test_event",
+		"chronicle":      "create_chronicle_page delete_chronicle_page edit_chronicle_page ingest_chronicle_page",
+		"artifacts":      "add_artifact retract_artifact",
+		"comments":       "add_comment list_comments",
+		"followups":      "ack_follow_up add_follow_up list_follow_ups",
+		"runs":           "cancel_runs list_runs open_run pick_run start_runs",
+		"sprints":        "create_sprint get_sprint list_sprints set_sprint update_sprint",
+		"notifications":  "list_notifications mark_notifications_read",
+		"agents_profile": "get_skill_stats register_agent_profile",
+		"anomalies":      "detect_anomalies",
+		"rank":           "orchestrate_subtasks rank_tasks",
 	}
 	if len(got) != len(want) {
-		t.Errorf("areas registered = %v, want projects, boards, tasks, lifecycle, context, media, search, artifacts, comments, followups, chronicle, integrations, deliveries, runs and sprints", got)
+		t.Errorf("areas registered = %v, want projects, boards, tasks, lifecycle, context, media, search, artifacts, comments, followups, chronicle, integrations, deliveries, runs, sprints, notifications, agents_profile, anomalies and rank", got)
 	}
 	for area, names := range want {
 		if strings.Join(got[area], " ") != names {

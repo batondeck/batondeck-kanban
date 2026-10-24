@@ -90,6 +90,16 @@ var expectedPosture = map[string]pinnedPosture{
 	"set_sprint":    {tier: domain.TierMaster, tenantScoped: true},
 	"get_sprint":    {tier: domain.TierRead, tenantScoped: true},
 	"list_sprints":  {tier: domain.TierRead, tenantScoped: true},
+	// The feed is the caller's own across projects: no project, no tier (conductor's notifications.ts).
+	// detect_anomalies writes its first sightings, so it is requireWriter's; orchestrate_subtasks is
+	// requireMaster plus the parent's lease.
+	"list_notifications":      {tier: "", tenantScoped: false},
+	"mark_notifications_read": {tier: "", tenantScoped: false},
+	"register_agent_profile":  {tier: domain.TierWrite, tenantScoped: true},
+	"get_skill_stats":         {tier: domain.TierRead, tenantScoped: true},
+	"detect_anomalies":        {tier: domain.TierWrite, tenantScoped: true},
+	"rank_tasks":              {tier: domain.TierRead, tenantScoped: true},
+	"orchestrate_subtasks":    {tier: domain.TierMaster, tenantScoped: true},
 	// The on-call tools are workspace-admin only (ADR-0004), then tiered on the project as conductor's
 	// manifest.ts:203-215: the mutations structural, the reads and the two that file tickets master.
 	"create_integration":        {tier: domain.TierStructural, tenantScoped: true, adminOnly: domain.AdminOnlyOnly},

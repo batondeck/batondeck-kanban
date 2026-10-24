@@ -730,6 +730,9 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 				return CompleteTaskResp{}, err
 			}
 			t.Wrote(after)
+			if err := t.rollUpSkill(cur, true); err != nil {
+				return CompleteTaskResp{}, err
+			}
 			if err := t.event(after, domain.EventTaskCompleted, map[string]any{"to": target, "hasDeliverable": req.Deliverable != "", "artifacts": 0}); err != nil {
 				return CompleteTaskResp{}, err
 			}
@@ -878,6 +881,9 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 				return BlockTaskResp{}, err
 			}
 			t.Wrote(after)
+			if err := t.rollUpSkill(cur, false); err != nil {
+				return BlockTaskResp{}, err
+			}
 			if err := t.event(after, domain.EventTaskBlocked, map[string]any{"reason": req.Reason}); err != nil {
 				return BlockTaskResp{}, err
 			}
