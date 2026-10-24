@@ -101,11 +101,11 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 			mux.Handle("DELETE "+internalPrefix+"wake-session/{pid}", wake.UnregisterHandler(dir, resolver, logger))
 			// The webhook ingest: outside every bearer, session and CSRF check (its signature is the
 			// credential), over TCP as well as the socket, since telemetry senders are remote.
-			mux.Handle("POST /hooks/{integrationId}", api.HookRoutes{Hooks: sc, Logger: logger}.Handler())
+			mux.Handle("POST /hooks/{integrationId}", web.WithoutCSP(api.HookRoutes{Hooks: sc, Logger: logger}.Handler()))
 			if media.Files != nil && media.Signer != nil {
 				blobs := &api.BlobRoutes{Signer: media.Signer, Files: media.Files, MaxBytes: media.MaxBytes, Uploads: sc, Logger: logger}
-				mux.Handle("PUT /blobs/{id}", blobs.Upload())
-				mux.Handle("GET /blobs/{id}", blobs.Download())
+				mux.Handle("PUT /blobs/{id}", web.WithoutCSP(blobs.Upload()))
+				mux.Handle("GET /blobs/{id}", web.WithoutCSP(blobs.Download()))
 			}
 		},
 	}, nil
