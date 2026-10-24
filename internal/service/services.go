@@ -46,4 +46,5 @@ type Services struct {
 	Ranking       Ranking
 	Me            Me
 	Audit         Audit
+	Analytics     Analytics
 }

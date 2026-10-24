@@ -28,9 +28,11 @@ const (
 	DefaultWakeSessionTTL = 24 * time.Hour
 	// DefaultToolCallBatch rows fill one InsertToolCalls; DefaultToolCallFlush is the longest a row
 	// waits; DefaultToolCallBuffer is the most rows held while the store is failing.
-	DefaultToolCallBatch  = 100
-	DefaultToolCallFlush  = time.Second
-	DefaultToolCallBuffer = 10_000
+	DefaultToolCallBatch = 100
+	// DefaultToolCallRetentionDays is core.Config's default retention.tool_calls_days.
+	DefaultToolCallRetentionDays = 45
+	DefaultToolCallFlush         = time.Second
+	DefaultToolCallBuffer        = 10_000
 )
 
 // GrantLookup reads one member's capability grant: ok false is no grant, which restricts nothing.
@@ -69,6 +71,9 @@ type Options struct {
 	// JWKSFetch is how a jwt-mode integration's key set is fetched (POST /hooks); nil is
 	// auth.SafeFetch, the SSRF-guarded https GET. A test stubs it.
 	JWKSFetch auth.Fetch
+	// ToolCallRetentionDays is the tool_calls window the operations summary reports; 0 is
+	// DefaultToolCallRetentionDays.
+	ToolCallRetentionDays int64
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -95,6 +100,8 @@ type Core struct {
 	limiter *oncall.RateLimiter
 	// jwt verifies a jwt-mode integration's bearer, its JWKS cached per URL.
 	jwt *auth.Verifier
+	// toolCallRetentionDays is the window the operations summary's retention row names.
+	toolCallRetentionDays int64
 }
 
 // SetDeviceSessions hands the core the device session directory, which internal/wake builds after
@@ -136,6 +143,8 @@ func New(st store.Store, o Options) *Core {
 		sealer:  o.Sealer,
 		blobGC:  o.BlobGC,
 		media:   o.Media,
+
+		toolCallRetentionDays: orDefault(o.ToolCallRetentionDays, DefaultToolCallRetentionDays),
 	}
 	c.media.MaxBytes = orDefault(c.media.MaxBytes, core.DefaultBlobMaxBytes)
 	switch {
