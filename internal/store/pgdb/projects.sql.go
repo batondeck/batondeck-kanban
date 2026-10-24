@@ -52,28 +52,6 @@ func (q *Queries) DeleteProject(ctx context.Context, id string) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
-const getCapabilityGrant = `-- name: GetCapabilityGrant :one
-SELECT project_id, identity_id, grant_json, updated_by, updated_at FROM capability_grants WHERE project_id = $1 AND identity_id = $2
-`
-
-type GetCapabilityGrantParams struct {
-	ProjectID  string
-	IdentityID string
-}
-
-func (q *Queries) GetCapabilityGrant(ctx context.Context, arg GetCapabilityGrantParams) (CapabilityGrant, error) {
-	row := q.db.QueryRow(ctx, getCapabilityGrant, arg.ProjectID, arg.IdentityID)
-	var i CapabilityGrant
-	err := row.Scan(
-		&i.ProjectID,
-		&i.IdentityID,
-		&i.GrantJson,
-		&i.UpdatedBy,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getProject = `-- name: GetProject :one
 SELECT id, name, settings, review_enabled, retry_policy, created_by, created_at
 FROM projects WHERE id = $1

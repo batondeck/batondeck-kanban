@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ type Options struct {
 	MaxSessions int
 	// Logger receives refusals, bookkeeping failures and recovered panics; nil discards them.
 	Logger *log.Logger
+	// HiddenTools is what a caller's capability grants leave out of its tools/list
+	// (service.Core.HiddenTools); nil hides nothing.
+	HiddenTools func(ctx context.Context, c domain.Caller) ([]string, error)
 }
 
 // Server is the MCP server and its HTTP handler.
@@ -79,7 +83,8 @@ func New(o Options) *Server {
 	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}, keys: map[string]string{}, ending: map[string]bool{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
-	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log}
+	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log,
+		hidden: o.HiddenTools}
 	s.sdk = mcp.NewServer(&mcp.Implementation{Name: "batondeck-kanban", Version: o.Version}, &mcp.ServerOptions{
 		Instructions: Instructions,
 		Capabilities: &mcp.ServerCapabilities{
@@ -147,14 +152,19 @@ func (s *Server) Handler() http.Handler { return s.handler }
 func (s *Server) SDK() *mcp.Server { return s.sdk }
 
 // audience is what the tool list is filtered and memoised by: the part of a caller that decides
-// which tools it may see. A token carries no project role (membership decides it per call), so the
-// workspace-admin flag is all of it.
-type audience struct{ admin bool }
+// which tools it may see. A token carries no project role (membership decides it per call), so it is
+// the workspace-admin flag and the tools the caller's capability grants hide, sorted and joined by
+// commas (a string keeps the audience a map key).
+type audience struct {
+	admin  bool
+	hidden string
+}
 
 // toolList filters tools/list per audience and memoises the answer. gen counts registrations, so
 // a list read before one is never memoised after it. seen is each live session's audience as of its
 // last request: one that changes (the caller's workspace-admin flag, re-read through the 60 s
-// account cache) sends that session notifications/tools/list_changed through send.
+// account cache, or its grants, dropped from service's cache by the change) sends that session
+// notifications/tools/list_changed through send.
 type toolList struct {
 	mu      sync.Mutex
 	gen     int
@@ -164,6 +174,7 @@ type toolList struct {
 	known   map[string]bool                // every registered tool name
 	send    mcp.MethodHandler              // go-sdk's sending handler
 	log     *log.Logger
+	hidden  func(context.Context, domain.Caller) ([]string, error)
 }
 
 // AddTool registers a tool on s. visible says which callers see it in tools/list (nil: every
@@ -189,10 +200,9 @@ func AddTool[In, Out any](s *Server, t *mcp.Tool, visible func(admin bool) bool,
 	defer s.tools.mu.Unlock()
 	mcp.AddTool(s.sdk, t, wrapped)
 	s.tools.known[t.Name] = true
-	if visible != nil {
-		s.tools.visible[t.Name] = func(a audience) bool { return visible(a.admin) }
-	} else {
-		delete(s.tools.visible, t.Name)
+	name := "," + t.Name + ","
+	s.tools.visible[t.Name] = func(a audience) bool {
+		return (visible == nil || visible(a.admin)) && !strings.Contains(","+a.hidden+",", name)
 	}
 	s.tools.gen++
 	clear(s.tools.memo)

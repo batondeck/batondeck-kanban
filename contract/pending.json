@@ -1,7 +1,3 @@
 {
-  "tools": {
-    "P5 NICE tools and the agents, me and audit reads": [
-      "grant_capabilities"
-    ]
-  }
+  "tools": {}
 }

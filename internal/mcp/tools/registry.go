@@ -29,7 +29,6 @@ var areas = []struct{ name, owner string }{
 	{"agents_profile", "R2.3"},
 	{"anomalies", "R2.3"},
 	{"rank", "R2.3"},
-	{"router", "R2.4"},
 	{"grants", "R2.4"},
 	{"agents", "R2.5"},
 	{"me", "R2.5"},

@@ -24,6 +24,3 @@ UPDATE projects SET settings = ?, review_enabled = ?, retry_policy = ? WHERE id 
 -- itself (idempotency keys) and those kept as the trace (audit_log, tool_calls, change_log).
 -- name: DeleteProject :execrows
 DELETE FROM projects WHERE id = ?;
-
--- name: GetCapabilityGrant :one
-SELECT * FROM capability_grants WHERE project_id = ? AND identity_id = ?;

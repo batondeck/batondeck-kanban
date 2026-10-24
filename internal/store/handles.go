@@ -34,6 +34,7 @@ type engine interface {
 type sqlQueries interface {
 	projectQueries
 	memberQueries
+	grantQueries
 	boardQueries
 	counterQueries
 	idempotencyQueries

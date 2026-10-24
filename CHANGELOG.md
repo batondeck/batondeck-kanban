@@ -87,6 +87,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
+  a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
+  role. No `scope` writes the worker default, `null` removes the grant, an object replaces it; a
+  non-member is `VALIDATION`, and so is a `tools`/`deny` entry naming a tool that takes no projectId.
+  The grant is the new `Grants` store area (`capability_grants`, both engines and memstore, its
+  conformance battery) and the core now reads it on every governed call: until this change no grant
+  could be written and none was enforced. A grant on a project admin is stored and not enforced, as
+  in conductor. `tools/list` is narrowed too: a governed project tool is left out when the grant of
+  every membership the caller holds refuses it by name, so a tool callable in any project stays
+  listed. The change sends the member's sessions `notifications/tools/list_changed` at their next
+  request (R1.7's mechanism, its audience now the admin flag plus the hidden tools), read through a
+  per-identity cache dropped by the grant, a membership change or `create_project`. The router
+  facade (`find_tools`, `get_tool_schema`, `invoke_tool`) is not registered (ADR-0004).
 - The operations summary (R2.11): `GET /api/analytics/operations?projectId&days` replaces R1.12's
   stub with conductor's OpsSummary (`total`, `errors`, `errorRate`, `avgLatencyMs`, `byTool`,
   `byDay`, `byAgent`, as `aggregateOps` rolls it up) over the `tool_calls` rows, plus a `retention`
@@ -94,8 +107,9 @@ Notable changes to batondeck-kanban. The format follows
   to 90. The membership check is the service's, under `get_project`'s posture: a non-member is 403
   `FORBIDDEN`, never an empty summary. One statement per call on each engine
   (`Store.SummarizeToolCalls`, grouped by tool, outcome, agent and UTC day), pinned in `test/perf`.
-  Each `tool_calls` row now carries the `projectId` the call named; it was always empty, so no
-  project could have counted a call. Analytics and Reports read the summary unchanged, and a
+  Each `tool_calls` row now carries the `projectId` the call named (it was always empty, so no
+  project could have counted a call), except for a tool nobody registered and a call refused
+  `FORBIDDEN` or `UNAUTHENTICATED`, so a non-member moves no project's summary. Analytics and Reports read the summary unchanged, and a
   cancelled task (DONE with the `cancelled` label) counts in the total and in no done figure (P-208).
   This was the last stubbed route, so R1.12's stub handler and `TestStubsNameTheirLane` are gone.
 - Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
