@@ -1,4 +1,4 @@
-// Owner: R2.3 fills these bodies; R1.12 copied the signatures from api.ts.
+// The routes are R2.3's (internal/api/notifications.go); live updates ride /api/stream's notifications frame.
 import type { Notification } from '../types.js';
 import { req } from './http.js';
 
