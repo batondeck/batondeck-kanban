@@ -97,6 +97,7 @@ Notable changes to batondeck-kanban. The format follows
   Each `tool_calls` row now carries the `projectId` the call named; it was always empty, so no
   project could have counted a call. Analytics and Reports read the summary unchanged, and a
   cancelled task (DONE with the `cancelled` label) counts in the total and in no done figure (P-208).
+  This was the last stubbed route, so R1.12's stub handler and `TestStubsNameTheirLane` are gone.
 - Agent sessions, your settings and the audit log (R2.5): `list_agent_sessions`, `disconnect_agent`,
   `get_my_settings`, `set_my_settings` and `list_audit_log` leave `contract/pending.json`.
   `disconnect_agent` closes every live MCP session of `(identityId, agentId)` and deletes its row:
