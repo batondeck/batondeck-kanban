@@ -7,9 +7,11 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
 
 const getComment = `-- name: GetComment :one
+
 SELECT project_id, task_id, id, author, body, parent_comment_id, mentions, ts FROM comments WHERE project_id = $1 AND task_id = $2 AND id = $3
 `
 
@@ -19,6 +21,10 @@ type GetCommentParams struct {
 	ID        string
 }
 
+// The comment area. Every read starts FROM the task, so one statement answers both "no such task"
+// (no row) and "no comments" (one row whose comment columns are NULL). Ids order and compare
+// COLLATE "C", as bytes, as SQLite's BINARY does.
+// One row by its key.
 func (q *Queries) GetComment(ctx context.Context, arg GetCommentParams) (Comment, error) {
 	row := q.db.QueryRow(ctx, getComment, arg.ProjectID, arg.TaskID, arg.ID)
 	var i Comment
@@ -30,34 +36,6 @@ func (q *Queries) GetComment(ctx context.Context, arg GetCommentParams) (Comment
 		&i.Body,
 		&i.ParentCommentID,
 		&i.Mentions,
-		&i.Ts,
-	)
-	return i, err
-}
-
-const getFollowUp = `-- name: GetFollowUp :one
-SELECT project_id, task_id, id, body, author, target, target_identity, status, reopened, ts FROM follow_ups WHERE project_id = $1 AND task_id = $2 AND id = $3
-`
-
-type GetFollowUpParams struct {
-	ProjectID string
-	TaskID    string
-	ID        string
-}
-
-func (q *Queries) GetFollowUp(ctx context.Context, arg GetFollowUpParams) (FollowUp, error) {
-	row := q.db.QueryRow(ctx, getFollowUp, arg.ProjectID, arg.TaskID, arg.ID)
-	var i FollowUp
-	err := row.Scan(
-		&i.ProjectID,
-		&i.TaskID,
-		&i.ID,
-		&i.Body,
-		&i.Author,
-		&i.Target,
-		&i.TargetIdentity,
-		&i.Status,
-		&i.Reopened,
 		&i.Ts,
 	)
 	return i, err
@@ -88,4 +66,113 @@ func (q *Queries) GetNotification(ctx context.Context, arg GetNotificationParams
 		&i.Ts,
 	)
 	return i, err
+}
+
+const insertComment = `-- name: InsertComment :one
+INSERT INTO comments (project_id, task_id, id, author, body, parent_comment_id, mentions, ts)
+SELECT t.project_id, t.id, $1::text, $2::text, $3::text,
+  $4::text, $5::text, $6::bigint
+FROM tasks t WHERE t.project_id = $7 AND t.id = $8
+RETURNING project_id, task_id, id, author, body, parent_comment_id, mentions, ts
+`
+
+type InsertCommentParams struct {
+	ID              string
+	Author          string
+	Body            string
+	ParentCommentID sql.NullString
+	Mentions        string
+	Ts              int64
+	ProjectID       string
+	TaskID          string
+}
+
+// A comment on the task, in one statement: no row is a missing task. mentions is a JSON array.
+func (q *Queries) InsertComment(ctx context.Context, arg InsertCommentParams) (Comment, error) {
+	row := q.db.QueryRow(ctx, insertComment,
+		arg.ID,
+		arg.Author,
+		arg.Body,
+		arg.ParentCommentID,
+		arg.Mentions,
+		arg.Ts,
+		arg.ProjectID,
+		arg.TaskID,
+	)
+	var i Comment
+	err := row.Scan(
+		&i.ProjectID,
+		&i.TaskID,
+		&i.ID,
+		&i.Author,
+		&i.Body,
+		&i.ParentCommentID,
+		&i.Mentions,
+		&i.Ts,
+	)
+	return i, err
+}
+
+const listCommentsOldest = `-- name: ListCommentsOldest :many
+SELECT t.id AS task_id, c.id, c.author, c.body, c.parent_comment_id, c.mentions, c.ts
+FROM tasks t LEFT JOIN comments c ON c.project_id = t.project_id AND c.task_id = t.id
+  AND ($1::text = '' OR c.ts > $2::bigint
+       OR (c.ts = $2::bigint AND c.id COLLATE "C" > $1::text))
+WHERE t.project_id = $3 AND t.id = $4
+ORDER BY c.ts, c.id COLLATE "C"
+LIMIT $5::bigint
+`
+
+type ListCommentsOldestParams struct {
+	AfterID   string
+	AfterTs   int64
+	ProjectID string
+	TaskID    string
+	PageLimit int64
+}
+
+type ListCommentsOldestRow struct {
+	TaskID          string
+	ID              sql.NullString
+	Author          sql.NullString
+	Body            sql.NullString
+	ParentCommentID sql.NullString
+	Mentions        sql.NullString
+	Ts              sql.NullInt64
+}
+
+// One page of the task's comments, oldest first ((ts, id) ascending, as bytes), strictly after the
+// cursor's (after_ts, after_id); after_id ” is the first page.
+func (q *Queries) ListCommentsOldest(ctx context.Context, arg ListCommentsOldestParams) ([]ListCommentsOldestRow, error) {
+	rows, err := q.db.Query(ctx, listCommentsOldest,
+		arg.AfterID,
+		arg.AfterTs,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCommentsOldestRow
+	for rows.Next() {
+		var i ListCommentsOldestRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.Author,
+			&i.Body,
+			&i.ParentCommentID,
+			&i.Mentions,
+			&i.Ts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

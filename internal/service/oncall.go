@@ -996,13 +996,14 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 
 // incidentKeeps names what deleteCascade would take with task beyond the ticket and the ingest's
 // own writes, "" for nothing: a subtask or run (its deletion set), a dependency edge of any type to
-// or from it, an attachment, a task- or shared-scope memory entry, or a context item by anyone but
-// actor (an agent-scope entry is private to its author and not read here; writing one bumps the
+// or from it, an attachment, a task- or shared-scope memory entry, or a context item, comment or
+// follow-up by anyone but actor (an agent-scope entry is private to its author and not read here; writing one bumps the
 // ticket). Autoclose deletes only a ticket that keeps none of them, whether or not the write that put
 // it there bumped the ticket's version (add_subtask, create_task with a parent and a relates edge do
 // not). A project-scope memory entry naming the ticket as provenance is not here: the cascade keeps
 // it. The context items read are the newest 50; the ingest writes one (the snapshot) to a ticket it
-// may still delete.
+// may still delete. A comment or follow-up by anyone but actor keeps it too (R2.1): those writes
+// leave the version, so the stamp cannot see them; the oldest 50 of each are read.
 func (t *txn) incidentKeeps(task store.Task, actor string) (string, error) {
 	set, err := t.deletionSet(task)
 	if err != nil {
@@ -1043,6 +1044,26 @@ func (t *txn) incidentKeeps(task store.Task, actor string) (string, error) {
 	for _, it := range items.Items {
 		if it.Author != actor {
 			return "context items", nil
+		}
+	}
+	// A comment, a follow-up or its ack leaves the version as conductor's do (R2.1 KeepVersion), so
+	// the version stamp cannot see them: anyone's row here is a touch (review B1 of #57).
+	comments, err := t.Tx.ListComments(t.ctx, task.ProjectID, task.ID, store.CommentsQuery{Limit: 50})
+	if err != nil {
+		return "", err
+	}
+	for _, c := range comments.Items {
+		if c.Author != actor {
+			return "comments", nil
+		}
+	}
+	fus, err := t.Tx.ListFollowUps(t.ctx, task.ProjectID, task.ID, store.FollowUpsQuery{Limit: 50})
+	if err != nil {
+		return "", err
+	}
+	for _, f := range fus.Items {
+		if f.Author != actor {
+			return "follow-ups", nil
 		}
 	}
 	return "", nil

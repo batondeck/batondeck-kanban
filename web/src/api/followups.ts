@@ -1,4 +1,4 @@
-// Owner: R2.1 fills these bodies; R1.12 copied the signatures from api.ts.
+// The follow-up routes (internal/api/followups.go, R2.1); R1.12 copied the signatures from api.ts.
 import type { FollowUp, Task } from '../types.js';
 import { req, P } from './http.js';
 

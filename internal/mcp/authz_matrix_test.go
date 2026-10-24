@@ -65,6 +65,15 @@ var expectedPosture = map[string]pinnedPosture{
 	"remove_dependency": {tier: domain.TierMaster, tenantScoped: true},
 	"add_subtask":       {tier: domain.TierMaster, tenantScoped: true},
 	"list_subtasks":     {tier: domain.TierRead, tenantScoped: true},
+	// The artifact, comment and follow-up tools (R2.1): conductor's requireWriter, but add_follow_up's
+	// requireMaster; the two lists are reads.
+	"add_artifact":     {tier: domain.TierWrite, tenantScoped: true},
+	"retract_artifact": {tier: domain.TierWrite, tenantScoped: true},
+	"add_comment":      {tier: domain.TierWrite, tenantScoped: true},
+	"list_comments":    {tier: domain.TierRead, tenantScoped: true},
+	"add_follow_up":    {tier: domain.TierMaster, tenantScoped: true},
+	"ack_follow_up":    {tier: domain.TierWrite, tenantScoped: true},
+	"list_follow_ups":  {tier: domain.TierRead, tenantScoped: true},
 	// The chronicle writes are conductor's requireWriter: tier write, and governed by a grant.
 	"create_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},

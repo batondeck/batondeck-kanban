@@ -489,7 +489,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID, taskID string, expect
 		}
 		delete(st.tasks, [2]string{projectID, taskID})
 		// The rows the schema cascades from the task that this store holds: its events, context
-		// items, summary, edges and attachments. Memory is not one of them (migration 0003): its task scopes are
+		// items, artifacts, comments, follow-ups, summary, edges and attachments. Memory is not one of them (migration 0003): its task scopes are
 		// the service's cascade (DeleteMemoryByTask), and a project entry keeps the task as provenance.
 		for k, e := range st.events {
 			if k[0] == projectID && e.TaskID != nil && *e.TaskID == taskID {
@@ -497,6 +497,9 @@ func (s *Store) DeleteTask(ctx context.Context, projectID, taskID string, expect
 			}
 		}
 		maps.DeleteFunc(st.contextItems, func(k [3]string, _ store.ContextItem) bool { return k[0] == projectID && k[1] == taskID })
+		maps.DeleteFunc(st.artifacts, func(k [3]string, _ store.Artifact) bool { return k[0] == projectID && k[1] == taskID })
+		maps.DeleteFunc(st.comments, func(k [3]string, _ store.Comment) bool { return k[0] == projectID && k[1] == taskID })
+		maps.DeleteFunc(st.followUps, func(k [3]string, _ store.FollowUp) bool { return k[0] == projectID && k[1] == taskID })
 		delete(st.summaries, [2]string{projectID, taskID})
 		maps.DeleteFunc(st.edges, func(k [2]string, e store.DependencyEdge) bool {
 			return k[0] == projectID && (e.FromTaskID == taskID || e.ToTaskID == taskID)

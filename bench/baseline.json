@@ -19,28 +19,28 @@
     {
       "engine": "sqlite",
       "name": "claim race p50",
-      "value": 22.175,
+      "value": 21.454,
       "unit": "ms",
       "gate": "p20"
     },
     {
       "engine": "sqlite",
       "name": "claim race p95",
-      "value": 33.917,
+      "value": 32.357,
       "unit": "ms",
       "gate": "p20"
     },
     {
       "engine": "sqlite",
       "name": "claim race max",
-      "value": 34.844,
+      "value": 33.441,
       "unit": "ms",
       "gate": ""
     },
     {
       "engine": "sqlite",
       "name": "claim race wall",
-      "value": 35.096,
+      "value": 33.867,
       "unit": "ms",
       "gate": ""
     },
@@ -82,28 +82,28 @@
     {
       "engine": "sqlite",
       "name": "get_task: snapshot cached",
-      "value": 2,
-      "unit": "",
-      "gate": "exact"
-    },
-    {
-      "engine": "sqlite",
-      "name": "get_task: snapshot dropped",
-      "value": 2,
-      "unit": "",
-      "gate": "exact"
-    },
-    {
-      "engine": "sqlite",
-      "name": "get_task: fresh core",
       "value": 3,
       "unit": "",
       "gate": "exact"
     },
     {
       "engine": "sqlite",
+      "name": "get_task: snapshot dropped",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "get_task: fresh core",
+      "value": 4,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
       "name": "get_task: pin",
-      "value": 2,
+      "value": 3,
       "unit": "",
       "gate": ""
     },
@@ -131,6 +131,34 @@
     {
       "engine": "sqlite",
       "name": "list_tasks: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks missingArtifacts: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks missingArtifacts: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks missingArtifacts: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "sqlite",
+      "name": "list_tasks missingArtifacts: pin",
       "value": 2,
       "unit": "",
       "gate": ""
@@ -257,28 +285,28 @@
     {
       "engine": "postgres",
       "name": "claim race p50",
-      "value": 51.58,
+      "value": 50.163,
       "unit": "ms",
       "gate": "p20"
     },
     {
       "engine": "postgres",
       "name": "claim race p95",
-      "value": 61.351,
+      "value": 60.274,
       "unit": "ms",
       "gate": "p20"
     },
     {
       "engine": "postgres",
       "name": "claim race max",
-      "value": 62.028,
+      "value": 61.329,
       "unit": "ms",
       "gate": ""
     },
     {
       "engine": "postgres",
       "name": "claim race wall",
-      "value": 62.42,
+      "value": 61.569,
       "unit": "ms",
       "gate": ""
     },
@@ -320,28 +348,28 @@
     {
       "engine": "postgres",
       "name": "get_task: snapshot cached",
-      "value": 2,
-      "unit": "",
-      "gate": "exact"
-    },
-    {
-      "engine": "postgres",
-      "name": "get_task: snapshot dropped",
-      "value": 2,
-      "unit": "",
-      "gate": "exact"
-    },
-    {
-      "engine": "postgres",
-      "name": "get_task: fresh core",
       "value": 3,
       "unit": "",
       "gate": "exact"
     },
     {
       "engine": "postgres",
+      "name": "get_task: snapshot dropped",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "get_task: fresh core",
+      "value": 4,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
       "name": "get_task: pin",
-      "value": 2,
+      "value": 3,
       "unit": "",
       "gate": ""
     },
@@ -369,6 +397,34 @@
     {
       "engine": "postgres",
       "name": "list_tasks: pin",
+      "value": 2,
+      "unit": "",
+      "gate": ""
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks missingArtifacts: snapshot cached",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks missingArtifacts: snapshot dropped",
+      "value": 2,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks missingArtifacts: fresh core",
+      "value": 3,
+      "unit": "",
+      "gate": "exact"
+    },
+    {
+      "engine": "postgres",
+      "name": "list_tasks missingArtifacts: pin",
       "value": 2,
       "unit": "",
       "gate": ""

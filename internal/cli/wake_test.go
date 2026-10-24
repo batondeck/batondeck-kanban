@@ -847,8 +847,8 @@ func TestDirectoryHandoffToSelfRingsNobody(t *testing.T) {
 }
 
 // Review A41-3 (tested): each master-silent extra rings no master. A worker claims a task, then
-// heartbeats, adds a context item, sets the summary, writes memory and attaches a file: the
-// master hears nothing; the worker's move rings it (the positive control).
+// heartbeats, adds a context item, sets the summary, writes memory, attaches a file and comments
+// (R2.1, ADR-0004 "comments ring nobody"): the master hears nothing; the worker's move rings it (the positive control).
 func TestDirectoryMasterSilentTools(t *testing.T) {
 	s := startDirectory(t, nil)
 	w, m := s.client(t, "s-worker", ""), s.client(t, "s-master", "")
@@ -890,6 +890,10 @@ func TestDirectoryMasterSilentTools(t *testing.T) {
 		}},
 		{"attach_file", func() error {
 			_, err := s.a.core.Media().AttachFile(ctx, al, service.AttachFileReq{ProjectID: s.project, TaskID: task.ID, FileName: "a.txt", Kind: "file", MimeType: "text/plain", Bytes: 3})
+			return err
+		}},
+		{"add_comment", func() error {
+			_, err := s.a.core.Comments().AddComment(ctx, al, service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "a comment"})
 			return err
 		}},
 	}

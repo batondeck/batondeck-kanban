@@ -7,9 +7,11 @@ package pgdb
 
 import (
 	"context"
+	"database/sql"
 )
 
 const getArtifact = `-- name: GetArtifact :one
+
 SELECT project_id, task_id, id, kind, url, ref, repo, title, added_by, added_by_agent, ts, retracted_by, retracted_by_agent, retracted_at, retracted_reason FROM artifacts WHERE project_id = $1 AND task_id = $2 AND id = $3
 `
 
@@ -19,8 +21,219 @@ type GetArtifactParams struct {
 	ID        string
 }
 
+// The artifact area. Every read of a task's artifacts starts FROM the task, so one statement
+// answers both "no such task" (no row) and "no artifacts" (one row whose artifact columns are NULL).
+// Ids order COLLATE "C", as bytes, as SQLite's BINARY does.
+// One row by its key.
 func (q *Queries) GetArtifact(ctx context.Context, arg GetArtifactParams) (Artifact, error) {
 	row := q.db.QueryRow(ctx, getArtifact, arg.ProjectID, arg.TaskID, arg.ID)
+	var i Artifact
+	err := row.Scan(
+		&i.ProjectID,
+		&i.TaskID,
+		&i.ID,
+		&i.Kind,
+		&i.Url,
+		&i.Ref,
+		&i.Repo,
+		&i.Title,
+		&i.AddedBy,
+		&i.AddedByAgent,
+		&i.Ts,
+		&i.RetractedBy,
+		&i.RetractedByAgent,
+		&i.RetractedAt,
+		&i.RetractedReason,
+	)
+	return i, err
+}
+
+const insertArtifact = `-- name: InsertArtifact :one
+INSERT INTO artifacts (project_id, task_id, id, kind, url, ref, repo, title, added_by, added_by_agent, ts)
+SELECT t.project_id, t.id, $1::text, $2::text, $3::text,
+  $4::text, $5::text, $6::text,
+  $7::text, $8::text, $9::bigint
+FROM tasks t WHERE t.project_id = $10 AND t.id = $11
+RETURNING project_id, task_id, id, kind, url, ref, repo, title, added_by, added_by_agent, ts, retracted_by, retracted_by_agent, retracted_at, retracted_reason
+`
+
+type InsertArtifactParams struct {
+	ID           string
+	Kind         string
+	Url          sql.NullString
+	Ref          sql.NullString
+	Repo         sql.NullString
+	Title        sql.NullString
+	AddedBy      string
+	AddedByAgent sql.NullString
+	Ts           int64
+	ProjectID    string
+	TaskID       string
+}
+
+// An artifact on the task, in one statement: no row is a missing task.
+func (q *Queries) InsertArtifact(ctx context.Context, arg InsertArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, insertArtifact,
+		arg.ID,
+		arg.Kind,
+		arg.Url,
+		arg.Ref,
+		arg.Repo,
+		arg.Title,
+		arg.AddedBy,
+		arg.AddedByAgent,
+		arg.Ts,
+		arg.ProjectID,
+		arg.TaskID,
+	)
+	var i Artifact
+	err := row.Scan(
+		&i.ProjectID,
+		&i.TaskID,
+		&i.ID,
+		&i.Kind,
+		&i.Url,
+		&i.Ref,
+		&i.Repo,
+		&i.Title,
+		&i.AddedBy,
+		&i.AddedByAgent,
+		&i.Ts,
+		&i.RetractedBy,
+		&i.RetractedByAgent,
+		&i.RetractedAt,
+		&i.RetractedReason,
+	)
+	return i, err
+}
+
+const listArtifacts = `-- name: ListArtifacts :many
+SELECT t.id AS task_id, a.id, a.kind, a.url, a.ref, a.repo, a.title, a.added_by, a.added_by_agent, a.ts,
+  a.retracted_by, a.retracted_by_agent, a.retracted_at, a.retracted_reason
+FROM tasks t LEFT JOIN artifacts a ON a.project_id = t.project_id AND a.task_id = t.id
+WHERE t.project_id = $1 AND t.id = $2
+ORDER BY a.ts, a.id COLLATE "C"
+LIMIT 200
+`
+
+type ListArtifactsParams struct {
+	ProjectID string
+	TaskID    string
+}
+
+type ListArtifactsRow struct {
+	TaskID           string
+	ID               sql.NullString
+	Kind             sql.NullString
+	Url              sql.NullString
+	Ref              sql.NullString
+	Repo             sql.NullString
+	Title            sql.NullString
+	AddedBy          sql.NullString
+	AddedByAgent     sql.NullString
+	Ts               sql.NullInt64
+	RetractedBy      sql.NullString
+	RetractedByAgent sql.NullString
+	RetractedAt      sql.NullInt64
+	RetractedReason  sql.NullString
+}
+
+// Every artifact of the task, tombstones included, oldest first ((ts, id), as bytes). A task holds at
+// most 50 (the service's cap); the limit is a backstop.
+func (q *Queries) ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]ListArtifactsRow, error) {
+	rows, err := q.db.Query(ctx, listArtifacts, arg.ProjectID, arg.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListArtifactsRow
+	for rows.Next() {
+		var i ListArtifactsRow
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.ID,
+			&i.Kind,
+			&i.Url,
+			&i.Ref,
+			&i.Repo,
+			&i.Title,
+			&i.AddedBy,
+			&i.AddedByAgent,
+			&i.Ts,
+			&i.RetractedBy,
+			&i.RetractedByAgent,
+			&i.RetractedAt,
+			&i.RetractedReason,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveArtifactTaskIDs = `-- name: ListLiveArtifactTaskIDs :many
+SELECT DISTINCT task_id FROM artifacts
+WHERE project_id = $1 AND retracted_at IS NULL AND task_id = ANY($2::text[])
+`
+
+type ListLiveArtifactTaskIDsParams struct {
+	ProjectID string
+	TaskIds   []string
+}
+
+// The tasks among task_ids that carry at least one live artifact (list_tasks missingArtifacts).
+func (q *Queries) ListLiveArtifactTaskIDs(ctx context.Context, arg ListLiveArtifactTaskIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listLiveArtifactTaskIDs, arg.ProjectID, arg.TaskIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var task_id string
+		if err := rows.Scan(&task_id); err != nil {
+			return nil, err
+		}
+		items = append(items, task_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const retractArtifact = `-- name: RetractArtifact :one
+UPDATE artifacts SET retracted_by = $1::text, retracted_by_agent = $2::text,
+  retracted_at = $3::bigint, retracted_reason = $4::text
+WHERE project_id = $5 AND task_id = $6 AND id = $7 AND retracted_at IS NULL
+RETURNING project_id, task_id, id, kind, url, ref, repo, title, added_by, added_by_agent, ts, retracted_by, retracted_by_agent, retracted_at, retracted_reason
+`
+
+type RetractArtifactParams struct {
+	RetractedBy      string
+	RetractedByAgent sql.NullString
+	RetractedAt      int64
+	RetractedReason  string
+	ProjectID        string
+	TaskID           string
+	ID               string
+}
+
+// The tombstone on a live artifact: no row is a missing or an already retracted one.
+func (q *Queries) RetractArtifact(ctx context.Context, arg RetractArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, retractArtifact,
+		arg.RetractedBy,
+		arg.RetractedByAgent,
+		arg.RetractedAt,
+		arg.RetractedReason,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.ID,
+	)
 	var i Artifact
 	err := row.Scan(
 		&i.ProjectID,
