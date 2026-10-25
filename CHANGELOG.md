@@ -8,6 +8,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
+  Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
+  now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every
+  tool `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint: false` from them:
+  27 reads, 13 destructive (every `delete_*` and `remove_*`, `pick_run`, `cancel_runs`,
+  `retract_artifact`, `disconnect_agent`, `grant_capabilities`, `rotate_integration_secret`).
+  `detect_anomalies` is a write: it records first sightings as events. A row without an `Effect`
+  fails `TestPostureEffect` and panics at registration, and `TestReadEffectWritesNothing` calls
+  every read on both engines and fails if the board feed or change log moves. Annotations sit
+  outside the contract's canonical form, so no delta.
 - A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
   (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
   waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board
