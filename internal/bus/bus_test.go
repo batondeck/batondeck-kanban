@@ -242,7 +242,7 @@ func TestAWakeRightAfterAWokenReadIsReadAtOnce(t *testing.T) {
 				took := time.Since(began)
 				worst = max(worst, took)
 				if took > time.Second {
-					t.Fatalf("write %d of 5, %v after the last read, arrived after %v: held for the %v poll", i+1, took, took, 5*time.Second)
+					t.Fatalf("write %d of 5 arrived after %v: its wake was held for the %v poll", i+1, took, 5*time.Second)
 				}
 			}
 			t.Logf("%s: 5 back-to-back writes each arrived within %v (poll 5s, WakeGap %v)", o.name, worst.Round(time.Millisecond), WakeGap)
