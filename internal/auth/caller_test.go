@@ -67,7 +67,7 @@ func TestWorkspaceAdminFlagReachesTheCaller(t *testing.T) {
 		if err != nil || got.WorkspaceAdmin != c.want || got.Identity != c.id {
 			t.Fatalf("%s by token: %+v %v, want admin %v", c.login, got, err, c.want)
 		}
-		secret, _, err := f.svc.Login(ctx, c.login, "pw")
+		secret, _, err := f.svc.Login(ctx, "192.0.2.1", c.login, "pw")
 		if err != nil {
 			t.Fatal(err)
 		}
