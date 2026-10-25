@@ -42,7 +42,7 @@ func TestSecurityHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := compose(st, "x", public, logger, keys, media)
+	a, err := compose(st, "x", public, logger, keys, media, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}
