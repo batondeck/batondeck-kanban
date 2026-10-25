@@ -8,6 +8,12 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- A commit wake reads the change log at once (P-193). The bus read at most once per 250 ms poll,
+  so a wake landing within a poll of the last read waited for the next tick: an `/api/stream` board
+  frame arrived 239-344 ms after a write that followed another. Every wake now reads at once and the
+  wakes of commits made during a read coalesce into one more read, so reads stay at most one per
+  wake and an idle tail still issues none. The join's stream test asserts 200 ms on five
+  back-to-back moves as well as the quiet one, at serve's real poll, on SQLite and Postgres.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
