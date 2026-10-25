@@ -5,7 +5,7 @@
  * `claude mcp add --help` (2.1.308), `codex mcp add --help` (0.145.0), `gemini mcp add --help`
  * (0.65.0), and cursor-agent 2026.04.17, which resolves `${NAME}` in `headers` (not the docs' `${env:NAME}`).
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import * as sessionApi from './api/session.js';
@@ -22,7 +22,7 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
       blocks: [
         {
           label: 'MCP server',
-          text: `claude mcp add --scope user --transport http batondeck-kanban ${mcpUrl} \\\n  --header "Authorization: Bearer $BATONDECK_TOKEN"`,
+          text: `claude mcp add --scope user --transport http batondeck-kanban '${mcpUrl}' \\\n  --header "Authorization: Bearer $BATONDECK_TOKEN"`,
         },
         {
           label: 'Or the plugin (MCP server, worker skill and the device wake)',
@@ -32,14 +32,14 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
       note: "The plugin's .mcp.json reads http://localhost:8080/mcp and its wake needs a unix:// listen entry: plugin/README.md in your checkout has the setup.",
     },
     'Codex CLI': {
-      blocks: [{ label: 'Terminal', text: `codex mcp add batondeck-kanban --url ${mcpUrl} \\\n  --bearer-token-env-var BATONDECK_TOKEN` }],
+      blocks: [{ label: 'Terminal', text: `codex mcp add batondeck-kanban --url '${mcpUrl}' \\\n  --bearer-token-env-var BATONDECK_TOKEN` }],
       note: 'Writes [mcp_servers.batondeck-kanban] to ~/.codex/config.toml; Codex reads BATONDECK_TOKEN at each launch.',
     },
     'Gemini CLI': {
       blocks: [
         {
           label: 'Terminal',
-          text: `gemini mcp add --scope user --transport http batondeck-kanban ${mcpUrl} \\\n  -H "Authorization: Bearer $BATONDECK_TOKEN"`,
+          text: `gemini mcp add --scope user --transport http batondeck-kanban '${mcpUrl}' \\\n  -H "Authorization: Bearer $BATONDECK_TOKEN"`,
         },
       ],
       note: 'Writes ~/.gemini/settings.json; your shell fills in the token when you run it.',
@@ -98,13 +98,27 @@ export function ConnectMcp({ onClose }: { onClose: () => void }) {
   const mcpUrl = `${window.location.origin}/mcp`;
   const cur = snippets(mcpUrl)[tab];
   const cfg = useQuery({ queryKey: ['publicConfig'], queryFn: () => sessionApi.publicConfig(), staleTime: 60000 });
+  // OncallSetup's convention: focus the dialog on open, Escape closes. There is no focus trap in the
+  // app to reuse. Mount-only, through a ref: callers pass a fresh onClose each render.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close.current(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
     <div className="drawer-overlay" style={{ justifyContent: 'center', alignItems: 'center' }} onClick={onClose}>
       <div
         className="help-card"
         role="dialog"
+        aria-modal="true"
         aria-label="Connect an MCP client"
+        tabIndex={-1}
+        ref={dialogRef}
         style={{ width: 640, maxWidth: '94vw' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -120,10 +134,12 @@ export function ConnectMcp({ onClose }: { onClose: () => void }) {
           Gemini save the token into their config when you run it; Codex and Cursor read the variable each launch.
         </p>
 
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+        <div role="tablist" aria-label="MCP client" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
           {TABS.map((t) => (
             <button
               key={t}
+              role="tab"
+              aria-selected={t === tab}
               className={`btn ${t === tab ? '' : 'secondary'}`}
               style={{ fontSize: 12, padding: '5px 10px' }}
               onClick={() => setTab(t)}
@@ -133,7 +149,7 @@ export function ConnectMcp({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div role="tabpanel" aria-label={tab} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {cur.blocks.map((b) => (
             <CopyBlock key={b.label} label={b.label} text={b.text} />
           ))}
