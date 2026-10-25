@@ -727,7 +727,8 @@ func TestJoinDoorbellRows(t *testing.T) {
 }
 
 // TestJoinStreamFrameAfterAnMCPMove: an /api/stream subscriber of the board, signed in through POST
-// /api/login on the same mux, gets a board frame within 200 ms of an agent's move_task over /mcp.
+// /api/login on the same mux, gets a board frame within 200 ms of an agent's move_task over /mcp
+// returning.
 func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		owner := j.user("ada")
@@ -793,27 +794,38 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 			}
 		}
 		wait("ready", 2*time.Second)
+		var ends, writes []time.Duration // per move: call start to frame, and the call's own round trip
 		move := func(to string) time.Duration {
 			t.Helper()
 			t0 := time.Now()
 			if _, e := b.move(owner, id, to); e != nil {
 				t.Fatal(e)
 			}
+			returned := time.Now()
+			writes = append(writes, returned.Sub(t0))
 			wait("board", time.Second)
-			return time.Since(t0)
+			ends = append(ends, time.Since(t0))
+			return time.Since(returned)
 		}
-		// Busy: the move follows other writes within one bus poll (250 ms), which holds its wake for
-		// the next tick (bus.go "At most one read per poll"). Measured and logged, not asserted.
-		busy := move("IN_PROGRESS")
-		wait("updated", time.Second)
-		// Quiet: no write for longer than a poll, so the commit wake reads at once.
-		// DEVIATION: the plan's 200 ms holds only here; the busy figure above is a discovery for the bus.
+		// Busy: each move follows the last write within one bus poll (250 ms), so its wake lands
+		// while the previous read is fresh; quiet: no write for longer than a poll.
+		busy := make([]time.Duration, 5)
+		for i := range busy {
+			busy[i] = move([]string{"IN_PROGRESS", "TODO"}[i%2])
+			wait("updated", time.Second)
+		}
 		time.Sleep(bus.PollInterval + 50*time.Millisecond)
-		quiet := move("TODO")
-		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before)", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy.Round(time.Millisecond))
+		quiet := move("IN_PROGRESS")
+		t.Logf("%s: board frame after an MCP move_task returned: %v quiet (no write in the last %v), %v busy (writes just before); end to end %v, the calls themselves %v", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy, ends, writes)
 		// memstore has no commit wake (store.ChangeWatcher): its bus polls, so the bound is the engines'.
-		if j.engine != servicetest.Memstore && quiet > 200*time.Millisecond {
-			t.Fatalf("the quiet board frame took %v, want <= 200ms", quiet)
+		if j.engine == servicetest.Memstore {
+			return
+		}
+		for i, d := range append(busy, quiet) {
+			// The clock is commit to frame: from move_task's return, so the write's own round trip is not counted.
+			if d > 200*time.Millisecond {
+				t.Fatalf("board frame %d of %d came %v after its move_task returned, want <= 200ms (busy %v, quiet %v; end to end %v)", i+1, len(busy)+1, d, busy, quiet, ends)
+			}
 		}
 	})
 }
