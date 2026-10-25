@@ -30,13 +30,15 @@ Supervision, each turn the doorbell starts:
 
 1. **Read the board; the doorbell says only that something changed, and on which board.**
    `next_task { projectId, boardId, includeInbox: true }`, with the doorbell's `projectId` and
-   `boardId` (each id of its `boardIds`; none → `list_boards`): the claimable task plus the `review`,
-   `blocked` and `poisoned` buckets. Then `list_notifications` for what was addressed to you.
+   `boardId` (each id of its `boardIds`; none → `list_boards`): the best claimable task that is
+   unassigned or yours (pass `assignee` to see another's) plus the `review`, `blocked` and `poisoned`
+   buckets of the whole board. Then `list_notifications` for what was addressed to you.
 2. **Act by state:**
    - REVIEW → judge the deliverable and its `artifacts` (`get_task_context`, `get_task`); re-run one of
      its proofs rather than trusting it ran. Good → `move_task { projectId, taskId, version,
      toStatus: "DONE" }`, which auto-unblocks its dependants. Not good →
-     `add_follow_up { projectId, taskId, body, reopen: true }` with concrete changes. Never approve a
+     `add_follow_up { projectId, taskId, body, reopen: true }` with concrete changes; the rework goes
+     back to TODO assigned to its completer, who is rung. Never approve a
      task you completed yourself.
    - DONE → check what the auto-unblock opened; assign or re-prioritise the new frontier.
    - BLOCKED → read the reason; resolve it (answer as a follow-up, `remove_dependency`, reassign, or do
