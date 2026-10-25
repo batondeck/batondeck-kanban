@@ -31,8 +31,8 @@ const (
 	maxPayloadCapKb     = 512
 	maxIntegrationList  = 200
 	maxDeliveriesPage   = 200
-	// DeliveryRetention is how long a delivery row is kept; RawBodyRetention a refused delivery's
-	// raw body (plan §Clarifications 5). R2.9 sweeps both.
+	// DeliveryRetention is how long a delivery row is kept by default; RawBodyRetention a refused
+	// delivery's raw body (plan §Clarifications 5). Options overrides both; R2.9 sweeps both.
 	DeliveryRetention = 30 * 24 * time.Hour
 	RawBodyRetention  = 7 * 24 * time.Hour
 )
@@ -661,7 +661,7 @@ func (s oncallSvc) ListDeliveries(ctx context.Context, caller domain.Caller, req
 var unsafeFilename = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
 // ReadDeliveryRaw answers NOT_FOUND for a delivery with no kept body (never kept, or swept after
-// RawBodyRetention): the task's AC3, where conductor answers payloadBase64 null.
+// its raw-body window): the task's AC3, where conductor answers payloadBase64 null.
 func (s oncallSvc) ReadDeliveryRaw(ctx context.Context, caller domain.Caller, req ReadDeliveryRawReq) (ReadDeliveryRawResp, error) {
 	if _, err := s.c.authorize(ctx, caller, req.ProjectID, "read_delivery_raw", domain.GrantSubject{}, false); err != nil {
 		return ReadDeliveryRawResp{}, err
@@ -923,7 +923,7 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			}
 			if correlates {
 				state = store.AlertState{ProjectID: integration.ProjectID, IntegrationID: integration.ID, Fingerprint: ev.Fingerprint, TaskID: task.ID,
-					Occurrences: 1, FirstAt: ts, LastAt: ts, AlertStatus: oncall.StatusFiring, ExpiresAt: t.Now.Add(DeliveryRetention).UnixMilli()}
+					Occurrences: 1, FirstAt: ts, LastAt: ts, AlertStatus: oncall.StatusFiring, ExpiresAt: t.Now.Add(c.deliveryTTL).UnixMilli()}
 				if err := t.Tx.PutAlertState(ctx, state); err != nil {
 					return Ingested{}, err
 				}
@@ -934,7 +934,7 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			if err != nil {
 				return Ingested{}, err
 			}
-			state.LastAt, state.AlertStatus, state.ExpiresAt = ts, oncall.StatusFiring, t.Now.Add(DeliveryRetention).UnixMilli()
+			state.LastAt, state.AlertStatus, state.ExpiresAt = ts, oncall.StatusFiring, t.Now.Add(c.deliveryTTL).UnixMilli()
 			if err := t.Tx.PutAlertState(ctx, state); err != nil {
 				return Ingested{}, err
 			}
@@ -972,7 +972,7 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		}
 		if _, _, err := t.Tx.InsertDelivery(ctx, store.Delivery{
 			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: ts, Kind: kind,
-			Result: out.Result, TaskID: out.TaskID, NormalizedEvent: event, ExpiresAt: t.Now.Add(DeliveryRetention).UnixMilli(),
+			Result: out.Result, TaskID: out.TaskID, NormalizedEvent: event, ExpiresAt: t.Now.Add(c.deliveryTTL).UnixMilli(),
 		}); err != nil {
 			return Ingested{}, err
 		}

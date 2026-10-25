@@ -67,6 +67,10 @@ type Options struct {
 	BlobGC BlobGC
 	// Media is the blob store attach_file and list_attachments sign URLs into (media.go).
 	Media MediaOptions
+	// DeliveryRetention and RawBodyRetention are the windows stamped on an on-call delivery (and its
+	// alert state) and on a refused delivery's raw body; zero is the package default (30 and 7 days).
+	DeliveryRetention time.Duration
+	RawBodyRetention  time.Duration
 	// JWKSFetch is how a jwt-mode integration's key set is fetched (POST /hooks); nil is
 	// auth.SafeFetch, the SSRF-guarded https GET. A test stubs it.
 	JWKSFetch auth.Fetch
@@ -102,6 +106,8 @@ type Core struct {
 	jwt *auth.Verifier
 	// toolCallRetentionDays is the window the operations summary's retention row names.
 	toolCallRetentionDays int64
+	// deliveryTTL and rawBodyTTL are Options.DeliveryRetention and RawBodyRetention.
+	deliveryTTL, rawBodyTTL time.Duration
 }
 
 // SetDeviceSessions hands the core the device session directory, which internal/wake builds after
@@ -145,6 +151,8 @@ func New(st store.Store, o Options) *Core {
 		media:   o.Media,
 
 		toolCallRetentionDays: orDefault(o.ToolCallRetentionDays, DefaultToolCallRetentionDays),
+		deliveryTTL:           orDefault(o.DeliveryRetention, DeliveryRetention),
+		rawBodyTTL:            orDefault(o.RawBodyRetention, RawBodyRetention),
 	}
 	c.media.MaxBytes = orDefault(c.media.MaxBytes, core.DefaultBlobMaxBytes)
 	switch {

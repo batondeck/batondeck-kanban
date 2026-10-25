@@ -109,7 +109,7 @@ func agentSessions(t *testing.T, newStore Factory) {
 				_, err := s.UpsertAgentSession(ctx, in)
 				noErr(t, err)
 			}
-			n, err := s.DeleteIdleAgentSessions(ctx, 300)
+			n, err := s.DeleteIdleAgentSessions(ctx, 300, 10)
 			noErr(t, err)
 			if n != 1 {
 				t.Fatalf("deleted %d idle before 300, want 1", n)
@@ -121,6 +121,28 @@ func agentSessions(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("DeleteIdleIsBoundedLongestIdleFirst", func(t *testing.T) {
+			s := migrated(t, newStore)
+			for _, in := range []store.AgentSessionStart{start("alice", "a3", 300), start("alice", "a1", 100), start("bob", "a2", 200), start("alice", "a4", 900)} {
+				_, err := s.UpsertAgentSession(ctx, in)
+				noErr(t, err)
+			}
+			n, err := s.DeleteIdleAgentSessions(ctx, 900, 2)
+			noErr(t, err)
+			rows, err := s.ListAgentSessions(ctx, "", 0)
+			noErr(t, err)
+			var left []string
+			for _, r := range rows {
+				left = append(left, r.AgentID)
+			}
+			slices.Sort(left)
+			if n != 2 || !slices.Equal(left, []string{"a3", "a4"}) {
+				t.Fatalf("a delete limited to 2 deleted %d and left %v, want 2 and [a3 a4]", n, left)
+			}
+			_, err = s.DeleteIdleAgentSessions(ctx, 900, 0)
+			wantErr(t, err, domain.CodeValidation, "")
+		})
+
 		t.Run("ATouchedSessionOutlivesAnIdleSweepOfTwoSeconds", func(t *testing.T) {
 			s := migrated(t, newStore)
 			for _, agent := range []string{"idle", "busy"} {
@@ -128,7 +150,7 @@ func agentSessions(t *testing.T, newStore Factory) {
 				noErr(t, err)
 			}
 			noErr(t, s.TouchAgentSession(ctx, store.AgentSessionTouch{IdentityID: "alice", AgentID: "busy", AgentName: "busy-name", Kind: "agent", Tool: "claim_next", At: 5_000}))
-			n, err := s.DeleteIdleAgentSessions(ctx, 5_000-2_000)
+			n, err := s.DeleteIdleAgentSessions(ctx, 5_000-2_000, 10)
 			noErr(t, err)
 			rows, err := s.ListAgentSessions(ctx, "alice", 0)
 			noErr(t, err)
