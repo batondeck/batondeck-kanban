@@ -37,3 +37,9 @@ export async function session(): Promise<{ identity: string; csrfToken: string |
   const s = await req<{ identity: string; csrfToken: string | null; isAdmin?: boolean; permissions?: string[]; subscriptionsEnabled?: boolean; uiSettings?: Record<string, number | boolean>; tenantId?: string | null; tenantName?: string | null; pullBase?: string | null }>('GET', '/api/session');
   return { ...s, isAdmin: s.isAdmin ?? false, subscriptionsEnabled: s.subscriptionsEnabled ?? false, uiSettings: s.uiSettings ?? {} };
 }
+
+/** The unauthenticated server facts: whether the OAuth server runs, and whether no account exists yet. */
+export async function publicConfig(): Promise<{ oauth: boolean; noUsers: boolean }> {
+  const c = await req<{ oauth?: boolean; noUsers?: boolean }>('GET', '/api/public-config');
+  return { oauth: c.oauth ?? false, noUsers: c.noUsers ?? false };
+}

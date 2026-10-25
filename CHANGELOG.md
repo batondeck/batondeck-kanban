@@ -47,6 +47,18 @@ Notable changes to batondeck-kanban. The format follows
   assigns the task to `review.completedBy`, who is rung and gets the follow-up; with no completer on
   record it clears an assignee that is the reopener or the reviewer (a broadcast) and keeps any
   other. The master command says so, and that `next_task`'s head is unassigned or your own work.
+- The newcomer web path points at this server (P-287). **Connect MCP** builds every snippet from the
+  page's origin + `/mcp` with `Authorization: Bearer $BATONDECK_TOKEN`, links "create a token" to
+  Settings → CLI tokens, has one tab each for Claude Code, Codex CLI, Gemini CLI and Cursor (each in
+  the shape its own `mcp add --help` or docs give), says only Claude Code with the plugin gets the
+  device wake, and shows the OAuth connector path only when the OAuth server runs. The hosted URL,
+  the conductor marketplace, `mcp-remote`, the dead `/docs` link and the agent-name field (this server
+  reads no `X-BatonDeck-Agent` header) are gone. **Sign-in** says agents use API tokens, drops the
+  "What is BatonDeck?" link that looped to itself, and on a server with no account shows
+  `batondeck-kanban user add --admin <login>`. **Projects**, empty, lists three next steps (create a
+  project, create a token, connect an agent). **Settings** leads with Columns, Members and CLI tokens.
+  `GET /api/public-config` gains `oauth` (the OAuth server runs) and `noUsers` (no account exists).
+
 - A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
   (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
   waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board
@@ -58,6 +70,7 @@ Notable changes to batondeck-kanban. The format follows
   that coalesce's end, so frames stay at most one per 100 ms. The join's stream test bounds five
   back-to-back moves and the quiet one at 200 ms from `move_task`'s return (commit to frame), at
   serve's real poll, on SQLite and Postgres.
+
 - `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
