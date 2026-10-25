@@ -9,8 +9,13 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
 )
 
-// initializeAs posts initialize to url (a loopback listener) with the Host header host.
+// initializeAs posts initialize to url (a loopback listener) with the Host header host, as tokenAda.
 func initializeAs(t *testing.T, url, host string) *http.Response {
+	return initializeWith(t, url, host, tokenAda)
+}
+
+// initializeWith is initializeAs with bearer; "" sends no Authorization header.
+func initializeWith(t *testing.T, url, host, bearer string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(initBody))
 	if err != nil {
@@ -19,7 +24,9 @@ func initializeAs(t *testing.T, url, host string) *http.Response {
 	req.Host = host
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+tokenAda)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -58,5 +65,17 @@ func TestForeignHostRefusedOnLoopback(t *testing.T) {
 			t.Errorf("public_url %q, Host %s: status %d, type %q, body %+v (%v); want 403 application/json {FORBIDDEN, naming the host}",
 				tc.publicURL, tc.host, resp.StatusCode, resp.Header.Get("Content-Type"), body, err)
 		}
+	}
+}
+
+// TestForeignHostRefusedBeforeTheBearer: the host check sits in front of the bearer, so a foreign
+// Host with no bearer is 403, never the 401 that would send a rebinding page into the OAuth flow.
+func TestForeignHostRefusedBeforeTheBearer(t *testing.T) {
+	h := bootHarness(t, servicefake.New().Services(), resolver(), func(o *Options) { o.PublicURL = "https://kanban.example.com" })
+	if resp := initializeWith(t, h.url, "evil.example", ""); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Host evil.example, no bearer: status %d; want 403 (the host check runs before the bearer)", resp.StatusCode)
+	}
+	if resp := initializeWith(t, h.url, "kanban.example.com", ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Host kanban.example.com, no bearer: status %d; want 401", resp.StatusCode)
 	}
 }
