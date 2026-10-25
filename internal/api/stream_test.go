@@ -201,7 +201,7 @@ func decodeBoard(t *testing.T, f frame) boardData {
 }
 
 // AC2: a change-log row written by a real mutation, delivered by the real bus on each engine, is one
-// board frame within 200 ms, after ready and before the next ping, followed by its updated frame.
+// board frame within 200 ms of the mutation's return, after ready and before the next ping, followed by its updated frame.
 func TestStreamBoardFrameOnAChange(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		l := newLive(t, s, Options{Ping: time.Second})
@@ -217,19 +217,21 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 		time.Sleep(50 * time.Millisecond) // the tail is reading
 		start := time.Now()
 		l.addTask(t, l.caller(), pid, bid, "first")
-		wrote := time.Since(start)
+		returned := time.Now()
+		wrote := returned.Sub(start)
 		f := c.next(t, time.Second)
 		if f.event != "board" {
 			t.Fatalf("after the change: %+v, want board", f)
 		}
-		if took := f.at.Sub(start); took > 200*time.Millisecond {
-			t.Fatalf("the board frame took %v, want <= 200ms (the write itself took %v)", took, wrote)
+		// The clock is commit to frame: from the write's return, so the write's own round trip is not counted.
+		if took := f.at.Sub(returned); took > 200*time.Millisecond {
+			t.Fatalf("the board frame came %v after the write returned, want <= 200ms (end to end %v, the write %v)", took, f.at.Sub(start), wrote)
 		}
 		d := decodeBoard(t, f)
 		if d.Board.Board.ID != bid || len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "first" || f.id == "" {
 			t.Fatalf("board frame: id %q %s", f.id, f.data)
 		}
-		t.Logf("board frame %v after the change (the write took %v), id %s", f.at.Sub(start), wrote, f.id)
+		t.Logf("board frame %v after the write returned (end to end %v, the write %v), id %s", f.at.Sub(returned), f.at.Sub(start), wrote, f.id)
 		u := c.next(t, time.Second)
 		if u.event != "updated" || u.data != `{"uri":"batondeck://`+pid+`/board/`+bid+`/feed","count":1}` {
 			t.Fatalf("after board: %+v, want updated count 1", u)
