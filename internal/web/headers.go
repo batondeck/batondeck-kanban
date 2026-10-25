@@ -5,13 +5,14 @@ import "net/http"
 // AppCSP is the policy for every page the app serves. Each source is one the built SPA loads:
 // script-src hashes web/dist/index.html's theme bootstrap (headers_test.go recomputes it); style-src
 // is 'unsafe-inline' because React style props and mermaid's SVG carry style attributes, which no
-// hash can allow; fonts come from Google Fonts; img-src admits www.google.com for the link favicons
-// (AppLink.tsx) and nothing else external, so a chronicle page cannot make readers fetch images.
+// hash can allow; fonts come from Google Fonts; img-src admits the link favicons (AppLink.tsx asks
+// www.google.com, which redirects to t*.gstatic.com, and CSP checks the redirect target) and nothing
+// else external, so a chronicle page cannot make readers fetch other images.
 const AppCSP = "default-src 'self'; " +
 	"script-src 'self' 'sha256-psZYi3WR4pUW/2cO7EvzIngOWf45jXsrc7t7Rz8UMvs='; " +
 	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
 	"font-src 'self' https://fonts.gstatic.com; " +
-	"img-src 'self' data: https://www.google.com; " +
+	"img-src 'self' data: https://www.google.com https://*.gstatic.com; " +
 	"connect-src 'self'; " +
 	"object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 
