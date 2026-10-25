@@ -25,6 +25,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/wake"
+	"github.com/batondeck/batondeck-kanban/internal/web"
 )
 
 // app is what serve composes over one store: the MCP server, the OAuth server when public_url is
@@ -120,11 +121,11 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 			mux.Handle("DELETE "+internalPrefix+"wake-session/{pid}", wake.UnregisterHandler(dir, resolver, logger))
 			// The webhook ingest: outside every bearer, session and CSRF check (its signature is the
 			// credential), over TCP as well as the socket, since telemetry senders are remote.
-			mux.Handle("POST /hooks/{integrationId}", api.HookRoutes{Hooks: sc, Logger: logger}.Handler())
+			mux.Handle("POST /hooks/{integrationId}", web.WithoutCSP(api.HookRoutes{Hooks: sc, Logger: logger}.Handler()))
 			if media.Files != nil && media.Signer != nil {
 				blobs := &api.BlobRoutes{Signer: media.Signer, Files: media.Files, MaxBytes: media.MaxBytes, Uploads: sc, Logger: logger}
-				mux.Handle("PUT /blobs/{id}", blobs.Upload())
-				mux.Handle("GET /blobs/{id}", blobs.Download())
+				mux.Handle("PUT /blobs/{id}", web.WithoutCSP(blobs.Upload()))
+				mux.Handle("GET /blobs/{id}", web.WithoutCSP(blobs.Download()))
 			}
 		},
 	}, nil
@@ -143,16 +144,16 @@ const internalPrefix = "/internal/"
 
 // handler is the app's routes on both networks. Over TCP every path under /internal/ is 404 whatever
 // its method, before the mux sees it, so a socket-only route answers there exactly as one that does
-// not exist (no 405, no Allow header naming its method).
+// not exist (no 405, no Allow header naming its method). Every response carries web.SecurityHeaders.
 func (a *app) handler(version string) http.Handler {
 	mux := engineHandler(version, a.engine, a.mcp.Handler(), a.mount)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return web.SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !core.ViaUnixSocket(r.Context()) && strings.HasPrefix(r.URL.Path, internalPrefix) {
 			http.NotFound(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
-	})
+	}))
 }
 
 // openKeyring is the keyring (the sealer for wake-session inbox tokens and the blob signing key's
