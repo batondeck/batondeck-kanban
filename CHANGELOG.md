@@ -23,6 +23,9 @@ Notable changes to batondeck-kanban. The format follows
   1 to 36500 days and the interval 1 to 86400 seconds; past a bound the config is refused, since a
   window that overflows `time.Duration` would put the cutoff in the future and sweep a whole table.
   Boot logs the interval and every window.
+- The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
+  reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
+  the package instead of leaning on the bound.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
