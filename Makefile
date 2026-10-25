@@ -174,8 +174,9 @@ arch:
 
 # Naming the module's real trees keeps the run to this repository's code: ./... would reach into
 # web/node_modules once the UI's packages are installed.
+# Under -race, internal/cli nears Go's 10m default on a loaded machine (P-289 shortens it).
 test:
-	go test -race ./cmd/... ./internal/...
+	go test -race -timeout 20m ./cmd/... ./internal/...
 
 # conformance judges each store engine by internal/store/conformance, one run per engine, by name.
 # The Postgres run needs BATONDECK_TEST_POSTGRES_DSN: unset, it skips and prints why; set and
