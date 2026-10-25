@@ -27,8 +27,25 @@ const (
 	EnginePostgres = "postgres"
 )
 
-// DefaultSQLitePath is the SQLite file used when database.url is unset.
-const DefaultSQLitePath = "./data/batondeck-kanban.db"
+// DefaultDBFile is the SQLite file's name in the default data dir, used when database.url is unset.
+const DefaultDBFile = "batondeck-kanban.db"
+
+// DefaultDataDir is the absolute per-user data dir every subcommand resolves alike from any working
+// directory: $XDG_DATA_HOME/batondeck-kanban when XDG_DATA_HOME is absolute, else
+// ~/.local/share/batondeck-kanban.
+func DefaultDataDir(lookup func(string) (string, bool)) (string, error) {
+	if v, ok := lookup("XDG_DATA_HOME"); ok && filepath.IsAbs(v) {
+		return filepath.Join(v, "batondeck-kanban"), nil
+	}
+	home, ok := lookup("HOME")
+	if !ok || !filepath.IsAbs(home) {
+		var err error
+		if home, err = os.UserHomeDir(); err != nil {
+			return "", fmt.Errorf("%s: no XDG_DATA_HOME or HOME for the default data dir: set BATONDECK_DATABASE_URL", RuleDatabaseURL)
+		}
+	}
+	return filepath.Join(home, ".local", "share", "batondeck-kanban"), nil
+}
 
 // Database is the `database` object of the config file.
 type Database struct {
@@ -95,6 +112,36 @@ type Config struct {
 	Retention Retention `json:"retention"`
 	// Blob is the blob store. Environment: BATONDECK_BLOB_DIR, BATONDECK_BLOB_MAX_BYTES.
 	Blob Blob `json:"blob"`
+
+	// dataDir is DefaultDataDir as Load resolved it.
+	dataDir string
+}
+
+// EnvVar is one BATONDECK_* variable the server reads, as `serve -h` and `doctor -h` list it.
+type EnvVar struct {
+	Name, Default, Doc string
+}
+
+// EnvVars is every BATONDECK_* variable read in this package, in help order; a test fails when a
+// source here reads one this list does not name.
+func EnvVars() []EnvVar {
+	r := DefaultRetention
+	days := func(n int) string { return strconv.Itoa(n) }
+	return []EnvVar{
+		{"BATONDECK_CONFIG", "unset, no file is read", "path to the JSON config file; the -config flag overrides it"},
+		{"BATONDECK_DATABASE_URL", "$XDG_DATA_HOME/batondeck-kanban/" + DefaultDBFile + ", else ~/.local/share/batondeck-kanban/" + DefaultDBFile, "a SQLite file path, or a postgres:// URL"},
+		{"BATONDECK_DATABASE_SYNCHRONOUS", "FULL", "SQLite's synchronous pragma: FULL or NORMAL"},
+		{"BATONDECK_LISTEN", "tcp://127.0.0.1:8080", "comma-separated tcp://host:port or unix:///abs/path addresses"},
+		{"BATONDECK_PUBLIC_URL", "unset, no OAuth server: API tokens only", "the externally reachable base URL, the OAuth issuer"},
+		{"BATONDECK_RETENTION_CHANGE_LOG_DAYS", days(r.ChangeLogDays), "days the change log is kept"},
+		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS", days(r.ToolCallsDays), "days tool-call records are kept"},
+		{"BATONDECK_RETENTION_DELIVERIES_DAYS", days(r.DeliveriesDays), "days an on-call delivery is kept"},
+		{"BATONDECK_RETENTION_RAW_BODIES_DAYS", days(r.RawBodiesDays), "days a refused delivery's raw body is kept"},
+		{"BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS", days(r.SweepIntervalSeconds), "seconds between retention sweeps"},
+		{"BATONDECK_BLOB_DIR", "blobs beside the SQLite file; on Postgres, blobs in the default data dir", "the attachment blob directory"},
+		{"BATONDECK_BLOB_MAX_BYTES", strconv.Itoa(DefaultBlobMaxBytes), "the largest attachment, in bytes"},
+		{MasterKeyEnv, "master.key beside the SQLite file (on Postgres, beside the config file), made on first run", "base64 32-byte master key"},
+	}
 }
 
 // Load reads path (optional, "" = no file) and environment via lookup (injectable for
@@ -176,6 +223,12 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
+	// The default data dir is an error only where it is used: no database.url, or Postgres with no blob.dir.
+	dir, err := DefaultDataDir(lookup)
+	if err != nil && (c.Database.URL == "" || (c.Engine() == EnginePostgres && c.Blob.Dir == "")) {
+		return nil, err
+	}
+	c.dataDir = dir
 	return &c, nil
 }
 
@@ -217,24 +270,23 @@ func (c *Config) Engine() string {
 	return EngineSQLite
 }
 
-// SQLitePath is the SQLite file: database.url, or DefaultSQLitePath when it is unset. It is
-// meaningful only when Engine is sqlite.
+// SQLitePath is the SQLite file: database.url, or DefaultDBFile in the default data dir when it
+// is unset. It is meaningful only when Engine is sqlite.
 func (c *Config) SQLitePath() string {
 	if c.Database.URL == "" {
-		return DefaultSQLitePath
+		return filepath.Join(c.dataDir, DefaultDBFile)
 	}
 	return c.Database.URL
 }
 
-// BlobDir is the blob directory: blob.dir, else "blobs" beside the SQLite file (on Postgres,
-// beside DefaultSQLitePath).
+// BlobDir is the blob directory: blob.dir, else "blobs" beside the SQLite file (on Postgres, in
+// the default data dir).
 func (c *Config) BlobDir() string {
 	if c.Blob.Dir != "" {
 		return c.Blob.Dir
 	}
-	db := c.SQLitePath()
 	if c.Engine() != EngineSQLite {
-		db = DefaultSQLitePath
+		return filepath.Join(c.dataDir, "blobs")
 	}
-	return filepath.Join(filepath.Dir(db), "blobs")
+	return filepath.Join(filepath.Dir(c.SQLitePath()), "blobs")
 }

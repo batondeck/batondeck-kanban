@@ -3,6 +3,7 @@ package domain
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -209,6 +210,53 @@ func TestPostureFoldedRows(t *testing.T) {
 		if _, ok := ToolPosture(gone); ok {
 			t.Errorf("%s is not ported and must not be classified", gone)
 		}
+	}
+}
+
+// Every tool has an Effect, the MCP annotations' source. The read and destructive sets are written
+// out, so a row typed wrong fails here, and the name prefixes are a second check on the table.
+func TestPostureEffect(t *testing.T) {
+	reads := []string{
+		"get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint",
+		"get_task", "get_task_context", "list_agent_sessions", "list_attachments", "list_audit_log",
+		"list_boards", "list_comments", "list_deliveries", "list_follow_ups", "list_integrations",
+		"list_notifications", "list_projects", "list_runs", "list_sprints", "list_subtasks", "list_tasks",
+		"next_task", "rank_tasks", "read_delivery_raw", "read_memory", "recall_memory", "search_tasks",
+	}
+	destructive := []string{
+		"cancel_runs", "delete_chronicle_page", "delete_integration", "delete_project", "delete_task",
+		"disconnect_agent", "grant_capabilities", "pick_run", "remove_column", "remove_dependency",
+		"remove_member", "retract_artifact", "rotate_integration_secret",
+	}
+	var gotReads, gotDestructive []string
+	for _, name := range ClassifiedTools() {
+		p, _ := ToolPosture(name)
+		switch p.Effect {
+		case EffectRead:
+			gotReads = append(gotReads, name)
+		case EffectDestructive:
+			gotDestructive = append(gotDestructive, name)
+		case EffectWrite:
+		default:
+			t.Errorf("%s: no Effect: classify it in toolPosture", name)
+		}
+		if p.Tier == TierRead && p.Effect != EffectRead {
+			t.Errorf("%s: read tier but Effect %d", name, p.Effect)
+		}
+		for _, prefix := range []string{"get_", "list_", "search_", "recall_", "read_"} {
+			if strings.HasPrefix(name, prefix) && p.Effect != EffectRead {
+				t.Errorf("%s: a %s tool must be EffectRead, is %d", name, prefix, p.Effect)
+			}
+		}
+		if strings.HasPrefix(name, "delete_") && p.Effect != EffectDestructive {
+			t.Errorf("%s: a delete_ tool must be EffectDestructive, is %d", name, p.Effect)
+		}
+	}
+	if !reflect.DeepEqual(gotReads, reads) {
+		t.Errorf("read set\n got %q\nwant %q", gotReads, reads)
+	}
+	if !reflect.DeepEqual(gotDestructive, destructive) {
+		t.Errorf("destructive set\n got %q\nwant %q", gotDestructive, destructive)
 	}
 }
 

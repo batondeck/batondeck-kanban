@@ -25,6 +25,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/wake"
+	"github.com/batondeck/batondeck-kanban/internal/web"
 )
 
 // app is what serve composes over one store: the MCP server, the OAuth server when public_url is
@@ -84,8 +85,9 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days, raw bodies %d days, agent sessions %s idle",
 		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle)
 	opts := mcp.Options{
-		Version:  version,
-		Resolver: resolver,
+		Version:   version,
+		PublicURL: publicURL,
+		Resolver:  resolver,
 		Services: service.Services{Projects: sc.Projects(), Boards: sc.Boards(), Tasks: sc.Tasks(), Lifecycle: sc.Lifecycle(), Context: sc.Context(), Media: sc.Media(), Artifacts: sc.Artifacts(), Comments: sc.Comments(), FollowUps: sc.FollowUps(), Chronicle: sc.Chronicle(), Feed: sc.Feed(), Sessions: sc.Sessions(), ToolCalls: sc.ToolCalls(), Oncall: sc.Oncall(), Runs: sc.Runs(), Sprints: sc.Sprints(),
 			Notifications: sc.Notifications(), Profiles: sc.Profiles(), Anomalies: sc.Anomalies(), Ranking: sc.Ranking(), Me: sc.Me(), Audit: sc.Audit(), Grants: sc.Grants(), Analytics: sc.Analytics()},
 		Logger:      logger,
@@ -106,7 +108,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	sc.SetAgentSessionEnder(srv)
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
-	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger}
+	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger, OAuth: as != nil}
 	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
@@ -119,11 +121,11 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 			mux.Handle("DELETE "+internalPrefix+"wake-session/{pid}", wake.UnregisterHandler(dir, resolver, logger))
 			// The webhook ingest: outside every bearer, session and CSRF check (its signature is the
 			// credential), over TCP as well as the socket, since telemetry senders are remote.
-			mux.Handle("POST /hooks/{integrationId}", api.HookRoutes{Hooks: sc, Logger: logger}.Handler())
+			mux.Handle("POST /hooks/{integrationId}", web.WithoutCSP(api.HookRoutes{Hooks: sc, Logger: logger}.Handler()))
 			if media.Files != nil && media.Signer != nil {
 				blobs := &api.BlobRoutes{Signer: media.Signer, Files: media.Files, MaxBytes: media.MaxBytes, Uploads: sc, Logger: logger}
-				mux.Handle("PUT /blobs/{id}", blobs.Upload())
-				mux.Handle("GET /blobs/{id}", blobs.Download())
+				mux.Handle("PUT /blobs/{id}", web.WithoutCSP(blobs.Upload()))
+				mux.Handle("GET /blobs/{id}", web.WithoutCSP(blobs.Download()))
 			}
 		},
 	}, nil
@@ -142,16 +144,16 @@ const internalPrefix = "/internal/"
 
 // handler is the app's routes on both networks. Over TCP every path under /internal/ is 404 whatever
 // its method, before the mux sees it, so a socket-only route answers there exactly as one that does
-// not exist (no 405, no Allow header naming its method).
+// not exist (no 405, no Allow header naming its method). Every response carries web.SecurityHeaders.
 func (a *app) handler(version string) http.Handler {
 	mux := engineHandler(version, a.engine, a.mcp.Handler(), a.mount)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return web.SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !core.ViaUnixSocket(r.Context()) && strings.HasPrefix(r.URL.Path, internalPrefix) {
 			http.NotFound(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
-	})
+	}))
 }
 
 // openKeyring is the keyring (the sealer for wake-session inbox tokens and the blob signing key's

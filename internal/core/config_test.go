@@ -23,15 +23,54 @@ func writeConfig(t *testing.T, body string) string {
 }
 
 func TestDefaults(t *testing.T) {
-	c, err := Load("", env(nil))
+	c, err := Load("", env(map[string]string{"XDG_DATA_HOME": "/xdg"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(c.Listen, []string{"tcp://127.0.0.1:8080"}) || c.Database.Synchronous != "FULL" || c.PublicURL != "" {
 		t.Fatalf("defaults: %+v", c)
 	}
-	if c.Engine() != EngineSQLite || c.SQLitePath() != DefaultSQLitePath {
+	if c.Engine() != EngineSQLite || c.SQLitePath() != "/xdg/batondeck-kanban/batondeck-kanban.db" {
 		t.Fatalf("default engine %s at %s", c.Engine(), c.SQLitePath())
+	}
+}
+
+// The default data dir: $XDG_DATA_HOME/batondeck-kanban when that is absolute, else
+// ~/.local/share/batondeck-kanban; a relative XDG_DATA_HOME is ignored, as the XDG spec says.
+func TestDefaultDataDir(t *testing.T) {
+	for _, tc := range []struct {
+		env  map[string]string
+		want string
+	}{
+		{map[string]string{"XDG_DATA_HOME": "/xdg", "HOME": "/home/a"}, "/xdg/batondeck-kanban"},
+		{map[string]string{"HOME": "/home/a"}, "/home/a/.local/share/batondeck-kanban"},
+		{map[string]string{"XDG_DATA_HOME": "rel", "HOME": "/home/a"}, "/home/a/.local/share/batondeck-kanban"},
+	} {
+		if got, err := DefaultDataDir(env(tc.env)); err != nil || got != tc.want {
+			t.Fatalf("%v: %q, %v, want %q", tc.env, got, err, tc.want)
+		}
+	}
+}
+
+// Every subcommand loads the config the same way, so two working directories must resolve the same
+// absolute database and blob dir (a CWD-relative ./data made `user add` from another directory
+// create a second database).
+func TestDefaultPathsAreTheSameFromAnyWorkingDirectory(t *testing.T) {
+	lookup := env(map[string]string{"HOME": t.TempDir()})
+	var dbs, blobs []string
+	for _, wd := range []string{t.TempDir(), t.TempDir()} {
+		t.Chdir(wd)
+		c, err := Load("", lookup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p, err := filepath.Abs(c.SQLitePath()); err != nil || p != c.SQLitePath() {
+			t.Fatalf("database %q is relative to the working directory", c.SQLitePath())
+		}
+		dbs, blobs = append(dbs, c.SQLitePath()), append(blobs, c.BlobDir())
+	}
+	if dbs[0] != dbs[1] || blobs[0] != blobs[1] {
+		t.Fatalf("two working directories, two data dirs: %q %q", dbs, blobs)
 	}
 }
 
@@ -154,21 +193,21 @@ func TestRetentionWindows(t *testing.T) {
 	}
 }
 
-// The blob store: "blobs" beside the SQLite file (beside DefaultSQLitePath on Postgres) and 50 MiB
+// The blob store: "blobs" beside the SQLite file (in the default data dir on Postgres) and 50 MiB
 // by default, the file's object over them, the environment over the file, and a size below one byte
 // (or not a number) refused by name.
 func TestBlobConfig(t *testing.T) {
-	c, err := Load("", env(nil))
+	c, err := Load("", env(map[string]string{"XDG_DATA_HOME": "/xdg"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BlobDir() != filepath.Join("data", "blobs") || c.Blob.MaxBytes != 50<<20 {
+	if c.BlobDir() != "/xdg/batondeck-kanban/blobs" || c.Blob.MaxBytes != 50<<20 {
 		t.Fatalf("default blob dir %q, max %d", c.BlobDir(), c.Blob.MaxBytes)
 	}
 	if c, err = Load("", env(map[string]string{"BATONDECK_DATABASE_URL": "/srv/bk/bk.db"})); err != nil || c.BlobDir() != "/srv/bk/blobs" {
 		t.Fatalf("beside the SQLite file: %q, %v", c.BlobDir(), err)
 	}
-	if c, err = Load("", env(map[string]string{"BATONDECK_DATABASE_URL": "postgres://h/db"})); err != nil || c.BlobDir() != filepath.Join("data", "blobs") {
+	if c, err = Load("", env(map[string]string{"BATONDECK_DATABASE_URL": "postgres://h/db", "XDG_DATA_HOME": "/xdg"})); err != nil || c.BlobDir() != "/xdg/batondeck-kanban/blobs" {
 		t.Fatalf("postgres: %q, %v", c.BlobDir(), err)
 	}
 	p := writeConfig(t, `{"blob":{"dir":"/srv/blobs","max_bytes":1024}}`)

@@ -100,6 +100,13 @@ func leaseHeld(t store.Task, leaseID string, caller domain.Caller, now int64) er
 
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
 
+// heldBy is whether t is IN_PROGRESS under a live lease of the caller that store.ClaimTask would
+// replace as the caller's own (claimInput sets no agent handle), on a task it would still claim.
+func heldBy(t store.Task, caller domain.Caller, now int64) bool {
+	return t.Status == domain.InProgress && liveLease(t, now) && t.Claim.Owner == caller.Identity &&
+		t.Claim.AgentID == nil && !t.Racing && len(t.BlockedBy) == 0
+}
+
 // retryStale re-runs a call that carries no expected version when its versioned write lost a race
 // (STALE): the next run re-reads the task and judges it again, so a losing claim answers
 // CONFLICT_LOCKED, as Firestore's retried transaction did for conductor.
@@ -221,7 +228,11 @@ func replayedLease(task *Task, now time.Time) error {
 // checked against the version mutate loaded, and a lost race is re-judged (retryStale), so the loser
 // of two concurrent claims answers CONFLICT_LOCKED. The task gains no assignee (conductor's
 // performClaim sets none). It rings nobody (owner ruling 2026-10-23): mutate's change row is
-// ChangeKindChanged.
+// ChangeKindChanged. A claim of a task whose live lease the caller already holds answers that lease
+// and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
+// (G6): one identity in several sessions never mints a second lease that would silently end the
+// first. The served path carries no per-session agent handle yet (P-257), so the
+// lease is shared rather than refused CONFLICT_LOCKED as conductor does for two distinct handles.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -241,9 +252,21 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 	resp, err := retryStale(func() (ClaimTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "claim_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 		}, func(t *txn) (ClaimTaskResp, error) {
 			cur := *t.Task
+			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
+				// The second claim's leaseSeconds lengthens the shared lease, never shortens it.
+				held, err := t.Tx.Heartbeat(ctx, req.ProjectID, cur.ID, cur.Claim.LeaseID, caller.Identity, now+secs*1000, now, true)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				out, err := withSummary(ctx, t.Tx, held)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				return ClaimTaskResp{LeaseID: cur.Claim.LeaseID, Task: out}, nil
+			}
 			board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 			if err != nil {
 				return ClaimTaskResp{}, err
@@ -295,7 +318,7 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	if err := required("boardId", req.BoardID); err != nil {
 		return ClaimNextResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return ClaimNextResp{}, err
 	}
@@ -395,10 +418,17 @@ func storeBoard(b Board) store.Board {
 	return out
 }
 
-func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
-	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Capabilities: caps}
+// frontierQuery is claim_next's and next_task's frontier for caller: without an assignee the
+// unassigned tasks and the caller's own (the store matches its id and its login), so nobody takes
+// work routed to another. An assignee naming another identity is a master's question (FORBIDDEN
+// below it); conductor filters nothing without one, which let any agent claim a task handed to another.
+func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a access, projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
+	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Caller: caller.Identity, Capabilities: caps}
 	if assignee != "" {
 		if err := checkLabel("assignee", assignee); err != nil {
+			return q, err
+		}
+		if err := l.ownAssignee(ctx, caller, a, projectID, assignee); err != nil {
 			return q, err
 		}
 		q.Assignee = &assignee
@@ -412,8 +442,45 @@ func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID 
 	return q, nil
 }
 
+// ownAssignee refuses, below master, an assignee naming another identity: another account (by
+// email or id) or another member of the project. Any other assignee is an agent label, which names
+// no identity and cannot be checked until a caller carries its agent (audit A2), so it passes. Read
+// only on this path, so the claim's statement pins do not move.
+func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a access, projectID, assignee string) error {
+	if assignee == caller.Identity || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
+		return nil
+	}
+	other := forbidden("assignee names another identity: only a master may read or claim another's work",
+		map[string]any{"field": "assignee", "requiredRole": domain.RoleMaster, "role": a.Role})
+	u, err := l.c.store.GetUserByEmail(ctx, strings.ToLower(assignee))
+	switch {
+	case err == nil && u.ID == caller.Identity:
+		return nil
+	case err == nil:
+		return other
+	case !errors.Is(err, store.ErrNotFound):
+		return l.c.mapErr("assignee", err)
+	}
+	switch _, err := l.c.store.GetUser(ctx, assignee); {
+	case err == nil:
+		return other
+	case !errors.Is(err, store.ErrNotFound):
+		return l.c.mapErr("assignee", err)
+	}
+	e, err := l.c.accessEntry(ctx, projectID, assignee)
+	if err != nil {
+		return err
+	}
+	if e.member {
+		return other
+	}
+	return nil
+}
+
 // Heartbeat is heartbeat_task: the lease's expiry moves to now + leaseSeconds (store.Heartbeat, one
-// statement while the lease is live and the caller's). The version does not move (conductor:
+// statement while the lease is live and the caller's). With no leaseSeconds it is now + the default
+// and never earlier than the expiry already held, so a heartbeat does not cut a longer claim short
+// (conductor's "a heartbeat never SHORTENS a lease"); an explicit leaseSeconds is written as given. The version does not move (conductor:
 // "without bumping the task version"), so mutate loads no task; the change row names the task and
 // its board. Another owner's lease answers LEASE_EXPIRED, as conductor's assertLeaseHeld does.
 func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req HeartbeatTaskReq) (HeartbeatTaskResp, error) {
@@ -438,7 +505,7 @@ func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req Hear
 		ProjectID: req.ProjectID, Access: a,
 	}, func(t *txn) (HeartbeatTaskResp, error) {
 		now := t.Now.UnixMilli()
-		task, err := t.Tx.Heartbeat(ctx, req.ProjectID, req.TaskID, req.LeaseID, caller.Identity, now+secs*1000, now)
+		task, err := t.Tx.Heartbeat(ctx, req.ProjectID, req.TaskID, req.LeaseID, caller.Identity, now+secs*1000, now, req.LeaseSeconds == 0)
 		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeConflictLocked {
 			return HeartbeatTaskResp{}, store.LeaseExpired(req.TaskID)
 		}
@@ -522,7 +589,7 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	if err := required("boardId", req.BoardID); err != nil {
 		return NextTaskResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return NextTaskResp{}, err
 	}
@@ -1075,7 +1142,13 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 				return HandoffTaskResp{}, err
 			}
 			t.Wrote(after)
-			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote}); err != nil {
+			// The receiver's handoff notification (P-275): toAgent as a member key, or the member whose
+			// login it is; an agent label or a non-member notifies nobody.
+			target, err := t.handoffTarget(to)
+			if err != nil {
+				return HandoffTaskResp{}, err
+			}
+			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote, "targetIdentity": target}); err != nil {
 				return HandoffTaskResp{}, err
 			}
 			value, err := json.Marshal(map[string]any{"note": req.MemoryNote, "toAgent": to, "from": caller.Identity})
@@ -1090,6 +1163,23 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 			return HandoffTaskResp{Task: out}, err
 		})
 	})
+}
+
+// handoffTarget is the member identity toAgent names: itself when a member, else the member whose
+// account email it is (a handoff stores the login as given), else nil.
+func (t *txn) handoffTarget(to string) (*string, error) {
+	id, err := t.memberOrNil(to)
+	if id != nil || err != nil {
+		return id, err
+	}
+	u, err := t.Tx.GetUserByEmail(t.ctx, strings.ToLower(to))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return t.memberOrNil(u.ID)
 }
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note

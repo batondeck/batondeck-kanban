@@ -87,6 +87,9 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 		if q.Assignee != nil && (t.Assignee == nil || *t.Assignee != *q.Assignee) {
 			continue
 		}
+		if q.Assignee == nil && !st.callers(t.Assignee, q.Caller) {
+			continue
+		}
 		if len(q.Capabilities) > 0 && !allIn(t.RequiredCapabilities, q.Capabilities) {
 			continue
 		}
@@ -101,6 +104,22 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 		)
 	})
 	return out
+}
+
+// callers is the routing half of the frontier without an assignee: the task is unassigned, or
+// assigned to caller's id or, in any case, to its account's email.
+func (st *state) callers(assignee *string, caller string) bool {
+	if assignee == nil {
+		return true
+	}
+	if caller == "" {
+		return false
+	}
+	if *assignee == caller {
+		return true
+	}
+	u, ok := st.users[caller]
+	return ok && strings.ToLower(*assignee) == u.Email
 }
 
 func allIn(need, have []string) bool {
@@ -179,7 +198,7 @@ func (st *state) heldLease(projectID, taskID, leaseID, owner string, now int64) 
 	return t, nil
 }
 
-func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (store.Task, error) {
+func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (store.Task, error) {
 	if expiresAt <= now {
 		return store.Task{}, domain.Validation("a lease must expire after now", map[string]any{"expiresAt": expiresAt, "now": now})
 	}
@@ -188,7 +207,9 @@ func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner
 		if err != nil {
 			return store.Task{}, err
 		}
-		t.Claim.ExpiresAt = expiresAt
+		if !keepLonger || expiresAt > t.Claim.ExpiresAt {
+			t.Claim.ExpiresAt = expiresAt
+		}
 		return st.put(t), nil
 	})
 }

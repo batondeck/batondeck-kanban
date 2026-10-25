@@ -91,7 +91,7 @@ func TestNotificationFeed(t *testing.T) {
 		// A review request notifies the reviewer.
 		lease := str(r.ada.call("claim_task", map[string]any{"projectId": r.p, "taskId": id})["leaseId"])
 		r.ada.call("complete_task", map[string]any{"projectId": r.p, "taskId": id, "leaseId": lease, "reviewer": "u-grace"})
-		// A handoff writes no row (conductor's notify.ts: a handoff is not a notification type).
+		// A handoff notifies its receiver (P-275; conductor's notify.ts listed it as a TODO).
 		h := r.task("handed", nil)
 		lease = str(r.ada.call("claim_task", map[string]any{"projectId": r.p, "taskId": h})["leaseId"])
 		r.ada.call("handoff_task", map[string]any{"projectId": r.p, "taskId": h, "leaseId": lease, "toAgent": "u-grace", "memoryNote": "yours"})
@@ -108,20 +108,20 @@ func TestNotificationFeed(t *testing.T) {
 				t.Fatalf("mention %v does not name comment %s", x, c)
 			}
 		}
-		if !slices.Equal(types, []string{"review_request", "mention", "follow_up"}) || feed["unread"] != float64(2) {
-			t.Fatalf("grace's feed is %v (unread %v), want review_request, mention, follow_up newest first, 2 unread", types, feed["unread"])
+		if !slices.Equal(types, []string{"handoff", "review_request", "mention", "follow_up"}) || feed["unread"] != float64(3) {
+			t.Fatalf("grace's feed is %v (unread %v), want handoff, review_request, mention, follow_up newest first, 3 unread", types, feed["unread"])
 		}
 		if own := r.feedOf(r.ada); len(own["notifications"].([]any)) != 0 {
 			t.Fatalf("ada's feed %v: a self-mention and a self-directed follow-up notify nobody", own)
 		}
-		if all := r.grace.call("mark_notifications_read", map[string]any{"all": true}); all["updated"] != float64(2) {
-			t.Fatalf("mark all %v, want 2", all)
+		if all := r.grace.call("mark_notifications_read", map[string]any{"all": true}); all["updated"] != float64(3) {
+			t.Fatalf("mark all %v, want 3", all)
 		}
 
 		page := r.grace.call("list_notifications", map[string]any{"limit": 2})
 		next := r.grace.call("list_notifications", map[string]any{"limit": 2, "cursor": page["nextCursor"]})
-		if len(page["notifications"].([]any)) != 2 || len(next["notifications"].([]any)) != 1 || next["nextCursor"] != nil {
-			t.Fatalf("pages %v / %v, want 2 then 1", page, next)
+		if len(page["notifications"].([]any)) != 2 || len(next["notifications"].([]any)) != 2 || next["nextCursor"] != nil {
+			t.Fatalf("pages %v / %v, want 2 then 2", page, next)
 		}
 
 		r.wantCode(r.grace, "list_notifications", map[string]any{"limit": 201}, "VALIDATION")

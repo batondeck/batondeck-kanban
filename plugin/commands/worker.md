@@ -15,7 +15,9 @@ Each turn, the doorbell's or the user's:
 
 1. **Is there an active sprint?** `list_sprints { projectId, boardId, status: "ACTIVE" }`, then
    `get_sprint`. While one is ACTIVE, pass its `sprintId` to selection.
-2. **Claim.** `claim_next { projectId, boardId, assignee? }` → keep the `leaseId`. On a doorbell,
+2. **Claim.** `claim_next { projectId, boardId }` → keep the `leaseId`; it takes unassigned work and
+   work assigned to you, never another's. With an agent label, call it with `assignee: "<label>"`
+   too. On a doorbell,
    take `projectId` and `boardId` from it (each id of its `boardIds`; none → `list_boards`). After a
    `broadcast` doorbell, also call it without `assignee`: that work is assigned to nobody.
 3. **Sweep the inbox** when the claim comes back null: `next_task { projectId, boardId, assignee,

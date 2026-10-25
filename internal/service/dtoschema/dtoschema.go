@@ -65,8 +65,12 @@ func enumSchema[T ~string](values []T) *jsonschema.Schema {
 
 var options = sync.OnceValue(build)
 
+// anyValue is an any-typed field's schema. The empty schema marshals as the boolean `true`, which
+// Cursor's tools/list validator refuses (P-301), so it carries a description to stay an object.
+func anyValue() *jsonschema.Schema { return &jsonschema.Schema{Description: "any JSON value"} }
+
 // Options is the inference recipe: the enums from their Go values, a custom field's value as
-// string|number|boolean, True as const true, the tri-state optionals, and the open objects. Slices
+// string|number|boolean, True as const true, an any as a described empty schema, the tri-state optionals, and the open objects. Slices
 // are fixed after inference (For), since jsonschema-go types every Go slice as [null, array]. The
 // value is shared: a caller must not change it.
 func Options() *jsonschema.ForOptions { return options() }
@@ -90,7 +94,7 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.CostClass]():            enumSchema(service.CostClassValues),
 		reflect.TypeFor[service.AnomalyKind]():          enumSchema(service.AnomalyKindValues),
 		reflect.TypeFor[service.AnomalySeverity]():      enumSchema(service.AnomalySeverityValues),
-		reflect.TypeFor[domain.NotificationType]():      enumSchema([]domain.NotificationType{domain.NotificationFollowUp, domain.NotificationMention, domain.NotificationReviewRequest}),
+		reflect.TypeFor[domain.NotificationType]():      enumSchema([]domain.NotificationType{domain.NotificationFollowUp, domain.NotificationMention, domain.NotificationReviewRequest, domain.NotificationHandoff}),
 		reflect.TypeFor[service.FollowUpStatus]():       enumSchema(service.FollowUpStatusValues),
 		reflect.TypeFor[service.MediaKind]():            enumSchema(service.MediaKindValues),
 		reflect.TypeFor[service.NextStrategy]():         enumSchema(service.NextStrategyValues),
@@ -113,7 +117,8 @@ func build() *jsonschema.ForOptions {
 		reflect.TypeFor[service.RawContentType]():       enumSchema(service.RawContentTypeValues),
 		reflect.TypeFor[service.FieldValue]():           {Types: []string{"string", "number", "boolean"}},
 		reflect.TypeFor[service.True]():                 {Type: "boolean", Const: &isTrue},
-		reflect.TypeFor[service.JSONObject]():           {Type: "object", AdditionalProperties: &jsonschema.Schema{Description: "any JSON value"}},
+		reflect.TypeFor[service.JSONObject]():           {Type: "object", AdditionalProperties: anyValue()},
+		reflect.TypeFor[any]():                          anyValue(),
 	}}
 	for _, typ := range Optionals {
 		v, _ := typ.FieldByName("V")
