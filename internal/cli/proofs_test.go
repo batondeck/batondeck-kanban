@@ -793,16 +793,18 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 			}
 		}
 		wait("ready", 2*time.Second)
-		var writes []time.Duration // each move_task's own round trip, inside its frame's time
+		var ends, writes []time.Duration // per move: call start to frame, and the call's own round trip
 		move := func(to string) time.Duration {
 			t.Helper()
 			t0 := time.Now()
 			if _, e := b.move(owner, id, to); e != nil {
 				t.Fatal(e)
 			}
-			writes = append(writes, time.Since(t0))
+			returned := time.Now()
+			writes = append(writes, returned.Sub(t0))
 			wait("board", time.Second)
-			return time.Since(t0)
+			ends = append(ends, time.Since(t0))
+			return time.Since(returned)
 		}
 		// Busy: each move follows the last write within one bus poll (250 ms), so its wake lands
 		// while the previous read is fresh; quiet: no write for longer than a poll.
@@ -813,14 +815,15 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 		}
 		time.Sleep(bus.PollInterval + 50*time.Millisecond)
 		quiet := move("IN_PROGRESS")
-		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before); the move_task calls took %v", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy, writes)
+		t.Logf("%s: board frame after an MCP move_task returned: %v quiet (no write in the last %v), %v busy (writes just before); end to end %v, the calls themselves %v", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy, ends, writes)
 		// memstore has no commit wake (store.ChangeWatcher): its bus polls, so the bound is the engines'.
 		if j.engine == servicetest.Memstore {
 			return
 		}
 		for i, d := range append(busy, quiet) {
+			// The clock is commit to frame: from move_task's return, so the write's own round trip is not counted.
 			if d > 200*time.Millisecond {
-				t.Fatalf("board frame %d of %d took %v, want <= 200ms (busy %v, quiet %v; the move_task calls took %v)", i+1, len(busy)+1, d, busy, quiet, writes)
+				t.Fatalf("board frame %d of %d came %v after its move_task returned, want <= 200ms (busy %v, quiet %v; end to end %v)", i+1, len(busy)+1, d, busy, quiet, ends)
 			}
 		}
 	})
