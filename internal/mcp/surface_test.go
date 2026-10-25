@@ -74,7 +74,7 @@ func TestInstructionsNameBothWakes(t *testing.T) {
 	if got != Instructions {
 		t.Fatalf("initialize instructions = %q, want Instructions", got)
 	}
-	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context"} {
+	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "calling list_notifications, then claim_next { projectId, boardId } (no assignee needed)", "never another's", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions lack %q", want)
 		}

@@ -18,6 +18,35 @@ Notable changes to batondeck-kanban. The format follows
   fails `TestPostureEffect` and panics at registration, and `TestReadEffectWritesNothing` calls
   every read on both engines and fails if the board feed or change log moves. Annotations sit
   outside the contract's canonical form, so no delta.
+- `claim_next` and `next_task` take only your own or unassigned work (P-275, audit A1, owner
+  2026-10-24). With no `assignee` the frontier admitted every TODO task, so a client following the
+  served instructions (`claim_next {projectId, boardId}`) claimed tasks handed to another agent,
+  across identities and vendors. Without `assignee` the frontier is now the unassigned tasks plus
+  those assigned to the caller's id or, in any case, its account email (a handoff stores the login
+  as given), matched inside the one claim statement on SQLite and Postgres, so the statement pins
+  are unchanged. A task assigned to another identity or to an agent label is in no one's default
+  frontier. An explicit `assignee` naming another account (by email or id) or another member of the
+  project is `FORBIDDEN` below master; an agent label names no identity and still passes, since no
+  caller carries its label yet. Conductor filters nothing without `assignee`; this is a deliberate
+  departure. The served MCP instructions give non-Claude clients the pull recipe
+  (`list_notifications`, then `claim_next {projectId, boardId}`, no assignee needed), and the worker
+  skill and the worker, work and work-assigned commands say the same and pass `assignee` only for an
+  agent label; the plugin is `0.1.3`.
+- A handoff notifies its receiver (P-275, audit A12; migration 0006 owner-approved 2026-10-24, zone
+  Z2). `handoff_task` wrote a task memory and rang the socket doorbell, but no notification row, so a
+  client that pulls (every non-Claude client, `list_notifications` each turn) never learned of it.
+  It now writes one `handoff` notification (`data.toAgent`) for the member `toAgent` names, by member
+  key or by login in any case, and the receiver's `/api/stream` gets its notifications frame; the
+  sender, an agent label and a handoff to oneself notify nobody. Migration 0006 adds `handoff` to the
+  notifications type CHECK on both engines (SQLite rebuilds the table; down drops the handoff rows).
+  `list_notifications` declares the new type (`contract/deltas.json` gains `addedEnumValues`), and
+  the Notifications screen reads "X handed you T-n". The doorbell is unchanged.
+- A reviewer's reopen hands the rework back to its completer (P-275, review B72-1). `add_follow_up
+  {reopen: true}` kept the assignee, which `complete_task` had made the reviewer, so under the new
+  routing the reopened task was in no worker's `claim_next` and nobody was rung. The reopen now
+  assigns the task to `review.completedBy`, who is rung and gets the follow-up; with no completer on
+  record it clears an assignee that is the reopener or the reviewer (a broadcast) and keeps any
+  other. The master command says so, and that `next_task`'s head is unassigned or your own work.
 - A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
   (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
   waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board

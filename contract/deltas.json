@@ -467,6 +467,12 @@
       "to": "TODO"
     }
   ],
+  "addedEnumValues": [
+    {
+      "pointer": "/tools/list_notifications/output/properties/notifications/items/properties/type/enum/handoff",
+      "why": "P-275 (audit A12), owner-approved migration 0006 (2026-10-24): handoff_task writes the receiver a handoff notification, which conductor lists in notify.ts as a TODO."
+    }
+  ],
   "addedTools": [
     {
       "name": "cancel_task",

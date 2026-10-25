@@ -318,7 +318,7 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	if err := required("boardId", req.BoardID); err != nil {
 		return ClaimNextResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return ClaimNextResp{}, err
 	}
@@ -418,10 +418,17 @@ func storeBoard(b Board) store.Board {
 	return out
 }
 
-func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
-	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Capabilities: caps}
+// frontierQuery is claim_next's and next_task's frontier for caller: without an assignee the
+// unassigned tasks and the caller's own (the store matches its id and its login), so nobody takes
+// work routed to another. An assignee naming another identity is a master's question (FORBIDDEN
+// below it); conductor filters nothing without one, which let any agent claim a task handed to another.
+func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a access, projectID, boardID, assignee string, caps []string, sprintID string) (store.FrontierQuery, error) {
+	q := store.FrontierQuery{ProjectID: projectID, BoardID: boardID, Caller: caller.Identity, Capabilities: caps}
 	if assignee != "" {
 		if err := checkLabel("assignee", assignee); err != nil {
+			return q, err
+		}
+		if err := l.ownAssignee(ctx, caller, a, projectID, assignee); err != nil {
 			return q, err
 		}
 		q.Assignee = &assignee
@@ -433,6 +440,41 @@ func frontierQuery(projectID, boardID, assignee string, caps []string, sprintID 
 		return q, unsupported("sprintId", "the frontier has no sprint filter")
 	}
 	return q, nil
+}
+
+// ownAssignee refuses, below master, an assignee naming another identity: another account (by
+// email or id) or another member of the project. Any other assignee is an agent label, which names
+// no identity and cannot be checked until a caller carries its agent (audit A2), so it passes. Read
+// only on this path, so the claim's statement pins do not move.
+func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a access, projectID, assignee string) error {
+	if assignee == caller.Identity || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
+		return nil
+	}
+	other := forbidden("assignee names another identity: only a master may read or claim another's work",
+		map[string]any{"field": "assignee", "requiredRole": domain.RoleMaster, "role": a.Role})
+	u, err := l.c.store.GetUserByEmail(ctx, strings.ToLower(assignee))
+	switch {
+	case err == nil && u.ID == caller.Identity:
+		return nil
+	case err == nil:
+		return other
+	case !errors.Is(err, store.ErrNotFound):
+		return l.c.mapErr("assignee", err)
+	}
+	switch _, err := l.c.store.GetUser(ctx, assignee); {
+	case err == nil:
+		return other
+	case !errors.Is(err, store.ErrNotFound):
+		return l.c.mapErr("assignee", err)
+	}
+	e, err := l.c.accessEntry(ctx, projectID, assignee)
+	if err != nil {
+		return err
+	}
+	if e.member {
+		return other
+	}
+	return nil
 }
 
 // Heartbeat is heartbeat_task: the lease's expiry moves to now + leaseSeconds (store.Heartbeat, one
@@ -547,7 +589,7 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	if err := required("boardId", req.BoardID); err != nil {
 		return NextTaskResp{}, err
 	}
-	q, err := frontierQuery(req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
+	q, err := l.frontierQuery(ctx, caller, a, req.ProjectID, req.BoardID, req.Assignee, req.Capabilities, req.SprintID)
 	if err != nil {
 		return NextTaskResp{}, err
 	}
@@ -1100,7 +1142,13 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 				return HandoffTaskResp{}, err
 			}
 			t.Wrote(after)
-			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote}); err != nil {
+			// The receiver's handoff notification (P-275): toAgent as a member key, or the member whose
+			// login it is; an agent label or a non-member notifies nobody.
+			target, err := t.handoffTarget(to)
+			if err != nil {
+				return HandoffTaskResp{}, err
+			}
+			if err := t.event(after, domain.EventTaskHandoff, map[string]any{"toAgent": to, "note": req.MemoryNote, "targetIdentity": target}); err != nil {
 				return HandoffTaskResp{}, err
 			}
 			value, err := json.Marshal(map[string]any{"note": req.MemoryNote, "toAgent": to, "from": caller.Identity})
@@ -1115,6 +1163,23 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 			return HandoffTaskResp{Task: out}, err
 		})
 	})
+}
+
+// handoffTarget is the member identity toAgent names: itself when a member, else the member whose
+// account email it is (a handoff stores the login as given), else nil.
+func (t *txn) handoffTarget(to string) (*string, error) {
+	id, err := t.memberOrNil(to)
+	if id != nil || err != nil {
+		return id, err
+	}
+	u, err := t.Tx.GetUserByEmail(t.ctx, strings.ToLower(to))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return t.memberOrNil(u.ID)
 }
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note

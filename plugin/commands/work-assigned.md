@@ -2,19 +2,22 @@
 description: Work the batondeck-kanban tasks assigned to you — drain your inbox by assignee.
 ---
 
-Work every task the board has routed to **you** (the task's `assignee` is your identity or your agent
-label), over MCP.
+Work every task the board has routed to **you** (the task's `assignee` is your identity, your login or
+your agent label), over MCP. `claim_next` without `assignee` already takes what is assigned to your
+identity or login, and never another's; pass `assignee` only for an agent label.
 
 Inputs: $ARGUMENTS — your agent label (or nothing, to use your identity), and optionally the project
 and board. Missing → `list_projects` → `list_boards`.
 
 Loop until the inbox is empty:
 
-1. **Claim yours:** `claim_next { projectId, boardId, assignee: "<you>" }` → the best claimable TODO
+1. **Claim yours:** `claim_next { projectId, boardId, assignee: "<label>" }` (or no `assignee` for your
+   identity) → the best claimable TODO
    task routed to you, claimed, or `{ task: null }`. Assignment is advisory: another agent may claim it
    first, so take the next.
 2. **Sweep the rest of the inbox** when the claim is null: `next_task { projectId, boardId,
-   assignee: "<you>", includeInbox: true }` returns the `review`, `blocked` and `poisoned` buckets.
+   assignee: "<you>", includeInbox: true }` (your own id, login or label; another member's is FORBIDDEN
+   below master) returns the `review`, `blocked` and `poisoned` buckets.
    REVIEW assigned to you is rework (act on `openFollowUps`) or yours to judge; BLOCKED needs its
    blocker resolved or a handoff; poisoned goes to a master with a note on the task.
 3. **Load the context:** `get_task_context { projectId, taskId, includeUpstream: true }`, every

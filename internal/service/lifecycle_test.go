@@ -1107,3 +1107,208 @@ func TestRingForSkipsASelfAssignment(t *testing.T) {
 		}
 	}
 }
+
+// P-275 (audit A1): without an assignee claim_next and next_task never reach work routed to
+// another identity or agent label — a handoff stores the receiver's login, so bob's own is matched
+// by login too — and an assignee naming another identity (account or member) is FORBIDDEN below master.
+func TestClaimNextTakesOnlyTheCallersOrUnassigned(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		carl := e.member(t, e.project, "carl", domain.RoleWorker)
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		e.member(t, e.project, "erin", domain.RoleWorker) // a member with no account
+		for _, u := range []store.User{
+			{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1},
+			{ID: "dave", Email: "dave@x.test", DisplayName: "Dave", PasswordHash: "x", CreatedAt: 1},
+		} {
+			if err := e.st.CreateUser(e.ctx, u); err != nil {
+				t.Fatal(err)
+			}
+		}
+		add := func(assignee *string, order string) store.Task {
+			task, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{
+				ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "t", Status: domain.Todo,
+				Assignee: assignee, OrderKey: order, CreatedBy: "alice", CreatedAt: time.Now().UnixMilli(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return task
+		}
+		dave, erin, bot := "dave@x.test", "erin", "reviewer-bot"
+		bobLogin := "Bob@X.test"
+		daves, bobs, open := add(&dave, "a0"), add(&bobLogin, "a1"), add(nil, "a2")
+		erins, bots := add(&erin, "a3"), add(&bot, "a4")
+		lc := e.c.Lifecycle()
+		claimNext := func(who domain.Caller, assignee string) (*Task, error) {
+			r, err := lc.ClaimNext(e.ctx, who, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: assignee})
+			return r.Task, err
+		}
+		next := func(who domain.Caller, assignee string) (*Task, error) {
+			r, err := lc.Next(e.ctx, who, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: assignee})
+			return r.Task, err
+		}
+		if head, err := next(carl, ""); err != nil || head == nil || head.ID != open.ID {
+			t.Fatalf("carl's next_task head %+v %v, want the unassigned %s", head, err, open.ID)
+		}
+		if head, err := next(bob, ""); err != nil || head == nil || head.ID != bobs.ID {
+			t.Fatalf("bob's next_task head %+v %v, want his own by login %s", head, err, bobs.ID)
+		}
+		for i, want := range []string{open.ID, ""} {
+			got, err := claimNext(carl, "")
+			if err != nil || (got == nil) != (want == "") || (got != nil && got.ID != want) {
+				t.Fatalf("carl's claim_next #%d = %+v %v, want %q", i, got, err, want)
+			}
+		}
+		for i, want := range []string{bobs.ID, ""} {
+			got, err := claimNext(bob, "")
+			if err != nil || (got == nil) != (want == "") || (got != nil && got.ID != want) {
+				t.Fatalf("bob's claim_next #%d = %+v %v, want %q", i, got, err, want)
+			}
+		}
+		for _, id := range []string{daves.ID, erins.ID, bots.ID} {
+			if got, err := e.st.GetTask(e.ctx, e.project, id); err != nil || got.Status != domain.Todo || got.Claim != nil {
+				t.Fatalf("%s is %+v %v, want TODO and unclaimed", id, got, err)
+			}
+		}
+		for _, other := range []string{dave, "DAVE@x.test", "dave", erin} {
+			_, err := claimNext(carl, other)
+			wantCode(t, err, domain.CodeForbidden)
+			_, err = next(bob, other)
+			wantCode(t, err, domain.CodeForbidden)
+		}
+		// An agent label names no identity, so it is not refused (audit A2: no caller carries its label yet).
+		if got, err := claimNext(carl, bot); err != nil || got == nil || got.ID != bots.ID {
+			t.Fatalf("carl's claim_next for the label %q = %+v %v, want %s", bot, got, err, bots.ID)
+		}
+		for _, own := range []string{"bob", "BOB@x.test"} {
+			if _, err := claimNext(bob, own); err != nil {
+				t.Fatalf("bob's claim_next for his own %q: %v", own, err)
+			}
+		}
+		if head, err := next(mia, dave); err != nil || head == nil || head.ID != daves.ID {
+			t.Fatalf("the master's next_task for dave = %+v %v, want %s", head, err, daves.ID)
+		}
+	})
+}
+
+// P-275 (audit A12): a handoff writes one handoff notification for its receiver, named by member
+// key or by login in any case, with the change row that is the receiver's /api/stream frame; the
+// sender, an agent label and a handoff to oneself notify nobody.
+func TestHandoffNotifiesItsReceiver(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		if err := e.st.CreateUser(e.ctx, store.User{ID: "bob", Email: "bob@x.test", DisplayName: "Bob", PasswordHash: "x", CreatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+		lc, nf := e.c.Lifecycle(), e.c.Notifications()
+		feed := func(who domain.Caller) []Notification {
+			t.Helper()
+			r, err := nf.List(e.ctx, who, ListNotificationsReq{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r.Notifications
+		}
+		task := e.task(t, domain.Todo)
+		handoff := func(who domain.Caller, to string) {
+			t.Helper()
+			c := e.claim(t, who, task.ID, 0)
+			if _, err := lc.Handoff(e.ctx, who, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: to, MemoryNote: "over to you"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		handoff(e.alice, "Bob@X.test")
+		got := feed(bob)
+		if len(got) != 1 || got[0].Type != domain.NotificationHandoff || got[0].Actor != "alice" || got[0].TaskID == nil || *got[0].TaskID != task.ID {
+			t.Fatalf("bob's feed after the handoff: %+v, want one handoff of %s from alice", got, task.ID)
+		}
+		if d, _ := got[0].Data.(map[string]any); d["toAgent"] != "Bob@X.test" {
+			t.Fatalf("handoff data %+v", got[0].Data)
+		}
+		if n := len(feed(e.alice)); n != 0 {
+			t.Fatalf("the sender's feed holds %d rows, want none", n)
+		}
+		ch, err := e.st.ReadChanges(e.ctx, 0, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last := ch[len(ch)-1]; last.Kind != ChangeKindNotification || last.Scope != "bob" {
+			t.Fatalf("last change row %+v, want bob's notification row", last)
+		}
+		handoff(bob, "reviewer-bot")
+		handoff(e.alice, "alice")
+		if a, b := len(feed(e.alice)), len(feed(bob)); a != 0 || b != 1 {
+			t.Fatalf("after a handoff to a label and one to oneself: alice %d rows, bob %d, want 0 and 1", a, b)
+		}
+		handoff(e.alice, "bob")
+		if b := feed(bob); len(b) != 2 || b[0].Type != domain.NotificationHandoff {
+			t.Fatalf("bob's feed after a handoff by member key: %+v", b)
+		}
+	})
+}
+
+// B72-1 (review of #72): a reviewer's reopen hands the rework back to its completer, who is rung
+// and notified and takes it with claim_next; a reopen with no completer on record clears an
+// assignee that is the reopener, so the rework is open work any worker takes.
+func TestReopenedReworkReachesTheWorker(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		wkr := e.member(t, e.project, "wkr", domain.RoleWorker)
+		carl := e.member(t, e.project, "carl", domain.RoleWorker)
+		mst := e.member(t, e.project, "mst", domain.RoleMaster)
+		lc, fu, nf := e.c.Lifecycle(), e.c.FollowUps(), e.c.Notifications()
+		task := e.task(t, domain.Todo)
+		c, err := lc.ClaimNext(e.ctx, wkr, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || c.Task == nil || c.Task.ID != task.ID {
+			t.Fatalf("worker claim %+v %v", c.Task, err)
+		}
+		if _, err := lc.Complete(e.ctx, wkr, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: *c.LeaseID, Reviewer: "mst"}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := fu.AddFollowUp(e.ctx, mst, AddFollowUpReq{ProjectID: e.project, TaskID: task.ID, Body: "fix the edge case", Reopen: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Task.Status != domain.Todo || r.Task.Assignee == nil || *r.Task.Assignee != "wkr" {
+			t.Fatalf("after reopen: status=%s assignee=%v, want TODO assigned to the completer wkr", r.Task.Status, r.Task.Assignee)
+		}
+		if rows := e.assignedRows(t); rows[len(rows)-1] != "add_follow_up@wkr" || slices.Contains(rows[:len(rows)-1], "add_follow_up@wkr") {
+			t.Fatalf("assigned rows %v, want one add_follow_up@wkr last", rows)
+		}
+		if n, err := nf.List(e.ctx, wkr, ListNotificationsReq{}); err != nil || len(n.Notifications) != 1 || n.Notifications[0].Type != domain.NotificationFollowUp {
+			t.Fatalf("worker's feed %+v %v, want the follow-up", n.Notifications, err)
+		}
+		if got, err := lc.ClaimNext(e.ctx, carl, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err != nil || got.Task != nil {
+			t.Fatalf("another worker's claim_next = %+v %v, want null", got.Task, err)
+		}
+		got, err := lc.ClaimNext(e.ctx, wkr, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || got.Task == nil || got.Task.ID != task.ID {
+			t.Fatalf("worker claim_next after reopen = %+v %v, want %s", got.Task, err, task.ID)
+		}
+
+		// No completer on record (a DONE task that never went through review): the reopen clears
+		// the assignee and broadcasts.
+		e.settings(t, map[string]any{"reviewEnabled": false})
+		done := e.task(t, domain.Todo)
+		lease := e.claim(t, wkr, done.ID, 0).LeaseID
+		if _, err := lc.Complete(e.ctx, wkr, CompleteTaskReq{ProjectID: e.project, TaskID: done.ID, LeaseID: lease}); err != nil {
+			t.Fatal(err)
+		}
+		if d := e.get(t, done.ID); d.Status != domain.Done || d.Review != nil {
+			t.Fatalf("done task %s review %s, want DONE with no review", d.Status, d.Review)
+		}
+		if _, err := e.st.UpdateTask(e.ctx, e.project, done.ID, e.get(t, done.ID).Version, store.TaskPatch{Assignee: &store.Nullable[string]{Value: ptr("mst")}, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli()}); err != nil {
+			t.Fatal(err)
+		}
+		r, err = fu.AddFollowUp(e.ctx, mst, AddFollowUpReq{ProjectID: e.project, TaskID: done.ID, Body: "again", Reopen: true})
+		if err != nil || r.Task.Status != domain.Todo || r.Task.Assignee != nil {
+			t.Fatalf("reopen with no completer: %+v %v, want TODO unassigned", r.Task, err)
+		}
+		if _, p := e.lastChange(t); p.Kind != DoorbellBroadcast {
+			t.Fatalf("reopen with no completer rang %+v, want broadcast", p)
+		}
+		if got, err := lc.ClaimNext(e.ctx, carl, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err != nil || got.Task == nil || got.Task.ID != done.ID {
+			t.Fatalf("carl's claim_next = %+v %v, want the reopened %s", got.Task, err, done.ID)
+		}
+	})
+}

@@ -5,7 +5,8 @@ description: Work the batondeck-kanban board once — claim the best task and ru
 Work a batondeck-kanban board over MCP:
 
 1. **Claim:** `claim_next { projectId, boardId }` selects and claims in one call and returns the
-   `leaseId` and `resume`. To take only what was routed to you, pass `assignee`. Missing project or
+   `leaseId` and `resume`. It takes only unassigned work and work assigned to you, never another's; an
+   agent label's work needs `assignee: "<label>"`. Missing project or
    board → `list_projects` → `list_boards`.
 2. **Resume check:** a `branch` in `resume` or in the task's artifacts means someone already worked it:
    `git fetch origin && git checkout <branch>` and continue from the last checkpoint's `NEXT`.
