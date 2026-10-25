@@ -37,6 +37,35 @@ WHERE t.id = (
   FOR NO KEY UPDATE OF f SKIP LOCKED) AND t.project_id = sqlc.arg(project_id) AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;
 
+-- ClaimNextWaiting is ClaimNext without SKIP LOCKED: the second look when ClaimNext found nothing.
+-- A frontier row a writer holds (a mutation that bumps a task locks it from its load) is waited for,
+-- not passed over, and Postgres re-checks it against the frontier once the writer commits, so a
+-- task the writer moved out of TODO is not claimed (P-278 B1).
+-- name: ClaimNextWaiting :one
+UPDATE tasks AS t SET status = 'IN_PROGRESS',
+  column_id = CASE WHEN sqlc.arg(column_id)::text = '' THEN t.column_id ELSE sqlc.arg(column_id)::text END,
+  claim_owner = sqlc.arg(owner)::text, claim_agent = sqlc.narg(agent)::text, claim_agent_id = sqlc.narg(agent_id)::text,
+  lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
+  version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
+WHERE t.id = (
+  SELECT f.id FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps) p
+  WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
+    AND json_array_length(f.blocked_by::json) = 0
+    AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
+    AND f.racing = 0
+    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= sqlc.arg(now)::bigint)
+    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= sqlc.arg(now)::bigint)
+    AND (sqlc.narg(assignee)::text IS NULL OR f.assignee = sqlc.narg(assignee)::text)
+    AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND (sqlc.arg(column_id)::text = '' OR EXISTS (
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
+  ORDER BY f.score DESC,
+    CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
+    f.order_key COLLATE "C", f.id COLLATE "C"
+  LIMIT 1
+  FOR NO KEY UPDATE OF f) AND t.project_id = sqlc.arg(project_id) AND t.status = 'TODO'
+RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;
+
 -- name: PreviewFrontier :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps) p

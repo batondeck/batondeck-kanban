@@ -229,8 +229,9 @@ func replayedLease(task *Task, now time.Time) error {
 // of two concurrent claims answers CONFLICT_LOCKED. The task gains no assignee (conductor's
 // performClaim sets none). It rings nobody (owner ruling 2026-10-23): mutate's change row is
 // ChangeKindChanged. A claim of a task whose live lease the caller already holds answers that lease
-// and writes nothing (G6): one identity in several sessions never mints a second lease that would
-// silently end the first. The served path carries no per-session agent handle yet (P-257), so the
+// and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
+// (G6): one identity in several sessions never mints a second lease that would silently end the
+// first. The served path carries no per-session agent handle yet (P-257), so the
 // lease is shared rather than refused CONFLICT_LOCKED as conductor does for two distinct handles.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
@@ -254,8 +255,13 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 		}, func(t *txn) (ClaimTaskResp, error) {
 			cur := *t.Task
-			if heldBy(cur, caller, t.Now.UnixMilli()) {
-				out, err := withSummary(ctx, t.Tx, cur)
+			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
+				// The second claim's leaseSeconds lengthens the shared lease, never shortens it.
+				held, err := t.Tx.Heartbeat(ctx, req.ProjectID, cur.ID, cur.Claim.LeaseID, caller.Identity, now+secs*1000, now, true)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				out, err := withSummary(ctx, t.Tx, held)
 				if err != nil {
 					return ClaimTaskResp{}, err
 				}

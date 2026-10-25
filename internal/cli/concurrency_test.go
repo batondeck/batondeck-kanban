@@ -37,55 +37,67 @@ func (j *joined) session(a *agent) *agent {
 	return &agent{t: j.t, login: a.login, id: a.id, cs: cs}
 }
 
-// G1 (skip.py): per round a fresh board with ONE TODO task that three callers keep commenting on;
-// 50 ms in, claim_next on the board must claim it. On Postgres the frontier's FOR UPDATE SKIP LOCKED
-// passed over the row the comments' foreign key checks held FOR KEY SHARE: 2 of 20 rounds claimed.
-func TestClaimNextClaimsATaskBeingCommented(t *testing.T) {
+// G1 (skip.py): per round a fresh board with ONE TODO task that three callers keep writing beside
+// (comments, context items, task memory); 50 ms in, claim_next on the board must claim it. On
+// Postgres the frontier's SKIP LOCKED passed over the row: a comment's foreign key check held it FOR
+// KEY SHARE (2 of 20 rounds claimed), and a writer that bumps the task holds it locked from its load
+// (rev68 B1: 1 of 20 under write_memory), so a miss is looked at again without SKIP LOCKED.
+func TestClaimNextClaimsATaskBeingWritten(t *testing.T) {
+	writers := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"add_comment", map[string]any{"body": "x"}},
+		{"add_context_item", map[string]any{"kind": "note", "body": "x"}},
+		{"write_memory", map[string]any{"scope": "task", "key": "k", "value": 1}},
+	}
 	onJoined(t, func(t *testing.T, j *joined) {
 		owner := j.user("ada")
 		spammers := []*agent{j.session(owner), j.session(owner), j.session(owner)}
 		const rounds = 20
-		claimed, comments := 0, 0
-		var mu sync.Mutex
-		for r := range rounds {
-			b := j.board(owner, nil, nil)
-			id := asStr(b.task(fmt.Sprintf("only %d", r))["id"])
-			stop := make(chan struct{})
-			var wg sync.WaitGroup
-			for _, s := range spammers {
-				wg.Go(func() {
-					for {
-						select {
-						case <-stop:
-							return
-						default:
+		for _, w := range writers {
+			claimed, writes := 0, 0
+			var mu sync.Mutex
+			for r := range rounds {
+				b := j.board(owner, nil, nil)
+				id := asStr(b.task(fmt.Sprintf("only %d", r))["id"])
+				stop := make(chan struct{})
+				var wg sync.WaitGroup
+				for _, s := range spammers {
+					wg.Go(func() {
+						for {
+							select {
+							case <-stop:
+								return
+							default:
+							}
+							if _, e := s.try(w.tool, with(map[string]any{"projectId": b.project, "taskId": id}, w.args)); e != nil {
+								t.Errorf("%s: %+v", w.tool, e)
+								return
+							}
+							mu.Lock()
+							writes++
+							mu.Unlock()
 						}
-						if _, e := s.try("add_comment", map[string]any{"projectId": b.project, "taskId": id, "body": "x"}); e != nil {
-							t.Errorf("add_comment: %+v", e)
-							return
-						}
-						mu.Lock()
-						comments++
-						mu.Unlock()
-					}
-				})
+					})
+				}
+				time.Sleep(50 * time.Millisecond)
+				out, e := owner.try("claim_next", map[string]any{"projectId": b.project, "boardId": b.bid})
+				close(stop)
+				wg.Wait()
+				switch got := asStr(asMap(out["task"])["id"]); {
+				case e != nil:
+					t.Errorf("round %d: claim_next: %+v", r, e)
+				case got == id:
+					claimed++
+				default:
+					t.Logf("round %d: claim_next answered task %q while %s was TODO", r, got, id)
+				}
 			}
-			time.Sleep(50 * time.Millisecond)
-			out, e := owner.try("claim_next", map[string]any{"projectId": b.project, "boardId": b.bid})
-			close(stop)
-			wg.Wait()
-			switch got := asStr(asMap(out["task"])["id"]); {
-			case e != nil:
-				t.Errorf("round %d: claim_next: %+v", r, e)
-			case got == id:
-				claimed++
-			default:
-				t.Logf("round %d: claim_next answered task %q while %s was TODO", r, got, id)
+			t.Logf("%s: claim_next claimed the task under %s in %d/%d rounds (%d writes landed beside it)", j.engine, w.tool, claimed, rounds, writes)
+			if claimed != rounds {
+				t.Errorf("under %s: claimed %d/%d rounds, want every one", w.tool, claimed, rounds)
 			}
-		}
-		t.Logf("%s: claim_next claimed the commented task in %d/%d rounds (%d comments landed beside it)", j.engine, claimed, rounds, comments)
-		if claimed != rounds {
-			t.Fatalf("claimed %d/%d rounds, want every one", claimed, rounds)
 		}
 	})
 }
@@ -303,6 +315,20 @@ func TestOneIdentityTwoSessionsHoldOneLease(t *testing.T) {
 		t.Logf("%s: %d sessions of one identity x %d rounds: %d rounds held more than one lease", j.engine, len(sessions), rounds, twoLeases)
 		if twoLeases != 0 {
 			t.Fatalf("%d of %d rounds minted more than one lease", twoLeases, rounds)
+		}
+		// rev68 S4: the second claim's leaseSeconds lengthens the shared lease and never shortens it.
+		long := asStr(b.task("long")["id"])
+		short := owner.call("claim_task", map[string]any{"projectId": b.project, "taskId": long, "leaseSeconds": 60})
+		joinedLease := sessions[1].call("claim_task", map[string]any{"projectId": b.project, "taskId": long, "leaseSeconds": 3600})
+		again := sessions[2].call("claim_task", map[string]any{"projectId": b.project, "taskId": long, "leaseSeconds": 60})
+		exp := func(m map[string]any) time.Time {
+			at, _ := time.Parse(time.RFC3339Nano, asStr(asMap(asMap(m["task"])["claim"])["expiresAt"]))
+			return at
+		}
+		if joinedLease["leaseId"] != short["leaseId"] || again["leaseId"] != short["leaseId"] ||
+			time.Until(exp(joinedLease)) < 3500*time.Second || !exp(again).Equal(exp(joinedLease)) {
+			t.Fatalf("claims of 60, 3600, 60 s: expiries %v, %v, %v, leases %v %v %v; want one lease, lengthened to 3600 s and kept",
+				exp(short), exp(joinedLease), exp(again), short["leaseId"], joinedLease["leaseId"], again["leaseId"])
 		}
 		// Control: a lease that has expired is not handed back; the claim mints a new one.
 		id := asStr(b.task("short")["id"])
