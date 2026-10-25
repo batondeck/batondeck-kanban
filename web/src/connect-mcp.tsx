@@ -3,7 +3,7 @@
  * token in the Authorization header. The OAuth connector path shows only when public-config says
  * the server runs its OAuth server (public_url set). Each snippet's shape is the client's own:
  * `claude mcp add --help` (2.1.308), `codex mcp add --help` (0.145.0), `gemini mcp add --help`
- * (0.65.0), and cursor.com/docs/context/mcp (`${env:NAME}` resolves in `headers`).
+ * (0.65.0), and cursor-agent 2026.04.17, which resolves `${NAME}` in `headers` (not the docs' `${env:NAME}`).
  */
 import { useState } from 'react';
 import { Link } from 'react-router';
@@ -22,7 +22,7 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
       blocks: [
         {
           label: 'MCP server',
-          text: `claude mcp add --transport http batondeck-kanban ${mcpUrl} \\\n  --header "Authorization: Bearer $BATONDECK_TOKEN"`,
+          text: `claude mcp add --scope user --transport http batondeck-kanban ${mcpUrl} \\\n  --header "Authorization: Bearer $BATONDECK_TOKEN"`,
         },
         {
           label: 'Or the plugin (MCP server, worker skill and the device wake)',
@@ -48,10 +48,10 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
       blocks: [
         {
           label: '~/.cursor/mcp.json (or .cursor/mcp.json in a project)',
-          text: `{\n  "mcpServers": {\n    "batondeck-kanban": {\n      "url": "${mcpUrl}",\n      "headers": { "Authorization": "Bearer \${env:BATONDECK_TOKEN}" }\n    }\n  }\n}`,
+          text: `{\n  "mcpServers": {\n    "batondeck-kanban": {\n      "url": "${mcpUrl}",\n      "headers": { "Authorization": "Bearer \${BATONDECK_TOKEN}" }\n    }\n  }\n}`,
         },
       ],
-      note: 'Merge into the file, then turn the server on in Cursor Settings → MCP.',
+      note: 'Merge into the file, then turn the server on in Cursor Settings → MCP. Checked with cursor-agent 2026.04.17; the Cursor IDE is unverified.',
     },
   };
 }
@@ -116,7 +116,8 @@ export function ConnectMcp({ onClose }: { onClose: () => void }) {
           This server's MCP endpoint is <span className="mono">{mcpUrl}</span>. Agents send an API token as{' '}
           <span className="mono">Authorization: Bearer $BATONDECK_TOKEN</span>:{' '}
           <Link to="/settings#cli-tokens" onClick={onClose} style={{ color: 'var(--accent-tint)' }}>create a token</Link>{' '}
-          and export it as <span className="mono">BATONDECK_TOKEN</span> in the shell you start the client from.
+          and export it as <span className="mono">BATONDECK_TOKEN</span> before running the command below. Claude Code and
+          Gemini save the token into their config when you run it; Codex and Cursor read the variable each launch.
         </p>
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
