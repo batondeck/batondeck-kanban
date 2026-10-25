@@ -802,18 +802,24 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 			wait("board", time.Second)
 			return time.Since(t0)
 		}
-		// Busy: the move follows other writes within one bus poll (250 ms), which holds its wake for
-		// the next tick (bus.go "At most one read per poll"). Measured and logged, not asserted.
-		busy := move("IN_PROGRESS")
-		wait("updated", time.Second)
-		// Quiet: no write for longer than a poll, so the commit wake reads at once.
-		// DEVIATION: the plan's 200 ms holds only here; the busy figure above is a discovery for the bus.
+		// Busy: each move follows the last write within one bus poll (250 ms), so its wake lands
+		// while the previous read is fresh; quiet: no write for longer than a poll.
+		busy := make([]time.Duration, 5)
+		for i := range busy {
+			busy[i] = move([]string{"IN_PROGRESS", "TODO"}[i%2])
+			wait("updated", time.Second)
+		}
 		time.Sleep(bus.PollInterval + 50*time.Millisecond)
-		quiet := move("TODO")
-		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before)", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy.Round(time.Millisecond))
+		quiet := move("IN_PROGRESS")
+		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before)", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy)
 		// memstore has no commit wake (store.ChangeWatcher): its bus polls, so the bound is the engines'.
-		if j.engine != servicetest.Memstore && quiet > 200*time.Millisecond {
-			t.Fatalf("the quiet board frame took %v, want <= 200ms", quiet)
+		if j.engine == servicetest.Memstore {
+			return
+		}
+		for i, d := range append(busy, quiet) {
+			if d > 200*time.Millisecond {
+				t.Fatalf("board frame %d of %d took %v, want <= 200ms (busy %v, quiet %v)", i+1, len(busy)+1, d, busy, quiet)
+			}
 		}
 	})
 }
