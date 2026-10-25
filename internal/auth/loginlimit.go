@@ -17,7 +17,7 @@ import (
 // client address and one per login before it runs (a success refunds both). A login's bucket is
 // larger than an address's, so one address cannot lock another out of an account.
 type LoginLimits struct {
-	// Verifies is the most password checks at once; 0 means GOMAXPROCS, never fewer than 2.
+	// Verifies is the most password checks at once; 0 means GOMAXPROCS, between 2 and 4 (4 is 256 MiB).
 	Verifies int
 	// Wait is how long a check waits for a slot before RATE_LIMITED; 0 means 3 s.
 	Wait time.Duration
@@ -37,7 +37,7 @@ func (l *LoginLimits) init() {
 	l.once.Do(func() {
 		n := l.Verifies
 		if n == 0 {
-			n = max(runtime.GOMAXPROCS(0), 2)
+			n = min(max(runtime.GOMAXPROCS(0), 2), 4)
 		}
 		l.sem = make(chan struct{}, n)
 		l.addrs = newBuckets(orDefault(l.PerAddr, 10))
