@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	// StreamCoalesce is how long a board's changes are gathered into one board frame.
+	// StreamCoalesce is the least time between two board frames: the changes within it of the last
+	// frame are gathered into one.
 	StreamCoalesce = 100 * time.Millisecond
 	// StreamPing is the keepalive: a named event, since EventSource never surfaces a comment.
 	StreamPing = 20 * time.Second
@@ -64,7 +65,8 @@ func feedURI(projectID, boardID string) string {
 
 // stream is GET /api/stream?projectId&boardId (app.ts:3540): SSE with ready, ping every
 // StreamPing, and, when a board is named, a board frame and an updated frame per StreamCoalesce of
-// the board's changes, fed by the bus's project subscription; presence frames from the directory.
+// the board's changes (the first at once, the rest of its StreamCoalesce at the end of it), fed by
+// the bus's project subscription; presence frames from the directory.
 // A board stream is authorized by a board snapshot as the caller before any byte is written (a
 // non-member gets 403, an unknown board 404), and again at every board frame: a caller who has lost
 // the board has the stream closed. Each board frame's SSE id is the last change-log id it covers;
@@ -73,6 +75,9 @@ func feedURI(projectID, boardID string) string {
 // notifications frame (conductor's identity-routed notifications hub): list_notifications {limit:
 // 50} as the caller, once on open and again per StreamCoalesce of the caller's notification rows,
 // read from the bus by the caller's identity scope. A notification row is never a board change.
+// The caller is resolved again before every ping, board, presence and notifications frame (P-219):
+// once the credential no longer resolves (a logout, a disabled user as of the account cache, a
+// revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
 type stream struct {
 	o         *Options
 	coalesce  time.Duration
@@ -189,6 +194,21 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// recheck re-resolves the request's credential: closed when the stream must end; ok false is a
+	// failed read, which keeps the stream and skips this frame (as /wake's recheck does).
+	recheck := func() (closed, ok bool) {
+		c, err := s.o.Auth.Reauthenticate(r)
+		if err != nil {
+			if e, isBD := domain.AsBatonDeckError(err); isBD && e.Code == domain.CodeUnauthenticated {
+				return true, false
+			}
+			logger.Printf("api: stream re-resolving the caller %s: %+v", caller.Identity, err)
+			return false, false
+		}
+		caller = c
+		return false, true
+	}
+
 	var presenceChanged <-chan struct{}
 	lastPresence := ""
 	sendPresence := func() {
@@ -227,6 +247,9 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer ping.Stop()
 	var flush <-chan time.Time
 	var timer *time.Timer
+	// Leading edge: a change a coalesce after the last board frame is sent at once; the changes
+	// within one coalesce of it gather into the next frame at that coalesce's end.
+	var flushed time.Time
 	arm := func(d time.Duration) {
 		if timer == nil {
 			timer = time.NewTimer(d)
@@ -249,9 +272,15 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			pending++
 			last = max(last, c.id)
-			arm(s.coalesce)
+			arm(max(0, s.coalesce-time.Since(flushed)))
 		case <-flush:
 			timer, flush = nil, nil
+			flushed = time.Now()
+			if closed, ok := recheck(); closed {
+				return
+			} else if !ok {
+				continue
+			}
 			frame, err := s.compose(ctx, caller, projectID, boardID)
 			if err != nil {
 				if e, ok := domain.AsBatonDeckError(err); ok && (e.Code == domain.CodeForbidden || e.Code == domain.CodeNotFound) {
@@ -272,11 +301,25 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-feedFlush:
 			feedFlush = nil
-			sendNotifications()
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				sendNotifications()
+			}
 		case <-ping.C:
-			out.event("ping", 0, struct{}{})
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				out.event("ping", 0, struct{}{})
+			}
 		case <-presenceChanged:
-			sendPresence()
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				sendPresence()
+			} else {
+				presenceChanged = s.o.Presence.Changed()
+			}
 		}
 	}
 }

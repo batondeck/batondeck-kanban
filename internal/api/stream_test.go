@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
@@ -199,7 +201,7 @@ func decodeBoard(t *testing.T, f frame) boardData {
 }
 
 // AC2: a change-log row written by a real mutation, delivered by the real bus on each engine, is one
-// board frame within 200 ms, after ready and before the next ping, followed by its updated frame.
+// board frame within 200 ms of the mutation's return, after ready and before the next ping, followed by its updated frame.
 func TestStreamBoardFrameOnAChange(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		l := newLive(t, s, Options{Ping: time.Second})
@@ -215,18 +217,21 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 		time.Sleep(50 * time.Millisecond) // the tail is reading
 		start := time.Now()
 		l.addTask(t, l.caller(), pid, bid, "first")
+		returned := time.Now()
+		wrote := returned.Sub(start)
 		f := c.next(t, time.Second)
 		if f.event != "board" {
 			t.Fatalf("after the change: %+v, want board", f)
 		}
-		if took := f.at.Sub(start); took > 200*time.Millisecond {
-			t.Fatalf("the board frame took %v, want <= 200ms", took)
+		// The clock is commit to frame: from the write's return, so the write's own round trip is not counted.
+		if took := f.at.Sub(returned); took > 200*time.Millisecond {
+			t.Fatalf("the board frame came %v after the write returned, want <= 200ms (end to end %v, the write %v)", took, f.at.Sub(start), wrote)
 		}
 		d := decodeBoard(t, f)
 		if d.Board.Board.ID != bid || len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "first" || f.id == "" {
 			t.Fatalf("board frame: id %q %s", f.id, f.data)
 		}
-		t.Logf("board frame %v after the change, id %s", f.at.Sub(start), f.id)
+		t.Logf("board frame %v after the write returned (end to end %v, the write %v), id %s", f.at.Sub(returned), f.at.Sub(start), wrote, f.id)
 		u := c.next(t, time.Second)
 		if u.event != "updated" || u.data != `{"uri":"batondeck://`+pid+`/board/`+bid+`/feed","count":1}` {
 			t.Fatalf("after board: %+v, want updated count 1", u)
@@ -238,6 +243,49 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 		if at := p.at.Sub(opened); at < 900*time.Millisecond || at > 1500*time.Millisecond {
 			t.Fatalf("ping at %v after open, want the 1s keepalive", at)
 		}
+	})
+}
+
+// P-193 (P-295): the first change after a quiet coalesce is a board frame at once, not at the
+// coalesce's end; the changes within the coalesce after it gather into one frame at its end. The
+// coalesce is 2 s here so the two edges cannot be confused under load.
+func TestStreamSendsTheFirstChangeAtOnceAndCoalescesTheRest(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		const coalesce = 2 * time.Second
+		l := newLive(t, s, Options{Ping: time.Minute, Coalesce: coalesce})
+		pid, bid := seedBoard(t, l.harness, l.core, "Edges")
+		c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		if c.status != 200 {
+			t.Fatalf("stream: %d %s", c.status, c.body)
+		}
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("first frame %+v, want ready", f)
+		}
+		time.Sleep(50 * time.Millisecond) // the tail is reading
+		start := time.Now()
+		l.addTask(t, l.caller(), pid, bid, "first")
+		f := c.next(t, 3*time.Second)
+		lead := f.at.Sub(start)
+		if f.event != "board" || lead > coalesce/2 {
+			t.Fatalf("the first change: %s after %v, want a board frame well inside the %v coalesce", f.event, lead, coalesce)
+		}
+		if u := c.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":1`) {
+			t.Fatalf("%+v, want updated count 1", u)
+		}
+		l.addTask(t, l.caller(), pid, bid, "second")
+		l.addTask(t, l.caller(), pid, bid, "third")
+		f = c.next(t, 3*time.Second)
+		trail := f.at.Sub(start)
+		if f.event != "board" || trail < coalesce-100*time.Millisecond {
+			t.Fatalf("the follow-ups: %s after %v, want one board frame at the coalesce's end (%v)", f.event, trail, coalesce)
+		}
+		if d := decodeBoard(t, f); len(d.Tasks.Tasks) != 3 {
+			t.Fatalf("the trailing frame holds %d tasks, want 3", len(d.Tasks.Tasks))
+		}
+		if u := c.next(t, time.Second); u.event != "updated" || !strings.Contains(u.data, `"count":2`) {
+			t.Fatalf("%+v, want updated count 2 (both follow-ups in one frame)", u)
+		}
+		t.Logf("leading frame %v after the first change; trailing frame %v after it, for 2 follow-ups", lead.Round(time.Millisecond), trail.Round(time.Millisecond))
 	})
 }
 
@@ -461,6 +509,209 @@ func TestStreamClosesWhenTheMemberIsRemoved(t *testing.T) {
 			case <-deadline:
 				t.Fatal("the stream is still open 1s after the member was removed")
 			}
+		}
+	})
+}
+
+// closes reads c until it ends within d, failing on any frame but ping: nothing reaches a caller
+// after the refusal (P-219). It answers the pings seen.
+func (c *sseClient) closes(t *testing.T, d time.Duration) (pings int) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case f, ok := <-c.frames:
+			if !ok {
+				return pings
+			}
+			if f.event != "ping" {
+				t.Fatalf("a %s frame after the refusal: %s", f.event, f.data)
+			}
+			pings++
+		case <-deadline:
+			t.Fatalf("the stream is still open %v after the refusal", d)
+		}
+	}
+}
+
+// pings reads n pings within d, failing on a close or a frame but ping: the stream is healthy.
+func (c *sseClient) pings(t *testing.T, n int, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for seen := 0; seen < n; {
+		select {
+		case f, ok := <-c.frames:
+			if !ok {
+				t.Fatalf("the stream closed after %d of %d pings", seen, n)
+			}
+			if f.event != "ping" {
+				t.Fatalf("a %s frame (%s), want ping", f.event, f.data)
+			}
+			seen++
+		case <-deadline:
+			t.Fatalf("%d of %d pings within %v", seen, n, d)
+		}
+	}
+}
+
+// openBoardStream is h's board stream, read past ready and its presence frame.
+func openBoardStream(t *testing.T, h *harness, pid, bid string, header map[string]string) *sseClient {
+	t.Helper()
+	c := h.stream(t, "?projectId="+pid+"&boardId="+bid, header)
+	if c.status != http.StatusOK {
+		t.Fatalf("stream: %d %s", c.status, c.body)
+	}
+	if f := c.next(t, time.Second); f.event != "ready" {
+		t.Fatalf("%+v, want ready", f)
+	}
+	return c
+}
+
+// The control: a stream whose caller still resolves stays open across pings (P-219).
+func TestStreamStaysOpenAcrossPings(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 100 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 5, 2*time.Second)
+	})
+}
+
+// A logout deletes the session row, so the stream it opened closes at the next ping and the
+// reconnect is 401 (P-219; rev54 finding 1).
+func TestStreamClosesAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 200 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 1, time.Second)
+		if st, body := l.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		at := time.Now()
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the logout", time.Since(at).Round(time.Millisecond))
+		if again := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
+		}
+	})
+}
+
+// A disable reaches an open stream within the account cache's bound: the cached entry keeps it
+// open until DefaultAccountCacheTTL has passed on the auth clock, then the next ping closes it.
+func TestStreamClosesWhenTheUserIsDisabled(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		var skew atomic.Int64
+		now := func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+		l := &live{harness: newStackHarnessAt(t, s, Options{Ping: 100 * time.Millisecond}, now), core: s.Core, bus: s.Bus}
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 1, time.Second)
+		if _, err := l.auth.Accounts.Disable(context.Background(), "alice"); err != nil {
+			t.Fatal(err)
+		}
+		c.pings(t, 3, 2*time.Second) // within the bound: the cached entry still holds
+		skew.Store(int64(auth.DefaultAccountCacheTTL + time.Second))
+		at := time.Now()
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the cache bound passed", time.Since(at).Round(time.Millisecond))
+		if again := l.stream(t, "", nil); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
+		}
+	})
+}
+
+// A revoked API token ends the bearer stream it opened before its next frame: here a board frame,
+// no ping being due, so a board change after the revoke reaches nobody (P-219).
+func TestStreamClosesWhenTheTokenIsRevoked(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		token, info, err := l.auth.Tokens.Create(context.Background(), l.userID, l.userID, "stream", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bearer := &harness{t: t, auth: l.auth, srv: l.srv, userID: l.userID} // no cookie
+		header := map[string]string{"Authorization": "Bearer " + token}
+		c := openBoardStream(t, bearer, pid, bid, header)
+		l.addTask(t, l.caller(), pid, bid, "before the revoke")
+		for _, want := range []string{"board", "updated"} {
+			if f := c.next(t, time.Second); f.event != want {
+				t.Fatalf("%+v, want the bearer's %s frame", f, want)
+			}
+		}
+		if _, err := l.auth.Tokens.Revoke(context.Background(), info.ID); err != nil {
+			t.Fatal(err)
+		}
+		at := time.Now()
+		l.addTask(t, l.caller(), pid, bid, "after the revoke")
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the revoke", time.Since(at).Round(time.Millisecond))
+		if again := bearer.stream(t, "", header); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect: %d %s, want 401", again.status, again.body)
+		}
+	})
+}
+
+// A presence change after logout, no ping being due, closes the stream before its presence frame
+// (P-219; the rev6667 review's probe).
+func TestStreamClosesOnAPresenceChangeAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		dir := newFakeDirectory()
+		l := newLive(t, s, Options{Ping: time.Minute, Presence: dir})
+		c := l.stream(t, "", nil)
+		if f := c.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		if f := c.next(t, time.Second); f.event != "presence" {
+			t.Fatalf("%+v, want presence", f)
+		}
+		if st, body := l.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		dir.register(PresenceEntry{PID: 4242, Role: "worker", IdentityID: l.userID, AgentID: "b", RegisteredAt: "2026-10-23T00:00:00Z"})
+		c.closes(t, time.Second)
+	})
+}
+
+// A notification row after logout, no ping being due, closes the stream before its notifications
+// frame (P-219; the rev6667 review's probe).
+func TestStreamClosesOnANotificationAfterLogout(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		bob := l.as("bob")
+		ctx := context.Background()
+		if _, err := l.core.Projects().AddMember(ctx, l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+			t.Fatal(err)
+		}
+		task, err := l.core.Tasks().Create(ctx, l.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: "for bob"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.core.Tasks().Update(ctx, l.caller(), service.UpdateTaskReq{ProjectID: pid, TaskID: task.Task.ID, Version: int64(task.Task.Version),
+			Patch: service.TaskPatch{Assignee: service.Value(bob.userID)}}); err != nil {
+			t.Fatal(err)
+		}
+		mine := bob.stream(t, "", nil)
+		if mine.status != http.StatusOK {
+			t.Fatalf("stream: %d", mine.status)
+		}
+		if f := mine.next(t, time.Second); f.event != "ready" {
+			t.Fatalf("%+v, want ready", f)
+		}
+		mine.nextNote(t, time.Second)
+		if st, body := bob.do("POST", "/api/logout", "", nil); st != http.StatusNoContent {
+			t.Fatalf("logout: %d %s", st, body)
+		}
+		if _, err := l.core.FollowUps().AddFollowUp(ctx, l.caller(), service.AddFollowUpReq{ProjectID: pid, TaskID: task.Task.ID, Body: "your turn"}); err != nil {
+			t.Fatal(err)
+		}
+		mine.closes(t, 2*time.Second)
+		select {
+		case n := <-mine.notes:
+			t.Fatalf("a notifications frame after the logout: %s", n.data)
+		default:
 		}
 	})
 }
