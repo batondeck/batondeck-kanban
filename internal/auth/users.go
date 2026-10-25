@@ -48,6 +48,8 @@ type Accounts struct {
 	Now func() time.Time
 	// Params are the argon2id costs for new hashes; the zero value means DefaultArgon2.
 	Params Argon2Params
+	// Limits bound Authenticate's password checks; nil means the process-wide default.
+	Limits *LoginLimits
 }
 
 func (a *Accounts) now() time.Time {
@@ -165,26 +167,44 @@ var dummyHash = sync.OnceValue(func() string {
 	return h
 })
 
-// Authenticate checks a login and password. An unknown login, a wrong password and a disabled user
-// are one refusal: UNAUTHENTICATED, with nothing saying which.
-func (a *Accounts) Authenticate(ctx context.Context, login, password string) (store.User, error) {
+// Authenticate checks a login and password from the client address addr. An unknown login, a wrong
+// password and a disabled user are one refusal: UNAUTHENTICATED, with nothing saying which. Past
+// Limits it is RATE_LIMITED, whose details carry retryAfterSeconds, without checking the password.
+func (a *Accounts) Authenticate(ctx context.Context, addr, login, password string) (store.User, error) {
 	l, err := NormalizeLogin(login)
 	if err != nil {
 		return store.User{}, errUnauthenticated()
 	}
+	lim := a.Limits
+	if lim == nil {
+		lim = loginLimits
+	}
+	refund, err := lim.admit(addr, a.now())
+	if err != nil {
+		return store.User{}, err
+	}
+	release, err := lim.acquire(ctx)
+	if err != nil {
+		return store.User{}, err
+	}
+	defer release()
 	u, err := a.Store.GetUserByEmail(ctx, l)
 	if errors.Is(err, store.ErrNotFound) {
-		_ = VerifyPassword(password, dummyHash())
+		_ = verify(password, dummyHash())
 		return store.User{}, errUnauthenticated()
 	}
 	if err != nil {
 		return store.User{}, err
 	}
-	if !VerifyPassword(password, u.PasswordHash) || u.DisabledAt != 0 {
+	if !verify(password, u.PasswordHash) || u.DisabledAt != 0 {
 		return store.User{}, errUnauthenticated()
 	}
+	refund()
 	return u, nil
 }
+
+// verify is VerifyPassword; a test wraps it to count the checks in flight.
+var verify = VerifyPassword
 
 // HashPassword returns argon2id's encoded form: $argon2id$v=19$m=<KiB>,t=<n>,p=<n>$<salt>$<key>,
 // salt and key in unpadded standard base64.
