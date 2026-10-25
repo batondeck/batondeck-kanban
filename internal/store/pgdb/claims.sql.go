@@ -33,7 +33,7 @@ WHERE t.id = (
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
   LIMIT 1
-  FOR UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
+  FOR NO KEY UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -104,9 +104,11 @@ type ClaimNextRow struct {
 // (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 // valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
 // high, normal, low), then order key and id COLLATE "C", as bytes.
-// ClaimNext in ONE statement: the frontier's first row that no other transaction holds (FOR
+// ClaimNext in ONE statement: the frontier's first row that no other claim holds (FOR NO KEY
 // UPDATE OF f SKIP LOCKED), locked and claimed, so concurrent callers never win the same task and
-// never wait on each other. column_id ” keeps the task's column; a column that is not the board's matches no
+// never wait on each other. NO KEY UPDATE, not UPDATE: the FOR KEY SHARE a concurrent child insert's
+// foreign key check takes on the task (a comment, an event) does not conflict with it, so that task
+// is not skipped (P-96). column_id ” keeps the task's column; a column that is not the board's matches no
 // row, and the caller tells that apart from an empty frontier.
 func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNextRow, error) {
 	row := q.db.QueryRow(ctx, claimNext,
@@ -171,20 +173,175 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 	return i, err
 }
 
+const claimNextWaiting = `-- name: ClaimNextWaiting :one
+UPDATE tasks AS t SET status = 'IN_PROGRESS',
+  column_id = CASE WHEN $1::text = '' THEN t.column_id ELSE $1::text END,
+  claim_owner = $2::text, claim_agent = $3::text, claim_agent_id = $4::text,
+  lease_id = $5::text, lease_expires_at = $6::bigint, next_eligible_at = NULL,
+  version = t.version + 1, updated_by = $2::text, updated_at = $7::bigint
+WHERE t.id = (
+  SELECT f.id FROM tasks f, (SELECT $8::text AS caps) p
+  WHERE f.project_id = $9 AND f.board_id = $10 AND f.status = 'TODO'
+    AND json_array_length(f.blocked_by::json) = 0
+    AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
+    AND f.racing = 0
+    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $7::bigint)
+    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $7::bigint)
+    AND ($11::text IS NULL OR f.assignee = $11::text)
+    AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND ($1::text = '' OR EXISTS (
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
+  ORDER BY f.score DESC,
+    CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
+    f.order_key COLLATE "C", f.id COLLATE "C"
+  LIMIT 1
+  FOR NO KEY UPDATE OF f) AND t.project_id = $9 AND t.status = 'TODO'
+RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
+`
+
+type ClaimNextWaitingParams struct {
+	ColumnID  string
+	Owner     string
+	Agent     sql.NullString
+	AgentID   sql.NullString
+	LeaseID   string
+	ExpiresAt int64
+	Now       int64
+	Caps      string
+	ProjectID string
+	BoardID   string
+	Assignee  sql.NullString
+}
+
+type ClaimNextWaitingRow struct {
+	ProjectID            string
+	ID                   string
+	BoardID              string
+	ColumnID             string
+	Title                string
+	Description          string
+	Status               string
+	BlockedReason        sql.NullString
+	Priority             string
+	Assignee             sql.NullString
+	Labels               string
+	RequiredCapabilities string
+	Estimate             sql.NullFloat64
+	DueAt                sql.NullInt64
+	ParentTaskID         sql.NullString
+	OrderKey             string
+	CustomFields         string
+	BlockedBy            string
+	Blocks               string
+	Deliverable          sql.NullString
+	Reviewer             sql.NullString
+	Review               sql.NullString
+	Chars                sql.NullString
+	ModelHint            sql.NullString
+	RunOf                sql.NullString
+	SprintIds            string
+	Racing               int64
+	RaceOpenedAt         sql.NullInt64
+	ClaimAttempts        int64
+	NextEligibleAt       sql.NullInt64
+	Score                float64
+	SearchTokens         string
+	ClaimOwner           sql.NullString
+	ClaimAgent           sql.NullString
+	ClaimAgentID         sql.NullString
+	LeaseID              sql.NullString
+	LeaseExpiresAt       sql.NullInt64
+	Version              int64
+	CreatedBy            string
+	CreatedByAgent       sql.NullString
+	CreatedAt            int64
+	UpdatedBy            string
+	UpdatedAt            int64
+}
+
+// ClaimNextWaiting is ClaimNext without SKIP LOCKED: the second look when ClaimNext found nothing.
+// A frontier row a writer holds (a mutation that bumps a task locks it from its load) is waited for,
+// not passed over, and Postgres re-checks it against the frontier once the writer commits, so a
+// task the writer moved out of TODO is not claimed (P-278 B1).
+func (q *Queries) ClaimNextWaiting(ctx context.Context, arg ClaimNextWaitingParams) (ClaimNextWaitingRow, error) {
+	row := q.db.QueryRow(ctx, claimNextWaiting,
+		arg.ColumnID,
+		arg.Owner,
+		arg.Agent,
+		arg.AgentID,
+		arg.LeaseID,
+		arg.ExpiresAt,
+		arg.Now,
+		arg.Caps,
+		arg.ProjectID,
+		arg.BoardID,
+		arg.Assignee,
+	)
+	var i ClaimNextWaitingRow
+	err := row.Scan(
+		&i.ProjectID,
+		&i.ID,
+		&i.BoardID,
+		&i.ColumnID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.BlockedReason,
+		&i.Priority,
+		&i.Assignee,
+		&i.Labels,
+		&i.RequiredCapabilities,
+		&i.Estimate,
+		&i.DueAt,
+		&i.ParentTaskID,
+		&i.OrderKey,
+		&i.CustomFields,
+		&i.BlockedBy,
+		&i.Blocks,
+		&i.Deliverable,
+		&i.Reviewer,
+		&i.Review,
+		&i.Chars,
+		&i.ModelHint,
+		&i.RunOf,
+		&i.SprintIds,
+		&i.Racing,
+		&i.RaceOpenedAt,
+		&i.ClaimAttempts,
+		&i.NextEligibleAt,
+		&i.Score,
+		&i.SearchTokens,
+		&i.ClaimOwner,
+		&i.ClaimAgent,
+		&i.ClaimAgentID,
+		&i.LeaseID,
+		&i.LeaseExpiresAt,
+		&i.Version,
+		&i.CreatedBy,
+		&i.CreatedByAgent,
+		&i.CreatedAt,
+		&i.UpdatedBy,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const heartbeatLease = `-- name: HeartbeatLease :one
-UPDATE tasks SET lease_expires_at = $1::bigint
-WHERE project_id = $2 AND id = $3 AND claim_owner = $4::text
-  AND lease_id = $5::text AND lease_expires_at > $6::bigint
+UPDATE tasks SET lease_expires_at = CASE WHEN $1::bigint <> 0
+  THEN GREATEST(lease_expires_at, $2::bigint) ELSE $2::bigint END
+WHERE project_id = $3 AND id = $4 AND claim_owner = $5::text
+  AND lease_id = $6::text AND lease_expires_at > $7::bigint
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
 type HeartbeatLeaseParams struct {
-	ExpiresAt int64
-	ProjectID string
-	ID        string
-	Owner     string
-	LeaseID   string
-	Now       int64
+	KeepLonger int64
+	ExpiresAt  int64
+	ProjectID  string
+	ID         string
+	Owner      string
+	LeaseID    string
+	Now        int64
 }
 
 type HeartbeatLeaseRow struct {
@@ -234,9 +391,11 @@ type HeartbeatLeaseRow struct {
 }
 
 // The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
-// caller reads the task to name. Neither the version nor updated_at moves.
+// caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.
+// Neither the version nor updated_at moves.
 func (q *Queries) HeartbeatLease(ctx context.Context, arg HeartbeatLeaseParams) (HeartbeatLeaseRow, error) {
 	row := q.db.QueryRow(ctx, heartbeatLease,
+		arg.KeepLonger,
 		arg.ExpiresAt,
 		arg.ProjectID,
 		arg.ID,

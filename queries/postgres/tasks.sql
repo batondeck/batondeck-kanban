@@ -5,9 +5,11 @@
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at FROM tasks WHERE project_id = $1 AND id = $2;
 
 -- The read a versioned write starts from: the row is locked to the transaction, so two writers of
--- one task take turns.
+-- one task take turns. FOR NO KEY UPDATE, since no task write changes (project_id, id): FOR UPDATE
+-- conflicts with the FOR KEY SHARE every child insert's foreign key check takes on the task, and two
+-- writers that each inserted a child row and then locked the task deadlocked (P-119).
 -- name: LockTask :one
-SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at FROM tasks WHERE project_id = $1 AND id = $2 FOR UPDATE;
+SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at FROM tasks WHERE project_id = $1 AND id = $2 FOR NO KEY UPDATE;
 
 -- name: InsertTask :one
 INSERT INTO tasks (project_id, id, board_id, column_id, title, description, status, priority, assignee, labels, required_capabilities, parent_task_id, order_key, custom_fields, model_hint, run_of, sprint_ids, version, created_by, created_by_agent, created_at, updated_by, updated_at)

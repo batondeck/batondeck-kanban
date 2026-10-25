@@ -186,6 +186,10 @@ type Tasks interface {
 	CreateTask(ctx context.Context, in CreateTaskInput) (Task, error)
 	// GetTask is one task by (project, id).
 	GetTask(ctx context.Context, projectID, taskID string) (Task, error)
+	// LockTask is GetTask for a write inside Atomically: on Postgres the row stays locked (FOR NO
+	// KEY UPDATE) until the transaction ends, so its version cannot move under the caller; SQLite's
+	// transaction already holds the write lock.
+	LockTask(ctx context.Context, projectID, taskID string) (Task, error)
 	// UpdateTask applies patch at expectedVersion. An empty title, an unknown priority,
 	// CustomFields that is not a JSON object, a Review, Chars or ModelHint that is not JSON, or no
 	// UpdatedBy or UpdatedAt is VALIDATION.
