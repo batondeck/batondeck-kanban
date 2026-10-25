@@ -203,7 +203,8 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		if m.TaskID != "" {
 			// A mutation that bumps the task locks it first, before fn writes any row that references
 			// it, so its version cannot move before the bump (P-119: two writers that each inserted a
-			// child row and then locked the task deadlocked on Postgres).
+			// child row and then locked the task deadlocked on Postgres). claim_next's SKIP LOCKED
+			// passes over a task held so; its second, waiting look (store.ClaimNext) claims it.
 			load := tx.LockTask
 			if m.KeepVersion {
 				load = tx.GetTask

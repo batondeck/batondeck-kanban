@@ -106,9 +106,10 @@ func sameAgent(a, b *string) bool {
 	return *a == *b
 }
 
-// claimNext is the claim statement alone when it wins. When it matches nothing and the caller named
-// a column, the column and then the frontier are read to tell a missing column (NOT_FOUND, as when
-// it wins) from an empty frontier.
+// claimNext is the claim statement alone when it wins. On Postgres a miss is looked at once more
+// without SKIP LOCKED (waitingClaimer), so a TODO task a writer holds is waited for rather than
+// reported as no work. When it matches nothing and the caller named a column, the column and then
+// the frontier are read to tell a missing column (NOT_FOUND, as when it wins) from an empty frontier.
 func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (Task, bool, error) {
 	if err := validFrontier(fq); err != nil {
 		return Task{}, false, err
@@ -117,11 +118,15 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 		return Task{}, false, err
 	}
 	q := e.queries(true)
-	row, err := q.ClaimNext(ctx, sqlitedb.ClaimNextParams{
+	arg := sqlitedb.ClaimNextParams{
 		ColumnID: in.ColumnID, Owner: in.Owner, Agent: nullStr(in.Agent), AgentID: nullStr(in.AgentID),
 		LeaseID: in.LeaseID, ExpiresAt: in.ExpiresAt, Now: in.Now, ProjectID: fq.ProjectID, BoardID: fq.BoardID,
 		Assignee: nullStr(fq.Assignee), Caps: capsParam(fq.Capabilities),
-	})
+	}
+	row, err := q.ClaimNext(ctx, arg)
+	if w, ok := e.(waitingClaimer); ok && isNoRows(err) {
+		row, err = w.claimNextWaiting(ctx, arg)
+	}
 	switch {
 	case err == nil:
 		t, err := taskFromRow(sqlitedb.GetTaskRow(row))
@@ -139,6 +144,17 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 		return Task{}, false, err
 	}
 	return Task{}, false, domain.NotFound("Column", in.ColumnID)
+}
+
+// waitingClaimer is an engine whose ClaimNext skips locked rows: Postgres. SQLite's writer holds
+// the database, so nothing is ever skipped there.
+type waitingClaimer interface {
+	claimNextWaiting(ctx context.Context, arg sqlitedb.ClaimNextParams) (sqlitedb.ClaimNextRow, error)
+}
+
+func (s *Postgres) claimNextWaiting(ctx context.Context, arg sqlitedb.ClaimNextParams) (sqlitedb.ClaimNextRow, error) {
+	r, err := s.queries(true).(pgQueries).q.ClaimNextWaiting(ctx, pgdb.ClaimNextWaitingParams(arg))
+	return sqlitedb.ClaimNextRow(r), err
 }
 
 func isNotFound(err error) bool {
