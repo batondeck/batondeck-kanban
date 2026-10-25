@@ -8,6 +8,21 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
+  sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
+  `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
+  It deletes, in bounded batches, memory past its expiry, change-log rows past
+  `retention.change_log_days`, tool_calls rows past `retention.tool_calls_days`, agent sessions idle
+  for 30 minutes (ADR-0004's GC in place of `prune_agent_sessions`; `Store.DeleteIdleAgentSessions`
+  now takes a limit, longest idle first), deliveries and raw webhook bodies past the expiry stamped
+  on each, and (with a blob store) the blobs unreferenced for an hour. Before this, nothing ran it,
+  so tool_calls and the change log grew without bound. The delivery and raw-body windows are config
+  too: `retention.deliveries_days` (`BATONDECK_RETENTION_DELIVERIES_DAYS`, default 30, also an alert
+  state's expiry) and `retention.raw_bodies_days` (`BATONDECK_RETENTION_RAW_BODIES_DAYS`, default 7),
+  stamped on each row when written, so a change applies to rows written after it. Every window is
+  1 to 36500 days and the interval 1 to 86400 seconds; past a bound the config is refused, since a
+  window that overflows `time.Duration` would put the cutoff in the future and sweep a whole table.
+  Boot logs the interval and every window.
 - The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
   reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
   the package instead of leaning on the bound.
@@ -521,8 +536,8 @@ Notable changes to batondeck-kanban. The format follows
   `attach_file` is INTERNAL and `downloadUrl` null, said once at boot. Both engines and memstore build
   the `Attachments` and `Blobs` store areas; delete_task's blob hook now removes each freed blob's row
   and file unless another attachment or memory entry holds it, and the retention sweep gains a step
-  handing the blobs unreferenced for an hour to the same collector (the sweep is not yet run by
-  `serve`).
+  handing the blobs unreferenced for an hour to the same collector (`serve` runs the sweep since
+  P-109).
 
 - The R3.1 socket-wake spike findings (`docs/release/socket-wake-spike-2026-10.md`) and its scratch
   writer (`docs/release/spikes/socket-wake/doorbell.py`), measured on Claude Code 2.1.309: a
@@ -1023,6 +1038,15 @@ Notable changes to batondeck-kanban. The format follows
   case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
   JSON instead of text/plain. No new config key. The check runs before the bearer, so a foreign
   Host with no bearer is now 403, where it was 401.
+
+- P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
+  The caller was resolved once at connect, so a copied session cookie kept receiving board frames
+  after logout (the R1.15 review measured the stream still open 20 s after it). The stream now
+  resolves the request's credential again before every ping, board, presence and notifications
+  frame, through the same resolver as the session check (`auth.Service.Reauthenticate`, new), and
+  closes without another frame once it is refused: a logout or a revoke at the next frame or ping
+  (20 s), a disable once the 60 s account cache has let the entry go. A store error keeps the stream
+  and skips that frame. The reconnect is 401.
 
 - P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
   window; ingest verifies with the current secret alone and logs why. A current secret that will not

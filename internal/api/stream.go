@@ -73,6 +73,9 @@ func feedURI(projectID, boardID string) string {
 // notifications frame (conductor's identity-routed notifications hub): list_notifications {limit:
 // 50} as the caller, once on open and again per StreamCoalesce of the caller's notification rows,
 // read from the bus by the caller's identity scope. A notification row is never a board change.
+// The caller is resolved again before every ping, board, presence and notifications frame (P-219):
+// once the credential no longer resolves (a logout, a disabled user as of the account cache, a
+// revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
 type stream struct {
 	o         *Options
 	coalesce  time.Duration
@@ -189,6 +192,21 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// recheck re-resolves the request's credential: closed when the stream must end; ok false is a
+	// failed read, which keeps the stream and skips this frame (as /wake's recheck does).
+	recheck := func() (closed, ok bool) {
+		c, err := s.o.Auth.Reauthenticate(r)
+		if err != nil {
+			if e, isBD := domain.AsBatonDeckError(err); isBD && e.Code == domain.CodeUnauthenticated {
+				return true, false
+			}
+			logger.Printf("api: stream re-resolving the caller %s: %+v", caller.Identity, err)
+			return false, false
+		}
+		caller = c
+		return false, true
+	}
+
 	var presenceChanged <-chan struct{}
 	lastPresence := ""
 	sendPresence := func() {
@@ -252,6 +270,11 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			arm(s.coalesce)
 		case <-flush:
 			timer, flush = nil, nil
+			if closed, ok := recheck(); closed {
+				return
+			} else if !ok {
+				continue
+			}
 			frame, err := s.compose(ctx, caller, projectID, boardID)
 			if err != nil {
 				if e, ok := domain.AsBatonDeckError(err); ok && (e.Code == domain.CodeForbidden || e.Code == domain.CodeNotFound) {
@@ -272,11 +295,25 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-feedFlush:
 			feedFlush = nil
-			sendNotifications()
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				sendNotifications()
+			}
 		case <-ping.C:
-			out.event("ping", 0, struct{}{})
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				out.event("ping", 0, struct{}{})
+			}
 		case <-presenceChanged:
-			sendPresence()
+			if closed, ok := recheck(); closed {
+				return
+			} else if ok {
+				sendPresence()
+			} else {
+				presenceChanged = s.o.Presence.Changed()
+			}
 		}
 	}
 }

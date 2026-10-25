@@ -35,8 +35,9 @@ var backends = []opener{
 
 const day = 24 * time.Hour
 
-// AC4: one sweep removes the change-log row older than 7 days, the tool_calls row past 45 days and
-// the memory entry past its TTL, and leaves the younger ones, on memstore and both engines.
+// AC4: one sweep removes the change-log row older than 7 days, the tool_calls row past 45 days, the
+// memory entry past its TTL and the agent session idle past 30 minutes (P-109), and leaves the
+// younger ones, on memstore and both engines.
 func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 	for _, b := range backends {
 		t.Run(b.name, func(t *testing.T) {
@@ -64,12 +65,21 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 				}
 			}
 
+			for agent, ago := range map[string]time.Duration{"idle": 31 * time.Minute, "busy": 29 * time.Minute} {
+				if _, err := s.UpsertAgentSession(ctx, store.AgentSessionStart{IdentityID: "alice", AgentID: agent, AgentName: agent, Kind: "agent", At: at(ago)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
 			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}),
 				Now: func() time.Time { return now }, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
 			got := sw.Sweep(ctx)
 			t.Logf("swept %+v", got)
-			if got != (Swept{Memory: 1, ChangeLog: 1, ToolCalls: 1}) {
-				t.Fatalf("swept %+v, want one memory entry, one change-log row and one tool call", got)
+			if got != (Swept{Memory: 1, ChangeLog: 1, ToolCalls: 1, AgentSessions: 1}) {
+				t.Fatalf("swept %+v, want one memory entry, one change-log row, one tool call and one agent session", got)
+			}
+			if rows, err := s.ListAgentSessions(ctx, "alice", 0); err != nil || len(rows) != 1 || rows[0].AgentID != "busy" {
+				t.Fatalf("agent sessions after the sweep: %+v, %v; want only busy", rows, err)
 			}
 			left, err := s.ReadChanges(ctx, 0, 0)
 			if err != nil {
@@ -78,7 +88,7 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 			if len(left) != 1 || left[0].ID != youngChange {
 				t.Fatalf("change log after the sweep: %+v, want only %d (not %d)", left, youngChange, oldChange)
 			}
-			if again := sw.Sweep(ctx); again.ChangeLog != 0 || again.ToolCalls != 0 || again.Memory != 0 {
+			if again := sw.Sweep(ctx); again.ChangeLog != 0 || again.ToolCalls != 0 || again.Memory != 0 || again.AgentSessions != 0 {
 				t.Fatalf("a second sweep deleted %+v", again)
 			}
 			if n, err := s.DeleteToolCallsOlderThan(ctx, 1<<62, 10); err != nil || n != 1 {
@@ -168,6 +178,10 @@ func (f *fake) DeleteToolCallsOlderThan(_ context.Context, _ int64, limit int) (
 	return f.del("tool calls", limit)
 }
 
+func (f *fake) DeleteIdleAgentSessions(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("agent sessions", limit)
+}
+
 func (f *fake) DeleteExpiredDeliveries(_ context.Context, _ int64, limit int) (int64, error) {
 	return f.del("deliveries", limit)
 }
@@ -186,7 +200,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
