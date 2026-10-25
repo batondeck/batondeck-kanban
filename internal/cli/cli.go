@@ -224,7 +224,7 @@ func serve(args []string, version string, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media); err != nil {
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media, cfg.Retention); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}

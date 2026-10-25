@@ -38,5 +38,8 @@ WHERE sqlc.arg(identity_id)::text = '' OR identity_id = sqlc.arg(identity_id)::t
 ORDER BY last_seen_at DESC, agent_id COLLATE "C", identity_id COLLATE "C"
 LIMIT sqlc.arg(page_limit)::bigint;
 
+-- At most page_limit rows last seen before before, the longest idle first.
 -- name: DeleteIdleAgentSessions :execrows
-DELETE FROM agent_sessions WHERE last_seen_at < $1;
+DELETE FROM agent_sessions WHERE (identity_id, agent_id) IN (
+  SELECT a.identity_id, a.agent_id FROM agent_sessions a WHERE a.last_seen_at < sqlc.arg(before)
+  ORDER BY a.last_seen_at, a.identity_id, a.agent_id LIMIT sqlc.arg(page_limit)::bigint);
