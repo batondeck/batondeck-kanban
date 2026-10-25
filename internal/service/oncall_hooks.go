@@ -79,7 +79,7 @@ type HookResult struct {
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
 // <source id or the body's hash>#<fingerprint or index>. A verification or parse failure is a
-// rejected delivery row (its raw body kept for RawBodyRetention while the integration's hourly
+// rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
 // budget lasts), charged to the rate budget. The error is an internal fault only.
 func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (HookOutcome, error) {
 	now := c.now()
@@ -263,7 +263,7 @@ func (c *Core) hookSecrets(integration store.Integration, a oncall.Auth, now tim
 
 // reject records a refused delivery (kind and result rejected, the reason its error), charged to
 // the integration's rate budget like any delivery: over it, nothing is written. The raw body (its
-// first 64 KiB) is kept for RawBodyRetention while the integration's hourly budget of
+// first 64 KiB) is kept for the raw-body window while the integration's hourly budget of
 // oncall.RejectionsPerHour lasts. Its id is the body's hash, so a sender repeating one body is
 // recorded once.
 func (c *Core) reject(ctx context.Context, integration store.Integration, ratePerMin int, body []byte, reason string, now time.Time) error {
@@ -275,13 +275,13 @@ func (c *Core) reject(ctx context.Context, integration store.Integration, ratePe
 	err := c.store.Atomically(ctx, func(tx store.Store) error {
 		_, inserted, err := tx.InsertDelivery(ctx, store.Delivery{
 			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: now.UnixMilli(),
-			Kind: store.DeliveryRejected, Result: store.ResultRejected, Error: &reason, ExpiresAt: now.Add(DeliveryRetention).UnixMilli(),
+			Kind: store.DeliveryRejected, Result: store.ResultRejected, Error: &reason, ExpiresAt: now.Add(c.deliveryTTL).UnixMilli(),
 		})
 		if err != nil || !inserted || len(body) == 0 || !c.limiter.RejectionBudget(integration.ID, now) {
 			return err
 		}
 		kept := body[:min(len(body), rawBodyKeptMax)]
-		return tx.PutDeliveryRawBody(ctx, integration.ProjectID, integration.ID, deliveryID, kept, now.Add(RawBodyRetention).UnixMilli())
+		return tx.PutDeliveryRawBody(ctx, integration.ProjectID, integration.ID, deliveryID, kept, now.Add(c.rawBodyTTL).UnixMilli())
 	})
 	return c.mapErr("ingest", err)
 }
