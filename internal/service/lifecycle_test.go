@@ -1247,3 +1247,68 @@ func TestHandoffNotifiesItsReceiver(t *testing.T) {
 		}
 	})
 }
+
+// B72-1 (review of #72): a reviewer's reopen hands the rework back to its completer, who is rung
+// and notified and takes it with claim_next; a reopen with no completer on record clears the
+// assignee, so the rework is open work any worker takes.
+func TestReopenedReworkReachesTheWorker(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		wkr := e.member(t, e.project, "wkr", domain.RoleWorker)
+		carl := e.member(t, e.project, "carl", domain.RoleWorker)
+		mst := e.member(t, e.project, "mst", domain.RoleMaster)
+		lc, fu, nf := e.c.Lifecycle(), e.c.FollowUps(), e.c.Notifications()
+		task := e.task(t, domain.Todo)
+		c, err := lc.ClaimNext(e.ctx, wkr, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || c.Task == nil || c.Task.ID != task.ID {
+			t.Fatalf("worker claim %+v %v", c.Task, err)
+		}
+		if _, err := lc.Complete(e.ctx, wkr, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: *c.LeaseID, Reviewer: "mst"}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := fu.AddFollowUp(e.ctx, mst, AddFollowUpReq{ProjectID: e.project, TaskID: task.ID, Body: "fix the edge case", Reopen: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Task.Status != domain.Todo || r.Task.Assignee == nil || *r.Task.Assignee != "wkr" {
+			t.Fatalf("after reopen: status=%s assignee=%v, want TODO assigned to the completer wkr", r.Task.Status, r.Task.Assignee)
+		}
+		if rows := e.assignedRows(t); rows[len(rows)-1] != "add_follow_up@wkr" || slices.Contains(rows[:len(rows)-1], "add_follow_up@wkr") {
+			t.Fatalf("assigned rows %v, want one add_follow_up@wkr last", rows)
+		}
+		if n, err := nf.List(e.ctx, wkr, ListNotificationsReq{}); err != nil || len(n.Notifications) != 1 || n.Notifications[0].Type != domain.NotificationFollowUp {
+			t.Fatalf("worker's feed %+v %v, want the follow-up", n.Notifications, err)
+		}
+		if got, err := lc.ClaimNext(e.ctx, carl, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err != nil || got.Task != nil {
+			t.Fatalf("another worker's claim_next = %+v %v, want null", got.Task, err)
+		}
+		got, err := lc.ClaimNext(e.ctx, wkr, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || got.Task == nil || got.Task.ID != task.ID {
+			t.Fatalf("worker claim_next after reopen = %+v %v, want %s", got.Task, err, task.ID)
+		}
+
+		// No completer on record (a DONE task that never went through review): the reopen clears
+		// the assignee and broadcasts.
+		e.settings(t, map[string]any{"reviewEnabled": false})
+		done := e.task(t, domain.Todo)
+		lease := e.claim(t, wkr, done.ID, 0).LeaseID
+		if _, err := lc.Complete(e.ctx, wkr, CompleteTaskReq{ProjectID: e.project, TaskID: done.ID, LeaseID: lease}); err != nil {
+			t.Fatal(err)
+		}
+		if d := e.get(t, done.ID); d.Status != domain.Done || d.Review != nil {
+			t.Fatalf("done task %s review %s, want DONE with no review", d.Status, d.Review)
+		}
+		if _, err := e.st.UpdateTask(e.ctx, e.project, done.ID, e.get(t, done.ID).Version, store.TaskPatch{Assignee: &store.Nullable[string]{Value: ptr("mst")}, UpdatedBy: "alice", UpdatedAt: time.Now().UnixMilli()}); err != nil {
+			t.Fatal(err)
+		}
+		r, err = fu.AddFollowUp(e.ctx, mst, AddFollowUpReq{ProjectID: e.project, TaskID: done.ID, Body: "again", Reopen: true})
+		if err != nil || r.Task.Status != domain.Todo || r.Task.Assignee != nil {
+			t.Fatalf("reopen with no completer: %+v %v, want TODO unassigned", r.Task, err)
+		}
+		if _, p := e.lastChange(t); p.Kind != DoorbellBroadcast {
+			t.Fatalf("reopen with no completer rang %+v, want broadcast", p)
+		}
+		if got, err := lc.ClaimNext(e.ctx, carl, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err != nil || got.Task == nil || got.Task.ID != done.ID {
+			t.Fatalf("carl's claim_next = %+v %v, want the reopened %s", got.Task, err, done.ID)
+		}
+	})
+}
