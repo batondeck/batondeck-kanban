@@ -149,11 +149,11 @@ func TestMigrateAppliesTheSchemaThenNoChange(t *testing.T) {
 }
 
 // doctor reports the version the connection answers with, and fails naming the engine when there
-// is no connection to ask.
+// is no connection to ask; a SQLite file not created yet is not a failure.
 func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bk.db")
 	t.Setenv("BATONDECK_DATABASE_URL", path)
-	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL store        sqlite: ") {
+	if code, out, _ := run("doctor"); code != 0 || !strings.Contains(out, "ok   store        sqlite at "+path+": not created yet; serve creates it\n") {
 		t.Fatalf("doctor on a missing SQLite file: %d %q", code, out)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -163,7 +163,7 @@ func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 		t.Fatalf("migrate: %s", errs)
 	}
 	code, out, _ := run("doctor")
-	if code != 0 || !regexp.MustCompile(`ok   store        sqlite, the connection reports: SQLite 3\.\d+\.\d+\n`).MatchString(out) {
+	if code != 0 || !regexp.MustCompile(`ok   store        sqlite at .+, blobs in .+, the connection reports: SQLite 3\.\d+\.\d+\n`).MatchString(out) {
 		t.Fatalf("doctor on SQLite: %d %q", code, out)
 	}
 
@@ -175,9 +175,30 @@ func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 	if dsn := os.Getenv("BATONDECK_TEST_POSTGRES_DSN"); dsn != "" {
 		t.Setenv("BATONDECK_DATABASE_URL", dsn)
 		code, out, _ := run("doctor")
-		if code != 0 || !strings.Contains(out, "ok   store        postgres, the connection reports: PostgreSQL ") {
+		if code != 0 || !regexp.MustCompile(`ok   store        postgres on host .+, database .+, blobs in .+, the connection reports: PostgreSQL `).MatchString(out) {
 			t.Fatalf("doctor on Postgres: %d %q", code, out)
 		}
+	}
+}
+
+// serve's first line names the SQLite file and blob dir, or the Postgres host and database without
+// the URL's password.
+func TestDataLineNamesThePathsAndNeverThePassword(t *testing.T) {
+	t.Setenv("BATONDECK_DATABASE_URL", "/srv/bk/bk.db")
+	cfg, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dataLine(cfg); got != "sqlite at /srv/bk/bk.db, blobs in /srv/bk/blobs" {
+		t.Fatalf("sqlite: %q", got)
+	}
+	t.Setenv("BATONDECK_DATABASE_URL", "postgres://bk:SECRET@db.example:5432/kanban?sslmode=disable")
+	t.Setenv("BATONDECK_BLOB_DIR", "/srv/blobs")
+	if cfg, err = loadConfig(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := dataLine(cfg); got != "postgres on host db.example:5432, database kanban, blobs in /srv/blobs" {
+		t.Fatalf("postgres: %q", got)
 	}
 }
 
