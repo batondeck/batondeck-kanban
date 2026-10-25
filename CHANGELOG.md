@@ -17,7 +17,8 @@ Notable changes to batondeck-kanban. The format follows
   not one per commit, and an idle tail still issues none. The stream sends a change a coalesce after
   its last board frame at once and gathers the changes within a coalesce of it into one frame at
   that coalesce's end, so frames stay at most one per 100 ms. The join's stream test bounds five
-  back-to-back moves and the quiet one, at serve's real poll, on SQLite and Postgres.
+  back-to-back moves and the quiet one at 200 ms from `move_task`'s return (commit to frame), at
+  serve's real poll, on SQLite and Postgres.
 - `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
