@@ -13,8 +13,9 @@ import (
 func doctor(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("doctor", &cfgPath, stderr)
+	serverHelp(fs, "Checks the config and reports the store engine the connection answers as.")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return parseExit(err)
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
