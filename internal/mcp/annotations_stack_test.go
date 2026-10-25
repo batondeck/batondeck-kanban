@@ -76,7 +76,7 @@ func TestReadEffectWritesNothing(t *testing.T) {
 			}
 			reads++
 		}
-		t.Logf("%d reads wrote nothing on %s", reads, s.Engine)
+		t.Logf("%d reads called on %s", reads, s.Engine)
 
 		c.call("detect_anomalies", map[string]any{"projectId": p, "boardId": b})
 		if after := writes(t, s, p, b); after[0] <= before[0] {
