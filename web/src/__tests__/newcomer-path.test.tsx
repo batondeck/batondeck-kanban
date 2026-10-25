@@ -3,10 +3,19 @@
  * sign-in screen says how agents authenticate and shows the `user add` hint on a server with no
  * account, the empty Projects screen lists the next steps, and Settings leads with Columns, Members
  * and CLI tokens.
+ *
+ * The dialog and sign-in render on their own with public-config seeded in the query cache, so
+ * nothing they assert waits on a fetch or a timer; that wait is what timed out under load (rev76 N4).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider } from '../auth.js';
+import { App } from '../App.js';
+import { ConnectMcp } from '../connect-mcp.js';
+import { SignIn } from '../screens/SignIn.js';
+import { publicConfig } from '../api/session.js';
 
 afterEach(() => {
   cleanup();
@@ -25,24 +34,44 @@ const SOURCES = import.meta.glob(['../**/*.ts', '../**/*.tsx', '!../__tests__/**
 
 const json = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: '', json: async () => body }) as Response;
 
-async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; oauth?: boolean; noUsers?: boolean }): Promise<import('@tanstack/react-query').QueryClient> {
+/** A query client whose public-config answer is already in, so no render waits on it. */
+function seeded(cfg: { oauth: boolean; noUsers: boolean }): QueryClient {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  qc.setQueryData(['publicConfig'], cfg);
+  return qc;
+}
+
+function renderDialog(oauth: boolean, onClose = vi.fn()): HTMLElement {
+  vi.stubGlobal('fetch', vi.fn(async () => json({})));
+  render(
+    <QueryClientProvider client={seeded({ oauth, noUsers: false })}>
+      <MemoryRouter>
+        <ConnectMcp onClose={onClose} />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  return screen.getByRole('dialog', { name: 'Connect an MCP client' });
+}
+
+function renderSignIn(noUsers: boolean): void {
+  render(
+    <QueryClientProvider client={seeded({ oauth: false, noUsers })}>
+      <SignIn />
+    </QueryClientProvider>,
+  );
+}
+
+async function mountApp(path: string, admin: boolean): Promise<void> {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const p = String(input).split('?')[0]!;
-    if (p === '/api/public-config') return json({ demoLogin: false, workosLogin: false, oauth: opts.oauth ?? false, noUsers: opts.noUsers ?? false });
     if (p === '/api/session') {
-      if (!opts.signedIn) return json({ code: 'UNAUTHENTICATED', message: 'unauthenticated' }, 401);
-      const perms = opts.admin ? ['batondeck:superadmin'] : [];
-      return json({ identity: 'U-1', csrfToken: 'c', isAdmin: !!opts.admin, permissions: perms, subscriptionsEnabled: false, uiSettings: {} });
+      return json({ identity: 'U-1', csrfToken: 'c', isAdmin: admin, permissions: admin ? ['batondeck:superadmin'] : [], subscriptionsEnabled: false, uiSettings: {} });
     }
     if (p === '/api/me/settings') return json({ maxTicketTokens: null, tokenPolicy: null, starredAssets: [], defaults: { maxTicketTokens: 50000, tokenPolicy: 'warn', charsPerToken: 4 }, estimated: true });
     return json({ projects: [], boards: [], sessions: [], tokens: [], users: [], events: [], tasks: [] });
   }));
-  const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
-  const { AuthProvider } = await import('../auth.js');
-  const { App } = await import('../App.js');
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <QueryClientProvider client={qc}>
+    <QueryClientProvider client={seeded({ oauth: false, noUsers: false })}>
       <MemoryRouter initialEntries={[path]}>
         <AuthProvider>
           <App />
@@ -50,7 +79,6 @@ async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; o
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return qc;
 }
 
 describe('no hosted MCP URL and no agent-login wording anywhere in web/src', () => {
@@ -62,72 +90,83 @@ describe('no hosted MCP URL and no agent-login wording anywhere in web/src', () 
 });
 
 describe('Connect MCP dialog', () => {
-  async function open(oauth: boolean): Promise<HTMLElement> {
-    const qc = await mount('/projects', { signedIn: true, oauth });
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect an agent' }));
-    // The OAuth line hangs on public-config: assert on it only once that answer is in.
-    await waitFor(() => expect(qc.getQueryState(['publicConfig'])?.status).toBe('success'));
-    return screen.getByRole('dialog', { name: 'Connect an MCP client' });
-  }
-
-  it('every client snippet names this origin + /mcp and a bearer token, and nothing hosted', async () => {
-    const dlg = await open(false);
+  it('every client snippet names this origin + /mcp and a bearer token, and nothing hosted', () => {
+    const dlg = renderDialog(false);
     const url = `${window.location.origin}/mcp`;
     for (const tab of ['Claude Code', 'Codex CLI', 'Gemini CLI', 'Cursor']) {
-      fireEvent.click(within(dlg).getByRole('button', { name: tab }));
-      const pres = dlg.querySelectorAll('pre');
-      const server = [...pres].map((p) => p.textContent ?? '').find((t) => t.includes('/mcp'));
+      fireEvent.click(within(dlg).getByRole('tab', { name: tab }));
+      expect(within(dlg).getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true');
+      const server = [...dlg.querySelectorAll('pre')].map((p) => p.textContent ?? '').find((t) => t.includes('/mcp'));
       expect(server, tab).toContain(url);
       expect(server, tab).toMatch(/Authorization"?: "?Bearer (\$BATONDECK_TOKEN|\$\{BATONDECK_TOKEN\})|--bearer-token-env-var BATONDECK_TOKEN/);
       // cursor-agent 2026.04.17 sends `${env:…}` unresolved; Claude's default scope is this directory only.
       expect(server, tab).not.toContain('${env:');
       if (tab === 'Claude Code') expect(server, tab).toContain('claude mcp add --scope user ');
+      // Quoted for the shell: an IPv6 origin's brackets are a glob in zsh.
+      if (tab !== 'Cursor') expect(server, tab).toContain(`'${url}'`);
       expect(dlg.textContent, tab).not.toContain(HOSTED);
       expect(dlg.textContent, tab).not.toMatch(/marketplace|mcp-remote/);
     }
+    expect(within(dlg).getAllByRole('tab').filter((t) => t.getAttribute('aria-selected') === 'true')).toHaveLength(1);
     expect(within(dlg).getByRole('link', { name: 'create a token' })).toHaveAttribute('href', '/settings#cli-tokens');
     expect(dlg.textContent).toContain('Only Claude Code with the plugin gets the device wake');
     expect(dlg.textContent).not.toMatch(/OAuth is on/);
   });
 
-  it('shows the OAuth connector path only when public-config says OAuth is on', async () => {
-    const dlg = await open(true);
-    await waitFor(() => expect(dlg.textContent).toMatch(/OAuth is on/));
+  it('shows the OAuth connector path only when public-config says OAuth is on', () => {
+    expect(renderDialog(true).textContent).toMatch(/OAuth is on/);
+  });
+
+  it('takes focus on open and closes on Escape', () => {
+    const onClose = vi.fn();
+    const dlg = renderDialog(false, onClose);
+    expect(dlg).toHaveAttribute('aria-modal', 'true');
+    expect(document.activeElement).toBe(dlg);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('Sign-in', () => {
-  it('a server with no account shows the user add hint, and agents are told they use API tokens', async () => {
-    await mount('/projects', { signedIn: false, noUsers: true });
-    const note = await screen.findByRole('note');
-    expect(note.textContent).toContain('batondeck-kanban user add --admin <login>');
+  it('a server with no account shows the user add hint, and agents are told they use API tokens', () => {
+    renderSignIn(true);
+    expect(screen.getByRole('note').textContent).toContain('batondeck-kanban user add --admin <login>');
     expect(screen.getByText(/AI agents use API tokens/)).toBeInTheDocument();
     expect(document.querySelectorAll('a[href="/"]')).toHaveLength(0);
   });
 
-  it('a server with an account shows no hint', async () => {
-    const qc = await mount('/projects', { signedIn: false, noUsers: false });
-    await screen.findByText(/AI agents use API tokens/);
-    await waitFor(() => expect(qc.getQueryState(['publicConfig'])?.status).toBe('success'));
+  it('a server with an account shows no hint', () => {
+    renderSignIn(false);
+    expect(screen.getByText(/AI agents use API tokens/)).toBeInTheDocument();
     expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('publicConfig reads oauth and noUsers off /api/public-config, false when absent', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ demoLogin: false, workosLogin: false, oauth: true, noUsers: true })));
+    expect(await publicConfig()).toEqual({ oauth: true, noUsers: true });
+    vi.stubGlobal('fetch', vi.fn(async () => json({ demoLogin: false, workosLogin: false })));
+    expect(await publicConfig()).toEqual({ oauth: false, noUsers: false });
   });
 });
 
 describe('Projects: the empty workspace', () => {
-  it('lists the three next steps', async () => {
-    await mount('/projects', { signedIn: true });
+  it('lists the three next steps, the last opening the dialog', async () => {
+    await mountApp('/projects', false);
     const steps = await screen.findByRole('region', { name: 'Get started' });
     const items = within(steps).getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(items).toHaveLength(3);
     expect(items[0]).toMatch(/Create a project/);
     expect(within(steps).getByRole('link', { name: 'Create a token' })).toHaveAttribute('href', '/settings#cli-tokens');
-    expect(items[2]).toMatch(/Connect an agent/);
+    fireEvent.click(within(steps).getByRole('button', { name: 'Connect an agent' }));
+    expect(screen.getByRole('dialog', { name: 'Connect an MCP client' })).toBeInTheDocument();
   });
 });
 
 describe('Settings order', () => {
   it('Columns, Members and CLI tokens come before every other section, and none is gone', async () => {
-    await mount('/settings', { signedIn: true, admin: true });
+    await mountApp('/settings', true);
     await screen.findByRole('heading', { name: 'Your settings' });
     await waitFor(() => expect(document.getElementById('users')).not.toBeNull());
     const order = [
