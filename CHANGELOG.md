@@ -14,7 +14,8 @@ Notable changes to batondeck-kanban. The format follows
   the working directory, so `user add` run from another directory found no database (or `migrate`
   made a second one) and the admin it made could not sign in. **An existing install keeps its data by
   setting `BATONDECK_DATABASE_URL=/abs/path/to/data/batondeck-kanban.db`** (blobs and `master.key`
-  stay beside it), or by moving `./data` to the new dir. The Docker image is unchanged: it sets
+  stay beside it), or by moving `./data` to the new dir. On Postgres with no `blob.dir`, blobs moved
+  from `./data/blobs` to `blobs` in that dir likewise. The Docker image is unchanged: it sets
   `BATONDECK_DATABASE_URL=/data/batondeck-kanban.db` and now `BATONDECK_BLOB_DIR=/data/blobs` too.
   `serve`'s first line names the SQLite file (or the Postgres host and database, never the URL) and
   the blob dir; `doctor` reports a SQLite file not created yet as `not created yet; serve creates it`
@@ -24,6 +25,17 @@ Notable changes to batondeck-kanban. The format follows
   `batondeck-kanban help`, `-h` and `--help` print the usage to stdout and exit 0 (they said
   "unknown command" and exited 2).
 - `user add` and `user passwd` refuse a password under 12 characters, saying how long it was.
+- A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
+  (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
+  waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board
+  frame arrived 239-344 ms after a write that followed another. A wake now reads at once unless the
+  last woken read is under `bus.WakeGap` (25 ms) old, when it reads at the gap's end with every wake
+  since: a write storm of about 200 commits a second costs about 36 reads a second (pinned at 45),
+  not one per commit, and an idle tail still issues none. The stream sends a change a coalesce after
+  its last board frame at once and gathers the changes within a coalesce of it into one frame at
+  that coalesce's end, so frames stay at most one per 100 ms. The join's stream test bounds five
+  back-to-back moves and the quiet one at 200 ms from `move_task`'s return (commit to frame), at
+  serve's real poll, on SQLite and Postgres.
 - `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
