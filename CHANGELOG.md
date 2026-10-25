@@ -9,8 +9,9 @@ Notable changes to batondeck-kanban. The format follows
 ### Changed
 
 - Sign-in is bounded (P-220, audit G4). Each password check allocates argon2id's 64 MiB, and 64
-  concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most GOMAXPROCS checks, between 2
-  and 4 (256 MiB), run at once process-wide, and a caller that waits 3 s for a slot is refused. Every
+  concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most GOMAXPROCS checks,
+  between 2 and 4 (256 MiB), run at once process-wide, and a caller that waits 3 s for a slot is
+  refused. Every
   attempt debits a token bucket per client address (10 a minute) and per login (30 a minute, so one
   address cannot lock another out of an account) before the password is checked; a success refunds
   both. Past either, `POST /api/login` and the OAuth sign-in's `POST /login` answer 429
