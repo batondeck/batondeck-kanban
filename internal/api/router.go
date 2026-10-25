@@ -22,12 +22,14 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service/dtoschema"
 )
 
-// Auth is the session, bearer and CSRF surface the BFF mounts behind (*auth.Service).
+// Auth is the session, bearer and CSRF surface the BFF mounts behind (*auth.Service), and the
+// re-check /api/stream makes of its caller.
 type Auth interface {
 	Authenticate(next http.Handler) http.Handler
 	CSRF(next http.Handler) http.Handler
 	LoginHandler() http.Handler
 	LogoutHandler() http.Handler
+	Reauthenticate(r *http.Request) (domain.Caller, error)
 }
 
 var _ Auth = (*auth.Service)(nil)

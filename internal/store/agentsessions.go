@@ -19,7 +19,7 @@ type agentSessionQueries interface {
 	TouchAgentSession(ctx context.Context, arg sqlitedb.TouchAgentSessionParams) error
 	DeleteAgentSession(ctx context.Context, arg sqlitedb.DeleteAgentSessionParams) (int64, error)
 	ListAgentSessions(ctx context.Context, arg sqlitedb.ListAgentSessionsParams) ([]sqlitedb.ListAgentSessionsRow, error)
-	DeleteIdleAgentSessions(ctx context.Context, lastSeenAt int64) (int64, error)
+	DeleteIdleAgentSessions(ctx context.Context, arg sqlitedb.DeleteIdleAgentSessionsParams) (int64, error)
 }
 
 func (s *SQLite) UpsertAgentSession(ctx context.Context, in AgentSessionStart) (AgentSession, error) {
@@ -54,12 +54,12 @@ func (s *Postgres) ListAgentSessions(ctx context.Context, identityID string, lim
 	return listAgentSessions(ctx, s, identityID, limit)
 }
 
-func (s *SQLite) DeleteIdleAgentSessions(ctx context.Context, before int64) (int64, error) {
-	return deleteIdleAgentSessions(ctx, s, before)
+func (s *SQLite) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteIdleAgentSessions(ctx, s, before, limit)
 }
 
-func (s *Postgres) DeleteIdleAgentSessions(ctx context.Context, before int64) (int64, error) {
-	return deleteIdleAgentSessions(ctx, s, before)
+func (s *Postgres) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteIdleAgentSessions(ctx, s, before, limit)
 }
 
 func validAgent(identityID, agentID, agentName, kind string) error {
@@ -127,8 +127,11 @@ func listAgentSessions(ctx context.Context, e engine, identityID string, limit i
 	return out, nil
 }
 
-func deleteIdleAgentSessions(ctx context.Context, e engine, before int64) (int64, error) {
-	n, err := e.queries(true).DeleteIdleAgentSessions(ctx, before)
+func deleteIdleAgentSessions(ctx context.Context, e engine, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := e.queries(true).DeleteIdleAgentSessions(ctx, sqlitedb.DeleteIdleAgentSessionsParams{Before: before, PageLimit: int64(limit)})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete idle agent sessions: %w", err)
 	}
@@ -173,6 +176,6 @@ func (p pgQueries) ListAgentSessions(ctx context.Context, arg sqlitedb.ListAgent
 	}), err
 }
 
-func (p pgQueries) DeleteIdleAgentSessions(ctx context.Context, lastSeenAt int64) (int64, error) {
-	return p.q.DeleteIdleAgentSessions(ctx, lastSeenAt)
+func (p pgQueries) DeleteIdleAgentSessions(ctx context.Context, arg sqlitedb.DeleteIdleAgentSessionsParams) (int64, error) {
+	return p.q.DeleteIdleAgentSessions(ctx, pgdb.DeleteIdleAgentSessionsParams(arg))
 }
