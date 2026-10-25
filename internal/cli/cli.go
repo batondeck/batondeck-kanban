@@ -2,15 +2,18 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +28,8 @@ import (
 // errors go to the stdout and stderr it is given, not to the process's.
 //
 // The first argument names the command: serve, migrate, token, user, session, doctor,
-// healthcheck or version. No arguments, or a command it does not know, prints the usage to stderr and returns 2.
+// healthcheck or version; help, -h and --help print the usage to stdout and return 0. No arguments,
+// or a command it does not know, prints the usage to stderr and returns 2.
 // Across the commands 0 is success, 1 is a failure of the work, and 2 is a usage error (a flag
 // that does not parse, an unknown command or subcommand, a missing argument); session's failures
 // alone exit 0, since a client's hook runs it.
@@ -36,6 +40,9 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "help", "-h", "--help":
+		usage(stdout)
+		return 0
 	case "version":
 		fmt.Fprintln(stdout, "batondeck-kanban "+version)
 		return 0
@@ -72,6 +79,9 @@ commands:
   doctor       check the config and report the store engine the connection answers as
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
   version      print the version
+  help         print this usage
+
+run batondeck-kanban serve -h for the configuration: every BATONDECK_* variable and its default.
 `)
 }
 
@@ -86,6 +96,26 @@ func commonFlags(name string, cfgPath *string, stderr io.Writer) *flag.FlagSet {
 	fs.SetOutput(stderr)
 	fs.StringVar(cfgPath, "config", os.Getenv("BATONDECK_CONFIG"), "path to config file (JSON)")
 	return fs
+}
+
+// serverHelp sets fs's -h to name the command, its flags, every BATONDECK_* variable with its
+// default (core.EnvVars) and the config-file rule.
+func serverHelp(fs *flag.FlagSet, what string) {
+	fs.Usage = func() {
+		w := fs.Output()
+		fmt.Fprintf(w, "usage: batondeck-kanban %s [-config PATH]\n\n%s\n\nflags:\n", fs.Name(), what)
+		fs.PrintDefaults()
+		fmt.Fprint(w, `
+configuration: environment > config file > defaults. The config file is JSON, read from -config PATH,
+else from BATONDECK_CONFIG; with neither, no file is read. A relative path (the file's, or a SQLite
+path in it or in BATONDECK_DATABASE_URL) is relative to the working directory.
+
+environment:
+`)
+		for _, v := range core.EnvVars() {
+			fmt.Fprintf(w, "  %s\n    \t%s\n    \tdefault: %s\n", v.Name, v.Doc, v.Default)
+		}
+	}
 }
 
 func loadConfig(cfgPath string) (*core.Config, error) {
@@ -159,8 +189,9 @@ func engineHandler(version, engine string, mcp http.Handler, mounts ...func(*htt
 func serve(args []string, version string, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("serve", &cfgPath, stderr)
+	serverHelp(fs, "Migrates the store, then serves /healthz, the MCP server at /mcp and the web UI.")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return parseExit(err)
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -168,6 +199,7 @@ func serve(args []string, version string, stderr io.Writer) int {
 		return 1
 	}
 	log := core.NewLogger(stderr)
+	log.Printf("serve: store %s", dataLine(cfg))
 	// On SQLite the data-dir lock is held for serve's lifetime: alone while this serve migrates,
 	// then shared, so a serve that starts beside another finds it migrated and does not migrate.
 	var lock *core.Lock
@@ -233,6 +265,19 @@ func serve(args []string, version string, stderr io.Writer) int {
 	return 0
 }
 
+// dataLine names where serve keeps its state: the SQLite file, or the Postgres host and database
+// (never the URL, which may carry a password), and the blob dir.
+func dataLine(cfg *core.Config) string {
+	if cfg.Engine() != core.EnginePostgres {
+		return fmt.Sprintf("sqlite at %s, blobs in %s", cfg.SQLitePath(), cfg.BlobDir())
+	}
+	host, db := "?", "?"
+	if u, err := url.Parse(cfg.Database.URL); err == nil {
+		host, db = u.Host, strings.TrimPrefix(u.Path, "/")
+	}
+	return fmt.Sprintf("postgres on host %s, database %s, blobs in %s", host, db, cfg.BlobDir())
+}
+
 // listenAll binds every listen entry, closing the ones bound when one fails.
 func listenAll(entries []string, logger *log.Logger) ([]net.Listener, error) {
 	var lns []net.Listener
@@ -251,6 +296,14 @@ func listenAll(entries []string, logger *log.Logger) ([]net.Listener, error) {
 		return nil, err
 	}
 	return lns, nil
+}
+
+// parseExit is the exit code of a flag parse error: 0 for -h, which printed the help, 2 otherwise.
+func parseExit(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	return 2
 }
 
 // healthcheck probes /healthz on the configured listen address; the container HEALTHCHECK runs

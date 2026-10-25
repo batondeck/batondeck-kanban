@@ -59,6 +59,23 @@ Notable changes to batondeck-kanban. The format follows
   project, create a token, connect an agent). **Settings** leads with Columns, Members and CLI tokens.
   `GET /api/public-config` gains `oauth` (the OAuth server runs) and `noUsers` (no account exists).
 
+- The default data dir is absolute and per-user (P-288): with no `database.url`, the SQLite file and
+  the blobs live in `$XDG_DATA_HOME/batondeck-kanban` (when that is absolute), else
+  `~/.local/share/batondeck-kanban`, made 0700 by `serve` or `migrate`. It was `./data`, relative to
+  the working directory, so `user add` run from another directory found no database (or `migrate`
+  made a second one) and the admin it made could not sign in. **An existing install keeps its data by
+  setting `BATONDECK_DATABASE_URL=/abs/path/to/data/batondeck-kanban.db`** (blobs and `master.key`
+  stay beside it), or by moving `./data` to the new dir. On Postgres with no `blob.dir`, blobs moved
+  from `./data/blobs` to `blobs` in that dir likewise. The Docker image is unchanged: it sets
+  `BATONDECK_DATABASE_URL=/data/batondeck-kanban.db` and now `BATONDECK_BLOB_DIR=/data/blobs` too.
+  `serve`'s first line names the SQLite file (or the Postgres host and database, never the URL) and
+  the blob dir; `doctor` reports a SQLite file not created yet as `not created yet; serve creates it`
+  and exits 0 instead of FAIL.
+- `serve -h` and `doctor -h` list every `BATONDECK_*` variable with its default, and the config-file
+  rule; a test fails when a source reads a variable the list does not name. `-h` exits 0.
+  `batondeck-kanban help`, `-h` and `--help` print the usage to stdout and exit 0 (they said
+  "unknown command" and exited 2).
+- `user add` and `user passwd` refuse a password under 12 characters, saying how long it was.
 - A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
   (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
   waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board

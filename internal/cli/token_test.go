@@ -27,7 +27,7 @@ func resolve(t *testing.T, path, bearer string) (domain.Caller, error) {
 // the plaintext; token revoke makes ResolveCaller answer UNAUTHENTICATED.
 func TestTokenCreateListRevoke(t *testing.T) {
 	path := migratedDB(t)
-	withStdin(t, "pw\n")
+	withStdin(t, "pw-twelve-chars\n")
 	if code, _, errs := run("user", "add", "alice"); code != 0 {
 		t.Fatalf("user add: %s", errs)
 	}
@@ -80,11 +80,11 @@ func TestTokenCreateListRevoke(t *testing.T) {
 // read back by user list and by ResolveCaller.
 func TestUserAddAdminFlag(t *testing.T) {
 	path := migratedDB(t)
-	withStdin(t, "pw\n")
+	withStdin(t, "pw-twelve-chars\n")
 	if code, out, errs := run("user", "add", "--admin", "root"); code != 0 || !strings.HasSuffix(out, " root (workspace admin)\n") {
 		t.Fatalf("add --admin: %d %q %q", code, out, errs)
 	}
-	withStdin(t, "pw\n")
+	withStdin(t, "pw-twelve-chars\n")
 	if code, out, errs := run("user", "add", "alice"); code != 0 || strings.Contains(out, "admin") {
 		t.Fatalf("add: %d %q %q", code, out, errs)
 	}
@@ -105,7 +105,7 @@ func TestUserAddAdminFlag(t *testing.T) {
 // subject the user the token acts for; a refused revoke writes none.
 func TestTokenSubcommandIsAudited(t *testing.T) {
 	path := migratedDB(t)
-	withStdin(t, "pw\n")
+	withStdin(t, "pw-twelve-chars\n")
 	if code, _, errs := run("user", "add", "alice"); code != 0 {
 		t.Fatalf("user add: %s", errs)
 	}
