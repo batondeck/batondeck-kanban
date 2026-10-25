@@ -64,9 +64,9 @@ type AgentSessions interface {
 	// ListAgentSessions is identityID's rows, or every row when identityID is "", at most limit
 	// (<= 0 is 100, above 1000 is 1000).
 	ListAgentSessions(ctx context.Context, identityID string, limit int) ([]AgentSession, error)
-	// DeleteIdleAgentSessions deletes the rows whose LastSeenAt is before before and returns how
-	// many it deleted.
-	DeleteIdleAgentSessions(ctx context.Context, before int64) (int64, error)
+	// DeleteIdleAgentSessions deletes at most limit rows whose LastSeenAt is before before, the
+	// longest idle first, and returns how many it deleted.
+	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
 }
 
 var (
