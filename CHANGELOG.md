@@ -1042,6 +1042,14 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Fixed
 
+- /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
+  request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
+  proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an
+  equivalent check in front of the bearer that also admits the host of `public_url` (any port, any
+  case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
+  JSON instead of text/plain. No new config key. The check runs before the bearer, so a foreign
+  Host with no bearer is now 403, where it was 401.
+
 - P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
   The caller was resolved once at connect, so a copied session cookie kept receiving board frames
   after logout (the R1.15 review measured the stream still open 20 s after it). The stream now
