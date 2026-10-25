@@ -793,12 +793,14 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 			}
 		}
 		wait("ready", 2*time.Second)
+		var writes []time.Duration // each move_task's own round trip, inside its frame's time
 		move := func(to string) time.Duration {
 			t.Helper()
 			t0 := time.Now()
 			if _, e := b.move(owner, id, to); e != nil {
 				t.Fatal(e)
 			}
+			writes = append(writes, time.Since(t0))
 			wait("board", time.Second)
 			return time.Since(t0)
 		}
@@ -811,14 +813,14 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 		}
 		time.Sleep(bus.PollInterval + 50*time.Millisecond)
 		quiet := move("IN_PROGRESS")
-		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before)", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy)
+		t.Logf("%s: board frame after an MCP move_task: %v quiet (no write in the last %v), %v busy (writes just before); the move_task calls took %v", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy, writes)
 		// memstore has no commit wake (store.ChangeWatcher): its bus polls, so the bound is the engines'.
 		if j.engine == servicetest.Memstore {
 			return
 		}
 		for i, d := range append(busy, quiet) {
 			if d > 200*time.Millisecond {
-				t.Fatalf("board frame %d of %d took %v, want <= 200ms (busy %v, quiet %v)", i+1, len(busy)+1, d, busy, quiet)
+				t.Fatalf("board frame %d of %d took %v, want <= 200ms (busy %v, quiet %v; the move_task calls took %v)", i+1, len(busy)+1, d, busy, quiet, writes)
 			}
 		}
 	})
