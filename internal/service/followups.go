@@ -96,8 +96,9 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddFollowUpResp, error) {
 		pre := *t.Task
-		// A reopen hands the rework back to its completer (review.completedBy), else to nobody: the
-		// reviewer stays assignee otherwise, and no worker's claim_next takes another's task (P-275).
+		// A reopen hands the rework back to its completer (review.completedBy); with none on record it
+		// clears an assignee that is the reopener or the reviewer, and keeps any other. Left with the
+		// reviewer, the rework is in no worker's claim_next (P-275, B72-1).
 		reopen := req.Reopen && (pre.Status == domain.Review || pre.Status == domain.Done)
 		basis, back := pre, (*store.Nullable[string])(nil)
 		if reopen {
@@ -105,12 +106,16 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 			if err != nil {
 				return AddFollowUpResp{}, err
 			}
-			back = &store.Nullable[string]{}
-			if rv != nil && rv.CompletedBy != "" {
+			switch {
+			case rv != nil && rv.CompletedBy != "":
 				w := rv.CompletedBy
-				back.Value = &w
+				back = &store.Nullable[string]{Value: &w}
+			case pre.Assignee != nil && (*pre.Assignee == caller.Identity || (rv != nil && rv.Reviewer != nil && *rv.Reviewer == *pre.Assignee)):
+				back = &store.Nullable[string]{}
 			}
-			basis.Assignee = back.Value
+			if back != nil {
+				basis.Assignee = back.Value
+			}
 		}
 		target, identity, err := t.followUpTarget(basis)
 		if err != nil {

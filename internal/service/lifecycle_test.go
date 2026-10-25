@@ -1249,8 +1249,8 @@ func TestHandoffNotifiesItsReceiver(t *testing.T) {
 }
 
 // B72-1 (review of #72): a reviewer's reopen hands the rework back to its completer, who is rung
-// and notified and takes it with claim_next; a reopen with no completer on record clears the
-// assignee, so the rework is open work any worker takes.
+// and notified and takes it with claim_next; a reopen with no completer on record clears an
+// assignee that is the reopener, so the rework is open work any worker takes.
 func TestReopenedReworkReachesTheWorker(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		wkr := e.member(t, e.project, "wkr", domain.RoleWorker)
