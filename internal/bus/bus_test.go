@@ -224,6 +224,32 @@ func TestIdle(t *testing.T) {
 	}
 }
 
+// P-193: a wake just after a woken read is read at once (within WakeGap), not held for the next
+// poll. The poll is 5 s here, so a held wake cannot hide inside the bound.
+func TestAWakeRightAfterAWokenReadIsReadAtOnce(t *testing.T) {
+	for _, o := range engines {
+		t.Run(o.name, func(t *testing.T) {
+			b := o.open(t)
+			bus, _ := newBus(t, b, Options{PollInterval: 5 * time.Second})
+			s := subscribe(t, bus, 16, "project:P-1")
+			var worst time.Duration
+			for i := range 5 {
+				began := time.Now()
+				id := write(t, b.store, change("project:P-1", i))[0]
+				if c := next(t, s, 6*time.Second); c.ID != id {
+					t.Fatalf("got change %d, want %d", c.ID, id)
+				}
+				took := time.Since(began)
+				worst = max(worst, took)
+				if took > time.Second {
+					t.Fatalf("write %d of 5, %v after the last read, arrived after %v: held for the %v poll", i+1, took, took, 5*time.Second)
+				}
+			}
+			t.Logf("%s: 5 back-to-back writes each arrived within %v (poll 5s, WakeGap %v)", o.name, worst.Round(time.Millisecond), WakeGap)
+		})
+	}
+}
+
 // P-193: a write storm of about 200 commits a second costs the tail at most one read per WakeGap
 // (40 a second, pinned at 45 for the trailing read and the clock), not one per commit, and every
 // change still arrives once. The storm must outrun the pin, or a passing rate is vacuous.
