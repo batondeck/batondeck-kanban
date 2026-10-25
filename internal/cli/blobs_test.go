@@ -77,7 +77,7 @@ func startBlobs(t *testing.T, st store.Store, maxBytes int64) *blobServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := compose(st, "x", "", logger, keys, media)
+	a, err := compose(st, "x", "", logger, keys, media, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
@@ -28,7 +29,7 @@ func oauthServer(t *testing.T, st store.Store) (public string) {
 	t.Helper()
 	srv := httptest.NewUnstartedServer(nil)
 	public = "http://" + srv.Listener.Addr().String()
-	a, err := compose(st, "x", public, log.New(io.Discard, "", 0), nil, service.MediaOptions{})
+	a, err := compose(st, "x", public, log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{})
 	if err != nil || a.as == nil {
 		t.Fatalf("compose: %v", err)
 	}
