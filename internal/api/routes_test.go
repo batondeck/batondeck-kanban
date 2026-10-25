@@ -1,14 +1,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
@@ -249,8 +252,43 @@ func TestSessionAndPublicConfig(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var pc map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&pc); err != nil || resp.StatusCode != 200 || pc["demoLogin"] != false || pc["workosLogin"] != false || len(pc) != 2 {
+	if err := json.NewDecoder(resp.Body).Decode(&pc); err != nil || resp.StatusCode != 200 || pc["demoLogin"] != false || pc["workosLogin"] != false || pc["oauth"] != false || pc["noUsers"] != false || len(pc) != 4 {
 		t.Fatalf("public-config: %d %v", resp.StatusCode, pc)
+	}
+}
+
+// /api/public-config's noUsers is true on a server with no account and false once one is added
+// (the sign-in screen's `user add` hint); oauth is Options.OAuth.
+func TestPublicConfigNoUsersAndOAuth(t *testing.T) {
+	st := memstore.New()
+	if _, err := st.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Params: fastArgon}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	mux := http.NewServeMux()
+	Mount(mux, Options{Services: fakeServices(servicefake.New())(st).Services, Auth: a, Users: a.Accounts, OAuth: true})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	get := func() map[string]any {
+		resp, err := http.Get(srv.URL + "/api/public-config")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var pc map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&pc); err != nil || resp.StatusCode != 200 {
+			t.Fatalf("public-config: %d %v", resp.StatusCode, err)
+		}
+		return pc
+	}
+	if pc := get(); pc["noUsers"] != true || pc["oauth"] != true {
+		t.Fatalf("no accounts: %v, want noUsers and oauth true", pc)
+	}
+	if _, err := a.Accounts.Add(context.Background(), "admin", "", testPassword, true); err != nil {
+		t.Fatal(err)
+	}
+	if pc := get(); pc["noUsers"] != false {
+		t.Fatalf("one account: %v, want noUsers false", pc)
 	}
 }
 
