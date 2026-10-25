@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,7 +24,7 @@ func (f *fixture) loginFrom(t *testing.T, addr, login, password string) *http.Re
 	r := httptest.NewRequest(http.MethodPost, "http://board.test/login", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
-	r.RemoteAddr = addr + ":40000"
+	r.RemoteAddr = net.JoinHostPort(addr, "40000")
 	w := httptest.NewRecorder()
 	f.svc.CSRF(f.svc.LoginHandler()).ServeHTTP(w, r)
 	return w.Result()
@@ -56,7 +57,8 @@ func slowVerify(t *testing.T, hold time.Duration, entered chan<- struct{}) *atom
 func TestLoginVerifiesAreCapped(t *testing.T) {
 	f := newFixture(t)
 	f.addUser(t, "alice", "right")
-	f.svc.Accounts.Limits = &LoginLimits{Verifies: 2, Wait: 10 * time.Second, PerAddr: 1000, PerLogin: 1000}
+	// The default cap, 2, whatever the core count.
+	f.svc.Accounts.Limits = &LoginLimits{Wait: 10 * time.Second, PerAddr: 1000}
 	peak := slowVerify(t, 20*time.Millisecond, nil)
 	var wg sync.WaitGroup
 	for range 64 {
@@ -132,22 +134,39 @@ func TestFailedLoginsLimitedPerAddress(t *testing.T) {
 	})
 }
 
-func TestFailedLoginsLimitedPerLogin(t *testing.T) {
+func TestFailedLoginsLimitedPerIPv6Prefix(t *testing.T) {
 	f := newFixture(t)
 	f.addUser(t, "alice", "right")
-	f.addUser(t, "bob", "right")
-	for i := range 30 {
-		if resp := f.loginFrom(t, fmt.Sprintf("198.51.100.%d", i+1), "Alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+	for i := range 10 {
+		if resp := f.loginFrom(t, fmt.Sprintf("2001:db8:0:1::%x", i+1), "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: status %d, want 401", i+1, resp.StatusCode)
 		}
 	}
-	wantRateLimited(t, f.loginFrom(t, "203.0.113.1", "alice", "wrong"))
+	// Every other address of the /64 shares the spent bucket.
+	for i := 10; i < 25; i++ {
+		wantRateLimited(t, f.loginFrom(t, fmt.Sprintf("2001:db8:0:1:ffff::%x", i+1), "alice", "wrong"))
+	}
 	t.Run("Control", func(t *testing.T) {
-		// The same fresh address still signs in to another account.
-		if resp := f.loginFrom(t, "203.0.113.1", "bob", "right"); resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("status %d, want 204", resp.StatusCode)
+		// The next /64 has its own bucket.
+		if resp := f.loginFrom(t, "2001:db8:0:2::1", "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status %d, want 401", resp.StatusCode)
 		}
 	})
+}
+
+func TestFailedLoginsDoNotLockOutTheAccount(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "right")
+	for a := range 3 {
+		for range 10 {
+			f.loginFrom(t, fmt.Sprintf("198.51.100.%d", a+1), "alice", "wrong")
+		}
+		wantRateLimited(t, f.loginFrom(t, fmt.Sprintf("198.51.100.%d", a+1), "alice", "wrong"))
+	}
+	// The owner, from a fresh address, signs in through three spent attackers.
+	if resp := f.loginFrom(t, "203.0.113.9", "alice", "right"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status %d, want 204", resp.StatusCode)
+	}
 }
 
 func TestSuccessfulLoginsAreNotCounted(t *testing.T) {
