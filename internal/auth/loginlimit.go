@@ -5,7 +5,7 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"runtime"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -13,21 +13,20 @@ import (
 )
 
 // LoginLimits bounds password checks, each of which allocates argon2id's 64 MiB: at most Verifies of
-// them run at once, a caller waits up to Wait for a slot, and every attempt debits a token bucket per
-// client address and one per login before it runs (a success refunds both). A login's bucket is
-// larger than an address's, so one address cannot lock another out of an account.
+// them run at once, a caller waits up to Wait for a slot, and every attempt debits a token bucket of
+// its client address (an IPv6 address by its /64) before it runs; a success refunds it. There is no
+// bucket per login: one would let a few addresses lock anyone out of an account.
 type LoginLimits struct {
-	// Verifies is the most password checks at once; 0 means GOMAXPROCS, between 2 and 4 (4 is 256 MiB).
+	// Verifies is the most password checks at once; 0 means 2 (128 MiB), whatever the core count.
 	Verifies int
 	// Wait is how long a check waits for a slot before RATE_LIMITED; 0 means 3 s.
 	Wait time.Duration
-	// PerAddr and PerLogin are the failed attempts allowed a minute (and the burst); 0 means 10 and 30.
-	PerAddr, PerLogin int
+	// PerAddr is the failed attempts allowed an address a minute (and the burst); 0 means 10.
+	PerAddr int
 
 	once  sync.Once
 	sem   chan struct{}
 	addrs *buckets
-	names *buckets
 }
 
 // loginLimits is the process-wide default, used by every Accounts whose Limits is nil.
@@ -35,13 +34,8 @@ var loginLimits = &LoginLimits{}
 
 func (l *LoginLimits) init() {
 	l.once.Do(func() {
-		n := l.Verifies
-		if n == 0 {
-			n = min(max(runtime.GOMAXPROCS(0), 2), 4)
-		}
-		l.sem = make(chan struct{}, n)
+		l.sem = make(chan struct{}, orDefault(l.Verifies, 2))
 		l.addrs = newBuckets(orDefault(l.PerAddr, 10))
-		l.names = newBuckets(orDefault(l.PerLogin, 30))
 	})
 }
 
@@ -52,18 +46,29 @@ func orDefault(v, def int) int {
 	return v
 }
 
-// admit debits addr's and login's buckets: RATE_LIMITED, with the wait, when either is empty. The
-// returned refund puts both tokens back.
-func (l *LoginLimits) admit(addr, login string, now time.Time) (refund func(), err error) {
+// admit debits addr's bucket: RATE_LIMITED, with the wait, when it is empty. The returned refund puts
+// the token back.
+func (l *LoginLimits) admit(addr string, now time.Time) (refund func(), err error) {
 	l.init()
-	if wait, ok := l.addrs.take(addr, now); !ok {
+	key := addrKey(addr)
+	if wait, ok := l.addrs.take(key, now); !ok {
 		return nil, rateLimited(wait)
 	}
-	if wait, ok := l.names.take(login, now); !ok {
-		l.addrs.refund(addr)
-		return nil, rateLimited(wait)
+	return func() { l.addrs.refund(key) }, nil
+}
+
+// addrKey is the bucket an address counts against: an IPv4 address itself, an IPv6 address its /64
+// (one host commonly holds a whole /64). Anything unparsable is its own key.
+func addrKey(addr string) string {
+	a, err := netip.ParseAddr(addr)
+	if err != nil {
+		return addr
 	}
-	return func() { l.addrs.refund(addr); l.names.refund(login) }, nil
+	if a = a.Unmap(); a.Is4() {
+		return a.String()
+	}
+	p, _ := a.WithZone("").Prefix(64)
+	return p.String()
 }
 
 // acquire takes a verification slot, waiting up to Wait: RATE_LIMITED past it.

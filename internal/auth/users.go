@@ -179,7 +179,7 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	if lim == nil {
 		lim = loginLimits
 	}
-	refund, err := lim.admit(addr, l, a.now())
+	refund, err := lim.admit(addr, a.now())
 	if err != nil {
 		return store.User{}, err
 	}
