@@ -1,11 +1,12 @@
 // Package retention is the retention sweep (plan §Performance "Retention is a job, not a request
 // path"), ported from hdtp's services/retention: a timer, never a request, deletes what has
 // outlived its window — memory past its own expiry, change-log rows past ChangeLog, tool_calls rows
-// past ToolCalls, the on-call deliveries and the raw webhook bodies past the expiry stamped on each
-// at write time (30 and 7 days, service.DeliveryRetention and RawBodyRetention, plan
-// §Clarifications 5), and the blobs no attachment or memory entry references any more. Task events
-// are kept. Each table's delete is bounded per statement and per tick,
-// so one sweep never holds the write lock for long: what a tick leaves, the next one takes.
+// past ToolCalls, the agent sessions idle past AgentSessionIdle (ADR-0004), the on-call deliveries
+// and the raw webhook bodies past the expiry stamped on each at write time (retention.deliveries_days
+// and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), and the blobs no attachment or
+// memory entry references any more. Task events are kept. Each table's delete is bounded per
+// statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
+// next one takes.
 package retention
 
 import (
@@ -26,6 +27,9 @@ const (
 	MaxPerTick = 50_000
 	// BlobGrace is how old an unreferenced blob is before a sweep collects it.
 	BlobGrace = time.Hour
+	// AgentSessionIdle is how long an agent session row outlives its last request (ADR-0004: the
+	// GC that replaced prune_agent_sessions).
+	AgentSessionIdle = 30 * time.Minute
 )
 
 // Store is the slice of the store a sweep deletes through.
@@ -33,6 +37,7 @@ type Store interface {
 	DeleteExpiredMemory(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
@@ -40,20 +45,21 @@ type Store interface {
 
 // Windows is how long each table swept by age keeps a row.
 type Windows struct {
-	ChangeLog time.Duration
-	ToolCalls time.Duration
+	ChangeLog     time.Duration
+	ToolCalls     time.Duration
+	AgentSessions time.Duration
 }
 
-// WindowsOf is the config's windows.
+// WindowsOf is the config's windows, and AgentSessionIdle.
 func WindowsOf(r core.Retention) Windows {
-	return Windows{ChangeLog: days(r.ChangeLogDays), ToolCalls: days(r.ToolCallsDays)}
+	return Windows{ChangeLog: days(r.ChangeLogDays), ToolCalls: days(r.ToolCallsDays), AgentSessions: AgentSessionIdle}
 }
 
 func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, Deliveries, RawBodies, Blobs int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Deliveries, RawBodies, Blobs int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -67,7 +73,8 @@ type Sweeper struct {
 	CollectBlobs func(ctx context.Context, sha256s []string)
 }
 
-// Sweep runs one pass: memory, then the change log, then tool calls, then the expired deliveries
+// Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
+// then the expired deliveries
 // (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
 // unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
@@ -100,6 +107,9 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	})
 	out.ToolCalls = step("tool calls", func(limit int) (int64, error) {
 		return s.Store.DeleteToolCallsOlderThan(ctx, ms-s.Windows.ToolCalls.Milliseconds(), limit)
+	})
+	out.AgentSessions = step("agent sessions", func(limit int) (int64, error) {
+		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit)
 	})
 	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
 	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })

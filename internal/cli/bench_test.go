@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
@@ -206,7 +207,7 @@ func benchIdle(t *testing.T, engine string) []metric {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := compose(st, "x", "", logger, testKeys(t), service.MediaOptions{})
+	a, err := compose(st, "x", "", logger, testKeys(t), service.MediaOptions{}, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}
