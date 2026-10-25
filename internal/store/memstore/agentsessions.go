@@ -116,16 +116,25 @@ func (s *Store) ListAgentSessions(ctx context.Context, identityID string, limit 
 	})
 }
 
-func (s *Store) DeleteIdleAgentSessions(ctx context.Context, before int64) (int64, error) {
+func (s *Store) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
 	return get(ctx, s, func(st *state) (int64, error) {
-		var n int64
+		// The longest idle first, then by (identity, agent), up to limit.
+		var idle [][2]string
 		for k, a := range st.agents {
 			if a.LastSeenAt < before {
-				delete(st.agents, k)
-				n++
+				idle = append(idle, k)
 			}
 		}
-		return n, nil
+		slices.SortFunc(idle, func(x, y [2]string) int {
+			return cmp.Or(cmp.Compare(st.agents[x].LastSeenAt, st.agents[y].LastSeenAt), cmp.Compare(x[0], y[0]), cmp.Compare(x[1], y[1]))
+		})
+		for _, k := range idle[:min(len(idle), limit)] {
+			delete(st.agents, k)
+		}
+		return int64(min(len(idle), limit)), nil
 	})
 }
 
