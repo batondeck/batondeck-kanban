@@ -344,7 +344,7 @@ function CliTokens() {
   });
 
   return (
-    <section id="cli-tokens">
+    <section id="cli-tokens" style={{ marginBottom: 36 }}>
       <Panel
         title="CLI tokens"
         right={<span className="muted" style={{ fontSize: 12 }}>{tokens.filter((t) => t.status === 'live').length} live</span>}
@@ -545,7 +545,7 @@ export function Settings() {
    * self-service disconnect had been there the whole time; only the SPA was missing.
    */
   /**
-   * Honour `#sessions` in the URL. React Router does client-side navigation, so the browser never sees
+   * Honour `#sessions` and `#cli-tokens` in the URL. React Router does client-side navigation, so the browser never sees
    * a document load and never acts on the fragment — clicking "Manage your sessions" from the Agents
    * screen landed at the TOP of Settings, above Columns and Members, with the section the
    * link is named for far below the fold. Verified in the browser, which is the only place this is
@@ -555,8 +555,9 @@ export function Settings() {
    * would target an element that does not exist yet.
    */
   useEffect(() => {
-    if (window.location.hash !== '#sessions') return;
-    const t = setTimeout(() => document.getElementById('sessions')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    const id = window.location.hash.slice(1);
+    if (id !== 'sessions' && id !== 'cli-tokens') return;
+    const t = setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
     return () => clearTimeout(t);
   }, []);
 
@@ -635,9 +636,6 @@ export function Settings() {
         </select>
       </div>
       <div className="page" style={{ maxWidth: 820 }}>
-        {/* ABOVE the board configuration: it is workspace scope, not project scope. It renders
-            nothing for anyone but the workspace admin. */}
-        <UsersSection />
         <header style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: 20, margin: '0 0 4px', letterSpacing: '-0.01em' }}>Board Configuration</h1>
           <p className="muted" style={{ margin: 0, fontSize: 14 }}>
@@ -646,14 +644,6 @@ export function Settings() {
         </header>
 
         {err && <p className="error" style={{ fontSize: 12, marginBottom: 16 }}>{err}</p>}
-
-        {/*
-          YOUR settings — deliberately first, and deliberately OUTSIDE the project-scoped sections
-          below. These follow the person, not the project, so they must render even when the account
-          has no projects at all; nesting them under the project picker would hide them from exactly
-          the user who has just signed up.
-        */}
-        <MyTokenBudget />
 
         {/* Columns */}
         <section style={{ marginBottom: 36 }}>
@@ -750,35 +740,6 @@ export function Settings() {
           )}
         </section>
 
-        {/* Workflow / policy */}
-        <section style={{ marginBottom: 36 }}>
-          <h3 style={sectionTitle}>Workflow Settings</h3>
-          {settings ? (
-            <Stack gap={12}>
-              <Panel pad>
-                <Cluster gap={16} align='flex-start' justify='space-between'>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
-                    <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
-                      When off, completing a task sends it straight to Done instead of Review. Useful for simple pipelines.
-                    </p>
-                  </div>
-                  <Toggle checked={settings.reviewEnabled} onChange={(v) => void guard(projectsApi.updateSettings(projectId, { reviewEnabled: v }))} />
-                </Cluster>
-              </Panel>
-              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
-                  cost control over the tenant, not a workflow choice, and the core refuses both fields
-                  from anyone who is not a workspace admin (src/tools/projects.ts, update_settings) — so
-                  rendering them here only offered a project admin a guaranteed FORBIDDEN. They now live
-                  in the /admin portal (web/src/screens/Admin.tsx, ProjectQuotaCard). */}
-            </Stack>
-          ) : (
-            <Panel pad>
-              <WaitLoader />
-            </Panel>
-          )}
-        </section>
-
         {/* Members */}
         <section style={{ marginBottom: 24 }}>
           <h3 style={sectionTitle}>Members</h3>
@@ -844,6 +805,44 @@ export function Settings() {
         </section>
 
         <CliTokens />
+        {/* Workspace scope, not project scope: it renders nothing for anyone but the workspace admin. */}
+        <UsersSection />
+        {/*
+          YOUR settings — deliberately OUTSIDE the project-scoped sections. These follow the person,
+          not the project, so they must render even when the account has no projects at all; nesting them under the project picker would hide them from exactly
+          the user who has just signed up. Columns, Members and CLI tokens come first (usability #9).
+        */}
+        <MyTokenBudget />
+
+        {/* Workflow / policy */}
+        <section style={{ marginBottom: 36 }}>
+          <h3 style={sectionTitle}>Workflow Settings</h3>
+          {settings ? (
+            <Stack gap={12}>
+              <Panel pad>
+                <Cluster gap={16} align='flex-start' justify='space-between'>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
+                    <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
+                      When off, completing a task sends it straight to Done instead of Review. Useful for simple pipelines.
+                    </p>
+                  </div>
+                  <Toggle checked={settings.reviewEnabled} onChange={(v) => void guard(projectsApi.updateSettings(projectId, { reviewEnabled: v }))} />
+                </Cluster>
+              </Panel>
+              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
+                  cost control over the tenant, not a workflow choice, and the core refuses both fields
+                  from anyone who is not a workspace admin (src/tools/projects.ts, update_settings) — so
+                  rendering them here only offered a project admin a guaranteed FORBIDDEN. They now live
+                  in the /admin portal (web/src/screens/Admin.tsx, ProjectQuotaCard). */}
+            </Stack>
+          ) : (
+            <Panel pad>
+              <WaitLoader />
+            </Panel>
+          )}
+        </section>
+
 
         {/* Anchored so `/settings#sessions` from the Agents screen lands here. */}
 

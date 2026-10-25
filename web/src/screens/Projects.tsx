@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
 import * as boardsApi from '../api/boards.js';
@@ -11,6 +11,7 @@ import { useProject } from '../projectContext.js';
 import { Avatar, PageHeader } from '../components.js';
 import { fire, pushToast } from '../toast.js';
 import { toolKey } from '../ToolLogo.js';
+import { ConnectMcp } from '../connect-mcp.js';
 import type { AgentSession } from '../types.js';
 
 // Project identity colours — NeoPOP pop palette (500s). These are IDENTITY, not status: they mark
@@ -29,6 +30,7 @@ export function Projects() {
   const { permissions, ui } = useAuth();
   const { projectId: selected, projects: roster } = useProject();
   const [name, setName] = useState('');
+  const [connectOpen, setConnectOpen] = useState(false);
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
   const list = projects.data?.projects ?? [];
 
@@ -220,9 +222,27 @@ export function Projects() {
                 </div>
               );
             })}
-          {!selected && projects.data && list.length === 0 && <p className="muted">No projects yet — create one.</p>}
+          {!selected && projects.data && list.length === 0 && (
+            <section aria-label="Get started" className="proj-card" style={{ gridColumn: '1 / -1', cursor: 'default' }}>
+              <div className="title" style={{ fontSize: 14, fontWeight: 600, margin: '0 0 10px' }}>No projects yet. Three steps to a working board:</div>
+              <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 14 }}>
+                <li>Create a project: type a name above and press New project. Its board is created when you first open it.</li>
+                <li>
+                  <Link to="/settings#cli-tokens" style={{ color: 'var(--accent-tint)' }}>Create a token</Link> for your agent in
+                  Settings → CLI tokens.
+                </li>
+                <li>
+                  <button className="btn secondary" style={{ fontSize: 12, padding: '4px 10px' }} onClick={() => setConnectOpen(true)}>
+                    Connect an agent
+                  </button>{' '}
+                  with that token.
+                </li>
+              </ol>
+            </section>
+          )}
         </div>
       </div>
+      {connectOpen && <ConnectMcp onClose={() => setConnectOpen(false)} />}
     </>
   );
 }
