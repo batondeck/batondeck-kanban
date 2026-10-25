@@ -21,6 +21,7 @@ function message(n: Notification): string {
   if (n.type === 'mention') return `${n.actor} mentioned you in a comment`;
   if (n.type === 'follow_up') return `${n.actor} sent you a follow-up`;
   if (n.type === 'review_request') return `${n.actor} asked you to review a ticket`;
+  if (n.type === 'handoff') return `${n.actor} handed you ${n.taskId ?? 'a ticket'}`;
   return `${n.actor}: ${n.type}`;
 }
 

@@ -1,6 +1,7 @@
 -- The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 -- blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
--- with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
+-- with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
+-- the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 -- tasks whose required capabilities are all among caps. caps is read once, as the derived table p
 -- (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 -- valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
@@ -26,7 +27,10 @@ WHERE t.id = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= sqlc.arg(now)::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= sqlc.arg(now)::bigint)
-    AND (sqlc.narg(assignee)::text IS NULL OR f.assignee = sqlc.narg(assignee)::text)
+    AND (CASE WHEN sqlc.narg(assignee)::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = sqlc.arg(caller)::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
+          ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
@@ -55,7 +59,10 @@ WHERE t.id = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= sqlc.arg(now)::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= sqlc.arg(now)::bigint)
-    AND (sqlc.narg(assignee)::text IS NULL OR f.assignee = sqlc.narg(assignee)::text)
+    AND (CASE WHEN sqlc.narg(assignee)::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = sqlc.arg(caller)::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
+          ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
@@ -75,7 +82,10 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
   AND f.racing = 0
   AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= sqlc.arg(now)::bigint)
   AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= sqlc.arg(now)::bigint)
-  AND (sqlc.narg(assignee)::text IS NULL OR f.assignee = sqlc.narg(assignee)::text)
+  AND (CASE WHEN sqlc.narg(assignee)::text IS NULL
+        THEN f.assignee IS NULL OR f.assignee = sqlc.arg(caller)::text
+          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
+        ELSE f.assignee = sqlc.narg(assignee)::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,

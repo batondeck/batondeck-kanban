@@ -10,6 +10,7 @@ import { Notifications } from '../screens/Notifications.js';
 import type { Notification } from '../types.js';
 
 const ROWS: Notification[] = [
+  { id: 'N-3', identityId: 'u-grace', projectId: 'p1', boardId: 'b1', type: 'handoff', taskId: 'T-9', actor: 'u-cy', data: { toAgent: 'grace@x.test' }, read: true, ts: new Date().toISOString() },
   { id: 'N-2', identityId: 'u-grace', projectId: 'p1', boardId: 'b1', type: 'review_request', taskId: 'T-7', actor: 'u-ada', data: {}, read: false, ts: new Date().toISOString() },
   { id: 'N-1', identityId: 'u-grace', projectId: 'p1', boardId: 'b1', type: 'mention', taskId: 'T-3', actor: 'u-bob', data: { commentId: 'C-1' }, read: true, ts: new Date(Date.now() - 3_600_000).toISOString() },
 ];
@@ -40,6 +41,7 @@ describe('Notifications', () => {
     );
     expect(await screen.findByText('u-ada asked you to review a ticket')).toBeInTheDocument();
     expect(screen.getByText('u-bob mentioned you in a comment')).toBeInTheDocument();
+    expect(screen.getByText('u-cy handed you T-9')).toBeInTheDocument();
     expect(screen.getByText(/^T-7 · /)).toBeInTheDocument();
     expect(screen.getAllByText('new')).toHaveLength(1);
     fireEvent.click(screen.getByText('Mark all read'));

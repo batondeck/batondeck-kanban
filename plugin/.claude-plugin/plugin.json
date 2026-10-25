@@ -1,6 +1,6 @@
 {
   "name": "batondeck-kanban",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Work a batondeck-kanban board from Claude Code: the board's MCP tools at /mcp, and a session doorbell that starts a turn when work is assigned to this session.",
   "author": {
     "name": "BatonDeck"

@@ -25,7 +25,10 @@ WHERE t.id = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $7::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $7::bigint)
-    AND ($11::text IS NULL OR f.assignee = $11::text)
+    AND (CASE WHEN $11::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = $12::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $12::text)
+          ELSE f.assignee = $11::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
     AND ($1::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
@@ -49,6 +52,7 @@ type ClaimNextParams struct {
 	ProjectID string
 	BoardID   string
 	Assignee  sql.NullString
+	Caller    string
 }
 
 type ClaimNextRow struct {
@@ -99,7 +103,8 @@ type ClaimNextRow struct {
 
 // The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 // blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
-// with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
+// with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
+// the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 // tasks whose required capabilities are all among caps. caps is read once, as the derived table p
 // (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 // valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
@@ -123,6 +128,7 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Assignee,
+		arg.Caller,
 	)
 	var i ClaimNextRow
 	err := row.Scan(
@@ -187,7 +193,10 @@ WHERE t.id = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $7::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $7::bigint)
-    AND ($11::text IS NULL OR f.assignee = $11::text)
+    AND (CASE WHEN $11::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = $12::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $12::text)
+          ELSE f.assignee = $11::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
     AND ($1::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
@@ -211,6 +220,7 @@ type ClaimNextWaitingParams struct {
 	ProjectID string
 	BoardID   string
 	Assignee  sql.NullString
+	Caller    string
 }
 
 type ClaimNextWaitingRow struct {
@@ -276,6 +286,7 @@ func (q *Queries) ClaimNextWaiting(ctx context.Context, arg ClaimNextWaitingPara
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Assignee,
+		arg.Caller,
 	)
 	var i ClaimNextWaitingRow
 	err := row.Scan(
@@ -594,12 +605,15 @@ WHERE f.project_id = $2 AND f.board_id = $3 AND f.status = 'TODO'
   AND f.racing = 0
   AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $4::bigint)
   AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $4::bigint)
-  AND ($5::text IS NULL OR f.assignee = $5::text)
+  AND (CASE WHEN $5::text IS NULL
+        THEN f.assignee IS NULL OR f.assignee = $6::text
+          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $6::text)
+        ELSE f.assignee = $5::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key COLLATE "C", f.id COLLATE "C"
-LIMIT $6::bigint
+LIMIT $7::bigint
 `
 
 type PreviewFrontierParams struct {
@@ -608,6 +622,7 @@ type PreviewFrontierParams struct {
 	BoardID   string
 	Now       int64
 	Assignee  sql.NullString
+	Caller    string
 	PageLimit int64
 }
 
@@ -664,6 +679,7 @@ func (q *Queries) PreviewFrontier(ctx context.Context, arg PreviewFrontierParams
 		arg.BoardID,
 		arg.Now,
 		arg.Assignee,
+		arg.Caller,
 		arg.PageLimit,
 	)
 	if err != nil {
