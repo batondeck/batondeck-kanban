@@ -25,7 +25,7 @@ const SOURCES = import.meta.glob(['../**/*.ts', '../**/*.tsx', '!../__tests__/**
 
 const json = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: '', json: async () => body }) as Response;
 
-async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; oauth?: boolean; noUsers?: boolean }): Promise<void> {
+async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; oauth?: boolean; noUsers?: boolean }): Promise<import('@tanstack/react-query').QueryClient> {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const p = String(input).split('?')[0]!;
     if (p === '/api/public-config') return json({ demoLogin: false, workosLogin: false, oauth: opts.oauth ?? false, noUsers: opts.noUsers ?? false });
@@ -50,6 +50,7 @@ async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; o
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return qc;
 }
 
 describe('no hosted URL and no service accounts anywhere in web/src', () => {
@@ -62,8 +63,10 @@ describe('no hosted URL and no service accounts anywhere in web/src', () => {
 
 describe('Connect MCP dialog', () => {
   async function open(oauth: boolean): Promise<HTMLElement> {
-    await mount('/projects', { signedIn: true, oauth });
+    const qc = await mount('/projects', { signedIn: true, oauth });
     fireEvent.click(await screen.findByRole('button', { name: 'Connect an agent' }));
+    // The OAuth line hangs on public-config: assert on it only once that answer is in.
+    await waitFor(() => expect(qc.getQueryState(['publicConfig'])?.status).toBe('success'));
     return screen.getByRole('dialog', { name: 'Connect an MCP client' });
   }
 
@@ -100,9 +103,9 @@ describe('Sign-in', () => {
   });
 
   it('a server with an account shows no hint', async () => {
-    await mount('/projects', { signedIn: false, noUsers: false });
+    const qc = await mount('/projects', { signedIn: false, noUsers: false });
     await screen.findByText(/AI agents use API tokens/);
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u) === '/api/public-config')).toBe(true));
+    await waitFor(() => expect(qc.getQueryState(['publicConfig'])?.status).toBe('success'));
     expect(screen.queryByRole('note')).toBeNull();
   });
 });
