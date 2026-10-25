@@ -23,12 +23,15 @@ type Call[Req, Resp any] func(ctx context.Context, caller domain.Caller, req Req
 // wrong type or a null into an Optional) and decoding them into Req, either failure a VALIDATION
 // before the service is called (errorMiddleware); call; a non-BatonDeckError made INTERNAL and
 // logged with its stack (AddTool); the one error shape and one tool_calls row (errorMiddleware).
-// A tool with no domain.ToolPosture panics here: an unclassified tool is refused at registration,
+// A tool with no domain.ToolPosture, or one without an Effect, panics here: an unclassified tool is refused at registration,
 // never served. It is listed to every caller unless its posture is AdminOnlyOnly.
 func Tool[Req, Resp any](s *Server, area, name, description string, call Call[Req, Resp]) {
 	posture, ok := domain.ToolPosture(name)
 	if !ok {
 		panic(fmt.Sprintf("mcp: tool %s has no domain.ToolPosture: classify it in internal/domain/grants.go", name))
+	}
+	if posture.Effect == 0 {
+		panic(fmt.Sprintf("mcp: tool %s has no domain.Posture Effect: classify it in internal/domain/grants.go", name))
 	}
 	t := &mcp.Tool{
 		Name:         name,

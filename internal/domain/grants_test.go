@@ -217,7 +217,7 @@ func TestPostureFoldedRows(t *testing.T) {
 // out, so a row typed wrong fails here, and the name prefixes are a second check on the table.
 func TestPostureEffect(t *testing.T) {
 	reads := []string{
-		"detect_anomalies", "get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint",
+		"get_board", "get_my_settings", "get_project", "get_skill_stats", "get_sprint",
 		"get_task", "get_task_context", "list_agent_sessions", "list_attachments", "list_audit_log",
 		"list_boards", "list_comments", "list_deliveries", "list_follow_ups", "list_integrations",
 		"list_notifications", "list_projects", "list_runs", "list_sprints", "list_subtasks", "list_tasks",

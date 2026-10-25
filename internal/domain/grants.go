@@ -142,7 +142,7 @@ var toolPosture = map[string]Posture{
 	"delete_integration":        {Tier: TierStructural, TenantScoped: true, AdminOnly: AdminOnlyOnly, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_project":            {Tier: TierAdmin, TenantScoped: true, AdminOnly: AdminOnlyConditional, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_task":               {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
-	"detect_anomalies":          {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectRead},
+	"detect_anomalies":          {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite, Idempotent: true},
 	"disconnect_agent":          {TenantScoped: false, AdminOnly: AdminOnlyConditional, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"edit_chronicle_page":       {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"fail_task":                 {TenantScoped: true, Landing: fixedLanding(Todo, Blocked), Effect: EffectWrite},
