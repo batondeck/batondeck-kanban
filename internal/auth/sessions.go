@@ -228,24 +228,14 @@ func SessionFrom(ctx context.Context) (store.Session, bool) {
 // request is judged by CSRF as a non-browser one.
 func (s *Service) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		var err error
-		if h := r.Header.Get("Authorization"); h != "" {
-			var c domain.Caller
-			if c, err = s.ResolveCaller(ctx, h); err == nil {
-				next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, callerKey, c)))
-				return
+		c, sess, err := s.resolveRequest(r)
+		if err == nil {
+			ctx := context.WithValue(r.Context(), callerKey, c)
+			if sess != nil {
+				ctx = context.WithValue(ctx, sessionKey, *sess)
 			}
-		} else if ck, cerr := r.Cookie(SessionCookie); cerr == nil {
-			var c domain.Caller
-			var sess store.Session
-			if c, sess, err = s.ResolveSession(ctx, ck.Value); err == nil {
-				ctx = context.WithValue(context.WithValue(ctx, callerKey, c), sessionKey, sess)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-		} else {
-			err = errUnauthenticated()
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		}
 		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
 			w.Header().Set("WWW-Authenticate", "Bearer")
@@ -254,4 +244,31 @@ func (s *Service) Authenticate(next http.Handler) http.Handler {
 		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	})
+}
+
+// Reauthenticate resolves r's credential again, as Authenticate did: a long-lived response
+// (/api/stream) learns from its UNAUTHENTICATED that the session was ended, the user disabled (as
+// of the account cache) or the token revoked.
+func (s *Service) Reauthenticate(r *http.Request) (domain.Caller, error) {
+	c, _, err := s.resolveRequest(r)
+	return c, err
+}
+
+// resolveRequest is r's principal: the bearer when there is one, else the session cookie (with its
+// session); neither is UNAUTHENTICATED.
+func (s *Service) resolveRequest(r *http.Request) (domain.Caller, *store.Session, error) {
+	ctx := r.Context()
+	if h := r.Header.Get("Authorization"); h != "" {
+		c, err := s.ResolveCaller(ctx, h)
+		return c, nil, err
+	}
+	ck, err := r.Cookie(SessionCookie)
+	if err != nil {
+		return domain.Caller{}, nil, errUnauthenticated()
+	}
+	c, sess, err := s.ResolveSession(ctx, ck.Value)
+	if err != nil {
+		return domain.Caller{}, nil, err
+	}
+	return c, &sess, nil
 }

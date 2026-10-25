@@ -41,13 +41,32 @@ type Database struct {
 
 // Retention is the `retention` object of the config file: how many days the retention sweep
 // (internal/retention) keeps a row of each table it sweeps by age. Memory has no window here (each
-// entry carries its own expiry) and task events are never swept.
+// entry carries its own expiry), an agent session goes 30 minutes idle (retention.AgentSessionIdle)
+// and task events are never swept.
 type Retention struct {
 	// ChangeLogDays is the change log's window: 7 days by default (hdtp retention.ChangeLogKept).
 	ChangeLogDays int `json:"change_log_days"`
 	// ToolCallsDays is tool_calls' window: 45 days by default (conductor's BigQuery table expiry).
 	ToolCallsDays int `json:"tool_calls_days"`
+	// DeliveriesDays is an on-call delivery's window: 30 days by default. It is stamped on the row
+	// (and its alert state) when written, so a change applies to deliveries written after it.
+	DeliveriesDays int `json:"deliveries_days"`
+	// RawBodiesDays is a refused delivery's raw body window: 7 days by default, stamped likewise.
+	RawBodiesDays int `json:"raw_bodies_days"`
+	// SweepIntervalSeconds is how often serve sweeps: 3600 (hourly) by default.
+	SweepIntervalSeconds int `json:"sweep_interval_seconds"`
 }
+
+// The retention bounds: a window is at most a century, far inside time.Duration's ~106,751 days, so
+// no window overflows into a cutoff in the future (which would sweep a whole table); the sweep runs at
+// least daily.
+const (
+	MaxRetentionDays        = 36500
+	MaxSweepIntervalSeconds = 86400
+)
+
+// DefaultRetention is the retention object unset.
+var DefaultRetention = Retention{ChangeLogDays: 7, ToolCallsDays: 45, DeliveriesDays: 30, RawBodiesDays: 7, SweepIntervalSeconds: 3600}
 
 // DefaultBlobMaxBytes is blob.max_bytes unset: conductor's ATTACHMENT_MAX_BYTES, 50 MiB.
 const DefaultBlobMaxBytes = 50 << 20
@@ -84,7 +103,7 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	c := Config{
 		Database:  Database{Synchronous: "FULL"},
 		Listen:    []string{"tcp://127.0.0.1:8080"},
-		Retention: Retention{ChangeLogDays: 7, ToolCallsDays: 45},
+		Retention: DefaultRetention,
 		Blob:      Blob{MaxBytes: DefaultBlobMaxBytes},
 	}
 
@@ -136,6 +155,15 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 	if err := envDays("BATONDECK_RETENTION_TOOL_CALLS_DAYS", &c.Retention.ToolCallsDays); err != nil {
 		return nil, err
 	}
+	if err := envDays("BATONDECK_RETENTION_DELIVERIES_DAYS", &c.Retention.DeliveriesDays); err != nil {
+		return nil, err
+	}
+	if err := envDays("BATONDECK_RETENTION_RAW_BODIES_DAYS", &c.Retention.RawBodiesDays); err != nil {
+		return nil, err
+	}
+	if err := envDays("BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS", &c.Retention.SweepIntervalSeconds); err != nil {
+		return nil, err
+	}
 	envStr("BATONDECK_BLOB_DIR", &c.Blob.Dir)
 	if v, ok := lookup("BATONDECK_BLOB_MAX_BYTES"); ok {
 		n, err := strconv.ParseInt(v, 10, 64)
@@ -157,8 +185,10 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("%s: database.synchronous %q (want FULL|NORMAL)", RuleEnum, c.Database.Synchronous)
 	}
-	if c.Retention.ChangeLogDays <= 0 || c.Retention.ToolCallsDays <= 0 {
-		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d (each must be at least 1)", RuleRetention, c.Retention.ChangeLogDays, c.Retention.ToolCallsDays)
+	if r := c.Retention; min(r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, r.SweepIntervalSeconds) <= 0 ||
+		max(r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays) > MaxRetentionDays || r.SweepIntervalSeconds > MaxSweepIntervalSeconds {
+		return fmt.Errorf("%s: retention change_log_days %d, tool_calls_days %d, deliveries_days %d, raw_bodies_days %d (each 1 to %d), sweep_interval_seconds %d (1 to %d)",
+			RuleRetention, r.ChangeLogDays, r.ToolCallsDays, r.DeliveriesDays, r.RawBodiesDays, MaxRetentionDays, r.SweepIntervalSeconds, MaxSweepIntervalSeconds)
 	}
 	if c.Blob.MaxBytes <= 0 {
 		return fmt.Errorf("%s: blob.max_bytes %d (must be at least 1)", RuleBlob, c.Blob.MaxBytes)
