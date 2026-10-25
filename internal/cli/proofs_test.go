@@ -727,7 +727,8 @@ func TestJoinDoorbellRows(t *testing.T) {
 }
 
 // TestJoinStreamFrameAfterAnMCPMove: an /api/stream subscriber of the board, signed in through POST
-// /api/login on the same mux, gets a board frame within 200 ms of an agent's move_task over /mcp.
+// /api/login on the same mux, gets a board frame within 200 ms of an agent's move_task over /mcp
+// returning.
 func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		owner := j.user("ada")
