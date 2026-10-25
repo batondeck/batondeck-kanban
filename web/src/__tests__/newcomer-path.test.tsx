@@ -53,7 +53,7 @@ async function mount(path: string, opts: { signedIn: boolean; admin?: boolean; o
   return qc;
 }
 
-describe('no hosted URL and no service accounts anywhere in web/src', () => {
+describe('no hosted MCP URL and no agent-login wording anywhere in web/src', () => {
   it('scans every source file', () => {
     expect(Object.keys(SOURCES).length).toBeGreaterThan(50);
     const hits = Object.entries(SOURCES).flatMap(([f, src]) => FORBIDDEN.filter((w) => src.includes(w)).map((w) => `${f}: ${w}`));
