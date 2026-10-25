@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 
+import * as sessionApi from '../api/session.js';
 import { useAuth } from '../auth.js';
 import { BrandLockup } from '../brand';
 
@@ -9,6 +11,7 @@ export function SignIn() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const cfg = useQuery({ queryKey: ['publicConfig'], queryFn: () => sessionApi.publicConfig() });
   // No navigation on success: App renders this card at the URL the visitor asked for, and the same
   // URL renders its route once the session loads.
   const submit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -117,6 +120,14 @@ export function SignIn() {
             borderTop: '1px solid var(--border)',
           }}
         >
+          {cfg.data?.noUsers && (
+            <p role="note" style={{ fontSize: 12, lineHeight: '18px', margin: '0 0 12px' }}>
+              This server has no accounts yet. Create the first admin where the server runs:
+              <code className="mono" style={{ display: 'block', marginTop: 6, fontSize: 11 }}>
+                batondeck-kanban user add --admin &lt;login&gt;
+              </code>
+            </p>
+          )}
           <p
             className="mono"
             style={{
@@ -126,14 +137,8 @@ export function SignIn() {
               margin: 0,
             }}
           >
-            AI agents authenticate via service accounts — no login required.
+            AI agents use API tokens (Settings → CLI tokens), not this sign-in.
           </p>
-          <a
-            href="/"
-            style={{ marginTop: 14, fontSize: 12, color: 'var(--accent-tint)', display: 'inline-block' }}
-          >
-            What is BatonDeck? →
-          </a>
         </div>
       </div>
     </div>
