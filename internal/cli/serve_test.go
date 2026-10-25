@@ -39,7 +39,7 @@ func (b bearerRT) RoundTrip(r *http.Request) (*http.Response, error) {
 // and none are 401 with a Bearer challenge.
 func TestServeMountsMCPOverTokens(t *testing.T) {
 	path := migratedDB(t)
-	withStdin(t, "pw\n")
+	withStdin(t, "pw-twelve-chars\n")
 	if code, _, errs := run("user", "add", "alice"); code != 0 {
 		t.Fatalf("user add: %s", errs)
 	}

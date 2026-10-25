@@ -8,6 +8,22 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- The default data dir is absolute and per-user (P-288): with no `database.url`, the SQLite file and
+  the blobs live in `$XDG_DATA_HOME/batondeck-kanban` (when that is absolute), else
+  `~/.local/share/batondeck-kanban`, made 0700 by `serve` or `migrate`. It was `./data`, relative to
+  the working directory, so `user add` run from another directory found no database (or `migrate`
+  made a second one) and the admin it made could not sign in. **An existing install keeps its data by
+  setting `BATONDECK_DATABASE_URL=/abs/path/to/data/batondeck-kanban.db`** (blobs and `master.key`
+  stay beside it), or by moving `./data` to the new dir. The Docker image is unchanged: it sets
+  `BATONDECK_DATABASE_URL=/data/batondeck-kanban.db` and now `BATONDECK_BLOB_DIR=/data/blobs` too.
+  `serve`'s first line names the SQLite file (or the Postgres host and database, never the URL) and
+  the blob dir; `doctor` reports a SQLite file not created yet as `not created yet; serve creates it`
+  and exits 0 instead of FAIL.
+- `serve -h` and `doctor -h` list every `BATONDECK_*` variable with its default, and the config-file
+  rule; a test fails when a source reads a variable the list does not name. `-h` exits 0.
+  `batondeck-kanban help`, `-h` and `--help` print the usage to stdout and exit 0 (they said
+  "unknown command" and exited 2).
+- `user add` and `user passwd` refuse a password under 12 characters, saying how long it was.
 - `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.

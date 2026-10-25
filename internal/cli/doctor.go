@@ -2,9 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
+
+	"github.com/batondeck/batondeck-kanban/internal/core"
 )
 
 // doctor reports the configuration and which engine is live, as the connection itself answers
@@ -27,6 +31,10 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	// doctor diagnoses; it does not create the SQLite file it is asked about.
 	st, err := openStore(ctx, cfg, false)
+	if errors.Is(err, os.ErrNotExist) && cfg.Engine() == core.EngineSQLite {
+		fmt.Fprintf(stdout, "ok   store        sqlite at %s: not created yet; serve creates it\n", cfg.SQLitePath())
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL store        %s: %v\n", cfg.Engine(), err)
 		return 1
@@ -37,6 +45,6 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "FAIL store        %s: %v\n", cfg.Engine(), err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "ok   store        %s, the connection reports: %s\n", cfg.Engine(), v)
+	fmt.Fprintf(stdout, "ok   store        %s, the connection reports: %s\n", dataLine(cfg), v)
 	return 0
 }

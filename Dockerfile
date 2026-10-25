@@ -27,9 +27,10 @@ COPY --from=build /batondeck-kanban /usr/local/bin/batondeck-kanban
 # named volumes inherit the image's ownership of the mount point on first use;
 # distroless has no shell, so seed /data with the right owner at build time
 COPY --from=build --chown=nonroot:nonroot /data-skel /data
-# The SQLite file lives on the volume, and the server listens on every interface so a published
+# The SQLite file and the blobs live on the volume (named, not left to the per-user default dir), and the server listens on every interface so a published
 # port reaches it (the binary's own default is loopback); the healthcheck dials loopback.
 ENV BATONDECK_DATABASE_URL=/data/batondeck-kanban.db
+ENV BATONDECK_BLOB_DIR=/data/blobs
 ENV BATONDECK_LISTEN=tcp://:8080
 VOLUME /data
 EXPOSE 8080
