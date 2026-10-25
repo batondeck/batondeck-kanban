@@ -78,7 +78,10 @@ describe('Connect MCP dialog', () => {
       const pres = dlg.querySelectorAll('pre');
       const server = [...pres].map((p) => p.textContent ?? '').find((t) => t.includes('/mcp'));
       expect(server, tab).toContain(url);
-      expect(server, tab).toMatch(/Authorization"?: "?Bearer (\$BATONDECK_TOKEN|\$\{env:BATONDECK_TOKEN\})|--bearer-token-env-var BATONDECK_TOKEN/);
+      expect(server, tab).toMatch(/Authorization"?: "?Bearer (\$BATONDECK_TOKEN|\$\{BATONDECK_TOKEN\})|--bearer-token-env-var BATONDECK_TOKEN/);
+      // cursor-agent 2026.04.17 sends `${env:…}` unresolved; Claude's default scope is this directory only.
+      expect(server, tab).not.toContain('${env:');
+      if (tab === 'Claude Code') expect(server, tab).toContain('claude mcp add --scope user ');
       expect(dlg.textContent, tab).not.toContain(HOSTED);
       expect(dlg.textContent, tab).not.toMatch(/marketplace|mcp-remote/);
     }
