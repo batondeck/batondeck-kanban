@@ -163,6 +163,33 @@ func TestAuthzMatrix(t *testing.T) {
 	t.Logf("%d tools pinned", len(registered))
 }
 
+// TestToolsListAnnotations: tools/list over the real registry gives every tool all four hints, read
+// from its domain.Posture Effect, so a client gating on readOnlyHint (Codex headless) runs the reads.
+func TestToolsListAnnotations(t *testing.T) {
+	h := bootTools(t, servicefake.New().Services())
+	listed, err := h.Connect(t, bearerAdmin).ListTools(testCtx(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Tools) != len(expectedPosture) {
+		t.Errorf("tools/list served %d tools, pinned %d", len(listed.Tools), len(expectedPosture))
+	}
+	for _, tl := range listed.Tools {
+		p, _ := domain.ToolPosture(tl.Name)
+		a := tl.Annotations
+		if a == nil || a.DestructiveHint == nil || a.OpenWorldHint == nil {
+			t.Errorf("%s: annotations %+v, want all four hints", tl.Name, a)
+			continue
+		}
+		if a.ReadOnlyHint != (p.Effect == domain.EffectRead) || *a.DestructiveHint != (p.Effect == domain.EffectDestructive) || *a.OpenWorldHint {
+			t.Errorf("%s: readOnly=%v destructive=%v openWorld=%v for Effect %d", tl.Name, a.ReadOnlyHint, *a.DestructiveHint, *a.OpenWorldHint, p.Effect)
+		}
+		if p.Effect == domain.EffectRead && !a.IdempotentHint {
+			t.Errorf("%s: a read is idempotent", tl.Name)
+		}
+	}
+}
+
 // landingCase is one call's facts and the statuses the tool must say it lands its task in; ok false
 // is a landing a statuses grant cannot decide from the call.
 type landingCase struct {

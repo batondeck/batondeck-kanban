@@ -64,13 +64,13 @@ func TestRefusalWrongPassword(t *testing.T) {
 	f.addUser(t, "alice", "right")
 	ctx := context.Background()
 	t.Run("Refused", func(t *testing.T) {
-		_, err := f.svc.Accounts.Authenticate(ctx, "alice", "wrong")
+		_, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "wrong")
 		wantCode(t, err, domain.CodeUnauthenticated)
-		_, err = f.svc.Accounts.Authenticate(ctx, "nobody", "right")
+		_, err = f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "nobody", "right")
 		wantCode(t, err, domain.CodeUnauthenticated)
 	})
 	t.Run("Control", func(t *testing.T) {
-		if _, err := f.svc.Accounts.Authenticate(ctx, "ALICE", "right"); err != nil {
+		if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "ALICE", "right"); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -85,11 +85,11 @@ func TestRefusalDisabledUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("Refused", func(t *testing.T) {
-		_, err := f.svc.Accounts.Authenticate(ctx, "alice", "pw")
+		_, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw")
 		wantCode(t, err, domain.CodeUnauthenticated)
 	})
 	t.Run("Control", func(t *testing.T) {
-		if _, err := f.svc.Accounts.Authenticate(ctx, "bob", "pw"); err != nil {
+		if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "bob", "pw"); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -102,9 +102,9 @@ func TestSetPasswordReplacesTheOldOne(t *testing.T) {
 	if err := f.svc.Accounts.SetPassword(ctx, "alice", "new"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := f.svc.Accounts.Authenticate(ctx, "alice", "old")
+	_, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "old")
 	wantCode(t, err, domain.CodeUnauthenticated)
-	if _, err := f.svc.Accounts.Authenticate(ctx, "alice", "new"); err != nil {
+	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "new"); err != nil {
 		t.Fatal(err)
 	}
 	wantCode(t, f.svc.Accounts.SetPassword(ctx, "nobody", "x"), domain.CodeNotFound)

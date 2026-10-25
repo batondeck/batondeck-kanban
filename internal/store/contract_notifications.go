@@ -74,7 +74,7 @@ var (
 // CheckNotification is AddNotification's validation, shared with memstore.
 func CheckNotification(in AddNotificationInput) error {
 	switch in.Type {
-	case domain.NotificationMention, domain.NotificationFollowUp, domain.NotificationReviewRequest:
+	case domain.NotificationMention, domain.NotificationFollowUp, domain.NotificationReviewRequest, domain.NotificationHandoff:
 	default:
 		return domain.Validation("unknown notification type: "+string(in.Type), map[string]any{"type": in.Type})
 	}

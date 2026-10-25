@@ -18,6 +18,9 @@ import (
 // stdin is where a password is read from; tests replace it with a pipe.
 var stdin = os.Stdin
 
+// minPasswordLen is the shortest password user add and user passwd accept.
+const minPasswordLen = 12
+
 // readPassword reads the first line of stdin. A terminal is refused rather than read, because it
 // would echo the password: pipe it in instead.
 func readPassword() (string, error) {
@@ -28,7 +31,11 @@ func readPassword() (string, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	pw := strings.TrimRight(line, "\r\n")
+	if n := len([]rune(pw)); n < minPasswordLen {
+		return "", fmt.Errorf("the password is %d characters: it must be at least %d", n, minPasswordLen)
+	}
+	return pw, nil
 }
 
 // authStore opens the configured store for the user and token commands: it must exist and be

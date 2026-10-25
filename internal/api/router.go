@@ -47,6 +47,8 @@ type Options struct {
 	// Presence is the device session directory /api/stream's presence frames read; nil sends none.
 	Presence Presence
 	Logger   *log.Logger
+	// OAuth is whether serve runs the OAuth authorization server (public_url set); /api/public-config says so.
+	OAuth bool
 
 	// The stream's timings; zero is the default (StreamCoalesce, StreamPing, ReplayCap).
 	Coalesce  time.Duration
@@ -118,8 +120,9 @@ func (s in) bind(r *http.Request, args map[string]any) {
 
 // call is one route that is one service call: its arguments are the JSON body (or, on a GET, the
 // query string, typed by the request's schema), with the path parameters over them; they are
-// validated against the same schema the MCP tool registers (dtoschema), decoded into Req, and the
-// response is the tool's output as JSON.
+// validated against the same schema the MCP tool registers (dtoschema) and refused when any string
+// holds a NUL character (domain.CheckText, as the MCP tool does), decoded into Req, and the response
+// is the tool's output as JSON.
 func call[Req, Resp any](o *Options, fn func(context.Context, domain.Caller, Req) (Resp, error), spec in) http.Handler {
 	schema := dtoschema.For(reflect.TypeFor[Req]())
 	resolved, err := schema.Resolve(nil)
@@ -136,9 +139,10 @@ func call[Req, Resp any](o *Options, fn func(context.Context, domain.Caller, Req
 		args, err := arguments(w, r, schema, spec)
 		if err == nil {
 			spec.bind(r, args)
-			err = resolved.Validate(args)
-			if err != nil {
+			if err = resolved.Validate(args); err != nil {
 				err = domain.Validation(err.Error(), nil)
+			} else {
+				err = domain.CheckText(args)
 			}
 		}
 		var req Req

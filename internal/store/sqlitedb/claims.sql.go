@@ -25,7 +25,10 @@ WHERE rid = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?7 AS INTEGER))
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?7 AS INTEGER))
-    AND (CAST(?11 AS TEXT) IS NULL OR f.assignee = CAST(?11 AS TEXT))
+    AND (CASE WHEN CAST(?11 AS TEXT) IS NULL
+          THEN f.assignee IS NULL OR f.assignee = CAST(?12 AS TEXT)
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?12 AS TEXT))
+          ELSE f.assignee = CAST(?11 AS TEXT) END)
     AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
       SELECT 1 FROM json_each(f.required_capabilities) r
       WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
@@ -50,6 +53,7 @@ type ClaimNextParams struct {
 	ProjectID string
 	BoardID   string
 	Assignee  sql.NullString
+	Caller    string
 }
 
 type ClaimNextRow struct {
@@ -100,7 +104,8 @@ type ClaimNextRow struct {
 
 // The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 // blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
-// with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
+// with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
+// the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 // tasks whose required capabilities are all among caps. caps is read once, as the derived table p:
 // sqlc does not bind a parameter nested deeper than one subquery under json_each. Best first: score
 // descending, then priority (urgent, high, normal, low), then order key and id as bytes (SQLite's
@@ -122,6 +127,7 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Assignee,
+		arg.Caller,
 	)
 	var i ClaimNextRow
 	err := row.Scan(
@@ -173,19 +179,21 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 }
 
 const heartbeatLease = `-- name: HeartbeatLease :one
-UPDATE tasks SET lease_expires_at = CAST(?1 AS INTEGER)
-WHERE project_id = ?2 AND id = ?3 AND claim_owner = CAST(?4 AS TEXT)
-  AND lease_id = CAST(?5 AS TEXT) AND lease_expires_at > CAST(?6 AS INTEGER)
+UPDATE tasks SET lease_expires_at = CASE WHEN CAST(?1 AS INTEGER) <> 0
+  THEN MAX(lease_expires_at, CAST(?2 AS INTEGER)) ELSE CAST(?2 AS INTEGER) END
+WHERE project_id = ?3 AND id = ?4 AND claim_owner = CAST(?5 AS TEXT)
+  AND lease_id = CAST(?6 AS TEXT) AND lease_expires_at > CAST(?7 AS INTEGER)
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
 type HeartbeatLeaseParams struct {
-	ExpiresAt int64
-	ProjectID string
-	ID        string
-	Owner     string
-	LeaseID   string
-	Now       int64
+	KeepLonger int64
+	ExpiresAt  int64
+	ProjectID  string
+	ID         string
+	Owner      string
+	LeaseID    string
+	Now        int64
 }
 
 type HeartbeatLeaseRow struct {
@@ -235,9 +243,11 @@ type HeartbeatLeaseRow struct {
 }
 
 // The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
-// caller reads the task to name. Neither the version nor updated_at moves.
+// caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.
+// Neither the version nor updated_at moves.
 func (q *Queries) HeartbeatLease(ctx context.Context, arg HeartbeatLeaseParams) (HeartbeatLeaseRow, error) {
 	row := q.db.QueryRowContext(ctx, heartbeatLease,
+		arg.KeepLonger,
 		arg.ExpiresAt,
 		arg.ProjectID,
 		arg.ID,
@@ -439,14 +449,17 @@ WHERE f.project_id = ?2 AND f.board_id = ?3 AND f.status = 'TODO'
   AND f.racing = 0
   AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?4 AS INTEGER))
   AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?4 AS INTEGER))
-  AND (CAST(?5 AS TEXT) IS NULL OR f.assignee = CAST(?5 AS TEXT))
+  AND (CASE WHEN CAST(?5 AS TEXT) IS NULL
+        THEN f.assignee IS NULL OR f.assignee = CAST(?6 AS TEXT)
+          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?6 AS TEXT))
+        ELSE f.assignee = CAST(?5 AS TEXT) END)
   AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
     SELECT 1 FROM json_each(f.required_capabilities) r
     WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key, f.id
-LIMIT ?6
+LIMIT ?7
 `
 
 type PreviewFrontierParams struct {
@@ -455,6 +468,7 @@ type PreviewFrontierParams struct {
 	BoardID   string
 	Now       int64
 	Assignee  sql.NullString
+	Caller    string
 	PageLimit int64
 }
 
@@ -511,6 +525,7 @@ func (q *Queries) PreviewFrontier(ctx context.Context, arg PreviewFrontierParams
 		arg.BoardID,
 		arg.Now,
 		arg.Assignee,
+		arg.Caller,
 		arg.PageLimit,
 	)
 	if err != nil {

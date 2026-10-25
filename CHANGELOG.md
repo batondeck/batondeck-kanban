@@ -8,6 +8,74 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
+  Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
+  now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every
+  tool `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint: false` from them:
+  27 reads, 13 destructive (every `delete_*` and `remove_*`, `pick_run`, `cancel_runs`,
+  `retract_artifact`, `disconnect_agent`, `grant_capabilities`, `rotate_integration_secret`).
+  `detect_anomalies` is a write: it records first sightings as events. A row without an `Effect`
+  fails `TestPostureEffect` and panics at registration, and `TestReadEffectWritesNothing` calls
+  every read on both engines and fails if the board feed or change log moves. Annotations sit
+  outside the contract's canonical form, so no delta.
+- `claim_next` and `next_task` take only your own or unassigned work (P-275, audit A1, owner
+  2026-10-24). With no `assignee` the frontier admitted every TODO task, so a client following the
+  served instructions (`claim_next {projectId, boardId}`) claimed tasks handed to another agent,
+  across identities and vendors. Without `assignee` the frontier is now the unassigned tasks plus
+  those assigned to the caller's id or, in any case, its account email (a handoff stores the login
+  as given), matched inside the one claim statement on SQLite and Postgres, so the statement pins
+  are unchanged. A task assigned to another identity or to an agent label is in no one's default
+  frontier. An explicit `assignee` naming another account (by email or id) or another member of the
+  project is `FORBIDDEN` below master; an agent label names no identity and still passes, since no
+  caller carries its label yet. Conductor filters nothing without `assignee`; this is a deliberate
+  departure. The served MCP instructions give non-Claude clients the pull recipe
+  (`list_notifications`, then `claim_next {projectId, boardId}`, no assignee needed), and the worker
+  skill and the worker, work and work-assigned commands say the same and pass `assignee` only for an
+  agent label; the plugin is `0.1.3`.
+- A handoff notifies its receiver (P-275, audit A12; migration 0006 owner-approved 2026-10-24, zone
+  Z2). `handoff_task` wrote a task memory and rang the socket doorbell, but no notification row, so a
+  client that pulls (every non-Claude client, `list_notifications` each turn) never learned of it.
+  It now writes one `handoff` notification (`data.toAgent`) for the member `toAgent` names, by member
+  key or by login in any case, and the receiver's `/api/stream` gets its notifications frame; the
+  sender, an agent label and a handoff to oneself notify nobody. Migration 0006 adds `handoff` to the
+  notifications type CHECK on both engines (SQLite rebuilds the table; down drops the handoff rows).
+  `list_notifications` declares the new type (`contract/deltas.json` gains `addedEnumValues`), and
+  the Notifications screen reads "X handed you T-n". The doorbell is unchanged.
+- A reviewer's reopen hands the rework back to its completer (P-275, review B72-1). `add_follow_up
+  {reopen: true}` kept the assignee, which `complete_task` had made the reviewer, so under the new
+  routing the reopened task was in no worker's `claim_next` and nobody was rung. The reopen now
+  assigns the task to `review.completedBy`, who is rung and gets the follow-up; with no completer on
+  record it clears an assignee that is the reopener or the reviewer (a broadcast) and keeps any
+  other. The master command says so, and that `next_task`'s head is unassigned or your own work.
+- The newcomer web path points at this server (P-287). **Connect MCP** builds every snippet from the
+  page's origin + `/mcp` with `Authorization: Bearer $BATONDECK_TOKEN`, links "create a token" to
+  Settings → CLI tokens, has one tab each for Claude Code, Codex CLI, Gemini CLI and Cursor (each in
+  the shape its own `mcp add --help` or docs give), says only Claude Code with the plugin gets the
+  device wake, and shows the OAuth connector path only when the OAuth server runs. The hosted URL,
+  the conductor marketplace, `mcp-remote`, the dead `/docs` link and the agent-name field (this server
+  reads no `X-BatonDeck-Agent` header) are gone. **Sign-in** says agents use API tokens, drops the
+  "What is BatonDeck?" link that looped to itself, and on a server with no account shows
+  `batondeck-kanban user add --admin <login>`. **Projects**, empty, lists three next steps (create a
+  project, create a token, connect an agent). **Settings** leads with Columns, Members and CLI tokens.
+  `GET /api/public-config` gains `oauth` (the OAuth server runs) and `noUsers` (no account exists).
+
+- The default data dir is absolute and per-user (P-288): with no `database.url`, the SQLite file and
+  the blobs live in `$XDG_DATA_HOME/batondeck-kanban` (when that is absolute), else
+  `~/.local/share/batondeck-kanban`, made 0700 by `serve` or `migrate`. It was `./data`, relative to
+  the working directory, so `user add` run from another directory found no database (or `migrate`
+  made a second one) and the admin it made could not sign in. **An existing install keeps its data by
+  setting `BATONDECK_DATABASE_URL=/abs/path/to/data/batondeck-kanban.db`** (blobs and `master.key`
+  stay beside it), or by moving `./data` to the new dir. On Postgres with no `blob.dir`, blobs moved
+  from `./data/blobs` to `blobs` in that dir likewise. The Docker image is unchanged: it sets
+  `BATONDECK_DATABASE_URL=/data/batondeck-kanban.db` and now `BATONDECK_BLOB_DIR=/data/blobs` too.
+  `serve`'s first line names the SQLite file (or the Postgres host and database, never the URL) and
+  the blob dir; `doctor` reports a SQLite file not created yet as `not created yet; serve creates it`
+  and exits 0 instead of FAIL.
+- `serve -h` and `doctor -h` list every `BATONDECK_*` variable with its default, and the config-file
+  rule; a test fails when a source reads a variable the list does not name. `-h` exits 0.
+  `batondeck-kanban help`, `-h` and `--help` print the usage to stdout and exit 0 (they said
+  "unknown command" and exited 2).
+- `user add` and `user passwd` refuse a password under 12 characters, saying how long it was.
 - A commit wake reads the change log at once, and `/api/stream` sends a board's first change at once
   (P-193, P-295). The bus read at most once per 250 ms poll, so a wake within a poll of the last read
   waited for the next tick, and the stream held every first change for its 100 ms coalesce: a board
@@ -19,6 +87,7 @@ Notable changes to batondeck-kanban. The format follows
   that coalesce's end, so frames stay at most one per 100 ms. The join's stream test bounds five
   back-to-back moves and the quiet one at 200 ms from `move_task`'s return (commit to frame), at
   serve's real poll, on SQLite and Postgres.
+
 - `serve` runs the retention sweep (P-109): R0.11's `retention.Sweeper` starts beside the server,
   sweeps once at boot and then every `retention.sweep_interval_seconds` (new config, environment
   `BATONDECK_RETENTION_SWEEP_INTERVAL_SECONDS`, default 3600), and stops before the store closes.
@@ -37,6 +106,15 @@ Notable changes to batondeck-kanban. The format follows
 - The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
   reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
   the package instead of leaning on the bound.
+- Sign-in is bounded (P-220, audit G4). Each password check allocates argon2id's 64 MiB, and 64
+  concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most 2 checks (128 MiB) run
+  at once process-wide, whatever the core count, and a caller that waits 3 s for a slot is refused.
+  Every attempt debits a token bucket of its client address (10 a minute; an IPv6 address counts
+  by its /64) before the password is checked; a success refunds it. There is no bucket per login,
+  so failures from other addresses never lock an account. Past the limit, `POST /api/login` and the
+  OAuth sign-in's `POST /login` answer 429 `{"code":"RATE_LIMITED"}` with `Retry-After` (the OAuth
+  page's form with `next` gets its `login=failed` redirect). The address is the TCP peer: behind a
+  proxy every client shares its budget (P-291).
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
@@ -128,6 +206,18 @@ Notable changes to batondeck-kanban. The format follows
   re-derived. `TestNoRemovedStatusRemains` refuses the two retired names in the surface.
 
 ### Added
+
+- Browser security headers on every response (P-250). One middleware around the composed handler
+  sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
+  a `Content-Security-Policy` on every response; the `/mcp`, `/hooks` and `/blobs` routes drop the
+  policy (JSON, SSE and attachments), per route, so an unanswered path under them still gets the SPA
+  shell with it. The policy: `default-src 'self'`, the theme bootstrap's script hash, inline styles
+  (mermaid's `<style>` and style attributes, which no hash can allow), Google Fonts, images from this
+  origin, `data:`, and for the link favicons `www.google.com` and the `*.gstatic.com` it redirects
+  to, only; `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`. The app could be framed
+  before, and a chronicle page could make its readers load any external image. The OAuth pages keep
+  their stricter policy. A test recomputes the hash of every inline script in the embedded
+  `index.html`.
 
 - `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
   a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
@@ -1041,6 +1131,44 @@ Notable changes to batondeck-kanban. The format follows
   pull request now reports no status check; the reviewer re-runs `make check` on its head.
 
 ### Fixed
+
+- /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
+  request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
+  proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an
+  equivalent check in front of the bearer that also admits the host of `public_url` (any port, any
+  case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
+  JSON instead of text/plain. No new config key. The check runs before the bearer, so a foreign
+  Host with no bearer is now 403, where it was 401.
+- Postgres claims and concurrent writes, one lease per task, heartbeats that keep their lease, NUL
+  refused (P-278; audit 2026-10-24 A2-A6, glitches G1 G2 G3 G6 G7). `claim_next`'s frontier locks
+  `FOR NO KEY UPDATE ... SKIP LOCKED`: under `FOR UPDATE` it passed over a TODO task whose row a
+  concurrent comment's foreign key check held `FOR KEY SHARE`, and answered no work. When that finds
+  nothing, Postgres looks once more without `SKIP LOCKED`, waiting for a writer that holds the task
+  (a context item, task memory) and claiming it if it is still TODO (G1 on Postgres, 20 rounds:
+  comments 5/20 → 20/20, context items 0/20 → 20/20, task memory 11/20 → 20/20; one more statement
+  only on that miss). `LockTask` locks `FOR NO KEY UPDATE`, and every mutation that bumps a task
+  (not a comment, a follow-up or a claim) loads it with `Store.LockTask` (new, all three stores)
+  before it writes any row beside it: two `add_context_item` or `write_memory` calls each inserted
+  their row and then waited on the other's lock, a deadlock answered INTERNAL (G2: 30 INTERNAL in 36
+  calls, now 0). A mutation with no expected version whose versioned write loses a race is run again
+  inside the service instead of answering STALE (concurrent `add_follow_up {reopen}`). A NUL
+  character (U+0000) in any argument string, at any depth, is VALIDATION naming the field, on every
+  MCP tool and every REST route that is a service call (`domain.CheckText`; the hand-decoded
+  `POST /api/me/cli-tokens` and `POST /api/users` and the oncall webhook ingest are not covered yet,
+  P-284): Postgres answered INTERNAL, retryable, on nine
+  fields of eight tools while SQLite stored it (G3). `claim_task` on a task whose live lease the
+  caller already holds answers that lease, lengthened to this claim's `leaseSeconds` if that is
+  later, never shortened: a second session of one identity minted a new lease and silently ended the
+  first (G6, 20/20 rounds). The two sessions now share one lease and neither is told. `heartbeat_task` with no
+  `leaseSeconds` never moves the expiry earlier (`Store.Heartbeat` takes `keepLonger`): it cut a
+  3600 s claim to 300 s (G7); an explicit `leaseSeconds` still sets it, shorter included.
+- Cursor can list tools (P-301, rev76 I1). An `any`-typed field inferred the empty schema, which
+  jsonschema-go serves as the boolean `true`, and cursor-agent refuses the whole `tools/list` over
+  one. Seven positions carried it: `write_memory`'s input `value` and the memory `value` /
+  notification `data` in six output schemas. They are now `{"description":"any JSON value"}`,
+  which takes the same values and canonicalises to the same node, so `contract/expected.json` and
+  `deltas.json` are unchanged. `TestNoBooleanSchemaServed` walks every served schema and refuses a
+  boolean schema at any depth, except `additionalProperties: false`.
 
 - P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
   The caller was resolved once at connect, so a copied session cookie kept receiving board frames

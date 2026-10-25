@@ -96,14 +96,34 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddFollowUpResp, error) {
 		pre := *t.Task
-		target, identity, err := t.followUpTarget(pre)
+		// A reopen hands the rework back to its completer (review.completedBy); with none on record it
+		// clears an assignee that is the reopener or the reviewer, and keeps any other. Left with the
+		// reviewer, the rework is in no worker's claim_next (P-275, B72-1).
+		reopen := req.Reopen && (pre.Status == domain.Review || pre.Status == domain.Done)
+		basis, back := pre, (*store.Nullable[string])(nil)
+		if reopen {
+			rv, err := reviewOut(pre.Review)
+			if err != nil {
+				return AddFollowUpResp{}, err
+			}
+			switch {
+			case rv != nil && rv.CompletedBy != "":
+				w := rv.CompletedBy
+				back = &store.Nullable[string]{Value: &w}
+			case pre.Assignee != nil && (*pre.Assignee == caller.Identity || (rv != nil && rv.Reviewer != nil && *rv.Reviewer == *pre.Assignee)):
+				back = &store.Nullable[string]{}
+			}
+			if back != nil {
+				basis.Assignee = back.Value
+			}
+		}
+		target, identity, err := t.followUpTarget(basis)
 		if err != nil {
 			return AddFollowUpResp{}, err
 		}
 		if target != nil && targetIsCaller(caller, *target, identity) {
 			target, identity = nil, nil // a directive to yourself notifies nobody
 		}
-		reopen := req.Reopen && (pre.Status == domain.Review || pre.Status == domain.Done)
 		f, err := t.Tx.AddFollowUp(ctx, store.AddFollowUpInput{ProjectID: req.ProjectID, TaskID: req.TaskID, Body: req.Body,
 			Author: caller.Identity, Target: target, TargetIdentity: identity, Reopened: reopen})
 		if err != nil {
@@ -117,13 +137,13 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 		after := pre
 		if reopen {
 			// An automatic, past the transition table (conductor's reopen), to TODO (ADR-0005): the
-			// task holds no lease in REVIEW or DONE, and its assignee is kept so the target is re-rung.
+			// task holds no lease in REVIEW or DONE, and its assignee is its completer's (above).
 			board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, pre.BoardID)
 			if err != nil {
 				return AddFollowUpResp{}, err
 			}
 			if after, err = t.Tx.SetStatus(ctx, req.ProjectID, req.TaskID, pre.Version, store.StatusChange{
-				Status: domain.Todo, ColumnID: todoColumn(board), UpdatedBy: caller.Identity, UpdatedAt: t.Now.UnixMilli(),
+				Status: domain.Todo, ColumnID: todoColumn(board), Assignee: back, UpdatedBy: caller.Identity, UpdatedAt: t.Now.UnixMilli(),
 			}); err != nil {
 				return AddFollowUpResp{}, err
 			}
@@ -133,9 +153,11 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 				return AddFollowUpResp{}, err
 			}
 			t.Event(store.EventInput{Type: domain.EventTaskReopened, Data: data})
-			t.RingFor(&pre, after, false) // an unassigned TODO is open work: broadcast
+			t.RingFor(&pre, after, false) // the new assignee, or broadcast for an unassigned TODO
 		}
 		switch {
+		case reopen && after.Assignee != nil && (pre.Assignee == nil || *pre.Assignee != *after.Assignee):
+			// RingFor rang the new assignee
 		case identity != nil:
 			t.RingAssigned(*identity, after)
 		case target != nil:

@@ -1,6 +1,7 @@
 -- The claim frontier of one board is domain.IsClaimable as a predicate: TODO, nothing in
 -- blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
--- with assignee set only its tasks, with caps (a JSON array; JSON null for no filter) only the
+-- with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
+-- the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 -- tasks whose required capabilities are all among caps. caps is read once, as the derived table p:
 -- sqlc does not bind a parameter nested deeper than one subquery under json_each. Best first: score
 -- descending, then priority (urgent, high, normal, low), then order key and id as bytes (SQLite's
@@ -24,7 +25,10 @@ WHERE rid = (
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(sqlc.arg(now) AS INTEGER))
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(sqlc.arg(now) AS INTEGER))
-    AND (CAST(sqlc.narg(assignee) AS TEXT) IS NULL OR f.assignee = CAST(sqlc.narg(assignee) AS TEXT))
+    AND (CASE WHEN CAST(sqlc.narg(assignee) AS TEXT) IS NULL
+          THEN f.assignee IS NULL OR f.assignee = CAST(sqlc.arg(caller) AS TEXT)
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(sqlc.arg(caller) AS TEXT))
+          ELSE f.assignee = CAST(sqlc.narg(assignee) AS TEXT) END)
     AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
       SELECT 1 FROM json_each(f.required_capabilities) r
       WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
@@ -45,7 +49,10 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
   AND f.racing = 0
   AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(sqlc.arg(now) AS INTEGER))
   AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(sqlc.arg(now) AS INTEGER))
-  AND (CAST(sqlc.narg(assignee) AS TEXT) IS NULL OR f.assignee = CAST(sqlc.narg(assignee) AS TEXT))
+  AND (CASE WHEN CAST(sqlc.narg(assignee) AS TEXT) IS NULL
+        THEN f.assignee IS NULL OR f.assignee = CAST(sqlc.arg(caller) AS TEXT)
+          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(sqlc.arg(caller) AS TEXT))
+        ELSE f.assignee = CAST(sqlc.narg(assignee) AS TEXT) END)
   AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
     SELECT 1 FROM json_each(f.required_capabilities) r
     WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
@@ -55,9 +62,11 @@ ORDER BY f.score DESC,
 LIMIT sqlc.arg(page_limit);
 
 -- The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
--- caller reads the task to name. Neither the version nor updated_at moves.
+-- caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.
+-- Neither the version nor updated_at moves.
 -- name: HeartbeatLease :one
-UPDATE tasks SET lease_expires_at = CAST(sqlc.arg(expires_at) AS INTEGER)
+UPDATE tasks SET lease_expires_at = CASE WHEN CAST(sqlc.arg(keep_longer) AS INTEGER) <> 0
+  THEN MAX(lease_expires_at, CAST(sqlc.arg(expires_at) AS INTEGER)) ELSE CAST(sqlc.arg(expires_at) AS INTEGER) END
 WHERE project_id = sqlc.arg(project_id) AND id = sqlc.arg(id) AND claim_owner = CAST(sqlc.arg(owner) AS TEXT)
   AND lease_id = CAST(sqlc.arg(lease_id) AS TEXT) AND lease_expires_at > CAST(sqlc.arg(now) AS INTEGER)
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at;

@@ -36,6 +36,9 @@ type Options struct {
 	Version string
 	// Resolver turns each request's bearer into its caller.
 	Resolver auth.Resolver
+	// PublicURL is the configured public_url; /mcp admits its host on a loopback listener (hostCheck).
+	// "" admits localhost only.
+	PublicURL string
 	// ResourceMetadataURL is the RFC 9728 protected-resource metadata a 401 names in its
 	// WWW-Authenticate challenge; "" names none (no OAuth server).
 	ResourceMetadataURL string
@@ -104,8 +107,10 @@ func New(o Options) *Server {
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s.sdk }, &mcp.StreamableHTTPOptions{
 		Stateless:      false,
 		SessionTimeout: o.SessionIdle,
+		// hostCheck replaces it: go-sdk's refuses the public_url host behind a local reverse proxy.
+		DisableLocalhostProtection: true,
 	})
-	s.handler = requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(s.closeEnding(streamable))
+	s.handler = hostCheck(o.PublicURL)(requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(s.closeEnding(streamable)))
 	return s
 }
 

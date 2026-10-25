@@ -38,12 +38,12 @@ func (s *Postgres) ClaimTask(ctx context.Context, projectID, taskID string, expe
 	return claimTask(ctx, s, projectID, taskID, expectedVersion, in)
 }
 
-func (s *SQLite) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
-	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now)
+func (s *SQLite) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
+	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now, keepLonger)
 }
 
-func (s *Postgres) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
-	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now)
+func (s *Postgres) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
+	return heartbeat(ctx, s, projectID, taskID, leaseID, owner, expiresAt, now, keepLonger)
 }
 
 func (s *SQLite) ReleaseLease(ctx context.Context, projectID, taskID, leaseID, owner string, now int64) (Task, error) {
@@ -106,9 +106,10 @@ func sameAgent(a, b *string) bool {
 	return *a == *b
 }
 
-// claimNext is the claim statement alone when it wins. When it matches nothing and the caller named
-// a column, the column and then the frontier are read to tell a missing column (NOT_FOUND, as when
-// it wins) from an empty frontier.
+// claimNext is the claim statement alone when it wins. On Postgres a miss is looked at once more
+// without SKIP LOCKED (waitingClaimer), so a TODO task a writer holds is waited for rather than
+// reported as no work. When it matches nothing and the caller named a column, the column and then
+// the frontier are read to tell a missing column (NOT_FOUND, as when it wins) from an empty frontier.
 func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (Task, bool, error) {
 	if err := validFrontier(fq); err != nil {
 		return Task{}, false, err
@@ -117,11 +118,15 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 		return Task{}, false, err
 	}
 	q := e.queries(true)
-	row, err := q.ClaimNext(ctx, sqlitedb.ClaimNextParams{
+	arg := sqlitedb.ClaimNextParams{
 		ColumnID: in.ColumnID, Owner: in.Owner, Agent: nullStr(in.Agent), AgentID: nullStr(in.AgentID),
 		LeaseID: in.LeaseID, ExpiresAt: in.ExpiresAt, Now: in.Now, ProjectID: fq.ProjectID, BoardID: fq.BoardID,
-		Assignee: nullStr(fq.Assignee), Caps: capsParam(fq.Capabilities),
-	})
+		Assignee: nullStr(fq.Assignee), Caller: fq.Caller, Caps: capsParam(fq.Capabilities),
+	}
+	row, err := q.ClaimNext(ctx, arg)
+	if w, ok := e.(waitingClaimer); ok && isNoRows(err) {
+		row, err = w.claimNextWaiting(ctx, arg)
+	}
 	switch {
 	case err == nil:
 		t, err := taskFromRow(sqlitedb.GetTaskRow(row))
@@ -139,6 +144,17 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 		return Task{}, false, err
 	}
 	return Task{}, false, domain.NotFound("Column", in.ColumnID)
+}
+
+// waitingClaimer is an engine whose ClaimNext skips locked rows: Postgres. SQLite's writer holds
+// the database, so nothing is ever skipped there.
+type waitingClaimer interface {
+	claimNextWaiting(ctx context.Context, arg sqlitedb.ClaimNextParams) (sqlitedb.ClaimNextRow, error)
+}
+
+func (s *Postgres) claimNextWaiting(ctx context.Context, arg sqlitedb.ClaimNextParams) (sqlitedb.ClaimNextRow, error) {
+	r, err := s.queries(true).(pgQueries).q.ClaimNextWaiting(ctx, pgdb.ClaimNextWaitingParams(arg))
+	return sqlitedb.ClaimNextRow(r), err
 }
 
 func isNotFound(err error) bool {
@@ -195,13 +211,13 @@ func leaseRefusal(ctx context.Context, q sqlQueries, projectID, taskID, owner st
 	return LeaseExpired(taskID)
 }
 
-func heartbeat(ctx context.Context, e engine, projectID, taskID, leaseID, owner string, expiresAt, now int64) (Task, error) {
+func heartbeat(ctx context.Context, e engine, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (Task, error) {
 	if expiresAt <= now {
 		return Task{}, domain.Validation("a lease must expire after now", map[string]any{"expiresAt": expiresAt, "now": now})
 	}
 	q := e.queries(true)
 	row, err := q.HeartbeatLease(ctx, sqlitedb.HeartbeatLeaseParams{
-		ExpiresAt: expiresAt, ProjectID: projectID, ID: taskID, Owner: owner, LeaseID: leaseID, Now: now,
+		KeepLonger: boolInt(keepLonger), ExpiresAt: expiresAt, ProjectID: projectID, ID: taskID, Owner: owner, LeaseID: leaseID, Now: now,
 	})
 	switch {
 	case isNoRows(err):
@@ -241,7 +257,7 @@ func previewFrontier(ctx context.Context, e engine, fq FrontierQuery, limit int)
 		return nil, err
 	}
 	rows, err := e.queries(false).PreviewFrontier(ctx, sqlitedb.PreviewFrontierParams{
-		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee),
+		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee), Caller: fq.Caller,
 		Caps: capsParam(fq.Capabilities), PageLimit: int64(clamp(limit, 50, 200)),
 	})
 	if err != nil {
