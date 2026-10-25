@@ -253,14 +253,16 @@ func TestAWakeRightAfterAWokenReadIsReadAtOnce(t *testing.T) {
 // P-193: a write storm of about 200 commits a second costs the tail at most one read per WakeGap
 // (40 a second, pinned at 45 for the trailing read and the clock), not one per commit, and every
 // change still arrives once. A storm slowed by load is pinned at half its writes, so one read per
-// commit still fails it.
+// commit still fails it however slow the machine.
 func TestAWriteStormCostsOneReadPerWakeGap(t *testing.T) {
 	for _, o := range engines {
 		t.Run(o.name, func(t *testing.T) {
 			b := o.open(t)
 			bus, log := newBus(t, b, Options{})
 			s := subscribe(t, bus, 1<<14, "project:P-1")
-			const writers, each, storm = 4, 50, 3 * time.Second
+			// Eight writers on tickers started together commit in bursts of about eight, 25 bursts a
+			// second: a storm slowed by load stays bursty, so its reads stay under half its writes.
+			const writers, each, storm = 8, 25, 3 * time.Second
 			before := log.reads.Load()
 			began := time.Now()
 			var wrote atomic.Int64
