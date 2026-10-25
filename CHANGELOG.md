@@ -1018,7 +1018,8 @@ Notable changes to batondeck-kanban. The format follows
   proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an
   equivalent check in front of the bearer that also admits the host of `public_url` (any port, any
   case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
-  JSON instead of text/plain. No new config key.
+  JSON instead of text/plain. No new config key. The check runs before the bearer, so a foreign
+  Host with no bearer is now 403, where it was 401.
 
 - P-210: a rotated-out secret that no longer opens does not refuse every delivery during its
   window; ingest verifies with the current secret alone and logs why. A current secret that will not
