@@ -29,11 +29,16 @@ func (f *fixture) loginFrom(t *testing.T, addr, login, password string) *http.Re
 	return w.Result()
 }
 
-// slowVerify swaps in a verify that holds each check for hold and records the most in flight.
-func slowVerify(t *testing.T, hold time.Duration) *atomic.Int64 {
+// slowVerify swaps in a verify that holds each check for hold and records the most in flight; each
+// check sends on entered, when it is not full, as it starts.
+func slowVerify(t *testing.T, hold time.Duration, entered chan<- struct{}) *atomic.Int64 {
 	var now, peak atomic.Int64
 	orig := verify
 	verify = func(p, h string) bool {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		n := now.Add(1)
 		for {
 			if m := peak.Load(); n <= m || peak.CompareAndSwap(m, n) {
@@ -52,7 +57,7 @@ func TestLoginVerifiesAreCapped(t *testing.T) {
 	f := newFixture(t)
 	f.addUser(t, "alice", "right")
 	f.svc.Accounts.Limits = &LoginLimits{Verifies: 2, Wait: 10 * time.Second, PerAddr: 1000, PerLogin: 1000}
-	peak := slowVerify(t, 20*time.Millisecond)
+	peak := slowVerify(t, 20*time.Millisecond, nil)
 	var wg sync.WaitGroup
 	for range 64 {
 		wg.Go(func() {
@@ -74,13 +79,14 @@ func TestLoginVerifyWaitIsBounded(t *testing.T) {
 	f := newFixture(t)
 	f.addUser(t, "alice", "right")
 	f.svc.Accounts.Limits = &LoginLimits{Verifies: 1, Wait: 50 * time.Millisecond}
-	slowVerify(t, 500*time.Millisecond)
+	entered := make(chan struct{}, 1)
+	slowVerify(t, 500*time.Millisecond, entered)
 	held := make(chan error, 1)
 	go func() {
 		_, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.1", "alice", "right")
 		held <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	<-entered
 	_, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.2", "alice", "right")
 	wantCode(t, err, domain.CodeRateLimited)
 	// Control: the caller holding the slot succeeds.
