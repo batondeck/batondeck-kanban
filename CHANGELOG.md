@@ -1162,6 +1162,13 @@ Notable changes to batondeck-kanban. The format follows
   first (G6, 20/20 rounds). The two sessions now share one lease and neither is told. `heartbeat_task` with no
   `leaseSeconds` never moves the expiry earlier (`Store.Heartbeat` takes `keepLonger`): it cut a
   3600 s claim to 300 s (G7); an explicit `leaseSeconds` still sets it, shorter included.
+- Cursor can list tools (P-301, rev76 I1). An `any`-typed field inferred the empty schema, which
+  jsonschema-go serves as the boolean `true`, and cursor-agent refuses the whole `tools/list` over
+  one. Seven positions carried it: `write_memory`'s input `value` and the memory `value` /
+  notification `data` in six output schemas. They are now `{"description":"any JSON value"}`,
+  which takes the same values and canonicalises to the same node, so `contract/expected.json` and
+  `deltas.json` are unchanged. `TestNoBooleanSchemaServed` walks every served schema and refuses a
+  boolean schema at any depth, except `additionalProperties: false`.
 
 - P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
   The caller was resolved once at connect, so a copied session cookie kept receiving board frames
