@@ -31,6 +31,12 @@ Notable changes to batondeck-kanban. The format follows
   notifications type CHECK on both engines (SQLite rebuilds the table; down drops the handoff rows).
   `list_notifications` declares the new type (`contract/deltas.json` gains `addedEnumValues`), and
   the Notifications screen reads "X handed you T-n". The doorbell is unchanged.
+- A reviewer's reopen hands the rework back to its completer (P-275, review B72-1). `add_follow_up
+  {reopen: true}` kept the assignee, which `complete_task` had made the reviewer, so under the new
+  routing the reopened task was in no worker's `claim_next` and nobody was rung. The reopen now
+  assigns the task to `review.completedBy`, who is rung and gets the follow-up; with no completer on
+  record it clears an assignee that is the reopener or the reviewer (a broadcast) and keeps any
+  other. The master command says so, and that `next_task`'s head is unassigned or your own work.
 - The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
   reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
   the package instead of leaning on the bound.
