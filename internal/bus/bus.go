@@ -11,9 +11,10 @@
 // Each has its catch-up from a cursor: Replay, ReplayProjects and ReplayAll.
 //
 // Cost: the tail runs only while a subscriber exists. When the engine gives a wake
-// (store.ChangeWatcher: Postgres LISTEN/NOTIFY, SQLite's in-process commit signal) it reads once per
-// wake, at once, and the wakes of commits made during a read make one more; an idle tail issues no
-// statement however many subscribers it has. Without a watcher (memstore) it reads every PollInterval.
+// (store.ChangeWatcher: Postgres LISTEN/NOTIFY, SQLite's in-process commit signal) it reads only
+// after a wake, at once unless it read less than WakeGap ago, so a write storm costs at most one
+// read per WakeGap and an idle tail issues no statement however many subscribers it has. Without a
+// watcher (memstore) it reads every PollInterval.
 //
 // Delivery never blocks on a slow subscriber: each has a bounded buffer, and a change that does not
 // fit is dropped and counted (Subscription.Dropped). A change is a hint; a subscriber that dropped
@@ -56,6 +57,9 @@ const (
 	// PollInterval is the tail's poll period: with no watcher (or the watch down) the longest a
 	// change waits to be read, and the clock a gap's GapTimeout is checked on.
 	PollInterval = 250 * time.Millisecond
+	// WakeGap is the least time between two woken reads: a wake within it of the last read is
+	// read at its end, with every wake since.
+	WakeGap = 25 * time.Millisecond
 	// GapTimeout is how long an id missing below delivered ones is waited for before the tail
 	// takes it for a rolled-back transaction.
 	GapTimeout = 10 * time.Second
@@ -469,18 +473,34 @@ func (b *Bus) tail(ctx context.Context, r *runner, hint int64) {
 	close(r.ready)
 	tick := time.NewTicker(b.opts.PollInterval)
 	defer tick.Stop()
-	// At most one read per wake: a wake reads at once, and the wakes that land during a read
-	// coalesce in wake's one slot into the next read.
+	// At most one read per WakeGap: a wake reads at once when the last read is a gap old, and the
+	// wakes within the gap coalesce into one read at its end.
+	var last time.Time
+	var gap <-chan time.Time
+	read := func() {
+		last = time.Now()
+		b.read(ctx, t)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-wake:
-			b.read(ctx, t)
+			if gap != nil {
+				continue // a read is already due at the gap's end
+			}
+			if d := WakeGap - time.Since(last); d > 0 {
+				gap = time.After(d)
+			} else {
+				read()
+			}
+		case <-gap:
+			gap = nil
+			read()
 		case <-tick.C:
 			switch {
 			case b.opts.Watcher == nil || degraded.Load():
-				b.read(ctx, t)
+				read()
 			case !t.stalled.IsZero():
 				b.advance(t) // no statement: a gap's clock runs with no write
 			}

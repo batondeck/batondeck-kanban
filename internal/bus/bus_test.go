@@ -224,6 +224,65 @@ func TestIdle(t *testing.T) {
 	}
 }
 
+// P-193: a write storm of about 200 commits a second costs the tail at most one read per WakeGap
+// (40 a second, pinned at 45 for the trailing read and the clock), not one per commit, and every
+// change still arrives once. The storm must outrun the pin twice over, or a passing rate is vacuous.
+func TestAWriteStormCostsOneReadPerWakeGap(t *testing.T) {
+	for _, o := range engines {
+		t.Run(o.name, func(t *testing.T) {
+			b := o.open(t)
+			bus, log := newBus(t, b, Options{})
+			s := subscribe(t, bus, 1<<14, "project:P-1")
+			const writers, each, storm = 4, 50, 3 * time.Second
+			before := log.reads.Load()
+			began := time.Now()
+			var wrote atomic.Int64
+			var failed atomic.Value
+			var wg sync.WaitGroup
+			for w := range writers {
+				wg.Go(func() {
+					tick := time.NewTicker(time.Second / each)
+					defer tick.Stop()
+					for n := 0; time.Since(began) < storm; n++ {
+						<-tick.C
+						err := b.store.Atomically(context.Background(), func(tx store.Store) error {
+							_, err := tx.AppendChange(context.Background(), change("project:P-1", w*1_000_000+n))
+							return err
+						})
+						if err != nil {
+							failed.Store(err)
+							return
+						}
+						wrote.Add(1)
+					}
+				})
+			}
+			wg.Wait()
+			took := time.Since(began)
+			if err := failed.Load(); err != nil {
+				t.Fatal(err)
+			}
+			seen := map[int64]bool{}
+			for int64(len(seen)) < wrote.Load() {
+				c := next(t, s, 2*time.Second)
+				if seen[c.ID] {
+					t.Fatalf("change %d delivered twice", c.ID)
+				}
+				seen[c.ID] = true
+			}
+			reads := log.reads.Load() - before
+			writeRate, readRate := float64(wrote.Load())/took.Seconds(), float64(reads)/took.Seconds()
+			t.Logf("%s: %d writes in %v (%.0f/s); the tail read %d times (%.1f/s, %.2f per write)", o.name, wrote.Load(), took.Round(time.Millisecond), writeRate, reads, readRate, float64(reads)/float64(wrote.Load()))
+			if writeRate < 90 {
+				t.Fatalf("the storm wrote %.0f/s, under twice the 45/s pin: it cannot show the cap", writeRate)
+			}
+			if readRate > 45 {
+				t.Fatalf("the tail read %.1f times a second under a %.0f/s storm, want <= 45 (one per WakeGap %v)", readRate, writeRate, WakeGap)
+			}
+		})
+	}
+}
+
 // AC2: a subscriber that never reads does not delay one that does: the fast one receives all
 // 1,000 changes while the slow one's buffer overflows and its drop counter counts the rest.
 func TestASlowSubscriberDoesNotDelayAFastOne(t *testing.T) {
