@@ -106,7 +106,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	sc.SetAgentSessionEnder(srv)
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
-	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger}
+	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger, OAuth: as != nil}
 	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)

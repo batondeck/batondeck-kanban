@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"sync/atomic"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -25,10 +26,14 @@ type sessionResp struct {
 	UISettings           map[string]any `json:"uiSettings"`
 }
 
-// publicConfigResp is ui-backend's /api/public-config: neither hosted sign-in exists here.
+// publicConfigResp is ui-backend's /api/public-config (neither hosted sign-in exists here), plus
+// whether the OAuth server runs and whether the server has no account yet (the sign-in screen's
+// `user add` hint).
 type publicConfigResp struct {
 	DemoLogin   bool `json:"demoLogin"`
 	WorkosLogin bool `json:"workosLogin"`
+	OAuth       bool `json:"oauth"`
+	NoUsers     bool `json:"noUsers"`
 }
 
 // sessionRoutes are the session, the public config, the local sign-in and the sign-out. POST
@@ -36,9 +41,19 @@ type publicConfigResp struct {
 // were WorkOS's, and here they are R0.12's form login (fields login and password; 204 and the
 // session and CSRF cookies) and the logout that deletes the session row (R1.15).
 func sessionRoutes(o *Options) []route {
+	// Accounts are disabled, never deleted, so once one exists the answer stays false.
+	var hasUsers atomic.Bool
 	return []route{
-		{Method: "GET", Path: "/api/public-config", public: true, h: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusOK, publicConfigResp{})
+		{Method: "GET", Path: "/api/public-config", public: true, h: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			resp := publicConfigResp{OAuth: o.OAuth}
+			if o.Users != nil && !hasUsers.Load() {
+				// ponytail: lists every account until the first exists; a store count if that ever matters.
+				if us, err := o.Users.List(r.Context()); err == nil {
+					hasUsers.Store(len(us) > 0)
+					resp.NoUsers = len(us) == 0
+				}
+			}
+			writeJSON(w, http.StatusOK, resp)
 		})},
 		{Method: "POST", Path: "/api/login", public: true, h: o.Auth.LoginHandler()},
 		{Method: "POST", Path: "/api/logout", h: o.Auth.LogoutHandler()},
