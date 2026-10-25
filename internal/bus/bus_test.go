@@ -224,6 +224,94 @@ func TestIdle(t *testing.T) {
 	}
 }
 
+// P-193: a wake just after a woken read is read at once (within WakeGap), not held for the next
+// poll. The poll is 5 s here, so a held wake cannot hide inside the bound.
+func TestAWakeRightAfterAWokenReadIsReadAtOnce(t *testing.T) {
+	for _, o := range engines {
+		t.Run(o.name, func(t *testing.T) {
+			b := o.open(t)
+			bus, _ := newBus(t, b, Options{PollInterval: 5 * time.Second})
+			s := subscribe(t, bus, 16, "project:P-1")
+			var worst time.Duration
+			for i := range 5 {
+				began := time.Now()
+				id := write(t, b.store, change("project:P-1", i))[0]
+				if c := next(t, s, 6*time.Second); c.ID != id {
+					t.Fatalf("got change %d, want %d", c.ID, id)
+				}
+				took := time.Since(began)
+				worst = max(worst, took)
+				if took > time.Second {
+					t.Fatalf("write %d of 5 arrived after %v: its wake was held for the %v poll", i+1, took, 5*time.Second)
+				}
+			}
+			t.Logf("%s: 5 back-to-back writes each arrived within %v (poll 5s, WakeGap %v)", o.name, worst.Round(time.Millisecond), WakeGap)
+		})
+	}
+}
+
+// P-193: a write storm of about 200 commits a second costs the tail at most one read per WakeGap
+// (40 a second, pinned at 45 for the trailing read and the clock), not one per commit, and every
+// change still arrives once. A storm slowed by load is pinned at half its writes, so one read per
+// commit still fails it however slow the machine.
+func TestAWriteStormCostsOneReadPerWakeGap(t *testing.T) {
+	for _, o := range engines {
+		t.Run(o.name, func(t *testing.T) {
+			b := o.open(t)
+			bus, log := newBus(t, b, Options{})
+			s := subscribe(t, bus, 1<<14, "project:P-1")
+			// Eight writers on tickers started together commit in bursts of about eight, 25 bursts a
+			// second: a storm slowed by load stays bursty, so its reads stay under half its writes.
+			const writers, each, storm = 8, 25, 3 * time.Second
+			before := log.reads.Load()
+			began := time.Now()
+			var wrote atomic.Int64
+			var failed atomic.Value
+			var wg sync.WaitGroup
+			for w := range writers {
+				wg.Go(func() {
+					tick := time.NewTicker(time.Second / each)
+					defer tick.Stop()
+					for n := 0; time.Since(began) < storm; n++ {
+						<-tick.C
+						err := b.store.Atomically(context.Background(), func(tx store.Store) error {
+							_, err := tx.AppendChange(context.Background(), change("project:P-1", w*1_000_000+n))
+							return err
+						})
+						if err != nil {
+							failed.Store(err)
+							return
+						}
+						wrote.Add(1)
+					}
+				})
+			}
+			wg.Wait()
+			took := time.Since(began)
+			if err := failed.Load(); err != nil {
+				t.Fatal(err)
+			}
+			seen := map[int64]bool{}
+			for int64(len(seen)) < wrote.Load() {
+				c := next(t, s, 2*time.Second)
+				if seen[c.ID] {
+					t.Fatalf("change %d delivered twice", c.ID)
+				}
+				seen[c.ID] = true
+			}
+			reads := log.reads.Load() - before
+			writeRate, readRate := float64(wrote.Load())/took.Seconds(), float64(reads)/took.Seconds()
+			t.Logf("%s: %d writes in %v (%.0f/s); the tail read %d times (%.1f/s, %.2f per write)", o.name, wrote.Load(), took.Round(time.Millisecond), writeRate, reads, readRate, float64(reads)/float64(wrote.Load()))
+			if writeRate < 20 {
+				t.Fatalf("the storm wrote %.0f/s: too slow to show the cap", writeRate)
+			}
+			if pin := min(45, writeRate/2); readRate > pin {
+				t.Fatalf("the tail read %.1f times a second under a %.0f/s storm, want <= %.1f (min of 45, one per WakeGap %v, and half the writes)", readRate, writeRate, pin, WakeGap)
+			}
+		})
+	}
+}
+
 // AC2: a subscriber that never reads does not delay one that does: the fast one receives all
 // 1,000 changes while the slow one's buffer overflows and its drop counter counts the rest.
 func TestASlowSubscriberDoesNotDelayAFastOne(t *testing.T) {
