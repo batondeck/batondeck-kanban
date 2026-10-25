@@ -217,18 +217,19 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 		time.Sleep(50 * time.Millisecond) // the tail is reading
 		start := time.Now()
 		l.addTask(t, l.caller(), pid, bid, "first")
+		wrote := time.Since(start)
 		f := c.next(t, time.Second)
 		if f.event != "board" {
 			t.Fatalf("after the change: %+v, want board", f)
 		}
 		if took := f.at.Sub(start); took > 200*time.Millisecond {
-			t.Fatalf("the board frame took %v, want <= 200ms", took)
+			t.Fatalf("the board frame took %v, want <= 200ms (the write itself took %v)", took, wrote)
 		}
 		d := decodeBoard(t, f)
 		if d.Board.Board.ID != bid || len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "first" || f.id == "" {
 			t.Fatalf("board frame: id %q %s", f.id, f.data)
 		}
-		t.Logf("board frame %v after the change, id %s", f.at.Sub(start), f.id)
+		t.Logf("board frame %v after the change (the write took %v), id %s", f.at.Sub(start), wrote, f.id)
 		u := c.next(t, time.Second)
 		if u.event != "updated" || u.data != `{"uri":"batondeck://`+pid+`/board/`+bid+`/feed","count":1}` {
 			t.Fatalf("after board: %+v, want updated count 1", u)
