@@ -47,6 +47,8 @@ type Options struct {
 	// Presence is the device session directory /api/stream's presence frames read; nil sends none.
 	Presence Presence
 	Logger   *log.Logger
+	// OAuth is whether serve runs the OAuth authorization server (public_url set); /api/public-config says so.
+	OAuth bool
 
 	// The stream's timings; zero is the default (StreamCoalesce, StreamPing, ReplayCap).
 	Coalesce  time.Duration
