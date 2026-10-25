@@ -130,15 +130,40 @@ func claims(t *testing.T, newStore Factory) {
 		task := f.add(t, "t", nil)
 		task, err := f.s.ClaimTask(ctx, f.project, task.ID, 1, f.leaseFor("bob", "a1", "L-1"))
 		mustOK(t, err)
-		got, err := f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+120_000, taskClock+30_000)
+		got, err := f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+120_000, taskClock+30_000, false)
 		mustOK(t, err)
 		if got.Claim.ExpiresAt != taskClock+120_000 || got.Version != task.Version || got.UpdatedAt != task.UpdatedAt {
 			t.Fatalf("heartbeat: %+v version %d", got.Claim, got.Version)
 		}
 		read, _ := f.s.GetTask(ctx, f.project, task.ID)
 		sameTask(t, read, got)
-		_, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+30_000, taskClock+30_000)
+		_, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+30_000, taskClock+30_000, false)
 		wantCode(t, err, domain.CodeValidation, "")
+	})
+
+	// G7: keepLonger never shortens the lease and still lengthens it; without it the expiry is
+	// expiresAt either way.
+	t.Run("HeartbeatKeepLongerNeverShortens", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		task := f.add(t, "t", nil)
+		_, err := f.s.ClaimTask(ctx, f.project, task.ID, 1, f.leaseFor("bob", "a1", "L-1"))
+		mustOK(t, err)
+		got, err := f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+30_000, taskClock+1, true)
+		mustOK(t, err)
+		if got.Claim.ExpiresAt != taskClock+60_000 {
+			t.Fatalf("keepLonger shortened the lease to %d, want %d", got.Claim.ExpiresAt, taskClock+60_000)
+		}
+		got, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+90_000, taskClock+1, true)
+		mustOK(t, err)
+		if got.Claim.ExpiresAt != taskClock+90_000 {
+			t.Fatalf("keepLonger did not lengthen the lease: %d, want %d", got.Claim.ExpiresAt, taskClock+90_000)
+		}
+		// Positive control: without keepLonger a shorter expiry is written.
+		got, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+30_000, taskClock+1, false)
+		mustOK(t, err)
+		if got.Claim.ExpiresAt != taskClock+30_000 {
+			t.Fatalf("an explicit expiry was not written: %d, want %d", got.Claim.ExpiresAt, taskClock+30_000)
+		}
 	})
 
 	leaseRefusals := func(t *testing.T, call func(s store.Store, projectID, taskID, leaseID, owner string, now int64) error) {
@@ -162,7 +187,7 @@ func claims(t *testing.T, newStore Factory) {
 
 	t.Run("HeartbeatRefusals", func(t *testing.T) {
 		leaseRefusals(t, func(s store.Store, projectID, taskID, leaseID, owner string, now int64) error {
-			_, err := s.Heartbeat(ctx, projectID, taskID, leaseID, owner, now+60_000, now)
+			_, err := s.Heartbeat(ctx, projectID, taskID, leaseID, owner, now+60_000, now, false)
 			return err
 		})
 	})
@@ -177,7 +202,7 @@ func claims(t *testing.T, newStore Factory) {
 		if got.Claim != nil || got.Version != task.Version || got.Status != domain.InProgress {
 			t.Fatalf("released: %+v", got)
 		}
-		_, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+2, taskClock+1)
+		_, err = f.s.Heartbeat(ctx, f.project, task.ID, "L-1", "bob", taskClock+2, taskClock+1, false)
 		wantCode(t, err, domain.CodeLeaseExpired, "")
 	})
 

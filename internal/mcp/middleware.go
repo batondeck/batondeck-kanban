@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -10,6 +11,19 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service/dtoschema"
 )
+
+// argumentsText is domain.CheckText over the call's arguments as they arrived (go-sdk has already
+// decoded them once, so they are valid JSON).
+func argumentsText(r *mcp.CallToolRequest) error {
+	if r == nil || r.Params == nil || len(r.Params.Arguments) == 0 {
+		return nil
+	}
+	var args any
+	if err := json.Unmarshal(r.Params.Arguments, &args); err != nil {
+		return domain.Validation("the arguments are not JSON", nil)
+	}
+	return domain.CheckText(args)
+}
 
 // Call is a tool's body: one service call, from the caller and the decoded request to the response
 // or a *domain.BatonDeckError. Membership, the role tier and the capability grant are the service's
@@ -21,7 +35,8 @@ type Call[Req, Resp any] func(ctx context.Context, caller domain.Caller, req Req
 // contract/expected.json. Every call then passes one chain, outermost first: the caller from the
 // bearer (withCaller); go-sdk validating the arguments against the input schema (an unknown key, a
 // wrong type or a null into an Optional) and decoding them into Req, either failure a VALIDATION
-// before the service is called (errorMiddleware); call; a non-BatonDeckError made INTERNAL and
+// before the service is called (errorMiddleware); a NUL character in any argument string, VALIDATION
+// (domain.CheckText); call; a non-BatonDeckError made INTERNAL and
 // logged with its stack (AddTool); the one error shape and one tool_calls row (errorMiddleware).
 // A tool with no domain.ToolPosture, or one without an Effect, panics here: an unclassified tool is refused at registration,
 // never served. It is listed to every caller unless its posture is AdminOnlyOnly.
@@ -45,11 +60,14 @@ func Tool[Req, Resp any](s *Server, area, name, description string, call Call[Re
 		visible = func(admin bool) bool { return admin }
 	}
 	s.manifest.add(ManifestEntry{Name: name, Area: area, Posture: posture})
-	AddTool(s, t, visible, func(ctx context.Context, _ *mcp.CallToolRequest, req Req) (*mcp.CallToolResult, Resp, error) {
+	AddTool(s, t, visible, func(ctx context.Context, r *mcp.CallToolRequest, req Req) (*mcp.CallToolResult, Resp, error) {
+		var zero Resp
 		caller, ok := CallerFrom(ctx)
 		if !ok {
-			var zero Resp
 			return nil, zero, domain.NewError(domain.CodeUnauthenticated, "no caller on the request", nil)
+		}
+		if err := argumentsText(r); err != nil {
+			return nil, zero, err
 		}
 		resp, err := call(ctx, caller, req)
 		return nil, resp, err

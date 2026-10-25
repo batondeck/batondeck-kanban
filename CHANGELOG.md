@@ -1059,6 +1059,29 @@ Notable changes to batondeck-kanban. The format follows
   case); any other foreign Host on loopback is still 403, now as `{"code":"FORBIDDEN","message"}`
   JSON instead of text/plain. No new config key. The check runs before the bearer, so a foreign
   Host with no bearer is now 403, where it was 401.
+- Postgres claims and concurrent writes, one lease per task, heartbeats that keep their lease, NUL
+  refused (P-278; audit 2026-10-24 A2-A6, glitches G1 G2 G3 G6 G7). `claim_next`'s frontier locks
+  `FOR NO KEY UPDATE ... SKIP LOCKED`: under `FOR UPDATE` it passed over a TODO task whose row a
+  concurrent comment's foreign key check held `FOR KEY SHARE`, and answered no work. When that finds
+  nothing, Postgres looks once more without `SKIP LOCKED`, waiting for a writer that holds the task
+  (a context item, task memory) and claiming it if it is still TODO (G1 on Postgres, 20 rounds:
+  comments 5/20 → 20/20, context items 0/20 → 20/20, task memory 11/20 → 20/20; one more statement
+  only on that miss). `LockTask` locks `FOR NO KEY UPDATE`, and every mutation that bumps a task
+  (not a comment, a follow-up or a claim) loads it with `Store.LockTask` (new, all three stores)
+  before it writes any row beside it: two `add_context_item` or `write_memory` calls each inserted
+  their row and then waited on the other's lock, a deadlock answered INTERNAL (G2: 30 INTERNAL in 36
+  calls, now 0). A mutation with no expected version whose versioned write loses a race is run again
+  inside the service instead of answering STALE (concurrent `add_follow_up {reopen}`). A NUL
+  character (U+0000) in any argument string, at any depth, is VALIDATION naming the field, on every
+  MCP tool and every REST route that is a service call (`domain.CheckText`; the hand-decoded
+  `POST /api/me/cli-tokens` and `POST /api/users` and the oncall webhook ingest are not covered yet,
+  P-284): Postgres answered INTERNAL, retryable, on nine
+  fields of eight tools while SQLite stored it (G3). `claim_task` on a task whose live lease the
+  caller already holds answers that lease, lengthened to this claim's `leaseSeconds` if that is
+  later, never shortened: a second session of one identity minted a new lease and silently ended the
+  first (G6, 20/20 rounds). The two sessions now share one lease and neither is told. `heartbeat_task` with no
+  `leaseSeconds` never moves the expiry earlier (`Store.Heartbeat` takes `keepLonger`): it cut a
+  3600 s claim to 300 s (G7); an explicit `leaseSeconds` still sets it, shorter included.
 
 - P-219: an open `/api/stream` no longer survives sign-out, a disabled account or a revoked token.
   The caller was resolved once at connect, so a copied session cookie kept receiving board frames

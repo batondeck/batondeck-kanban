@@ -179,6 +179,11 @@ func (s *Store) GetTask(ctx context.Context, projectID, taskID string) (store.Ta
 	return get(ctx, s, func(st *state) (store.Task, error) { return st.task(projectID, taskID) })
 }
 
+// LockTask is GetTask: Atomically already serialises every transaction.
+func (s *Store) LockTask(ctx context.Context, projectID, taskID string) (store.Task, error) {
+	return s.GetTask(ctx, projectID, taskID)
+}
+
 func validWriter(by string, at int64) error {
 	if by == "" || at <= 0 {
 		return domain.Validation("a write needs who made it and when", nil)

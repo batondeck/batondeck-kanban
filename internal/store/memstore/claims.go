@@ -179,7 +179,7 @@ func (st *state) heldLease(projectID, taskID, leaseID, owner string, now int64) 
 	return t, nil
 }
 
-func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64) (store.Task, error) {
+func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner string, expiresAt, now int64, keepLonger bool) (store.Task, error) {
 	if expiresAt <= now {
 		return store.Task{}, domain.Validation("a lease must expire after now", map[string]any{"expiresAt": expiresAt, "now": now})
 	}
@@ -188,7 +188,9 @@ func (s *Store) Heartbeat(ctx context.Context, projectID, taskID, leaseID, owner
 		if err != nil {
 			return store.Task{}, err
 		}
-		t.Claim.ExpiresAt = expiresAt
+		if !keepLonger || expiresAt > t.Claim.ExpiresAt {
+			t.Claim.ExpiresAt = expiresAt
+		}
 		return st.put(t), nil
 	})
 }
