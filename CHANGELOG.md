@@ -109,10 +109,11 @@ Notable changes to batondeck-kanban. The format follows
   policy (JSON, SSE and attachments), per route, so an unanswered path under them still gets the SPA
   shell with it. The policy: `default-src 'self'`, the theme bootstrap's script hash, inline styles
   (mermaid's `<style>` and style attributes, which no hash can allow), Google Fonts, images from this
-  origin, `data:` and `www.google.com` (the link favicons) only, `object-src 'none'`, `base-uri
-  'self'`, `frame-ancestors 'none'`. The app could be framed before, and a chronicle page could make
-  its readers load any external image. The OAuth pages keep their stricter policy. A test recomputes
-  the script hash from the embedded `index.html`.
+  origin, `data:`, and for the link favicons `www.google.com` and the `*.gstatic.com` it redirects
+  to, only; `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`. The app could be framed
+  before, and a chronicle page could make its readers load any external image. The OAuth pages keep
+  their stricter policy. A test recomputes the hash of every inline script in the embedded
+  `index.html`.
 
 - `grant_capabilities` (R2.4), the last tool in `contract/pending.json`, which is now `{"tools": {}}`:
   a project admin (conductor's `requireAdmin`) narrows one member's mutation surface below their
