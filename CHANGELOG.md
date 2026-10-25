@@ -31,6 +31,9 @@ Notable changes to batondeck-kanban. The format follows
   notifications type CHECK on both engines (SQLite rebuilds the table; down drops the handoff rows).
   `list_notifications` declares the new type (`contract/deltas.json` gains `addedEnumValues`), and
   the Notifications screen reads "X handed you T-n". The doorbell is unchanged.
+- The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
+  reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
+  the package instead of leaning on the bound.
 - The doorbell names its board (P-191, owner 2026-10-24). The socket frame was `{kind, cursor,
   projectId}` and its line said "call claim_next", which needs a `boardId` the frame never carried:
   two live haiku receivers passed the project id as the board id. The frame now adds `boardId` when
