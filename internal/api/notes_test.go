@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
@@ -94,5 +95,43 @@ func TestCommentAndFollowUpRoutes(t *testing.T) {
 			}
 		}
 		t.Logf("%s: 5 routes answered the member, refused a non-member 403 and no session 401", s.Engine)
+	})
+}
+
+// P-257 B2 (review): a follow-up on a task will's agent holds targets that agent; will's browser
+// session (no agent), which the drawer offers Ack, acks it 200, and another worker is refused 403.
+func TestTheHoldersBrowserAcksItsAgentsFollowUp(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		pid, bid := seedBoard(t, h, s.Core, "Holder")
+		ctx := context.Background()
+		will, carol := h.as("will"), h.as("carol")
+		for _, u := range []*harness{will, carol} {
+			if _, err := s.Core.Projects().AddMember(ctx, h.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: u.userID, Role: domain.RoleWorker}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		task, err := s.Core.Tasks().Create(ctx, h.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: "held"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent := will.caller()
+		agent.Agent = "agent-will"
+		if _, err := s.Core.Lifecycle().Claim(ctx, agent, service.ClaimTaskReq{ProjectID: pid, TaskID: task.Task.ID}); err != nil {
+			t.Fatal(err)
+		}
+		base := "/api/projects/" + pid + "/tasks/" + task.Task.ID
+		code, body := h.do("POST", base+"/follow-ups", `{"body":"status?"}`, nil)
+		var fu struct{ FollowUp service.FollowUp }
+		if err := json.Unmarshal([]byte(body), &fu); err != nil || code != http.StatusOK || fu.FollowUp.Target == nil || *fu.FollowUp.Target != "agent-will" {
+			t.Fatalf("POST follow-ups: %d %s, want the target agent-will", code, body)
+		}
+		ack := base + "/follow-ups/" + fu.FollowUp.ID + "/ack"
+		if code, body := carol.do("POST", ack, "", nil); code != http.StatusForbidden || !strings.Contains(body, `"FORBIDDEN"`) {
+			t.Fatalf("carol acks will's agent's follow-up: %d %s, want 403", code, body)
+		}
+		if code, body := will.do("POST", ack, "", nil); code != http.StatusOK || !strings.Contains(body, `"status":"acked"`) {
+			t.Fatalf("will's browser acks his agent's follow-up: %d %s, want 200 acked", code, body)
+		}
 	})
 }

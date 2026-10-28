@@ -20,12 +20,12 @@ func TestCoalescerPerEntryAndKind(t *testing.T) {
 	c := newCoalescer()
 	start := time.Now()
 	for i := range 5 {
-		q, m := window(KindAssigned)
+		q, m := Windows{}.withDefaults().of(KindAssigned)
 		c.add(1, Frame{Kind: KindAssigned, Cursor: int64(10 + i)}, start.Add(time.Duration(i)*20*time.Millisecond), q, m)
 	}
-	q, m := window(KindBroadcast)
+	q, m := Windows{}.withDefaults().of(KindBroadcast)
 	c.add(1, Frame{Kind: KindBroadcast, Cursor: 13}, start, q, m)
-	q, m = window(KindAssigned)
+	q, m = Windows{}.withDefaults().of(KindAssigned)
 	c.add(2, Frame{Kind: KindAssigned, Cursor: 9}, start, q, m)
 	if got := c.release(start.Add(299 * time.Millisecond)); len(got) != 0 {
 		t.Fatalf("released before quiet: %+v", got)
@@ -42,12 +42,39 @@ func TestCoalescerPerEntryAndKind(t *testing.T) {
 	}
 }
 
+// The production windows are plan Amendment B's and ADR-0004's numbers (P-289 pins them, since a
+// test may now hold shorter ones): assigned 300 ms quiet within 1 s, broadcast and changed 5 s. A
+// directory built with no Windows holds exactly those; one given a field keeps it and defaults the
+// rest.
+func TestProductionWindowsAreADR0004s(t *testing.T) {
+	want := Windows{AssignedQuiet: 300 * time.Millisecond, AssignedMaxHold: time.Second, Slow: 5 * time.Second}
+	d, err := NewDirectory(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Windows(); got != want {
+		t.Fatalf("a directory with no Windows holds %+v, want ADR-0004's %+v", got, want)
+	}
+	for kind, w := range map[string][2]time.Duration{KindAssigned: {300 * time.Millisecond, time.Second}, KindBroadcast: {5 * time.Second, 5 * time.Second}, KindChanged: {5 * time.Second, 5 * time.Second}} {
+		if q, m := d.Windows().of(kind); q != w[0] || m != w[1] {
+			t.Fatalf("%s: quiet %v, cap %v; want %v, %v", kind, q, m, w[0], w[1])
+		}
+	}
+	d, err = NewDirectory(Options{Windows: Windows{Slow: time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Windows(); got != (Windows{AssignedQuiet: 300 * time.Millisecond, AssignedMaxHold: time.Second, Slow: time.Second}) {
+		t.Fatalf("a directory given only Slow holds %+v", got)
+	}
+}
+
 // A kind that never pauses is released at its cap; the held cursor is the highest whatever the
 // arrival order; forget drops an entry's frames.
 func TestCoalescerCapHighestAndForget(t *testing.T) {
 	c := newCoalescer()
 	start := time.Now()
-	q, m := window(KindAssigned)
+	q, m := Windows{}.withDefaults().of(KindAssigned)
 	for i := range 6 { // every 200 ms, never quiet for 300
 		c.add(1, Frame{Kind: KindAssigned, Cursor: int64(100 + i)}, start.Add(time.Duration(i)*200*time.Millisecond), q, m)
 	}
@@ -67,12 +94,12 @@ func TestCoalescerCapHighestAndForget(t *testing.T) {
 // The frame names its board since P-191 (owner 2026-10-24: "add boardId to the doorbell").
 func TestFrameBytes(t *testing.T) {
 	f := Frame{Kind: KindAssigned, Cursor: 42, ProjectID: "P-1", BoardID: "B-1"}
-	b := string(frameBytes("S-1", "", f))
+	b := string(frameBytes("S-1", "", f, ""))
 	want := `{"type":"user","session_id":"S-1","message":{"role":"user","content":"batondeck: work was assigned to you on P-1 (cursor 42); call claim_next {projectId: P-1, boardId: B-1}, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":42,\"projectId\":\"P-1\",\"boardId\":\"B-1\"}"}}` + "\n"
 	if b != want {
 		t.Fatalf("frame\n got %q\nwant %q", b, want)
 	}
-	if a := string(frameBytes("S-1", "tok", f)); a != `{"type":"auth","token":"tok"}`+"\n"+want {
+	if a := string(frameBytes("S-1", "tok", f, "")); a != `{"type":"auth","token":"tok"}`+"\n"+want {
 		t.Fatalf("with a token %q", a)
 	}
 	for _, bad := range []string{"priority", "from", "taskId", "title"} {
@@ -164,6 +191,47 @@ func TestFrameBoards(t *testing.T) {
 	} {
 		if line := c.f.Line(); !strings.Contains(line, c.want) {
 			t.Fatalf("line %q\nwant it to hold %q", line, c.want)
+		}
+	}
+}
+
+// P-276: a worker registered under an agent label hears its assigned doorbell as claim_next with
+// assignee: <label>, then without it (work routed to its account); its broadcast and a master's
+// changed are Line's. The positive control: label "" is Line, word for word.
+func TestLineForALabelledWorker(t *testing.T) {
+	one := Frame{Kind: KindAssigned, Cursor: 7, ProjectID: "P-1", BoardID: "B-1"}
+	for _, c := range []struct {
+		f     Frame
+		label string
+		want  string
+	}{
+		{one, "agent-a", `; call claim_next {projectId: P-1, boardId: B-1, assignee: "agent-a"}, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindAssigned, ProjectID: "P-1", BoardIDs: []string{"B-a", "B-b"}}, "my agent", `; call claim_next {projectId: P-1, boardId, assignee: "my agent"} for each boardId of B-a, B-b, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindAssigned, ProjectID: "P-1"}, "agent-a", `; call list_boards {projectId: P-1}, then claim_next {projectId, boardId, assignee: "agent-a"} on each board, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindBroadcast, ProjectID: "P-1", BoardID: "B-1"}, "agent-a", "; call claim_next {projectId: P-1, boardId: B-1}, then list_notifications."},
+		{Frame{Kind: KindChanged, ProjectID: "P-1", BoardID: "B-1"}, "agent-a", "; call next_task {projectId: P-1, boardId: B-1, includeInbox: true}, then list_notifications."},
+	} {
+		if line := c.f.LineFor(c.label); !strings.Contains(line, c.want) {
+			t.Fatalf("line %q\nwant it to hold %q", line, c.want)
+		}
+	}
+	if one.LineFor("") != one.Line() || strings.Contains(one.Line(), "assignee") {
+		t.Fatalf("label \"\" is not Line: %q vs %q", one.LineFor(""), one.Line())
+	}
+	if got := string(frameBytes("S-1", "", one, "agent-a")); !strings.Contains(got, `assignee: \"agent-a\"`) {
+		t.Fatalf("frameBytes does not carry the label's line: %s", got)
+	}
+	// The entry's label: a worker's agent, never a master's or a derived id:<identity>.
+	for _, c := range []struct {
+		e    entry
+		want string
+	}{
+		{entry{role: "worker", agent: "agent-a"}, "agent-a"},
+		{entry{role: "worker", agent: "id:U-1"}, ""},
+		{entry{role: "master", agent: "agent-a"}, ""},
+	} {
+		if got := c.e.label(); got != c.want {
+			t.Fatalf("label of %+v = %q, want %q", c.e, got, c.want)
 		}
 	}
 }

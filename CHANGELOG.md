@@ -6,8 +6,115 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+## [0.1.0]
+
+The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
+this section's headings in CHANGELOG.md, are all part of it.
+
+- **One binary, two engines.** `batondeck-kanban serve` runs the MCP server at `/mcp` (Streamable HTTP,
+  API tokens or OAuth), the REST API behind the web UI, the embedded web UI and `/healthz`, on a
+  SQLite file or, with a `postgres://` `database.url`, on Postgres. `migrate`, `user`, `token`,
+  `session`, `doctor`, `healthcheck` and `version` are its other subcommands. The image
+  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64 by `make image`
+  (arm64 needs emulation, which Docker Desktop has), and `compose.yaml` runs it on Postgres 16.
+- **86 tools, 4 prompts and 11 resource templates**, by area:
+  projects and members (`create_project`, `get_project`, `list_projects`, `update_settings`,
+  `delete_project`, `add_member`, `remove_member`);
+  boards and columns (`create_board`, `get_board`, `list_boards`, `add_column`, `update_column`,
+  `remove_column`);
+  tasks (`create_task`, `get_task`, `list_tasks`, `update_task`, `move_task`, `search_tasks`,
+  `rank_tasks`, `cancel_task`, `delete_task`);
+  the lifecycle (`claim_task`, `claim_next`, `next_task`, `heartbeat_task`, `release_task`,
+  `complete_task`, `block_task`, `fail_task`, `handoff_task`, `reap_stale_leases`);
+  context and memory (`get_task_context`, `add_context_item`, `set_summary`, `write_memory`,
+  `read_memory`, `recall_memory`);
+  dependencies and subtasks (`add_dependency`, `remove_dependency`, `add_subtask`, `list_subtasks`,
+  `orchestrate_subtasks`);
+  attachments and artifacts (`attach_file`, `list_attachments`, `add_artifact`, `retract_artifact`);
+  comments and follow-ups (`add_comment`, `list_comments`, `add_follow_up`, `list_follow_ups`,
+  `ack_follow_up`);
+  runs (`start_runs`, `open_run`, `list_runs`, `pick_run`, `cancel_runs`);
+  sprints (`create_sprint`, `get_sprint`, `list_sprints`, `update_sprint`, `set_sprint`);
+  notifications (`list_notifications`, `mark_notifications_read`);
+  agents (`list_agent_sessions`, `disconnect_agent`, `register_agent_profile`, `get_skill_stats`,
+  `grant_capabilities`, `detect_anomalies`);
+  me and audit (`get_my_settings`, `set_my_settings`, `list_audit_log`);
+  chronicle (`create_chronicle_page`, `edit_chronicle_page`, `delete_chronicle_page`,
+  `ingest_chronicle_page`);
+  on-call (`create_integration`, `update_integration`, `delete_integration`, `list_integrations`,
+  `rotate_integration_secret`, `send_test_event`, `list_deliveries`, `read_delivery_raw`,
+  `replay_delivery`), with signed ingest at `/hooks/{id}` and eight connectors in the binary.
+  Analytics is the operations summary over the local `tool_calls` table
+  (`GET /api/analytics/operations`). `contract/expected.json` holds the exact surface.
+- **Five states and a fixed transition table** (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE; ADR-0005).
+  The table is not editable: `get_transitions`, `set_transitions` and `settings.transitionTable` are
+  gone.
+- **Two folds, named deviations from conductor:**
+  1. `DEAD_LETTER` is folded into `BLOCKED`: a poisoned task is BLOCKED with
+     `blockedReason: "poison"` and the system label `poisoned`; auto-unblock never un-poisons it, and
+     only a master's `move_task` to TODO does, resetting `claimAttempts`. `requeue_task` is not ported.
+  2. `CANCELLED` is folded away: `delete_task` (new; master tier) removes a task and what hangs off
+     it, `cancel_task` (new, ADR-0001) moves it to DONE with the system label `cancelled`, and
+     `pick_run` and `cancel_runs` delete the losing runs instead of marking them cancelled.
+- **Dropped:** the media function (thumbnails, OCR, captions; attachments still upload and
+  download), semantic search (keyword search over FTS5 and tsvector stays), notification delivery to
+  SendGrid and Slack (notifications are in-app), Pub/Sub (replaced by the device-local socket
+  doorbell for Claude Code and SSE for the web UI, ADR-0004) and BigQuery (replaced by the local
+  `tool_calls` table). Also dropped, by the owner's scope: billing, WorkOS, admin, the plugin maker,
+  the router facade, the CLI-token tools and `prune_agent_sessions` (ADR-0004).
+- **The Claude Code plugin, 0.1.0** (`plugin/`; its pre-release numbers 0.1.2 and 0.1.3 in the entries
+  below reset to the release's 0.1.0): the board's MCP tools, SessionStart and SessionEnd
+  hooks that register the session in the server's device directory so it is rung over its own
+  messaging socket when work arrives, the `batondeck-worker` and `batondeck-chronicle` skills and six
+  commands. There is no channel and no Stop hook; clients off the device pull each turn.
+- **The MCP OAuth 2.1 authorization server** for remote connectors, on when `public_url` is set:
+  dynamic client registration, PKCE S256, opaque tokens. It was built for the claude.ai and ChatGPT
+  connectors and exercised end to end with `mcp-remote`; neither connector has been tried against it.
+- **Release machinery:** `make dist` builds the four platform binaries reproducibly with
+  `SHA256SUMS`, `make image` builds the two-architecture image and refuses a version `compose.yaml`
+  does not pull, and `scripts/release-check.sh 0.1.0` refuses a candidate whose `compose.yaml`,
+  `plugin.json`, this file and binary disagree on the version (RELEASING.md).
+
 ### Changed
 
+- A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
+  ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
+  mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept
+  until something else woke it. A mention of a member with a live worker session on this device, by
+  login or by that worker's registered agent label (`@claude-rev`), now rings that member's workers
+  `assigned` on the task, once per comment. A self-mention, a member with no worker (a human at the
+  web UI), a name that is no member and a non-member ring nobody and do not error, and masters stay
+  silent. A comment without a mention still rings nobody.
+
+- Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
+  `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
+  `created_by_agent` and every event's agent stayed empty and `agent_sessions` held one row per
+  user. The agent is now the API token's label (`token create --label`), else the OAuth client's
+  registered `client_name`, else the MCP initialize `clientInfo.name`, with control characters
+  dropped, trimmed and cut to 64 characters. The default label `cli` names no agent, so two clients
+  on one default token are two `agent_sessions` rows by their client names; two on one labelled
+  token are that label's one row. The row's `kind` says `api_token` or `oauth_user` (a new enum
+  value, `contract/deltas.json`) instead of the hard-coded `service_account`. No migration:
+  `agent_sessions` was keyed by (identity, agent) already. A claim belongs to its agent: the same
+  identity's other agent claiming a held task is `CONFLICT_LOCKED`, and the same agent's second
+  session still shares the lease (P-278); a lease taken before the upgrade has no agent, so its
+  agent's re-claim is `CONFLICT_LOCKED` until it expires. A follow-up on a held task now targets the
+  holding agent (the claim's `agentId`, conductor's resolveTarget) rather than its account; the
+  account's own browser session still acks it, another agent of the account does not. A label is
+  one user's: `token create` and `POST /api/me/cli-tokens` refuse with `VALIDATION` a label another
+  user's token has ever carried, revoked or expired included, so the first user to mint a label keeps
+  it. Below master, an explicit `assignee` on `claim_next` or `next_task`, or a `handoff_task`
+  `toAgent`, naming a label a live token carries, or one another user's token has ever carried
+  (so a lapsed owner's queued work stays hers, P-338), is `FORBIDDEN` unless the caller is on a
+  token carrying it and no other user's token has ever carried it (P-277); an OAuth `client_name`
+  or a `clientInfo.name` never holds a label. Two users minting one new label at the same instant
+  can both land (the check is a read before the insert); the label then stays `FORBIDDEN` to both
+  below master, and revoking either token does not free it, so each picks another label. A master
+  may name any label, and `claim_task {taskId}` does not check the assignee. A label-registered
+  worker's assigned doorbell line names
+  `claim_next {projectId, boardId, assignee: "<label>"}` (P-276). The Agents screen counts a session
+  online when the device directory lists it or its last request is recent, not by
+  `wakeAttachedAt`, which nothing writes, and its Auth column says `api token` or `oauth`.
 - Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
   Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
   now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every
@@ -106,6 +213,24 @@ Notable changes to batondeck-kanban. The format follows
 - The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
   reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
   the package instead of leaning on the bound.
+- The device-directory tests run in parallel with shorter coalescing waits (P-289). They waited
+  ADR-0004's real 5 s broadcast and changed window one after another, and set package variables,
+  so they could not run together. `wake.Options.Windows` now takes the windows (a zero field is the
+  production value: assigned 300 ms quiet within 1 s, broadcast and changed 5 s), and serve's
+  composition passes none; a test hands its registry, sweep and windows to `composeWith`, and the
+  tests that wait the slow window out hold it at 2 s. `TestProductionWindowsAreADR0004s` and
+  `TestServeDirectoryHoldsTheProductionWindows` pin the production numbers. Every bound and every
+  expected silence is unchanged, and so is every expected ring but one: before its silent step,
+  `TestDirectoryHandoffToSelfRingsNobody` now drains the creates' burst, so it no longer fails when
+  that burst rings more than once. Four other tests still catch a broadcast window that does not
+  coalesce (`NoSelfRing`, `RebuildsAndCatchesUp`, `RefusesAnotherIdentityTakingAPid`,
+  `RingsAWorkerWithTheExactFrame`), and `MasterCoalescesAt5s` pins the slow window. The three tests that time or count against a bound
+  (`RingsAWorkerWithTheExactFrame`, `DropsAKilledProcessWithin1s`, `SweepDropsADisabledUser`) stay
+  serial, and the no-ring tests count from the writes their clients have read, since the directory
+  counts a doorbell just after writing it (P-319's "wrote 1 doorbells, want 0"). On 4 vCPUs with
+  Postgres, `go test -race -count=1 ./internal/cli/` went from 584 s to 451 s (the directory tests
+  from 197 s run serially to a 51 s parallel phase); the rest of the package is serial and
+  untouched, so the 20-minute timeout stays.
 - Sign-in is bounded (P-220, audit G4). Each password check allocates argon2id's 64 MiB, and 64
   concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most 2 checks (128 MiB) run
   at once process-wide, whatever the core count, and a caller that waits 3 s for a slot is refused.
@@ -136,10 +261,11 @@ Notable changes to batondeck-kanban. The format follows
   deletes the session row (`Store.DeleteSession`, both engines) and expires both cookies: sign-out
   called the unmounted `/auth/logout` before (P-198). New `GET` and `POST /api/users`, the workspace
   admin's only (anyone else is 403 `FORBIDDEN`): list the local accounts (login, name, role,
-  disabled) and add a member, whose generated password the answer carries once; disable, password
-  reset and role changes stay with `batondeck-kanban user`. Settings shows the Users panel to the
-  workspace admin in place of the WorkOS invitation panel, and `web/src/api/tenants.ts` is gone. A
-  disabled user's open session is 401 within the 60 s account-cache window.
+  disabled) and add a member, whose generated password the answer carries once; disable and
+  password reset stay with `batondeck-kanban user disable|passwd`, and nothing changes a role yet.
+  Settings shows the Users panel to the workspace admin in place of the WorkOS invitation panel, and
+  `web/src/api/tenants.ts` is gone. A disabled user's open session is 401 within the 60 s
+  account-cache window.
 - The SPA on five states (R1.14, ADR-0005): `Status` is `TODO · IN_PROGRESS · BLOCKED · REVIEW ·
   DONE`, derived from the exported `STATUSES`; every status map, filter, chart order, the move-button
   fallback table and the ticket-search aliases follow it (no `CANCELLED`, `BACKLOG`, `READY`, and the
@@ -153,10 +279,10 @@ Notable changes to batondeck-kanban. The format follows
   TODO) and a worker sees it disabled. A task blocked by a dependency keeps the plain `Blocked` badge.
 - `web/src/api.ts` is gone: every client function lives in one `web/src/api/<area>.ts`, one per
   `internal/api/<area>.go` (new: `session`, `projects`, `boards`, `tasks`, `lifecycle`, `context`,
-  `media`, `feed`, `stream`, and `tenants` for the four unmounted invitation calls Settings still
-  makes), `http.ts` holds `req`, `ApiError` and the local-edit marks, and every screen imports its
-  areas directly. The studio, admin, billing, tenant-switch and onboarding functions, which no kept
-  screen called, are dropped with the routes.
+  `media`, `feed` and `stream`; the interim `tenants` file went with the WorkOS invitation panel),
+  `http.ts` holds `req`, `ApiError` and the local-edit marks, and every screen imports its areas
+  directly. The studio, admin, billing, tenant-switch and onboarding functions, which no kept screen
+  called, are dropped with the routes.
 - Live board from `/api/stream`: presence frames (the device session directory's entries) become
   `device:<pid>` session rows that each frame replaces, and a `resync` frame or a rebuilt socket
   refetches the board, its tasks and its feed, since no board frame comes until the next change.
@@ -207,6 +333,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `docs/adr/`: the five decision records the tree cites, ADR-0001 to ADR-0005, copied unchanged
+  from the planning workspace, until now their only home (P-309, audit D4), and a README.
+  `TestADRReferencesResolve` (`internal/arch`, so `make check`'s `arch` step) fails on any
+  `ADR-NNNN` in a tracked or new file with no `docs/adr/NNNN-*.md`, and on a record whose name or
+  heading does not carry its id. The plan of record gains a one-line "Superseded by" banner on each
+  passage ADR-0001, ADR-0002 or ADR-0004 replaced (the channel, `/wake`, subscribe push, the Actions
+  workflow) and a "superseded by measurement" note on the query pins, the resource template count
+  and the CLI list. The plan's "plan Amendment B/E" citations and `internal/wake/doorbell.go`'s
+  name ADR-0004 and ADR-0005; the two `migrations/*/0004_five_states.sql` headers keep "plan
+  Amendment E" (zone Z2, left for the owner). ADR-0001 is amended in place to the code's rules
+  (cancel by the live lease holder; un-poison lands TODO), and ADR-0004 to the doorbell frame's
+  `boardId`/`boardIds`. Docs and comments only.
 - Browser security headers on every response (P-250). One middleware around the composed handler
   sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
   a `Content-Security-Policy` on every response; the `/mcp`, `/hooks` and `/blobs` routes drop the
@@ -259,7 +397,7 @@ Notable changes to batondeck-kanban. The format follows
   `/api/me/cli-tokens` routes replace R1.12's stubs: a CLI token minted on the Settings page answers
   its plaintext once, is listed without it, and revoked there is 401 at the next MCP initialize;
   another user's token id is 404; the page mints at most 10 live tokens per identity (conductor's cap,
-  400 `VALIDATION` past it) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
+  400 `VALIDATION` past it; the host's `token create` has no cap) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
   create|revoke` (actor `host`), write `cli_token.minted` and `cli_token.revoked` (P-159). New `GET
   /api/audit`, list_audit_log for the Workspace Log's admin-only audit panel. A device entry in the
   presence frames carries `lastDeliveredCursor` (`wake_sessions.last_cursor`), and a delivery signals
@@ -456,7 +594,8 @@ Notable changes to batondeck-kanban. The format follows
   registered nor pending, so `pending.json` only shrinks: each lane removes its names when it
   registers them. `TestSurfaceSnapshot` pins the served tool, prompt and template names for an admin
   and a member. `contract.CheckLive` and `contract.Pending` carry the rules (`contract/live.go`).
-- `test/perf/queries_per_call_test.go`: `get_task` 2, `list_tasks` 2, `get_board` 2, `claim_next` 4
+- `test/perf/queries_per_call_test.go`: `get_task` 2 (3 since R2.1's artifacts), `list_tasks` 2,
+  `get_board` 2, `claim_next` 4
   (Postgres 5: the change row's `NotifyChanges`), `get_task_context` 6, `next_task` 3, each a
   commented constant measured on SQLite and Postgres with the membership cached and the board
   snapshot in the state the pin names; the other snapshot state and a fresh core are printed beside
@@ -1106,6 +1245,14 @@ Notable changes to batondeck-kanban. The format follows
   `check` workflow runs `make check` on pull requests against a `postgres:16` service.
 
 ### Removed
+
+- Four on-call settings nothing read (P-310, owner decision 6, audit D5): the integration
+  `policy` input (`autoReviewCycle`, `openPrForReview`, `reviewerAgent`) and
+  `routing.fallbackBroadcast`. `create_integration` and `update_integration`, over MCP and REST,
+  refuse them as unexpected properties (`contract/deltas.json` records the four removed props,
+  each with its reason), and the integration form no longer shows the four toggles. A row stored
+  with them loads, lists, saves and routes with no migration: the keys are ignored, a new routing
+  replaces the stored one whole, and the stored `policy` object is still echoed as stored.
 
 - MCP resource subscriptions (ADR-0004): `initialize` no longer advertises `resources.subscribe`, the
   subscribe and unsubscribe handlers are gone, and `resources/subscribe` is answered method not found

@@ -67,7 +67,7 @@ describe('resync', () => {
 });
 
 describe('presence frames from the device directory', () => {
-  it('maps each entry to a device:<pid> session row stamped with the frame time', () => {
+  it('maps each entry to a device:<pid> session row whose last activity is the frame time', () => {
     const rows = streamApi.presenceSessions(
       { sessions: [{ pid: 7, role: 'worker', identityId: 'U-1', agentId: 'claude-1', adapter: 'claude-code', registeredAt: '2026-10-23T10:00:00Z' }] },
       '2026-10-23T12:00:00Z',
@@ -75,7 +75,7 @@ describe('presence frames from the device directory', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       sessionKey: 'device:7', agentId: 'claude-1', agentName: 'claude-1', identityId: 'U-1', clientName: 'claude-code',
-      firstSeenAt: '2026-10-23T10:00:00Z', lastSeenAt: '2026-10-23T10:00:00Z', wakeAttachedAt: '2026-10-23T12:00:00Z',
+      firstSeenAt: '2026-10-23T10:00:00Z', lastSeenAt: '2026-10-23T12:00:00Z',
     });
   });
 

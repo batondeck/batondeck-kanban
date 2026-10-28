@@ -39,6 +39,9 @@ type Options struct {
 	// Sweep defaults to the package's Sweep; WriteTimeout bounds each socket step (default 1 s).
 	Sweep        time.Duration
 	WriteTimeout time.Duration
+	// Windows is the coalescing windows; a zero field is the production value (Windows). serve sets
+	// none; a test sets a shorter one.
+	Windows Windows
 	// ProcessUID is core.ProcessUID unless a test replaces it.
 	ProcessUID func(pid int) (int, error)
 }
@@ -116,6 +119,7 @@ func NewDirectory(o Options) (*Directory, error) {
 	if o.ProcessUID == nil {
 		o.ProcessUID = core.ProcessUID
 	}
+	o.Windows = o.Windows.withDefaults()
 	return &Directory{o: o, entries: map[int64]*entry{}, index: map[string]map[int64]bool{},
 		changed: make(chan struct{}), catch: make(chan []released, 16), done: make(chan struct{})}, nil
 }
@@ -398,6 +402,9 @@ func (d *Directory) Changed() <-chan struct{} {
 // Writes is how many doorbells the dispatcher has written.
 func (d *Directory) Writes() int64 { return d.writes.Load() }
 
+// Windows is the coalescing windows the dispatcher holds doorbells for.
+func (d *Directory) Windows() Windows { return d.o.Windows }
+
 // Done is closed when the dispatcher has stopped.
 func (d *Directory) Done() <-chan struct{} { return d.done }
 
@@ -475,7 +482,7 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription) {
 		case frames := <-d.catch:
 			now := time.Now()
 			for _, r := range frames {
-				q, m := window(r.frame.Kind)
+				q, m := d.o.Windows.of(r.frame.Kind)
 				co.add(r.pid, r.frame, now, q, m)
 			}
 		case <-co.C():
@@ -511,7 +518,7 @@ func (d *Directory) route(co *coalescer, r row) {
 	d.mu.Unlock()
 	now := time.Now()
 	for _, h := range hits {
-		q, m := window(h.frame.Kind)
+		q, m := d.o.Windows.of(h.frame.Kind)
 		co.add(h.pid, h.frame, now, q, m)
 	}
 }
@@ -534,7 +541,7 @@ func (d *Directory) ringAll(co *coalescer) {
 				break
 			}
 		}
-		q, m := window(kind)
+		q, m := d.o.Windows.of(kind)
 		co.add(e.pid, Frame{Kind: kind, Cursor: cur, ProjectID: project}, now, q, m)
 	}
 }
@@ -584,6 +591,16 @@ func (d *Directory) sweep(ctx context.Context) {
 	}
 }
 
+// label is the agent label a worker entry registered under (its bearer's token label, or the
+// --agent it registered with), which its assigned doorbell names (Frame.LineFor); "" for a master
+// or an entry under its identity's derived id.
+func (e *entry) label() string {
+	if e.role != service.RoleWorker || strings.HasPrefix(e.agent, "id:") {
+		return ""
+	}
+	return e.agent
+}
+
 // deliver writes one released frame to its entry's socket, after the recheck: a revoked bearer, a
 // gone registry entry, a reused pid or a socket nobody answers drops the entry instead. The cursor
 // is the lower of the frame's and the bus's frontier (P-108), and is recorded once written.
@@ -624,7 +641,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	if token == "" {
 		token = e.socketToken
 	}
-	if err := writeDoorbell(reg.MessagingSocketPath, frameBytes(reg.SessionID, token, f), d.o.WriteTimeout); err != nil {
+	if err := writeDoorbell(reg.MessagingSocketPath, frameBytes(reg.SessionID, token, f, e.label()), d.o.WriteTimeout); err != nil {
 		if gone(err) {
 			d.drop(ctx, e.pid, "its socket is gone: "+err.Error())
 			return

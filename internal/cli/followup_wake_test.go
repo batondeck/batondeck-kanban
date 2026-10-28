@@ -11,11 +11,13 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/wake"
 )
 
-// R2.1 AC2 (ADR-0004): a comment rings nobody, neither the assignee's worker nor a master of the
+// R2.1 AC2 (ADR-0004): a comment with no mention rings nobody (a mention is owner decision 5's
+// exception, P-310: mention_wake_test.go), neither the assignee's worker nor a master of the
 // project; a follow-up rings its target's worker assigned within a second of the call (the
 // positive control, and the measurement).
 func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
-	s := startDirectory(t, nil)
+	t.Parallel()
+	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow})
 	w, m := s.client(t, "s-alice-worker", ""), s.client(t, "s-alice-master", "")
 	s.register(t, s.alice, w, "worker")
 	s.register(t, s.alice, m, "master")
@@ -29,7 +31,7 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 			select {
 			case b := <-c.got:
 				kinds = append(kinds, content(t, b).Kind)
-			case <-time.After(wake.SlowWindow + 500*time.Millisecond):
+			case <-time.After(s.win.Slow + 500*time.Millisecond):
 				quiet = true
 			}
 		}
@@ -38,14 +40,14 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 		t.Fatalf("the assignment rang %v, want an assigned among them", kinds)
 	}
 
-	before := s.a.dir.Writes()
-	if _, err := s.a.core.Comments().AddComment(ctx, s.bob.caller(), service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "@alice looks good"}); err != nil {
+	before := s.writesAfter(t, len(kinds))
+	if _, err := s.a.core.Comments().AddComment(ctx, s.bob.caller(), service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "looks good"}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.changeOf(t, "add_comment") {
 		t.Fatal("add_comment wrote no change row: the silence would prove nothing")
 	}
-	w.none(t, wake.SlowWindow+500*time.Millisecond)
+	w.none(t, s.win.Slow+500*time.Millisecond)
 	m.none(t, 0)
 	if n := s.a.dir.Writes() - before; n != 0 {
 		t.Fatalf("the comment wrote %d doorbells, want 0", n)

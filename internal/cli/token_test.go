@@ -134,3 +134,21 @@ func TestTokenSubcommandIsAudited(t *testing.T) {
 		t.Fatalf("audit rows:\n%s\nwant\n%s", strings.Join(got, "\n"), want)
 	}
 }
+
+// P-257 B1 (review): the host's token create refuses a label another user's token carries.
+func TestTokenCreateRefusesAnotherUsersLabel(t *testing.T) {
+	migratedDB(t)
+	for _, login := range []string{"alice", "bob"} {
+		withStdin(t, "pw-twelve-chars\n")
+		if code, _, errs := run("user", "add", login); code != 0 {
+			t.Fatalf("user add %s: %s", login, errs)
+		}
+	}
+	if code, _, errs := run("token", "create", "--user", "alice", "--label", "agent-a"); code != 0 {
+		t.Fatalf("alice's agent-a: %s", errs)
+	}
+	code, out, errs := run("token", "create", "--user", "bob", "--label", "agent-a")
+	if code != 1 || out != "" || !strings.Contains(errs, "VALIDATION") || !strings.Contains(errs, `label "agent-a" is another account's agent`) {
+		t.Fatalf("bob's agent-a: %d %q %q, want exit 1 and the VALIDATION refusal", code, out, errs)
+	}
+}

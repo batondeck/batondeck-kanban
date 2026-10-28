@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
 func tokenUsage(w io.Writer) {
@@ -17,7 +18,14 @@ func tokenUsage(w io.Writer) {
   list [--user LOGIN]                         list tokens: prefix, user, label, times, status
   revoke ID                                   revoke a token (its bd_<id> prefix or bare id)
 
---label defaults to "cli"; --ttl is a Go duration (720h is 30 days, the default; at most 8760h).
+--label names the agent that works on the token: its tool calls, claims and events record it. A
+label is one user's: create refuses a label another user's token has ever carried, revoked or
+expired included. Below master, naming as claim_next's or next_task's assignee, or as
+handoff_task's toAgent, a label a live token carries, or one another user's token has ever
+carried, is refused unless the caller is on a token carrying it and no other user's token has ever
+carried it (claim_task by task id does not check the assignee). It defaults to
+"cli", which names no agent (each MCP client is then told apart by its own name). --ttl is a Go duration (720h is 30 days, the default;
+at most 8760h).
 every subcommand takes -config PATH.
 `)
 }
@@ -36,7 +44,7 @@ func token(args []string, stdout, stderr io.Writer) int {
 	switch sub {
 	case "create":
 		fs.StringVar(&login, "user", "", "the user the token acts for (required)")
-		fs.StringVar(&label, "label", "cli", "a name for the token")
+		fs.StringVar(&label, "label", domain.DefaultTokenLabel, "the agent label the token works as")
 		fs.DurationVar(&ttl, "ttl", auth.DefaultTokenTTL, "how long the token lives")
 	case "list":
 		fs.StringVar(&login, "user", "", "only this user's tokens")

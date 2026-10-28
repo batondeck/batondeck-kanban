@@ -17,12 +17,16 @@ import (
 // The audit of 2026-10-24 (A2-A6; glitches G1, G2, G3, G6, G7) as tests through the served /mcp on
 // every engine: its repro scripts (skip.py, pgstorm.py, nul.py, conc.py) turned into Go.
 
-// session opens another MCP session of a's identity, on a token of its own: one person running two
-// Claude Code sessions.
-func (j *joined) session(a *agent) *agent {
+// session opens another MCP session of a's identity, on a token of its own with the label of a's
+// (j.user's joinLabel), so the same agent: one person running two Claude Code sessions.
+func (j *joined) session(a *agent) *agent { j.t.Helper(); return j.sessionAs(a, joinLabel(a.login)) }
+
+// sessionAs is session on a token labelled label: another agent of a's identity unless it is
+// joinLabel(a.login).
+func (j *joined) sessionAs(a *agent, label string) *agent {
 	j.t.Helper()
 	ctx := context.Background()
-	token, _, err := (&auth.TokenService{Store: j.st}).Create(ctx, a.id, "", "second session", time.Hour)
+	token, _, err := (&auth.TokenService{Store: j.st}).Create(ctx, a.id, "", label, time.Hour)
 	if err != nil {
 		j.t.Fatal(err)
 	}
@@ -266,10 +270,11 @@ func TestNULInTextIsValidationOnEveryEngine(t *testing.T) {
 	})
 }
 
-// G6 (conc.py): one identity in two sessions claiming one task at once never holds two leases: the
-// second claim answers the lease the first minted, and that lease stays good. Another identity is
-// still refused CONFLICT_LOCKED (the control that exclusivity holds), and a lease that has expired
-// is replaced by a fresh one.
+// G6 (conc.py): one agent in two sessions claiming one task at once never holds two leases: the
+// second claim answers the lease the first minted, and that lease stays good. Another identity, and
+// since P-257 another agent of the same identity (a token of another label), are refused
+// CONFLICT_LOCKED (the controls that exclusivity holds), and a lease that has expired is replaced by
+// a fresh one.
 func TestOneIdentityTwoSessionsHoldOneLease(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		owner, bob := j.user("ada"), j.user("bob")
@@ -315,6 +320,12 @@ func TestOneIdentityTwoSessionsHoldOneLease(t *testing.T) {
 		t.Logf("%s: %d sessions of one identity x %d rounds: %d rounds held more than one lease", j.engine, len(sessions), rounds, twoLeases)
 		if twoLeases != 0 {
 			t.Fatalf("%d of %d rounds minted more than one lease", twoLeases, rounds)
+		}
+		// P-257: the same identity's other agent does not share the lease.
+		held := asStr(b.task("held")["id"])
+		b.claim(owner, held)
+		if e := j.sessionAs(owner, "agent-b").refused("claim_task", map[string]any{"projectId": b.project, "taskId": held}, "CONFLICT_LOCKED"); e.Details["owner"] != owner.id {
+			t.Errorf("agent-b's refusal names %v, want %s", e.Details["owner"], owner.id)
 		}
 		// rev68 S4: the second claim's leaseSeconds lengthens the shared lease and never shortens it.
 		long := asStr(b.task("long")["id"])

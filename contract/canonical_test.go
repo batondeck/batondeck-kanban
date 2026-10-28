@@ -126,7 +126,7 @@ func surface(t *testing.T) Surface {
 func TestApply(t *testing.T) {
 	s := surface(t)
 	err := Apply(s, Deltas{
-		RemovedProps:      []string{"/tools/move_task/input/properties/order"},
+		RemovedProps:      []RemovedProp{{Pointer: "/tools/move_task/input/properties/order"}},
 		RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/CANCELLED"},
 		RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/TODO", To: "BLOCKED"}},
 		AddedEnumValues:   []AddedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/DONE", Why: "a value only this server writes"}},
@@ -152,8 +152,8 @@ func TestApply(t *testing.T) {
 func TestApplyRefusesStaleDeltas(t *testing.T) {
 	cases := map[string]Deltas{
 		"removed tool absent":         {RemovedTools: []string{"get_transitions"}},
-		"removed prop absent":         {RemovedProps: []string{"/tools/move_task/input/properties/transitions"}},
-		"removed prop path absent":    {RemovedProps: []string{"/tools/move_task/input/properties/nope/properties/x"}},
+		"removed prop absent":         {RemovedProps: []RemovedProp{{Pointer: "/tools/move_task/input/properties/transitions"}}},
+		"removed prop path absent":    {RemovedProps: []RemovedProp{{Pointer: "/tools/move_task/input/properties/nope/properties/x"}}},
 		"removed enum value absent":   {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER"}},
 		"enum emptied":                {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/TODO", "/tools/move_task/input/properties/toStatus/enum/CANCELLED", "/tools/move_task/input/properties/toStatus/enum/REVIEW"}},
 		"renamed enum value absent":   {RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER", To: "X"}}},
@@ -165,7 +165,7 @@ func TestApplyRefusesStaleDeltas(t *testing.T) {
 		"added enum value, no /enum/": {AddedEnumValues: []AddedEnum{{Pointer: "/tools/move_task/input/properties/toStatus", Why: "x"}}},
 		"added tool present":          {AddedTools: []RawTool{{Name: "move_task", InputSchema: map[string]any{}, OutputSchema: map[string]any{}}}},
 		"added prop present":          {AddedProps: []AddedProp{{Pointer: "/tools/move_task/input/properties/order", Schema: map[string]any{}}}},
-		"pointer outside tools":       {RemovedProps: []string{"/move_task/input/properties/order"}},
+		"pointer outside tools":       {RemovedProps: []RemovedProp{{Pointer: "/move_task/input/properties/order"}}},
 	}
 	for name, d := range cases {
 		if err := Apply(surface(t), d); err == nil {
@@ -183,5 +183,53 @@ func TestDiffNamesThePointer(t *testing.T) {
 	d := Diff(a, b)
 	if len(d) != 1 || d[0] != "extra /tools/move_task/input/properties/extra" {
 		t.Errorf("Diff = %v", d)
+	}
+}
+
+// TestRemovedPropMustSayWhy pins RemovedProp's reading of deltas.json (P-310): a bare pointer, or
+// {pointer, why} with both filled. An object entry with no why, a blank why, no pointer or an
+// unknown key is refused, beside the two accepted forms (the positive control) and the four entries
+// P-310 shipped, each of which reads with its reason.
+func TestRemovedPropMustSayWhy(t *testing.T) {
+	const ptr = "/tools/create_integration/input/properties/policy"
+	for name, in := range map[string]string{
+		"a bare pointer":         `"` + ptr + `"`,
+		"an object with its why": `{"pointer":"` + ptr + `","why":"owner decision 6"}`,
+	} {
+		var r RemovedProp
+		if err := json.Unmarshal([]byte(in), &r); err != nil || r.Pointer != ptr {
+			t.Errorf("%s: %s read as %+v, %v; want pointer %s", name, in, r, err, ptr)
+		}
+	}
+	for name, in := range map[string]string{
+		"no why":         `{"pointer":"` + ptr + `"}`,
+		"an empty why":   `{"pointer":"` + ptr + `","why":""}`,
+		"a blank why":    `{"pointer":"` + ptr + `","why":"  \t"}`,
+		"no pointer":     `{"why":"owner decision 6"}`,
+		"an unknown key": `{"pointer":"` + ptr + `","why":"owner decision 6","reason":"x"}`,
+	} {
+		var r RemovedProp
+		err := json.Unmarshal([]byte(in), &r)
+		if err == nil || !strings.Contains(err.Error(), "removedProps:") {
+			t.Errorf("%s: %s read as %+v, %v; want refused", name, in, r, err)
+		} else {
+			t.Logf("%s refused: %v", name, err)
+		}
+	}
+	var d Deltas
+	if err := ReadJSON("deltas.json", &d); err != nil {
+		t.Fatal(err)
+	}
+	why := 0
+	for _, r := range d.RemovedProps {
+		if r.Why != "" {
+			why++
+			if !strings.HasPrefix(r.Why, "P-310, owner decision 6") {
+				t.Errorf("%s: why %q", r.Pointer, r.Why)
+			}
+		}
+	}
+	if why != 4 {
+		t.Errorf("deltas.json removedProps carries %d entries with a why; want P-310's 4", why)
 	}
 }

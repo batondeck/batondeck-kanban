@@ -54,11 +54,14 @@ func (h *harness) connect(t testing.TB, bearer string) *mcp.ClientSession {
 }
 
 // dial initialises a session as bearer, leaving the error to the caller.
-func (h *harness) dial(bearer string) (*mcp.ClientSession, error) {
+func (h *harness) dial(bearer string) (*mcp.ClientSession, error) { return h.dialAs(bearer, "harness") }
+
+// dialAs is dial for a client whose initialize clientInfo.name is client.
+func (h *harness) dialAs(bearer, client string) (*mcp.ClientSession, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "harness", Version: "0.0.1"}, nil)
-	return client.Connect(ctx, &mcp.StreamableClientTransport{
+	c := mcp.NewClient(&mcp.Implementation{Name: client, Version: "0.0.1"}, nil)
+	return c.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:   h.url,
 		HTTPClient: &http.Client{Transport: bearerTransport{bearer: bearer}},
 		MaxRetries: -1,

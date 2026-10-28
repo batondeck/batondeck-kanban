@@ -16,7 +16,7 @@ export interface UiSettings {
   recentActivityLimit: number;
   /** Sessions fetched for presence/client-logo lookups (list_agent_sessions cap 200). */
   sessionsLimit: number;
-  /** An agent with no request for this long is shown offline (worker long-poll ≈50s/cycle). */
+  /** An MCP session with no request for this long is shown offline; a device-directory row is online while listed. */
   presenceOfflineAfterMs: number;
   /** "Who's around now" window for presence lists/pickers. */
   presenceWindowMs: number;

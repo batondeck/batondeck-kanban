@@ -188,7 +188,7 @@ interface DeviceSession {
 /**
  * A presence frame lists this device's live processes for the viewer, the whole list each time. They
  * become AgentSession rows keyed `device:<pid>` (presenceMerge.ts replaces those rows per frame), and
- * `seenAt`, the frame's arrival, stands for the directory's word that each one is live now.
+ * `seenAt`, the frame's arrival, is each one's last activity: the directory's word that it is live now.
  */
 export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
   const list = (d as { sessions?: DeviceSession[] } | null)?.sessions ?? [];
@@ -200,8 +200,7 @@ export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
     kind: 'dev',
     ...(e.adapter ? { clientName: e.adapter } : {}),
     firstSeenAt: e.registeredAt,
-    lastSeenAt: e.registeredAt,
-    wakeAttachedAt: seenAt,
+    lastSeenAt: seenAt,
     sessionCount: 1,
     requestCount: 0,
     toolCounts: {},

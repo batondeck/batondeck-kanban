@@ -4,8 +4,11 @@
 # HEAD tagged with another version; passing on a clean checkout of the tag, with binaries that
 # record vcs.modified=false. `make image` against the same fixtures and a stubbed docker: refused
 # on a dirty tree and an untagged HEAD; otherwise both platforms, both tags and the version, --push
-# only with PUSH=1. Then the binary check alone: a build from a modified tree, a build with no VCS
-# stamp and a build of another commit are each refused. Run by `make check`.
+# only with PUSH=1, and refused when compose.yaml pulls another version. Then the binary check
+# alone: a build from a modified tree, a build with no VCS stamp, a build of another commit and a
+# build by a Go other than go.mod's pin are each refused. Then the versions check
+# (`release-check.sh VERSION`): passing when compose.yaml, plugin.json, CHANGELOG.md and the binary
+# agree, and refused, naming the file, when any one of them does not. Run by `make check`.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,12 +29,18 @@ bad() { echo "release-check: FAIL $1" >&2; fail=1; }
 g() { git -c user.name=fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c tag.gpgSign=false "$@"; }
 
 goline=$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')
+gotoolchain=$(go env GOVERSION)
 
+# A fixture is a release candidate at 9.9.9: go.mod pins the Go on PATH (dist builds with exactly
+# that toolchain), and compose.yaml, plugin.json and CHANGELOG.md name 9.9.9.
 fixture() {
   local dir=$tmp/$1
-  mkdir -p "$dir/cmd/batondeck-kanban"
-  printf 'module example.invalid/fixture\n\ngo %s\n' "$goline" > "$dir/go.mod"
-  printf 'package main\n\nvar version string\n\nfunc main() { println(version) }\n' > "$dir/cmd/batondeck-kanban/main.go"
+  mkdir -p "$dir/cmd/batondeck-kanban" "$dir/plugin/.claude-plugin"
+  printf 'module example.invalid/fixture\n\ngo %s\n\ntoolchain %s\n' "$goline" "$gotoolchain" > "$dir/go.mod"
+  printf 'package main\n\nimport "os"\n\nvar version string\n\nfunc main() {\n\tif len(os.Args) > 1 && os.Args[1] == "version" {\n\t\tos.Stdout.WriteString("batondeck-kanban " + version + "\\n")\n\t}\n}\n' > "$dir/cmd/batondeck-kanban/main.go"
+  printf 'services:\n  batondeck-kanban:\n    image: ghcr.io/batondeck/batondeck-kanban:9.9.9\n' > "$dir/compose.yaml"
+  printf '{\n  "name": "batondeck-kanban",\n  "version": "9.9.9"\n}\n' > "$dir/plugin/.claude-plugin/plugin.json"
+  printf '# Changelog\n\n## [Unreleased]\n\n## [9.9.9] - 2026-01-01\n\n- fixture\n' > "$dir/CHANGELOG.md"
   printf '/dist/\n' > "$dir/.gitignore"
   (cd "$dir" && g init -q && g add -A && g commit -q -m fixture && g tag -a v9.9.9 -m v9.9.9)
   echo "$dir"
@@ -161,6 +170,9 @@ d=$(fixture imageuntracked); touch "$d/stray"
 expect_image_refused "image on an untracked file" "$d" "not clean"
 d=$(fixture imageuntagged); (cd "$d" && g commit -q --allow-empty -m later)
 expect_image_refused "image of HEAD past the tag" "$d" "not v9.9.9"
+d=$(fixture imagecompose)
+(cd "$d" && sed -i.bak 's/:9\.9\.9$/:9.9.8/' compose.yaml && rm compose.yaml.bak && g commit -q -am 'compose at 9.9.8' && g tag -f -a v9.9.9 -m v9.9.9 >/dev/null)
+expect_image_refused "image of a VERSION compose.yaml does not pull" "$d" "compose.yaml: pulls ghcr.io/batondeck/batondeck-kanban:9.9.8, not ghcr.io/batondeck/batondeck-kanban:9.9.9"
 
 # The binary check on builds dist would not make, each in a tree that is otherwise a clean tag.
 d=$(fixture binaries)
@@ -186,5 +198,39 @@ build -buildvcs=false
 refuse_bin "binary built without VCS stamping" "vcs.modified=false"
 (cd "$d" && g commit -q --allow-empty -m later); build; (cd "$d" && g reset -q --hard v9.9.9)
 refuse_bin "binary of another commit" "vcs.revision="
+# A binary of the clean tag, judged against a go.mod pinning another Go: the pin is read from the
+# checkout, the compiler from the binary.
+build; (cd "$d" && sed -i.bak "s/^toolchain .*/toolchain go1.0.1/" go.mod && rm go.mod.bak)
+refuse_bin "binary built by another Go than go.mod pins" "built with $gotoolchain, not the go1.0.1 go.mod pins"
+(cd "$d" && g checkout -q go.mod)
+
+# The versions check: the four agree in the control; each one changed alone is refused by name.
+versions() { (cd "$1" && "$check" 9.9.9) >"$tmp/out" 2>&1; }
+d=$(fixture versions)
+if versions "$d" && grep -q "9.9.9 agrees" "$tmp/out"; then
+  pass "versions of the candidate: agree"
+else
+  bad "versions of the candidate: refused:"; cat "$tmp/out" >&2
+fi
+refuse_versions() {
+  local name=$1 why=$2
+  if versions "$d"; then
+    bad "$name: versions check passed"
+  elif ! grep -qF "$why" "$tmp/out"; then
+    bad "$name: refused, but not for '$why':"; cat "$tmp/out" >&2
+  else
+    pass "$name: versions refused"
+  fi
+  (cd "$d" && g checkout -q -- .)
+}
+(cd "$d" && sed -i.bak 's/:9\.9\.9$/:9.9.8/' compose.yaml && rm compose.yaml.bak)
+refuse_versions "compose.yaml at 9.9.8" "compose.yaml: pulls ghcr.io/batondeck/batondeck-kanban:9.9.8, not ghcr.io/batondeck/batondeck-kanban:9.9.9"
+(cd "$d" && sed -i.bak 's/"9\.9\.9"/"9.9.8"/' plugin/.claude-plugin/plugin.json && rm plugin/.claude-plugin/plugin.json.bak)
+refuse_versions "plugin.json at 9.9.8" "plugin/.claude-plugin/plugin.json: version is '9.9.8', not 9.9.9"
+(cd "$d" && sed -i.bak 's/^## \[9\.9\.9\]/## [9.9.8]/' CHANGELOG.md && rm CHANGELOG.md.bak)
+refuse_versions "CHANGELOG.md without a 9.9.9 section" "CHANGELOG.md: no '## [9.9.9]' section"
+# main.version is still declared, but `version` prints another variable, which -X does not reach.
+(cd "$d" && sed -i.bak 's/var version string/var version, shown string/; s/+ version +/+ shown +/' cmd/batondeck-kanban/main.go && rm cmd/batondeck-kanban/main.go.bak)
+refuse_versions "a binary whose version command does not print the stamp" "the binary: version prints 'batondeck-kanban ', not 'batondeck-kanban 9.9.9'"
 
 exit $fail
