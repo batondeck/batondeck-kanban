@@ -242,3 +242,37 @@ func TestOncallRoutesOnTheStack(t *testing.T) {
 		}
 	})
 }
+
+// TestOncallRetiredSettingsRefusedOverREST (P-310, owner decision 6): the REST routes validate
+// against the same input schemas as the tools, so a body carrying policy or routing's
+// fallbackBroadcast is 400 VALIDATION on create and on update; the same bodies without them answer
+// 200 (the positive control).
+func TestOncallRetiredSettingsRefusedOverREST(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		root := h.asAdmin("root")
+		pid, bid := seedBoard(t, root, s.Core, "Oncall")
+		on := "/api/oncall/" + pid + "/integrations"
+		base := `"name":"Alerts","source":"generic","boardId":"` + bid + `","auth":{"mode":"hmac"}`
+		for what, body := range map[string]string{
+			"policy":            `{` + base + `,"routing":{"mode":"broadcast"},"policy":{"autoReviewCycle":true}}`,
+			"fallbackBroadcast": `{` + base + `,"routing":{"mode":"oncall","onCallAgent":"claude-oncall","fallbackBroadcast":true}}`,
+		} {
+			code, got := root.do("POST", on, body, nil)
+			errCode(t, "POST integrations with "+what, code, got, http.StatusBadRequest, domain.CodeValidation)
+			if !strings.Contains(got, what) {
+				t.Fatalf("POST integrations with %s refused for another reason: %s", what, got)
+			}
+		}
+		ig := okJSON(t, "POST integrations")(root.do("POST", on, `{`+base+`,"routing":{"mode":"broadcast"}}`, nil))["integration"].(map[string]any)
+		one := on + "/" + ig["id"].(string)
+		for what, body := range map[string]string{
+			"policy":            `{"version":1,"patch":{"policy":{"openPrForReview":true}}}`,
+			"fallbackBroadcast": `{"version":1,"patch":{"routing":{"mode":"broadcast","fallbackBroadcast":true}}}`,
+		} {
+			code, got := root.do("POST", one, body, nil)
+			errCode(t, "POST integration with "+what, code, got, http.StatusBadRequest, domain.CodeValidation)
+		}
+		okJSON(t, "POST integration")(root.do("POST", one, `{"version":1,"patch":{"routing":{"mode":"broadcast"}}}`, nil))
+	})
+}

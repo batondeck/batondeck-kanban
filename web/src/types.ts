@@ -472,7 +472,6 @@ export interface Integration {
   routing: {
     mode?: RoutingMode;
     onCallAgent?: string | null;
-    fallbackBroadcast?: boolean;
     pdUserMap?: Record<string, string>;
   };
   lifecycle: LifecycleMode;
@@ -549,10 +548,9 @@ export interface CreateIntegrationBody {
   boardId: string;
   columnId?: string;
   auth: { mode: IntegrationAuthMode; externalSecret?: string; apiKey?: string; jwt?: { issuer: string; audience: string; jwksUrl: string } };
-  routing: { mode: RoutingMode; onCallAgent?: string | null; fallbackBroadcast?: boolean; pdUserMap?: Record<string, string> };
+  routing: { mode: RoutingMode; onCallAgent?: string | null; pdUserMap?: Record<string, string> };
   mapping?: IntegrationMappingBody;
   lifecycle?: LifecycleMode;
-  policy?: { openPrForReview?: boolean; autoReviewCycle?: boolean; reviewerAgent?: string | null };
   limits?: { ratePerMin?: number; payloadCapKb?: number };
 }
 

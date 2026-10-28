@@ -8,6 +8,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
+  ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
+  mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept
+  until something else woke it. A mention of a member with a live worker session on this device, by
+  login or by that worker's registered agent label (`@claude-rev`), now rings that member's workers
+  `assigned` on the task, once per comment. A self-mention, a member with no worker (a human at the
+  web UI), a name that is no member and a non-member ring nobody and do not error, and masters stay
+  silent. A comment without a mention still rings nobody.
+
 - Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
   Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
   now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every
@@ -1106,6 +1115,14 @@ Notable changes to batondeck-kanban. The format follows
   `check` workflow runs `make check` on pull requests against a `postgres:16` service.
 
 ### Removed
+
+- Four on-call settings nothing read (P-310, owner decision 6, audit D5): the integration
+  `policy` input (`autoReviewCycle`, `openPrForReview`, `reviewerAgent`) and
+  `routing.fallbackBroadcast`. `create_integration` and `update_integration`, over MCP and REST,
+  refuse them as unexpected properties (`contract/deltas.json` records the four removed props,
+  each with its reason), and the integration form no longer shows the four toggles. A row stored
+  with them loads, lists, saves and routes with no migration: the keys are ignored, a new routing
+  replaces the stored one whole, and the stored `policy` object is still echoed as stored.
 
 - MCP resource subscriptions (ADR-0004): `initialize` no longer advertises `resources.subscribe`, the
   subscribe and unsubscribe handlers are gone, and `resources/subscribe` is answered method not found

@@ -11,7 +11,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/wake"
 )
 
-// R2.1 AC2 (ADR-0004): a comment rings nobody, neither the assignee's worker nor a master of the
+// R2.1 AC2 (ADR-0004): a comment with no mention rings nobody (a mention is owner decision 5's
+// exception, P-310: mention_wake_test.go), neither the assignee's worker nor a master of the
 // project; a follow-up rings its target's worker assigned within a second of the call (the
 // positive control, and the measurement).
 func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
@@ -39,7 +40,7 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 	}
 
 	before := s.a.dir.Writes()
-	if _, err := s.a.core.Comments().AddComment(ctx, s.bob.caller(), service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "@alice looks good"}); err != nil {
+	if _, err := s.a.core.Comments().AddComment(ctx, s.bob.caller(), service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "looks good"}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.changeOf(t, "add_comment") {

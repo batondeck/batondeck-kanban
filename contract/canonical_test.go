@@ -126,7 +126,7 @@ func surface(t *testing.T) Surface {
 func TestApply(t *testing.T) {
 	s := surface(t)
 	err := Apply(s, Deltas{
-		RemovedProps:      []string{"/tools/move_task/input/properties/order"},
+		RemovedProps:      []RemovedProp{{Pointer: "/tools/move_task/input/properties/order"}},
 		RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/CANCELLED"},
 		RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/TODO", To: "BLOCKED"}},
 		AddedEnumValues:   []AddedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/DONE", Why: "a value only this server writes"}},
@@ -152,8 +152,8 @@ func TestApply(t *testing.T) {
 func TestApplyRefusesStaleDeltas(t *testing.T) {
 	cases := map[string]Deltas{
 		"removed tool absent":         {RemovedTools: []string{"get_transitions"}},
-		"removed prop absent":         {RemovedProps: []string{"/tools/move_task/input/properties/transitions"}},
-		"removed prop path absent":    {RemovedProps: []string{"/tools/move_task/input/properties/nope/properties/x"}},
+		"removed prop absent":         {RemovedProps: []RemovedProp{{Pointer: "/tools/move_task/input/properties/transitions"}}},
+		"removed prop path absent":    {RemovedProps: []RemovedProp{{Pointer: "/tools/move_task/input/properties/nope/properties/x"}}},
 		"removed enum value absent":   {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER"}},
 		"enum emptied":                {RemovedEnumValues: []string{"/tools/move_task/input/properties/toStatus/enum/TODO", "/tools/move_task/input/properties/toStatus/enum/CANCELLED", "/tools/move_task/input/properties/toStatus/enum/REVIEW"}},
 		"renamed enum value absent":   {RenamedEnumValues: []RenamedEnum{{Pointer: "/tools/move_task/input/properties/toStatus/enum/DEAD_LETTER", To: "X"}}},
@@ -165,7 +165,7 @@ func TestApplyRefusesStaleDeltas(t *testing.T) {
 		"added enum value, no /enum/": {AddedEnumValues: []AddedEnum{{Pointer: "/tools/move_task/input/properties/toStatus", Why: "x"}}},
 		"added tool present":          {AddedTools: []RawTool{{Name: "move_task", InputSchema: map[string]any{}, OutputSchema: map[string]any{}}}},
 		"added prop present":          {AddedProps: []AddedProp{{Pointer: "/tools/move_task/input/properties/order", Schema: map[string]any{}}}},
-		"pointer outside tools":       {RemovedProps: []string{"/move_task/input/properties/order"}},
+		"pointer outside tools":       {RemovedProps: []RemovedProp{{Pointer: "/move_task/input/properties/order"}}},
 	}
 	for name, d := range cases {
 		if err := Apply(surface(t), d); err == nil {

@@ -15,7 +15,7 @@ func RegisterIntegrations(s *mcp.Server, svc service.Services) {
 		"Create an on-call webhook integration for a telemetry source. For hmac the server mints the secret and returns it once (secret, shownOnce); pass externalSecret for PagerDuty.",
 		o.CreateIntegration)
 	mcp.Tool(s, "integrations", "update_integration",
-		"Update an on-call integration: enable or disable it, retarget it, change mapping, routing, lifecycle, policy or limits. Version-checked. A new auth mode mints a fresh hmac secret.",
+		"Update an on-call integration: enable or disable it, retarget it, change mapping, routing, lifecycle or limits. Version-checked. A new auth mode mints a fresh hmac secret.",
 		o.UpdateIntegration)
 	mcp.Tool(s, "integrations", "delete_integration",
 		"Delete an on-call integration: its endpoint stops answering at once. A tombstone: its delivery log and incident tickets stay. Version-checked; a second delete is NOT_FOUND.",

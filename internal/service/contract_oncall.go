@@ -67,7 +67,6 @@ type CreateIntegrationReq struct {
 	Lifecycle      IntegrationLifecycle `json:"lifecycle,omitzero"`
 	Limits         IntegrationLimitsIn  `json:"limits,omitzero"`
 	Mapping        IntegrationMapping   `json:"mapping,omitzero"`
-	Policy         IntegrationPolicy    `json:"policy,omitzero"`
 }
 
 // CreateIntegrationResp is create_integration's output: Secret, with ShownOnce, only when the
@@ -96,7 +95,6 @@ type IntegrationPatch struct {
 	Limits    IntegrationLimitsIn  `json:"limits,omitzero"`
 	Mapping   IntegrationMapping   `json:"mapping,omitzero"`
 	Name      string               `json:"name,omitzero"`
-	Policy    IntegrationPolicy    `json:"policy,omitzero"`
 	Routing   IntegrationRouting   `json:"routing,omitzero"`
 }
 
@@ -225,19 +223,12 @@ type IntegrationJWT struct {
 	JWKSURL  string `json:"jwksUrl"`
 }
 
-// IntegrationRouting is who an incident is routed to.
+// IntegrationRouting is who an incident is routed to. A stored routing that still carries the
+// retired fallbackBroadcast key reads without it (P-310, owner decision 6: nothing read it).
 type IntegrationRouting struct {
-	Mode              RoutingMode       `json:"mode"`
-	FallbackBroadcast bool              `json:"fallbackBroadcast,omitzero"`
-	OnCallAgent       Nullable[string]  `json:"onCallAgent,omitzero"`
-	PDUserMap         map[string]string `json:"pdUserMap,omitzero"`
-}
-
-// IntegrationPolicy is an integration's review policy toggles.
-type IntegrationPolicy struct {
-	AutoReviewCycle bool             `json:"autoReviewCycle,omitzero"`
-	OpenPRForReview bool             `json:"openPrForReview,omitzero"`
-	ReviewerAgent   Nullable[string] `json:"reviewerAgent,omitzero"`
+	Mode        RoutingMode       `json:"mode"`
+	OnCallAgent Nullable[string]  `json:"onCallAgent,omitzero"`
+	PDUserMap   map[string]string `json:"pdUserMap,omitzero"`
 }
 
 // IntegrationLimitsIn is the limits a caller may set; an absent one keeps its default (or, on an
@@ -282,7 +273,8 @@ type MappingExtract struct {
 }
 
 // Integration is an integration as a caller sees it: auth redacted to its shape, never a secret,
-// key or hash.
+// key or hash. Policy is the stored policy object, read by nothing: no input sets it since P-310
+// (owner decision 6), so a new row's is {} and an older row's keeps the keys it was saved with.
 type Integration struct {
 	Auth         IntegrationAuthView  `json:"auth"`
 	CreatedAt    string               `json:"createdAt"`
