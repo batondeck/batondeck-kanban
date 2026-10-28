@@ -104,8 +104,9 @@ func TestAnOAuthCallersAgentIsItsClientName(t *testing.T) {
 }
 
 // P-257 B1 (review): a label is one identity's agent. Minting a label whose agent another
-// identity's live token carries is VALIDATION; the same identity mints it again, the default label
-// is everyone's, and a revoked or expired holder frees it.
+// identity's token carries is VALIDATION; the same identity mints it again, the default label is
+// everyone's, and a revoked or expired holder does not free it (review round 2: the first minter
+// keeps it).
 func TestALabelBelongsToOneIdentity(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -139,7 +140,19 @@ func TestALabelBelongsToOneIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := mint(bob, "agent-a"); err != nil {
-		t.Fatalf("bob mints agent-a once alice's tokens are revoked: %v", err)
+	if _, err := mint(bob, "agent-a"); !isValidation(err) {
+		t.Fatalf("bob mints agent-a once alice's tokens are revoked: %v, want VALIDATION", err)
 	}
+	f.clk.add(MaxTokenTTL + time.Hour) // every token of alice's has expired too
+	if _, err := mint(bob, "agent-a"); !isValidation(err) {
+		t.Fatalf("bob mints agent-a once alice's tokens expired: %v, want VALIDATION", err)
+	}
+	if _, err := mint(alice, "agent-a"); err != nil {
+		t.Fatalf("alice mints her lapsed label back: %v", err)
+	}
+}
+
+func isValidation(err error) bool {
+	e, ok := domain.AsBatonDeckError(err)
+	return ok && e.Code == domain.CodeValidation && e.Details["label"] == "agent-a"
 }

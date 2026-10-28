@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
@@ -158,5 +161,48 @@ func TestCLITokenMintIsCappedAtTenLive(t *testing.T) {
 		if code, body := h.do("POST", "/api/me/cli-tokens", `{"label":"after a revoke"}`, nil); code != http.StatusOK {
 			t.Fatalf("the mint after a revoke: %d %s, want 200", code, body)
 		}
+	})
+}
+
+// P-257 R2-B1 (review round 2, the adopted LapsedLabelTakeover probe, its mint half): a label stays
+// its first minter's on each engine. Carol's agent-b token lapses and another is revoked; alice's
+// REST mint of agent-b is refused each time, and carol mints her label back.
+func TestALapsedLabelStaysItsMintersOnTheStack(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		var now atomic.Int64
+		now.Store(time.Now().UnixMilli())
+		clk := func() time.Time { return time.UnixMilli(now.Load()) }
+		a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store, Now: clk},
+			Sessions: s.Store, Now: clk}
+		h := mountHarness(t, a, Options{Services: s.Services, Bus: s.Bus})
+		carol := h.as("carol")
+		mint := func(who *harness, label string) (int, string) {
+			t.Helper()
+			return who.do("POST", "/api/me/cli-tokens", `{"label":"`+label+`","ttlSeconds":60}`, nil)
+		}
+		refused := func(when string) {
+			t.Helper()
+			if code, out := mint(h, "agent-b"); code != http.StatusBadRequest || codeOf(t, out) != "VALIDATION" || !strings.Contains(out, `"label":"agent-b"`) {
+				t.Fatalf("alice mints carol's agent-b %s: %d %s, want 400 VALIDATION", when, code, out)
+			}
+		}
+		if code, out := mint(carol, "agent-b"); code != http.StatusOK {
+			t.Fatalf("carol mints agent-b: %d %s", code, out)
+		}
+		refused("while carol's token is live")
+		now.Add((2 * time.Minute).Milliseconds()) // carol's token lapses
+		refused("once carol's token lapsed")
+		code, out := mint(carol, "agent-b")
+		if code != http.StatusOK {
+			t.Fatalf("carol mints her lapsed label back: %d %s", code, out)
+		}
+		var again map[string]any
+		if err := json.Unmarshal([]byte(out), &again); err != nil {
+			t.Fatal(err)
+		}
+		if code, out := carol.do("POST", "/api/me/cli-tokens/"+str(again["id"])+"/revoke", "", nil); code != http.StatusOK {
+			t.Fatalf("carol revokes: %d %s", code, out)
+		}
+		refused("once carol's tokens are revoked or expired")
 	})
 }

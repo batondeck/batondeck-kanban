@@ -100,7 +100,8 @@ func TestALeaseIsItsAgentsNotItsIdentitys(t *testing.T) {
 
 // P-257 B1 (review): a worker who carries another identity's label on a token of his own (a row
 // written before the mint refused it, or in a race) still does not hold it: claim_next and handoff
-// naming it are FORBIDDEN, as for any other caller below master.
+// naming it are FORBIDDEN, as for any other caller below master, and still once the other token
+// is revoked (review round 2: every row counts).
 func TestASelfMintedLabelIsStillAnotherAgents(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
@@ -130,12 +131,66 @@ func TestASelfMintedLabelIsStillAnotherAgents(t *testing.T) {
 		mc := e.claim(t, bobAsB, mine.ID, 0)
 		_, err = lc.Handoff(e.ctx, bobAsB, HandoffTaskReq{ProjectID: e.project, TaskID: mine.ID, LeaseID: mc.LeaseID, ToAgent: "agent-b", MemoryNote: "over"})
 		wantCode(t, err, domain.CodeForbidden)
-		// Once carol's token is revoked the label is bob's alone, and his token holds it.
+		// Revoking carol's token does not hand bob the label (review round 2): her row still counts,
+		// so a label two identities carry stays refused to both below master.
 		if err := e.st.RevokeToken(e.ctx, "tok-carol-b", now); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := lc.ClaimNext(e.ctx, bobAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"}); err != nil {
-			t.Fatalf("claim_next of a label only bob's live token carries: %v", err)
+		_, err = lc.ClaimNext(e.ctx, bobAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+		wantCode(t, err, domain.CodeForbidden)
+	})
+}
+
+// P-257 R2-B1 (review round 2, the adopted LapsedLabelTakeover probe, its service half; the mint
+// half is internal/api TestALapsedLabelStaysItsMintersOnTheStack, since the service's tests may not
+// import internal/auth): carol's agent-b token expires while work handed to agent-b waits, and her
+// next agent-b token claims it. A second identity's agent-b row refuses both below master, revoked
+// or not.
+func TestALapsedLabelStaysItsOwners(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		carol := e.member(t, e.project, "carol", domain.RoleWorker)
+		row := func(id, identity string) {
+			t.Helper()
+			now := e.clock.now().UnixMilli()
+			if err := e.st.CreateToken(e.ctx, store.Token{ID: id, IdentityID: identity, Subject: identity, SecretHash: "h-" + id,
+				Label: "agent-b", CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		row("tok-carol-1", "carol")
+		lc := e.c.Lifecycle()
+		handed := map[string]bool{}
+		for range 2 {
+			task := e.task(t, domain.Todo)
+			c := e.claim(t, e.alice, task.ID, 3600)
+			if _, err := lc.Handoff(e.ctx, e.alice, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: "agent-b", MemoryNote: "for carol's agent"}); err != nil {
+				t.Fatal(err)
+			}
+			handed[task.ID] = true
+		}
+		e.clock.advance(2 * time.Hour) // carol's token lapses
+		row("tok-carol-2", "carol")
+		carolAsB := carol
+		carolAsB.Agent, carolAsB.Labelled, carolAsB.Via = "agent-b", true, domain.ViaAPIToken
+		resp, err := lc.ClaimNext(e.ctx, carolAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+		if err != nil || resp.Task == nil || !handed[resp.Task.ID] {
+			t.Fatalf("carol's next agent-b token claims work handed to agent-b: %+v %v", resp, err)
+		}
+		// A second identity's row (from before the mint refused it, or a race) refuses both, and its
+		// revoke does not free the label: the race fails closed. A master still names it.
+		row("tok-bob-b", "bob")
+		bobAsB := bob
+		bobAsB.Agent, bobAsB.Labelled, bobAsB.Via = "agent-b", true, domain.ViaAPIToken
+		_, err = lc.ClaimNext(e.ctx, bobAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+		wantCode(t, err, domain.CodeForbidden)
+		if err := e.st.RevokeToken(e.ctx, "tok-bob-b", e.clock.now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		_, err = lc.ClaimNext(e.ctx, carolAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+		wantCode(t, err, domain.CodeForbidden)
+		if resp, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"}); err != nil || resp.Task == nil || !handed[resp.Task.ID] {
+			t.Fatalf("a master names any label: %+v %v", resp, err)
 		}
 	})
 }

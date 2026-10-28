@@ -24,10 +24,13 @@ Notable changes to batondeck-kanban. The format follows
   holding agent (the claim's `agentId`, conductor's resolveTarget) rather than its account; the
   account's own browser session still acks it, another agent of the account does not. A label is
   one user's: `token create` and `POST /api/me/cli-tokens` refuse with `VALIDATION` a label another
-  user's live token carries. Below master, an explicit `assignee` on `claim_next` or `next_task`, or
-  a `handoff_task` `toAgent`, naming a label a live token carries is `FORBIDDEN` unless the caller
-  is on a token carrying it and no other user's live token does (P-277); an OAuth `client_name` or
-  a `clientInfo.name` never holds a label. A master may name any label, and `claim_task {taskId}`
+  user's token has ever carried, revoked or expired included, so the first user to mint a label keeps
+  it. Below master, an explicit `assignee` on `claim_next` or `next_task`, or a `handoff_task`
+  `toAgent`, naming a label a live token carries is `FORBIDDEN` unless the caller is on a token
+  carrying it and no other user's token has ever carried it (P-277); an OAuth `client_name` or a
+  `clientInfo.name` never holds a label. Two users minting one new label at the same instant can
+  both land (the check is a read before the insert); the label then stays `FORBIDDEN` to both below
+  master, and revoking either token does not free it, so each picks another label. A master may name any label, and `claim_task {taskId}`
   does not check the assignee. A label-registered worker's assigned doorbell line names
   `claim_next {projectId, boardId, assignee: "<label>"}` (P-276). The Agents screen counts a session
   online when the device directory lists it or its last request is recent, not by

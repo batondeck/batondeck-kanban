@@ -491,11 +491,12 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 // ownLabel refuses, below master, a label another agent holds (P-277, audit A2): a live API token's
 // label (domain.TokenAgent) is the agent of whoever presents that token, so claiming or reading its
 // assigned work, or handing work to it, is its own or a master's to do. The caller holds a label
-// when its own bearer carries it (Caller.Labelled) and no live token of another identity carries it
-// too (P-257 B1: minting refuses such a label, and this covers rows written before that rule or
-// in a race); a name a client declared (clientInfo.name) or registered (an OAuth client_name)
-// holds none. A string no live token carries names no agent and passes, as before. Read only when
-// a label is named, so the claim's statement pins do not move.
+// when its own bearer carries it (Caller.Labelled) and no token of another identity, live, revoked
+// or expired, has carried it (P-257 B1, review round 2: minting refuses such a label, and this
+// covers rows written before that rule or in a race, which stay refused to both identities); a
+// name a client declared (clientInfo.name) or registered (an OAuth client_name) holds none. A
+// string no live token carries names no agent and passes, as before. Read only when a label is
+// named, so the claim's statement pins do not move.
 func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
 	if domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
@@ -507,10 +508,11 @@ func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access,
 	now := l.c.nowMs()
 	carried, others := false, false
 	for _, t := range tokens {
-		if t.RevokedAt == 0 && t.ExpiresAt > now && domain.TokenAgent(t.Label) == label {
-			carried = true
-			others = others || t.IdentityID != caller.Identity
+		if domain.TokenAgent(t.Label) != label {
+			continue
 		}
+		carried = carried || (t.RevokedAt == 0 && t.ExpiresAt > now)
+		others = others || t.IdentityID != caller.Identity
 	}
 	if carried && (others || !caller.Labelled || caller.Agent != label) {
 		return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",

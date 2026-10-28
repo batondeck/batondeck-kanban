@@ -135,7 +135,7 @@ func TestTokenSubcommandIsAudited(t *testing.T) {
 	}
 }
 
-// P-257 B1 (review): the host's token create refuses a label another user's live token carries.
+// P-257 B1 (review): the host's token create refuses a label another user's token carries.
 func TestTokenCreateRefusesAnotherUsersLabel(t *testing.T) {
 	migratedDB(t)
 	for _, login := range []string{"alice", "bob"} {

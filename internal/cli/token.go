@@ -19,9 +19,10 @@ func tokenUsage(w io.Writer) {
   revoke ID                                   revoke a token (its bd_<id> prefix or bare id)
 
 --label names the agent that works on the token: its tool calls, claims and events record it. A
-label is one user's: create refuses a label another user's live token carries. Below master, naming
-a label as claim_next's or next_task's assignee, or as handoff_task's toAgent, is refused unless the
-caller is on a token carrying it (claim_task by task id does not check the assignee). It defaults to
+label is one user's: create refuses a label another user's token has ever carried, revoked or
+expired included. Below master, naming a label as claim_next's or next_task's assignee, or as
+handoff_task's toAgent, is refused unless the caller is on a token carrying it and no other user's
+token has ever carried it (claim_task by task id does not check the assignee). It defaults to
 "cli", which names no agent (each MCP client is then told apart by its own name). --ttl is a Go duration (720h is 30 days, the default;
 at most 8760h).
 every subcommand takes -config PATH.
