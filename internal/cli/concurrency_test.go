@@ -18,10 +18,11 @@ import (
 // every engine: its repro scripts (skip.py, pgstorm.py, nul.py, conc.py) turned into Go.
 
 // session opens another MCP session of a's identity, on a token of its own with the label of a's
-// (j.user's "join"), so the same agent: one person running two Claude Code sessions.
-func (j *joined) session(a *agent) *agent { j.t.Helper(); return j.sessionAs(a, "join") }
+// (j.user's joinLabel), so the same agent: one person running two Claude Code sessions.
+func (j *joined) session(a *agent) *agent { j.t.Helper(); return j.sessionAs(a, joinLabel(a.login)) }
 
-// sessionAs is session on a token labelled label: another agent of a's identity unless it is "join".
+// sessionAs is session on a token labelled label: another agent of a's identity unless it is
+// joinLabel(a.login).
 func (j *joined) sessionAs(a *agent, label string) *agent {
 	j.t.Helper()
 	ctx := context.Background()

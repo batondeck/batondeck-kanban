@@ -19,11 +19,16 @@ Notable changes to batondeck-kanban. The format follows
   value, `contract/deltas.json`) instead of the hard-coded `service_account`. No migration:
   `agent_sessions` was keyed by (identity, agent) already. A claim belongs to its agent: the same
   identity's other agent claiming a held task is `CONFLICT_LOCKED`, and the same agent's second
-  session still shares the lease (P-278). A follow-up on a held task now targets the holding agent
-  (the claim's `agentId`, conductor's resolveTarget) rather than its account. An explicit `assignee` on `claim_next` or `next_task`, or
-  a `handoff_task` `toAgent`, naming another live token's label is `FORBIDDEN` below master unless
-  the caller is on that token (P-277); an OAuth `client_name` or a `clientInfo.name` never holds a
-  label. A label-registered worker's assigned doorbell line names
+  session still shares the lease (P-278); a lease taken before the upgrade has no agent, so its
+  agent's re-claim is `CONFLICT_LOCKED` until it expires. A follow-up on a held task now targets the
+  holding agent (the claim's `agentId`, conductor's resolveTarget) rather than its account; the
+  account's own browser session still acks it, another agent of the account does not. A label is
+  one user's: `token create` and `POST /api/me/cli-tokens` refuse with `VALIDATION` a label another
+  user's live token carries. Below master, an explicit `assignee` on `claim_next` or `next_task`, or
+  a `handoff_task` `toAgent`, naming a label a live token carries is `FORBIDDEN` unless the caller
+  is on a token carrying it and no other user's live token does (P-277); an OAuth `client_name` or
+  a `clientInfo.name` never holds a label. A master may name any label, and `claim_task {taskId}`
+  does not check the assignee. A label-registered worker's assigned doorbell line names
   `claim_next {projectId, boardId, assignee: "<label>"}` (P-276). The Agents screen counts a session
   online when the device directory lists it or its last request is recent, not by
   `wakeAttachedAt`, which nothing writes, and its Auth column says `api token` or `oauth`.

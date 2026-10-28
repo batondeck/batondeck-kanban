@@ -97,3 +97,71 @@ func TestALeaseIsItsAgentsNotItsIdentitys(t *testing.T) {
 		}
 	})
 }
+
+// P-257 B1 (review): a worker who carries another identity's label on a token of his own (a row
+// written before the mint refused it, or in a race) still does not hold it: claim_next and handoff
+// naming it are FORBIDDEN, as for any other caller below master.
+func TestASelfMintedLabelIsStillAnotherAgents(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		e.member(t, e.project, "carol", domain.RoleWorker)
+		now := e.clock.now().UnixMilli()
+		for _, tok := range []store.Token{
+			{ID: "tok-carol-b", IdentityID: "carol", Subject: "carol", SecretHash: "h-cb", Label: "agent-b", CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()},
+			{ID: "tok-bob-b", IdentityID: "bob", Subject: "bob", SecretHash: "h-bb", Label: "agent-b", CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()},
+		} {
+			if err := e.st.CreateToken(e.ctx, tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		lc := e.c.Lifecycle()
+		task := e.task(t, domain.Todo)
+		c := e.claim(t, e.alice, task.ID, 0)
+		if _, err := lc.Handoff(e.ctx, e.alice, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: "agent-b", MemoryNote: "for carol's agent"}); err != nil {
+			t.Fatalf("admin handoff to carol's agent-b: %v", err)
+		}
+		bobAsB := bob
+		bobAsB.Agent, bobAsB.Labelled, bobAsB.Via = "agent-b", true, domain.ViaAPIToken
+		_, err := lc.ClaimNext(e.ctx, bobAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+		if be := wantCode(t, err, domain.CodeForbidden); be.Details["label"] != "agent-b" {
+			t.Fatalf("claim_next assignee agent-b on bob's self-labelled token: details %v", be.Details)
+		}
+		mine := e.task(t, domain.Todo)
+		mc := e.claim(t, bobAsB, mine.ID, 0)
+		_, err = lc.Handoff(e.ctx, bobAsB, HandoffTaskReq{ProjectID: e.project, TaskID: mine.ID, LeaseID: mc.LeaseID, ToAgent: "agent-b", MemoryNote: "over"})
+		wantCode(t, err, domain.CodeForbidden)
+		// Once carol's token is revoked the label is bob's alone, and his token holds it.
+		if err := e.st.RevokeToken(e.ctx, "tok-carol-b", now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := lc.ClaimNext(e.ctx, bobAsB, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"}); err != nil {
+			t.Fatalf("claim_next of a label only bob's live token carries: %v", err)
+		}
+	})
+}
+
+// P-257 B2 (review): a follow-up on a task its agent holds targets that agent. The holder's own
+// account with no agent (its browser session, which the drawer offers Ack) acks it, as on main;
+// another agent of the same identity does not, so the narrowing between agents stays.
+func TestTheHoldersAccountAcksItsAgentsFollowUp(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		agent, other := bob, bob
+		agent.Agent, other.Agent = "agent-b", "agent-x"
+		task := e.task(t, domain.Todo)
+		e.claim(t, agent, task.ID, 0)
+		fu, err := e.c.FollowUps().AddFollowUp(e.ctx, e.alice, AddFollowUpReq{ProjectID: e.project, TaskID: task.ID, Body: "status?"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fu.FollowUp.Target == nil || *fu.FollowUp.Target != "agent-b" {
+			t.Fatalf("the follow-up's target %v, want the holding agent agent-b", fu.FollowUp.Target)
+		}
+		ack := AckFollowUpReq{ProjectID: e.project, TaskID: task.ID, FollowUpID: fu.FollowUp.ID}
+		_, err = e.c.FollowUps().AckFollowUp(e.ctx, other, ack)
+		wantCode(t, err, domain.CodeForbidden)
+		if _, err := e.c.FollowUps().AckFollowUp(e.ctx, bob, ack); err != nil {
+			t.Fatalf("bob's browser session acks the follow-up aimed at his agent: %v", err)
+		}
+	})
+}

@@ -491,11 +491,13 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 // ownLabel refuses, below master, a label another agent holds (P-277, audit A2): a live API token's
 // label (domain.TokenAgent) is the agent of whoever presents that token, so claiming or reading its
 // assigned work, or handing work to it, is its own or a master's to do. The caller holds a label
-// when its own bearer carries it (Caller.Labelled); a name a client declared (clientInfo.name) or
-// registered (an OAuth client_name) holds none. A string no live token carries names no agent and
-// passes, as before. Read only when a label is named, so the claim's statement pins do not move.
+// when its own bearer carries it (Caller.Labelled) and no live token of another identity carries it
+// too (P-257 B1: minting refuses such a label, and this covers rows written before that rule or
+// in a race); a name a client declared (clientInfo.name) or registered (an OAuth client_name)
+// holds none. A string no live token carries names no agent and passes, as before. Read only when
+// a label is named, so the claim's statement pins do not move.
 func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
-	if (caller.Labelled && caller.Agent == label) || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
+	if domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
 	}
 	tokens, err := l.c.store.ListTokens(ctx, "")
@@ -503,11 +505,16 @@ func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access,
 		return l.c.mapErr(field, err)
 	}
 	now := l.c.nowMs()
+	carried, others := false, false
 	for _, t := range tokens {
 		if t.RevokedAt == 0 && t.ExpiresAt > now && domain.TokenAgent(t.Label) == label {
-			return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
-				map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})
+			carried = true
+			others = others || t.IdentityID != caller.Identity
 		}
+	}
+	if carried && (others || !caller.Labelled || caller.Agent != label) {
+		return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
+			map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})
 	}
 	return nil
 }

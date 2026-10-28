@@ -102,3 +102,44 @@ func TestAnOAuthCallersAgentIsItsClientName(t *testing.T) {
 		t.Fatalf("unnamed client: %+v %v", got, err)
 	}
 }
+
+// P-257 B1 (review): a label is one identity's agent. Minting a label whose agent another
+// identity's live token carries is VALIDATION; the same identity mints it again, the default label
+// is everyone's, and a revoked or expired holder frees it.
+func TestALabelBelongsToOneIdentity(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	alice, bob := f.addUser(t, "alice", "pw"), f.addUser(t, "bob", "pw")
+	mint := func(u store.User, label string) (TokenInfo, error) {
+		t.Helper()
+		_, info, err := f.svc.Tokens.Create(ctx, u.ID, u.Email, label, 0)
+		return info, err
+	}
+	first, err := mint(alice, "agent-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"agent-a", " agent-a\t", "agent-a\x00"} {
+		_, err := mint(bob, label)
+		if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["label"] != "agent-a" || e.Details["field"] != "label" {
+			t.Fatalf("bob mints %q while alice's agent-a is live: %v, want VALIDATION on label agent-a", label, err)
+		}
+	}
+	second, err := mint(alice, "agent-a")
+	if err != nil {
+		t.Fatalf("alice mints her own label again: %v", err)
+	}
+	for _, u := range []store.User{alice, bob} {
+		if _, err := mint(u, domain.DefaultTokenLabel); err != nil {
+			t.Fatalf("%s mints the default label: %v", u.Email, err)
+		}
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if err := f.st.RevokeToken(ctx, id, f.clk.now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := mint(bob, "agent-a"); err != nil {
+		t.Fatalf("bob mints agent-a once alice's tokens are revoked: %v", err)
+	}
+}

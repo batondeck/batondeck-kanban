@@ -58,6 +58,11 @@ func TestMeAgentsAuditRoutesOnTheStack(t *testing.T) {
 		if code, body := h.do("POST", "/api/me/cli-tokens/bd_0000000000000000/revoke", "", nil); code != http.StatusNotFound {
 			t.Fatalf("revoke a missing token: %d %s", code, body)
 		}
+		// P-257 B1: a label is one identity's agent, so alice cannot mint root's live label.
+		decode(admin.do("POST", "/api/me/cli-tokens", `{"label":"agent-root","ttlSeconds":3600}`, nil))
+		if code, out := h.do("POST", "/api/me/cli-tokens", `{"label":"agent-root"}`, nil); code != http.StatusBadRequest || codeOf(t, out) != "VALIDATION" || !strings.Contains(out, `"label":"agent-root"`) {
+			t.Fatalf("alice mints root's live label: %d %s, want 400 VALIDATION", code, out)
+		}
 
 		// Sessions: a cookie session holds no MCP session, so the list is empty; all:true is the
 		// admin's; a disconnect of nothing is NOT_FOUND, of another's agent FORBIDDEN.

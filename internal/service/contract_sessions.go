@@ -187,7 +187,7 @@ type AgentSession struct {
 // SessionKind is how an agent session authenticated.
 type SessionKind string
 
-// SessionKindValues are SessionKind's values, in the schema's order.
+// SessionKindValues are SessionKind's values: conductor's three, then api_token (P-257).
 var SessionKindValues = []SessionKind{"dev", "oauth_user", "service_account", "api_token"}
 
 // The session kinds the MCP transport writes (D6): an OAuth access token's, an API token's. "dev"

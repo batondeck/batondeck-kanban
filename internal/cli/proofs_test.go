@@ -93,6 +93,9 @@ type agent struct {
 	cs    *sdk.ClientSession
 }
 
+// joinLabel is the label of login's j.user token, its agent: a label is one user's (P-257 B1).
+func joinLabel(login string) string { return "join-" + login }
+
 // user adds login with a password and an API token, and opens its MCP session.
 func (j *joined) user(login string) *agent { j.t.Helper(); return j.account(login, false) }
 
@@ -104,7 +107,7 @@ func (j *joined) account(login string, admin bool) *agent {
 	if err != nil {
 		j.t.Fatal(err)
 	}
-	token, _, err := (&auth.TokenService{Store: j.st}).Create(ctx, u.ID, "", "join", time.Hour)
+	token, _, err := (&auth.TokenService{Store: j.st}).Create(ctx, u.ID, "", joinLabel(login), time.Hour)
 	if err != nil {
 		j.t.Fatal(err)
 	}

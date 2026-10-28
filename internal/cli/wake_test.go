@@ -112,7 +112,7 @@ func seedDirectory(t *testing.T) (*countedSQLite, person, person, person, string
 		if err != nil {
 			t.Fatal(err)
 		}
-		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "test", time.Hour)
+		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "test-"+login, time.Hour) // a label is one user's
 		if err != nil {
 			t.Fatal(err)
 		}
