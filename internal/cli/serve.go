@@ -179,6 +179,16 @@ func (a *app) handler(version string) http.Handler {
 	}))
 }
 
+// requestReadTimeout bounds reading a request, headers and body, from its first byte (the
+// server's ReadTimeout): a body still unread then fails its read, the handler answers it as any
+// read error (CapBody: 400) and the connection closes. It does not bound serving the request:
+// net/http clears the deadline once the body is read (at once for a request without one), when it
+// starts its background read of the connection (connReader.startBackgroundRead, go1.26.9), so
+// /api/stream, the MCP stream and a long tool call run past it, and a PUT /blobs/{id} keeps its own
+// deadline, the signed URL's expiry, until its body is in. A fixed bound with no setting; a
+// variable only so a test can shrink it, as shutdownBudget is.
+var requestReadTimeout = 30 * time.Second
+
 // openKeyring is the keyring (the sealer for wake-session inbox tokens and the blob signing key's
 // source): core.OpenKeyring from
 // BATONDECK_MASTER_KEY, else from master.key beside the SQLite file, or on Postgres beside the
@@ -324,7 +334,9 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	sweepCtx, stopSweep := context.WithCancel(ctx)
 	swept := make(chan struct{})
 	go func() { defer close(swept); a.sweep.Run(sweepCtx, a.sweepEvery) }()
-	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ConnContext: core.ConnContext}
+	// No WriteTimeout: a write deadline would cut /api/stream, the MCP GET stream and a large blob
+	// GET to a slow reader. No IdleTimeout: net/http then bounds an idle keep-alive by ReadTimeout.
+	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: requestReadTimeout, ConnContext: core.ConnContext}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func() { errc <- srv.Serve(ln) }()

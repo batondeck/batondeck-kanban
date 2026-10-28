@@ -1296,6 +1296,13 @@ this section's headings in CHANGELOG.md, are all part of it.
   the scheme and Host of the request they are signed for (`X-Forwarded-Proto: https` gives https),
   on the web UI and MCP alike; `public_url`, when set, is still the base. A request on the Unix
   socket takes the first TCP listener's address, a wildcard host made `127.0.0.1`. No new setting.
+- A request body is read within 30 s (P-232). Only the headers were bounded (10 s), so a client
+  that sent headers and then stalled its body held a handler and its connection for as long as it
+  liked, on every route, `/hooks` included; an idle keep-alive connection was never closed either.
+  The server now bounds reading a request at 30 s from its first byte (a stalled body gets 400 and
+  the connection closes); the bound ends once the request has been read, so `/api/stream`, the
+  MCP stream and a long tool call run as before; a blob upload keeps its signed URL's expiry as its
+  deadline. An idle keep-alive connection closes after 30 s. No new setting.
 - /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
   request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
   proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an
