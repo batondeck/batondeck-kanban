@@ -495,8 +495,10 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 // or expired, has carried it (P-257 B1, review round 2: minting refuses such a label, and this
 // covers rows written before that rule or in a race, which stay refused to both identities); a
 // name a client declared (clientInfo.name) or registered (an OAuth client_name) holds none. A
-// string no live token carries names no agent and passes, as before. Read only when a label is
-// named, so the claim's statement pins do not move.
+// label another identity's token has ever carried is that identity's even with no live carrier,
+// so another worker cannot name it while the owner's token has lapsed (P-338, delivered in P-257
+// review round 3). A string no other identity's token and no live token carries names no agent and
+// passes, as before. Read only when a label is named, so the claim's statement pins do not move.
 func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
 	if domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
@@ -514,6 +516,7 @@ func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access,
 		carried = carried || (t.RevokedAt == 0 && t.ExpiresAt > now)
 		others = others || t.IdentityID != caller.Identity
 	}
+	carried = carried || others // another identity's row of any status: its label is that identity's (R2-Q1, P-338)
 	if carried && (others || !caller.Labelled || caller.Agent != label) {
 		return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
 			map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})

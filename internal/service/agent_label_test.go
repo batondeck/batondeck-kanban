@@ -10,11 +10,13 @@ import (
 
 // P-277 (audit A2): an explicit assignee or handoff target that is another agent's label (a live API
 // token's, other than the default) is FORBIDDEN below master, unless the caller is that label's
-// token. Its own label, a free label, a revoked token's label and a master pass.
+// token. Its own label, a free label and a master pass; a revoked or expired token's label is still
+// its identity's (P-257 review round 3, R2-Q1), so it is refused to another worker and passes for
+// that identity.
 func TestAnotherAgentsLabelIsForbiddenBelowMaster(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
-		e.member(t, e.project, "carol", domain.RoleWorker)
+		carol := e.member(t, e.project, "carol", domain.RoleWorker)
 		now := e.clock.now().UnixMilli()
 		for _, tok := range []store.Token{
 			{ID: "tok-a", IdentityID: "bob", Subject: "bob", SecretHash: "h-a", Label: "agent-a", CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()},
@@ -55,16 +57,27 @@ func TestAnotherAgentsLabelIsForbiddenBelowMaster(t *testing.T) {
 			_, err = lc.Next(e.ctx, who, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
 			wantCode(t, err, domain.CodeForbidden)
 		}
-		// The controls: agent-a's own label, a label no live token holds, and a master.
+		// The controls: agent-a's own label, a label no token holds, and a master.
 		if err := handoff(agentA, "agent-a"); err != nil {
 			t.Fatalf("handoff to its own label: %v", err)
 		}
 		if _, err := lc.ClaimNext(e.ctx, agentA, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-a"}); err != nil {
 			t.Fatalf("claim_next of its own label: %v", err)
 		}
-		for _, free := range []string{"reviewer-bot", "agent-dead", "agent-old", domain.DefaultTokenLabel} {
+		for _, free := range []string{"reviewer-bot", domain.DefaultTokenLabel} {
 			if err := handoff(agentA, free); err != nil {
-				t.Fatalf("handoff to %q, which no live token's agent holds: %v", free, err)
+				t.Fatalf("handoff to %q, which no token's agent holds: %v", free, err)
+			}
+		}
+		// A revoked or expired token's label stays its identity's (R2-Q1: the first minter owns a
+		// label; P-338): refused to another worker, and still open to that identity's own caller,
+		// since no live token carries it.
+		for _, lapsed := range []string{"agent-dead", "agent-old"} {
+			if be := wantCode(t, handoff(agentA, lapsed), domain.CodeForbidden); be.Details["label"] != lapsed {
+				t.Fatalf("handoff to carol's lapsed %q: details %v", lapsed, be.Details)
+			}
+			if err := handoff(carol, lapsed); err != nil {
+				t.Fatalf("carol hands work to her own lapsed %q: %v", lapsed, err)
 			}
 		}
 		if err := handoff(e.alice, "agent-b"); err != nil {
@@ -191,6 +204,45 @@ func TestALapsedLabelStaysItsOwners(t *testing.T) {
 		wantCode(t, err, domain.CodeForbidden)
 		if resp, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"}); err != nil || resp.Task == nil || !handed[resp.Task.ID] {
 			t.Fatalf("a master names any label: %+v %v", resp, err)
+		}
+	})
+}
+
+// P-338 (delivered in P-257 review round 3): carol's agent-b token expires, no live token carries
+// agent-b, and work handed to agent-b waits. Another worker naming agent-b, from his browser (no
+// agent) or on a labelled token of his own, is refused on claim_next, next_task and handoff_task.
+func TestALapsedLabelsWorkIsNotAnotherWorkers(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		e.member(t, e.project, "carol", domain.RoleWorker)
+		now := e.clock.now().UnixMilli()
+		if err := e.st.CreateToken(e.ctx, store.Token{ID: "tok-carol-b", IdentityID: "carol", Subject: "carol", SecretHash: "h-cb",
+			Label: "agent-b", CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()}); err != nil {
+			t.Fatal(err)
+		}
+		lc := e.c.Lifecycle()
+		task := e.task(t, domain.Todo)
+		c := e.claim(t, e.alice, task.ID, 3600)
+		if _, err := lc.Handoff(e.ctx, e.alice, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: "agent-b", MemoryNote: "for carol's agent"}); err != nil {
+			t.Fatal(err)
+		}
+		e.clock.advance(2 * time.Hour) // carol's token lapses: no live carrier of agent-b
+		own := bob
+		own.Agent, own.Labelled, own.Via = "bob-own", true, domain.ViaAPIToken
+		for name, who := range map[string]domain.Caller{"browser": bob, "own label": own} {
+			resp, err := lc.ClaimNext(e.ctx, who, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+			if be, ok := domain.AsBatonDeckError(err); !ok || be.Code != domain.CodeForbidden || be.Details["label"] != "agent-b" {
+				t.Fatalf("bob (%s) claim_next assignee agent-b after carol's lapse: %+v %v, want FORBIDDEN", name, resp, err)
+			}
+			_, err = lc.Next(e.ctx, who, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"})
+			wantCode(t, err, domain.CodeForbidden)
+			mine := e.task(t, domain.Todo)
+			mc := e.claim(t, who, mine.ID, 0)
+			_, err = lc.Handoff(e.ctx, who, HandoffTaskReq{ProjectID: e.project, TaskID: mine.ID, LeaseID: mc.LeaseID, ToAgent: "agent-b", MemoryNote: "over"})
+			wantCode(t, err, domain.CodeForbidden)
+		}
+		if resp, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, Assignee: "agent-b"}); err != nil || resp.Task == nil || resp.Task.ID != task.ID {
+			t.Fatalf("a master names the lapsed label: %+v %v, want %s", resp, err, task.ID)
 		}
 	})
 }
