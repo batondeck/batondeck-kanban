@@ -83,6 +83,12 @@ this section's headings in CHANGELOG.md, are all part of it.
   error`. It now runs on the builder's platform (`FROM --platform=$BUILDPLATFORM`) and cross-compiles
   with `GOOS`/`GOARCH` from `TARGETOS`/`TARGETARCH`; the final stage, which only copies, is
   unchanged. `make release-check` holds the `Dockerfile` to both.
+- The web UI bundles dompurify 3.4.17, not 3.4.14 (P-57). mermaid, which renders a chronicle's
+  diagrams, pulls dompurify in, and `npm audit` rated 3.4.14 critical (DOM XSS: GHSA-p98j-92pf-mc4p,
+  GHSA-6688-9rhm-gjv2, GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f). The fix is a
+  patch inside mermaid's own `^3.3.3`: `web/package-lock.json` moves that one entry, no other
+  package changes, and `web/dist` is rebuilt. The remaining advisories are dev-only (vite,
+  vitest, undici, source-map-js) or need the breaking mermaid 12 (katex, low), and stay open.
 - A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
   ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
   mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept
