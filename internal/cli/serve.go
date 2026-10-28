@@ -57,6 +57,21 @@ type app struct {
 // is the blob store; with its Files and Signer set, the signed PUT and GET /blobs/{id} are mounted.
 // ret is the retention sweep's windows and interval; a zero field is core.DefaultRetention's.
 func compose(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention) (*app, error) {
+	return composeWith(st, version, publicURL, logger, sealer, media, ret, wakeTuning{registry: wakeRegistry(), sweep: wakeSweep})
+}
+
+// wakeTuning is the device session directory's registry, sweep interval and coalescing windows.
+// compose's, and so serve's, is wakeRegistry(), wakeSweep and the zero windows (ADR-0004's
+// numbers); a test passes its own to composeWith, so that tests running in parallel share no
+// package variable.
+type wakeTuning struct {
+	registry string
+	sweep    time.Duration
+	windows  wake.Windows
+}
+
+// composeWith is compose with the directory's tuning given.
+func composeWith(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, wt wakeTuning) (*app, error) {
 	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	var as *oauth.Server
 	if publicURL != "" {
@@ -99,7 +114,7 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	// The engines wake the tail on commit (store.ChangeWatcher); without one it polls.
 	watcher, _ := st.(store.ChangeWatcher)
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
-	dir, err := wake.NewDirectory(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Sessions: sc.WakeStore(), Registry: wakeRegistry(), Logger: logger, Sweep: wakeSweep})
+	dir, err := wake.NewDirectory(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Sessions: sc.WakeStore(), Registry: wt.registry, Logger: logger, Sweep: wt.sweep, Windows: wt.windows})
 	if err != nil {
 		return nil, err
 	}
@@ -213,8 +228,8 @@ var (
 	flushBudget    = 5 * time.Second
 )
 
-// wakeSweep is how often the directory re-resolves every entry's bearer (wake.Sweep). A variable
-// only so a test can watch a revocation drop an entry quickly.
+// wakeSweep is how often serve's directory re-resolves every entry's bearer (wake.Sweep). A test
+// that needs a quicker sweep passes its own through composeWith (wakeTuning).
 var wakeSweep = wake.Sweep
 
 // wakeRegistry is Claude Code's session registry directory: $CLAUDE_CONFIG_DIR/sessions, else

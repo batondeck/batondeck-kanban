@@ -15,7 +15,8 @@ import (
 // project; a follow-up rings its target's worker assigned within a second of the call (the
 // positive control, and the measurement).
 func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
-	s := startDirectory(t, nil)
+	t.Parallel()
+	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow})
 	w, m := s.client(t, "s-alice-worker", ""), s.client(t, "s-alice-master", "")
 	s.register(t, s.alice, w, "worker")
 	s.register(t, s.alice, m, "master")
@@ -29,7 +30,7 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 			select {
 			case b := <-c.got:
 				kinds = append(kinds, content(t, b).Kind)
-			case <-time.After(wake.SlowWindow + 500*time.Millisecond):
+			case <-time.After(s.win.Slow + 500*time.Millisecond):
 				quiet = true
 			}
 		}
@@ -45,7 +46,7 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 	if !s.changeOf(t, "add_comment") {
 		t.Fatal("add_comment wrote no change row: the silence would prove nothing")
 	}
-	w.none(t, wake.SlowWindow+500*time.Millisecond)
+	w.none(t, s.win.Slow+500*time.Millisecond)
 	m.none(t, 0)
 	if n := s.a.dir.Writes() - before; n != 0 {
 		t.Fatalf("the comment wrote %d doorbells, want 0", n)

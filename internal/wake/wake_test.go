@@ -20,12 +20,12 @@ func TestCoalescerPerEntryAndKind(t *testing.T) {
 	c := newCoalescer()
 	start := time.Now()
 	for i := range 5 {
-		q, m := window(KindAssigned)
+		q, m := Windows{}.withDefaults().of(KindAssigned)
 		c.add(1, Frame{Kind: KindAssigned, Cursor: int64(10 + i)}, start.Add(time.Duration(i)*20*time.Millisecond), q, m)
 	}
-	q, m := window(KindBroadcast)
+	q, m := Windows{}.withDefaults().of(KindBroadcast)
 	c.add(1, Frame{Kind: KindBroadcast, Cursor: 13}, start, q, m)
-	q, m = window(KindAssigned)
+	q, m = Windows{}.withDefaults().of(KindAssigned)
 	c.add(2, Frame{Kind: KindAssigned, Cursor: 9}, start, q, m)
 	if got := c.release(start.Add(299 * time.Millisecond)); len(got) != 0 {
 		t.Fatalf("released before quiet: %+v", got)
@@ -42,12 +42,39 @@ func TestCoalescerPerEntryAndKind(t *testing.T) {
 	}
 }
 
+// The production windows are plan Amendment B's and ADR-0004's numbers (P-289 pins them, since a
+// test may now hold shorter ones): assigned 300 ms quiet within 1 s, broadcast and changed 5 s. A
+// directory built with no Windows holds exactly those; one given a field keeps it and defaults the
+// rest.
+func TestProductionWindowsAreADR0004s(t *testing.T) {
+	want := Windows{AssignedQuiet: 300 * time.Millisecond, AssignedMaxHold: time.Second, Slow: 5 * time.Second}
+	d, err := NewDirectory(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Windows(); got != want {
+		t.Fatalf("a directory with no Windows holds %+v, want ADR-0004's %+v", got, want)
+	}
+	for kind, w := range map[string][2]time.Duration{KindAssigned: {300 * time.Millisecond, time.Second}, KindBroadcast: {5 * time.Second, 5 * time.Second}, KindChanged: {5 * time.Second, 5 * time.Second}} {
+		if q, m := d.Windows().of(kind); q != w[0] || m != w[1] {
+			t.Fatalf("%s: quiet %v, cap %v; want %v, %v", kind, q, m, w[0], w[1])
+		}
+	}
+	d, err = NewDirectory(Options{Windows: Windows{Slow: time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Windows(); got != (Windows{AssignedQuiet: 300 * time.Millisecond, AssignedMaxHold: time.Second, Slow: time.Second}) {
+		t.Fatalf("a directory given only Slow holds %+v", got)
+	}
+}
+
 // A kind that never pauses is released at its cap; the held cursor is the highest whatever the
 // arrival order; forget drops an entry's frames.
 func TestCoalescerCapHighestAndForget(t *testing.T) {
 	c := newCoalescer()
 	start := time.Now()
-	q, m := window(KindAssigned)
+	q, m := Windows{}.withDefaults().of(KindAssigned)
 	for i := range 6 { // every 200 ms, never quiet for 300
 		c.add(1, Frame{Kind: KindAssigned, Cursor: int64(100 + i)}, start.Add(time.Duration(i)*200*time.Millisecond), q, m)
 	}
