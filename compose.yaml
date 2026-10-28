@@ -1,0 +1,56 @@
+# batondeck-kanban on Postgres 16. README.md's quickstart says how to run it; in short:
+#
+#   printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+#   docker compose up -d
+#   curl -fsS http://127.0.0.1:8080/healthz
+#
+# `make image` refuses a VERSION this file's image line does not name (scripts/release-check.sh
+# compose), so a release bumps the tag here first.
+#
+# The orchestrator keeps its blobs on the `data` volume, and the SQLite file too when it runs on
+# SQLite: set BATONDECK_DATABASE_URL=/data/batondeck-kanban.db (in .env, or in the shell) and start it
+# with `docker compose up -d --no-deps batondeck-kanban`. The image alone (`docker run`) runs on that
+# SQLite file by default.
+#
+# The board is published on 127.0.0.1 only. The claude.ai connector needs it at a public HTTPS URL:
+# put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL.
+services:
+  batondeck-kanban:
+    image: ghcr.io/batondeck/batondeck-kanban:0.1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # A postgres:// URL selects Postgres; a file path selects SQLite. `doctor` reports the engine
+      # the connection answers as.
+      BATONDECK_DATABASE_URL: ${BATONDECK_DATABASE_URL:-postgres://batondeck:${BATONDECK_POSTGRES_PASSWORD:-batondeck}@postgres:5432/batondeck?sslmode=disable}
+      BATONDECK_BLOB_DIR: /data/blobs
+      # On Postgres there is no master.key file beside a SQLite file, so the key comes from here:
+      # without one, attachments and the wake directory's inbox tokens are refused.
+      BATONDECK_MASTER_KEY: ${BATONDECK_MASTER_KEY:?set BATONDECK_MASTER_KEY to a base64 32-byte key, for example in .env beside compose.yaml - openssl rand -base64 32}
+      # The OAuth issuer, for the claude.ai connector; empty runs with API tokens only.
+      BATONDECK_PUBLIC_URL: ${BATONDECK_PUBLIC_URL:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - data:/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: batondeck
+      POSTGRES_PASSWORD: ${BATONDECK_POSTGRES_PASSWORD:-batondeck}
+      POSTGRES_DB: batondeck
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U batondeck -d batondeck"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  data:
+  pgdata:

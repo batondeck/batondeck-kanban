@@ -37,8 +37,12 @@ PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 # dist builds every platform and writes SHA256SUMS. A release is cut locally from this exact target
 # (RELEASING.md), so what ships is what anyone can rebuild from the tag. It refuses unless the tree
 # is clean (untracked files included) and HEAD is tag v$(VERSION), and refuses the binaries unless
-# each records vcs.modified=false and that tag's commit (scripts/release-check.sh): a build from a
-# modified tree stamps vcs.modified=true, which no rebuild from the tag reproduces.
+# each records vcs.modified=false, that tag's commit and the Go go.mod pins
+# (scripts/release-check.sh): a build from a modified tree stamps vcs.modified=true, which no rebuild
+# from the tag reproduces. GOTOOLCHAIN is go.mod's toolchain exactly, without +auto: a newer Go on
+# PATH would otherwise build it, and another compiler writes other bytes; an older one is switched
+# (downloaded once by the go command).
+dist: export GOTOOLCHAIN = $(GO_TOOLCHAIN)
 dist:
 	@$(RELEASE_CHECK) tree $(VERSION)
 	@rm -rf dist && mkdir -p dist
@@ -78,14 +82,16 @@ sbom:
 
 # image builds the container image: the Dockerfile for linux/amd64 and linux/arm64,
 # --build-arg VERSION stamping main.version, tagged $(IMAGE):$(VERSION) and $(IMAGE):latest. It holds
-# to dist's tree check (clean, and HEAD is tag v$(VERSION)). Without PUSH=1 the image is kept in
-# Docker's own store (--load, which for two platforms needs the containerd image store, Docker
-# Desktop's default); with PUSH=1 it is pushed to the registry IMAGE names, after
-# `docker login ghcr.io`, and kept nowhere else.
+# to dist's tree check (clean, and HEAD is tag v$(VERSION)), and refuses a VERSION compose.yaml does
+# not pull (`release-check.sh compose`), so no image is pushed under a tag the compose file does not
+# run. Without PUSH=1 the image is kept in Docker's own store (--load, which for two platforms needs
+# the containerd image store, Docker Desktop's default); with PUSH=1 it is pushed to the registry
+# IMAGE names, after `docker login ghcr.io`, and kept nowhere else.
 IMAGE := ghcr.io/batondeck/batondeck-kanban
 IMAGE_PLATFORMS := linux/amd64,linux/arm64
 image:
 	@$(RELEASE_CHECK) tree $(VERSION)
+	@$(RELEASE_CHECK) compose $(VERSION)
 	docker buildx build --platform $(IMAGE_PLATFORMS) \
 		--build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest \
 		$(if $(filter 1,$(PUSH)),--push,--load) .
