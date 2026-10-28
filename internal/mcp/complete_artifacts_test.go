@@ -175,6 +175,9 @@ func TestCompleteArtifactsMerge(t *testing.T) {
 			map[string]any{"kind": "pr", "url": "https://EXAMPLE.com/pr/2"},
 			map[string]any{"kind": "pr", "url": "https://EXAMPLE.com/pr/3"},
 		}))
+		if obj(got["task"])["status"] != "DONE" {
+			t.Fatalf("complete_task = %v, want DONE", got)
+		}
 		arts := r.arts(id)
 		l := liveArts(arts)
 		// The key case-folds the url; the entry keeps it as written (add_artifact's rule).

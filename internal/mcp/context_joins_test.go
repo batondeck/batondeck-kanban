@@ -55,6 +55,11 @@ func TestTaskContextJoins(t *testing.T) {
 		}
 		t.Logf("%s get_task_context: artifacts %d (one retracted), attachment %s %s sha256 %v, open follow-ups %d of 2",
 			r.engine, len(arts), a["status"], a["gcsUri"], a["sha256"], len(fus))
+		tick()
+		r.ada.call("add_follow_up", map[string]any{"projectId": r.p, "taskId": id, "body": "one more"})
+		if n := r.bob.call("get_task_context", map[string]any{"projectId": r.p, "taskId": id})["openFollowUpCount"]; n != float64(2) {
+			t.Fatalf("openFollowUpCount after a second open follow-up = %v, want 2", n)
+		}
 
 		items := r.bob.call("get_task_context", map[string]any{"projectId": r.p, "taskId": id, "include": []any{"items"}})
 		if n := len(items["artifacts"].([]any)); n != 2 {
