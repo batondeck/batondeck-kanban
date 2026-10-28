@@ -6,6 +6,75 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+## [0.1.0]
+
+The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
+this section's headings in CHANGELOG.md, are all part of it.
+
+- **One binary, two engines.** `batondeck-kanban serve` runs the MCP server at `/mcp` (Streamable HTTP,
+  API tokens or OAuth), the REST API behind the web UI, the embedded web UI and `/healthz`, on a
+  SQLite file or, with a `postgres://` `database.url`, on Postgres. `migrate`, `user`, `token`,
+  `session`, `doctor`, `healthcheck` and `version` are its other subcommands. The image
+  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64 by `make image`
+  (arm64 needs emulation, which Docker Desktop has), and `compose.yaml` runs it on Postgres 16.
+- **86 tools, 4 prompts and 11 resource templates**, by area:
+  projects and members (`create_project`, `get_project`, `list_projects`, `update_settings`,
+  `delete_project`, `add_member`, `remove_member`);
+  boards and columns (`create_board`, `get_board`, `list_boards`, `add_column`, `update_column`,
+  `remove_column`);
+  tasks (`create_task`, `get_task`, `list_tasks`, `update_task`, `move_task`, `search_tasks`,
+  `rank_tasks`, `cancel_task`, `delete_task`);
+  the lifecycle (`claim_task`, `claim_next`, `next_task`, `heartbeat_task`, `release_task`,
+  `complete_task`, `block_task`, `fail_task`, `handoff_task`, `reap_stale_leases`);
+  context and memory (`get_task_context`, `add_context_item`, `set_summary`, `write_memory`,
+  `read_memory`, `recall_memory`);
+  dependencies and subtasks (`add_dependency`, `remove_dependency`, `add_subtask`, `list_subtasks`,
+  `orchestrate_subtasks`);
+  attachments and artifacts (`attach_file`, `list_attachments`, `add_artifact`, `retract_artifact`);
+  comments and follow-ups (`add_comment`, `list_comments`, `add_follow_up`, `list_follow_ups`,
+  `ack_follow_up`);
+  runs (`start_runs`, `open_run`, `list_runs`, `pick_run`, `cancel_runs`);
+  sprints (`create_sprint`, `get_sprint`, `list_sprints`, `update_sprint`, `set_sprint`);
+  notifications (`list_notifications`, `mark_notifications_read`);
+  agents (`list_agent_sessions`, `disconnect_agent`, `register_agent_profile`, `get_skill_stats`,
+  `grant_capabilities`, `detect_anomalies`);
+  me and audit (`get_my_settings`, `set_my_settings`, `list_audit_log`);
+  chronicle (`create_chronicle_page`, `edit_chronicle_page`, `delete_chronicle_page`,
+  `ingest_chronicle_page`);
+  on-call (`create_integration`, `update_integration`, `delete_integration`, `list_integrations`,
+  `rotate_integration_secret`, `send_test_event`, `list_deliveries`, `read_delivery_raw`,
+  `replay_delivery`), with signed ingest at `/hooks/{id}` and eight connectors in the binary.
+  Analytics is the operations summary over the local `tool_calls` table
+  (`GET /api/analytics/operations`). `contract/expected.json` holds the exact surface.
+- **Five states and a fixed transition table** (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE; ADR-0005).
+  The table is not editable: `get_transitions`, `set_transitions` and `settings.transitionTable` are
+  gone.
+- **Two folds, named deviations from conductor:**
+  1. `DEAD_LETTER` is folded into `BLOCKED`: a poisoned task is BLOCKED with
+     `blockedReason: "poison"` and the system label `poisoned`; auto-unblock never un-poisons it, and
+     only a master's `move_task` to TODO does, resetting `claimAttempts`. `requeue_task` is not ported.
+  2. `CANCELLED` is folded away: `delete_task` (new; master tier) removes a task and what hangs off
+     it, `cancel_task` (new, ADR-0001) moves it to DONE with the system label `cancelled`, and
+     `pick_run` and `cancel_runs` delete the losing runs instead of marking them cancelled.
+- **Dropped:** the media function (thumbnails, OCR, captions; attachments still upload and
+  download), semantic search (keyword search over FTS5 and tsvector stays), notification delivery to
+  SendGrid and Slack (notifications are in-app), Pub/Sub (replaced by the device-local socket
+  doorbell for Claude Code and SSE for the web UI, ADR-0004) and BigQuery (replaced by the local
+  `tool_calls` table). Also dropped, by the owner's scope: billing, WorkOS, admin, the plugin maker,
+  the router facade, the CLI-token tools and `prune_agent_sessions` (ADR-0004).
+- **The Claude Code plugin, 0.1.0** (`plugin/`; its pre-release numbers 0.1.2 and 0.1.3 in the entries
+  below reset to the release's 0.1.0): the board's MCP tools, SessionStart and SessionEnd
+  hooks that register the session in the server's device directory so it is rung over its own
+  messaging socket when work arrives, the `batondeck-worker` and `batondeck-chronicle` skills and six
+  commands. There is no channel and no Stop hook; clients off the device pull each turn.
+- **The MCP OAuth 2.1 authorization server** for remote connectors, on when `public_url` is set:
+  dynamic client registration, PKCE S256, opaque tokens. It was built for the claude.ai and ChatGPT
+  connectors and exercised end to end with `mcp-remote`; neither connector has been tried against it.
+- **Release machinery:** `make dist` builds the four platform binaries reproducibly with
+  `SHA256SUMS`, `make image` builds the two-architecture image and refuses a version `compose.yaml`
+  does not pull, and `scripts/release-check.sh 0.1.0` refuses a candidate whose `compose.yaml`,
+  `plugin.json`, this file and binary disagree on the version (RELEASING.md).
+
 ### Changed
 
 - Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
