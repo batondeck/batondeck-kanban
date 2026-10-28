@@ -113,7 +113,11 @@ Notable changes to batondeck-kanban. The format follows
   composition passes none; a test hands its registry, sweep and windows to `composeWith`, and the
   tests that wait the slow window out hold it at 2 s. `TestProductionWindowsAreADR0004s` and
   `TestServeDirectoryHoldsTheProductionWindows` pin the production numbers. Every bound and every
-  expected ring and silence is unchanged. The three tests that time or count against a bound
+  expected silence is unchanged, and so is every expected ring but one: before its silent step,
+  `TestDirectoryHandoffToSelfRingsNobody` now drains the creates' burst, so it no longer fails when
+  that burst rings more than once. Four other tests still catch a broadcast window that does not
+  coalesce (`NoSelfRing`, `RebuildsAndCatchesUp`, `RefusesAnotherIdentityTakingAPid`,
+  `RingsAWorkerWithTheExactFrame`), and `MasterCoalescesAt5s` pins the slow window. The three tests that time or count against a bound
   (`RingsAWorkerWithTheExactFrame`, `DropsAKilledProcessWithin1s`, `SweepDropsADisabledUser`) stay
   serial, and the no-ring tests count from the writes their clients have read, since the directory
   counts a doorbell just after writing it (P-319's "wrote 1 doorbells, want 0"). On 4 vCPUs with
