@@ -1,6 +1,7 @@
 package wake
 
 import (
+	"cmp"
 	"slices"
 	"strconv"
 	"time"
@@ -36,12 +37,25 @@ func newCoalescer() *coalescer {
 	return &coalescer{held: map[string]held{}, timer: t}
 }
 
-// window is a kind's quiet period and cap.
-func window(kind string) (quiet, maxHold time.Duration) {
+// Windows is the dispatcher's coalescing windows (plan Amendment B "The doorbell frame"): assigned
+// is released Quiet after its last doorbell within MaxHold of its first, broadcast and changed at most
+// once per Slow. A zero field is the production value, AssignedQuiet, AssignedMaxHold or SlowWindow
+// (ADR-0004); only a test sets one (Options.Windows), to wait a shorter window out.
+type Windows struct {
+	AssignedQuiet, AssignedMaxHold, Slow time.Duration
+}
+
+// withDefaults is w with each zero field the production value.
+func (w Windows) withDefaults() Windows {
+	return Windows{AssignedQuiet: cmp.Or(w.AssignedQuiet, AssignedQuiet), AssignedMaxHold: cmp.Or(w.AssignedMaxHold, AssignedMaxHold), Slow: cmp.Or(w.Slow, SlowWindow)}
+}
+
+// of is a kind's quiet period and cap.
+func (w Windows) of(kind string) (quiet, maxHold time.Duration) {
 	if kind == KindAssigned {
-		return AssignedQuiet, AssignedMaxHold
+		return w.AssignedQuiet, w.AssignedMaxHold
 	}
-	return SlowWindow, SlowWindow
+	return w.Slow, w.Slow
 }
 
 // add holds f for entry pid, pushing its release to quiet from now, within maxHold of the first.

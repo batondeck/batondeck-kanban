@@ -113,9 +113,9 @@ func peerToken(dir string, pid int64, socket string) string {
 }
 
 // frameBytes is the bytes one doorbell writes: the auth line when there is a token, then one user
-// frame naming the receiver's session. No priority, no from, never a from-mode attestation (R3.1
-// §4 items 1 and 3).
-func frameBytes(sessionID, token string, f Frame) []byte {
+// frame naming the receiver's session, its line for the entry's label (Frame.LineFor). No
+// priority, no from, never a from-mode attestation (R3.1 §4 items 1 and 3).
+func frameBytes(sessionID, token string, f Frame, label string) []byte {
 	var out []byte
 	if token != "" {
 		b, _ := json.Marshal(struct {
@@ -134,7 +134,7 @@ func frameBytes(sessionID, token string, f Frame) []byte {
 	}{Type: "user", SessionID: sessionID, Message: struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
-	}{Role: "user", Content: f.Line()}})
+	}{Role: "user", Content: f.LineFor(label)}})
 	return append(append(out, b...), '\n')
 }
 

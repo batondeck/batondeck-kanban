@@ -19,9 +19,13 @@ import (
 // (startDirectory): the client is a `sleep` with a fake Claude Code registry entry, found by the
 // socket named in CLAUDE_CODE_MESSAGING_SOCKET.
 
-// sessionEnv points the client at s's Unix socket as p, for the session whose socket is socket.
+// sessionEnv points the client at s's Unix socket as p, for the session whose socket is socket, and
+// at s's registry. It sets the environment and wakeRegistry, so these tests do not run in parallel.
 func sessionEnv(t *testing.T, s *dirServer, p person, socket string) {
 	t.Helper()
+	old := wakeRegistry
+	wakeRegistry = func() string { return s.reg }
+	t.Cleanup(func() { wakeRegistry = old })
 	t.Setenv("BATONDECK_CONFIG", "")
 	t.Setenv("BATONDECK_LISTEN", "tcp://"+s.tcp+",unix://"+s.sock)
 	t.Setenv("BATONDECK_TOKEN", p.token)

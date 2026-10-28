@@ -207,7 +207,7 @@ cursor-agent -> ~/.local/bin/cursor-agent               2026.04.17-479fd04  (not
    - expect nothing back.
 2. **The content is a prompt.** The receiving model reads it and acts on it.
    - First line: one readable sentence, e.g. `batondeck: T-12 assigned to you on B-… (cursor 4711)`, which is also the human's one-line preview.
-   - Second line: the `{kind, cursor, projectId}` JSON.
+   - Second line: the `{kind, cursor, projectId}` JSON (since P-191 it also names the board, `boardId`, or boards, `boardIds`).
    - Nothing third-party, and nothing alarming. ADR-0004's zero-authority rule holds.
 3. **Never forge `from-mode`.** It is a self-asserted attestation, and writing `bypass` to get past a hold would launder the receiving user's permission decision.
 4. **Auth line.** Send it when a key file exists, using the peer token from `<pid>.<sha256(path)>.key`. It is optional on macOS and Linux but forward-compatible, and required on Windows. Never log it. It is not the security boundary; the 0700 directory and same-uid check are.

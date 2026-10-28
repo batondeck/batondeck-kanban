@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,8 +97,10 @@ func tokenInfo(r store.Token, now time.Time) TokenInfo {
 }
 
 // Create mints a token acting for identityID (a user's id), named label, living ttl (0 means
-// DefaultTokenTTL; above MaxTokenTTL is VALIDATION). The returned plaintext is the ONLY time the
-// secret exists outside a hash.
+// DefaultTokenTTL; above MaxTokenTTL is VALIDATION). A label whose agent any token of another
+// identity has carried, live, revoked or expired, is VALIDATION (P-257 B1, review round 2): the
+// label is that agent, the first identity to mint it keeps it, and a lapse does not hand it on.
+// The returned plaintext is the ONLY time the secret exists outside a hash.
 func (t *TokenService) Create(ctx context.Context, identityID, subject, label string, ttl time.Duration) (plaintext string, info TokenInfo, err error) {
 	label = strings.TrimSpace(label)
 	if label == "" || len(label) > maxLabelLen {
@@ -108,6 +111,9 @@ func (t *TokenService) Create(ctx context.Context, identityID, subject, label st
 	}
 	if ttl < time.Minute || ttl > MaxTokenTTL {
 		return "", TokenInfo{}, domain.Validation("a token lives from 1 minute to 365 days", map[string]any{"field": "ttl"})
+	}
+	if err := t.labelFree(ctx, identityID, label); err != nil {
+		return "", TokenInfo{}, err
 	}
 	idb := make([]byte, tokenIDBytes)
 	sec := make([]byte, tokenSecretBytes)
@@ -126,6 +132,30 @@ func (t *TokenService) Create(ctx context.Context, identityID, subject, label st
 		return "", TokenInfo{}, err
 	}
 	return TokenPrefix + id + "_" + secret, tokenInfo(row, now), nil
+}
+
+// labelFree refuses a label whose agent (domain.TokenAgent) any token row of another identity
+// carries, whatever its status: token rows are never deleted, so the first identity to mint a label
+// owns it, and work handed to the label is never claimable by whoever mints it after a lapse. The
+// default label names no agent and is everyone's. It is a read before the insert, not a unique
+// index (no migration): two identities minting one new label at the same instant can both land,
+// and the service's label check (lifecycle ownLabel) then refuses both below master, for good.
+func (t *TokenService) labelFree(ctx context.Context, identityID, label string) error {
+	agent := domain.TokenAgent(label)
+	if agent == "" {
+		return nil
+	}
+	rows, err := t.Store.ListTokens(ctx, "")
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.IdentityID != identityID && domain.TokenAgent(r.Label) == agent {
+			return domain.Validation("label "+strconv.Quote(agent)+" is another account's agent: choose another label",
+				map[string]any{"field": "label", "label": agent})
+		}
+	}
+	return nil
 }
 
 // parseToken splits a presented bearer into its id and secret, or fails. It never reaches the store

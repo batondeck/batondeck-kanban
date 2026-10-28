@@ -13,6 +13,7 @@ import (
 // R1.11: serve wires the device session directory into /api/stream, so a process registering over
 // the Unix socket reaches its user's stream as a presence frame, and its unregister as another.
 func TestServeStreamsPresenceFromTheDirectory(t *testing.T) {
+	t.Parallel()
 	s := startDirectory(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

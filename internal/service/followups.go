@@ -63,11 +63,14 @@ func (t *txn) followUpTarget(task store.Task) (target, identity *string, err err
 
 // targetIsCaller is conductor's targetIsCaller: the verified identity is the caller's, and the
 // routing handle is that identity or the caller's agent (which narrows within one identity only).
+// A caller with no agent (the identity's browser session) is the identity itself and answers for
+// every one of its agents (P-257 B2): the holder's account acks what its agent was asked; another
+// agent of the same identity does not.
 func targetIsCaller(caller domain.Caller, target string, identity *string) bool {
 	if identity == nil || *identity != caller.Identity {
 		return false
 	}
-	return target == *identity || (caller.Agent != "" && target == caller.Agent)
+	return target == *identity || caller.Agent == "" || target == caller.Agent
 }
 
 // AddFollowUp is add_follow_up, in one transaction: the follow-up, its event, the reopen when the

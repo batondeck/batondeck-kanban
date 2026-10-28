@@ -71,5 +71,40 @@ func (s *Service) resolveOAuth(ctx context.Context, bearer string) (domain.Calle
 	c := callerFor(t.IdentityID, e)
 	c.Role = string(role)
 	c.WorkspaceAdmin = e.admin && role == domain.RoleAdmin
+	c.Via, c.OAuthClientID = domain.ViaOAuth, t.ClientID
+	if c.Agent, err = s.oauthClientName(ctx, t.ClientID); err != nil {
+		return domain.Caller{}, err
+	}
 	return c, nil
+}
+
+// maxClientNames bounds the client-name cache; a full cache is emptied and fills again.
+const maxClientNames = 1024
+
+// oauthClientName is the agent an OAuth client's registered client_name names (audit B1), through
+// domain.AgentLabel. A client's name never changes after registration, so it is read once per
+// client and kept: the per-request resolution, and the wake Sweep's 3 statements per entry, do not
+// grow. A client that is gone names no agent (its tokens went with it).
+func (s *Service) oauthClientName(ctx context.Context, clientID string) (string, error) {
+	s.mu.Lock()
+	name, ok := s.clientNames[clientID]
+	s.mu.Unlock()
+	if ok {
+		return name, nil
+	}
+	cl, err := s.OAuth.GetOAuthClient(ctx, clientID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	name = domain.AgentLabel(cl.ClientName)
+	s.mu.Lock()
+	if s.clientNames == nil || len(s.clientNames) >= maxClientNames {
+		s.clientNames = map[string]string{}
+	}
+	s.clientNames[clientID] = name
+	s.mu.Unlock()
+	return name, nil
 }

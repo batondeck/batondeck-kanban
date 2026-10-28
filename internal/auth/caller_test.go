@@ -62,7 +62,7 @@ func TestWorkspaceAdminFlagReachesTheCaller(t *testing.T) {
 		login string
 		want  bool
 	}{{admin.ID, "root", true}, {plain.ID, "alice", false}} {
-		tok, _, _ := f.svc.Tokens.Create(ctx, c.id, c.login, "t", 0)
+		tok, _, _ := f.svc.Tokens.Create(ctx, c.id, c.login, "t-"+c.login, 0) // a label is one user's
 		got, err := f.svc.ResolveCaller(ctx, tok)
 		if err != nil || got.WorkspaceAdmin != c.want || got.Identity != c.id {
 			t.Fatalf("%s by token: %+v %v, want admin %v", c.login, got, err, c.want)

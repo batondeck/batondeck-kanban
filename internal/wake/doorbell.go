@@ -34,7 +34,7 @@ const (
 	KindChanged   = "changed"
 )
 
-// The coalescing windows per entry and kind (plan Amendment B "The doorbell frame"): assigned is
+// The coalescing windows per entry and kind (ADR-0004 §B, the coalesced doorbell frame): assigned is
 // released AssignedQuiet after its last doorbell, within AssignedMaxHold of its first; broadcast and
 // changed at most once per SlowWindow.
 const (
@@ -108,16 +108,26 @@ func merge(a, b Frame) Frame {
 // is a prompt (R3.1 §3.2), so it says only what to do next, never a title or a note: claim_next (a
 // master's changed: next_task with its inbox, as the master command does) on the frame's board(s),
 // or list_boards first when it names none.
-func (f Frame) Line() string {
+func (f Frame) Line() string { return f.LineFor("") }
+
+// LineFor is Line for a worker session registered under an agent label (P-276): its assigned
+// doorbell names claim_next {…, assignee: <label>}, since work assigned to a label is in no default
+// frontier, and then claim_next without one, for work assigned to the session's account. label ""
+// is Line.
+func (f Frame) LineFor(label string) string {
 	b, _ := json.Marshal(f)
 	what := map[string]string{
 		KindAssigned:  "work was assigned to you",
 		KindBroadcast: "open work is waiting",
 		KindChanged:   "tasks changed",
 	}[f.Kind]
-	call, extra := "claim_next", ""
-	if f.Kind == KindChanged {
+	call, extra, then := "claim_next", "", ""
+	switch {
+	case f.Kind == KindChanged:
 		call, extra = "next_task", ", includeInbox: true"
+	case f.Kind == KindAssigned && label != "":
+		q, _ := json.Marshal(label)
+		extra, then = ", assignee: "+string(q), ", then claim_next without assignee"
 	}
 	var next string
 	switch bs := f.boards(); len(bs) {
@@ -128,7 +138,7 @@ func (f Frame) Line() string {
 	default:
 		next = fmt.Sprintf("call %s {projectId: %s, boardId%s} for each boardId of %s", call, f.ProjectID, extra, strings.Join(bs, ", "))
 	}
-	return fmt.Sprintf("batondeck: %s on %s (cursor %d); %s, then list_notifications.\n%s", what, f.ProjectID, f.Cursor, next, b)
+	return fmt.Sprintf("batondeck: %s on %s (cursor %d); %s%s, then list_notifications.\n%s", what, f.ProjectID, f.Cursor, next, then, b)
 }
 
 // row is what the dispatcher reads of a change-log row (service.changePayload).

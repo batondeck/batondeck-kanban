@@ -22,8 +22,9 @@ func TestFollowUpsAddFollowUp(t *testing.T) {
 		_ = lease
 		held := r.max.call("list_tasks", map[string]any{"projectId": r.p, "boardId": r.b, "status": "IN_PROGRESS"})["tasks"].([]any)
 		hid := str(obj(held[0])["id"])
-		if fu := obj(r.ada.call("add_follow_up", map[string]any{"projectId": r.p, "taskId": hid, "body": "status?"})["followUp"]); fu["target"] != "u-max" {
-			t.Fatalf("add_follow_up to the lease holder = %v, want target u-max", fu)
+		// The lease holder is its agent (the claim's agentId, P-257): u-max's client over the harness.
+		if fu := obj(r.ada.call("add_follow_up", map[string]any{"projectId": r.p, "taskId": hid, "body": "status?"})["followUp"]); fu["target"] != "harness" {
+			t.Fatalf("add_follow_up to the lease holder = %v, want target harness, u-max's agent", fu)
 		}
 		if fu := obj(r.ada.call("add_follow_up", map[string]any{"projectId": r.p, "taskId": str(r.task("mine", "u-ada")["id"]), "body": "note to self"})["followUp"]); fu["target"] != nil {
 			t.Fatalf("a self-directed follow-up = %v, want no target", fu)

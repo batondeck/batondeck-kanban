@@ -114,7 +114,7 @@ describe('Chronicle at the "All projects" scope (T-429)', () => {
    */
   it('a superseded record is tagged in the all-projects fanout too, not only under one project', async () => {
     stub([{ projectId: 'P-1', name: 'Alpha' }], {
-      'P-1': { pages: [rec('P-1', 1, { supersededBy: ['ADR-0044'] }), rec('P-1', 2)] },
+      'P-1': { pages: [rec('P-1', 1, { supersededBy: ['ADR-0004'] }), rec('P-1', 2)] },
     });
     mount();
     await waitFor(() => expect(screen.getByText('P-1 decision 1')).toBeTruthy());

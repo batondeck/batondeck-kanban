@@ -146,9 +146,9 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 
 	var rows []string
 	for _, r := range st.rows {
-		rows = append(rows, r.Tool+" "+r.Identity+" "+string(r.Outcome)+" "+r.Code)
+		rows = append(rows, r.Tool+" "+r.Identity+" "+r.Agent+" "+string(r.Outcome)+" "+r.Code)
 	}
-	if want := "probe " + user.ID + " ok OK"; len(rows) != 1 || rows[0] != want {
+	if want := "probe " + user.ID + " test ok OK"; len(rows) != 1 || rows[0] != want {
 		t.Errorf("tool_calls = %q, want [%q]", rows, want)
 	}
 
@@ -156,9 +156,9 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].AgentID != "id:"+user.ID || sessions[0].ClientName != "serve-test" ||
-		sessions[0].SessionCount != 1 || sessions[0].RequestCount != 1 || sessions[0].ToolCounts["probe"] != 1 || sessions[0].Kind != "service_account" {
-		t.Errorf("agent sessions = %+v, want one: client serve-test, one connection, one probe call", sessions)
+	if len(sessions) != 1 || sessions[0].AgentID != "test" || sessions[0].ClientName != "serve-test" ||
+		sessions[0].SessionCount != 1 || sessions[0].RequestCount != 1 || sessions[0].ToolCounts["probe"] != 1 || sessions[0].Kind != "api_token" {
+		t.Errorf("agent sessions = %+v, want one: agent test (the token's label), client serve-test, api_token, one connection, one probe call", sessions)
 	}
 }
 

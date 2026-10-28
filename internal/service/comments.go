@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -25,10 +27,32 @@ func commentOut(c store.Comment) Comment {
 		TaskID: c.TaskID, Ts: isoMs(c.TS)}
 }
 
-// mentionsOf resolves the body's @mentions against the project's members and their accounts' email
-// and display name. A body with no @token reads nothing; otherwise one member list and one account
-// read per member (conductor's memberAliases, bounded by the member count).
-func (t *txn) mentionsOf(body string) ([]string, error) {
+// liveWorkers is this device's registered worker sessions (R0.25's directory, empty until serve
+// hands it over): each identity with one, and the agent labels its workers registered under.
+func (c *Core) liveWorkers() map[string][]string {
+	d := c.DeviceSessions()
+	if d == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, e := range d.Entries() {
+		if e.Role != RoleWorker {
+			continue
+		}
+		labels := out[e.IdentityID]
+		if e.AgentID != "" && !strings.HasPrefix(e.AgentID, "id:") { // "id:<identity>" is no label
+			labels = append(labels, e.AgentID)
+		}
+		out[e.IdentityID] = labels
+	}
+	return out
+}
+
+// mentionsOf resolves the body's @mentions against the project's members: a member's identity, its
+// account's email and display name, and the agent label of each of its live worker sessions
+// (workers). A body with no @token reads nothing; otherwise one member list and one account read
+// per member (conductor's memberAliases, bounded by the member count).
+func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, error) {
 	if len(domain.MentionTokens(body)) == 0 {
 		return []string{}, nil
 	}
@@ -40,21 +64,26 @@ func (t *txn) mentionsOf(body string) ([]string, error) {
 	aliases := map[string][]string{}
 	for _, m := range members {
 		ids = append(ids, m.IdentityID)
+		aliases[m.IdentityID] = workers[m.IdentityID]
 		u, err := t.Tx.GetUser(t.ctx, m.IdentityID)
 		if errors.Is(err, store.ErrNotFound) {
-			continue // not an account: the member keeps matching on its identity alone
+			continue // not an account: the member keeps matching on its identity and labels alone
 		}
 		if err != nil {
 			return nil, err
 		}
-		aliases[m.IdentityID] = []string{u.Email, u.DisplayName}
+		aliases[m.IdentityID] = append(slices.Clone(aliases[m.IdentityID]), u.Email, u.DisplayName)
 	}
 	return domain.ResolveMentions(body, ids, aliases), nil
 }
 
 // AddComment is add_comment. The task's version does not move (conductor's addComment writes beside
-// the task). Mentions are recorded on the comment; no notification row is written and no mentionee
-// is rung (ADR-0004: comments ring nobody). TODO(spec): R2.3 materialises the mention notifications.
+// the task). Mentions are recorded on the comment, and its comment.added event writes each mentioned
+// member a mention notification (notify). A comment rings nobody (ADR-0004), but for a mention
+// (owner decision 5, P-310): a mentioned member with a live worker session on this device, named by
+// @login or by that worker's @label, is rung assigned on the task. A member with no worker (a human
+// at the web UI) and a name that resolves to no member ring nobody, and a self-mention rings nobody
+// (RingAssigned).
 func (s commentsSvc) AddComment(ctx context.Context, caller domain.Caller, req AddCommentReq) (AddCommentResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_comment", domain.GrantSubject{}, true)
 	if err != nil {
@@ -77,7 +106,8 @@ func (s commentsSvc) AddComment(ctx context.Context, caller domain.Caller, req A
 		Tool: "add_comment", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
 		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddCommentResp, error) {
-		mentions, err := t.mentionsOf(req.Body)
+		workers := s.c.liveWorkers()
+		mentions, err := t.mentionsOf(req.Body, workers)
 		if err != nil {
 			return AddCommentResp{}, err
 		}
@@ -95,6 +125,11 @@ func (s commentsSvc) AddComment(ctx context.Context, caller domain.Caller, req A
 			return AddCommentResp{}, err
 		}
 		t.Event(store.EventInput{Type: domain.EventCommentAdded, Data: data})
+		for _, id := range c.Mentions {
+			if _, live := workers[id]; live {
+				t.RingAssigned(id, *t.Task)
+			}
+		}
 		return AddCommentResp{Comment: commentOut(c)}, nil
 	})
 }

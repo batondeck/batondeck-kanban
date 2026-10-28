@@ -62,7 +62,8 @@ The SessionStart hook registers the session's process with the server, as a work
 - a **master** is rung when a task in its projects changes, except for claims, heartbeats, notes and
   its own changes.
 
-The doorbell carries a kind, a cursor and a project id, nothing else; the session reads the board with
+The doorbell carries a kind, a cursor, a project id and the board (`boardId`) or boards (`boardIds`)
+its changes name (neither: look at every board), nothing else; the session reads the board with
 `claim_next` and `list_notifications`. Several changes inside a short window arrive as one doorbell.
 
 Two things that stop a doorbell from starting a turn:

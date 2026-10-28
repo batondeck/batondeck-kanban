@@ -123,6 +123,26 @@ describe('Agents: the delivered cursor', () => {
   });
 });
 
+describe('Agents: how a session authenticated and whether it is online (P-257, drifts D6 and D9)', () => {
+  it('an API-token session says "api token", an OAuth one "oauth"; a device row is online with an old registration, a stale MCP row is not', async () => {
+    const stale = '2020-01-01T00:00:00.000Z';
+    await mount('/agents', false, {
+      'GET /api/agents/sessions': () => ({
+        sessions: [
+          session({ sessionKey: 'U-1::agent-a', kind: 'api_token', lastSeenAt: stale }),
+          session({ sessionKey: 'U-1::agent-o', agentId: 'agent-o', agentName: 'agent-o', kind: 'oauth_user', lastSeenAt: stale }),
+          ...presenceSessions({ sessions: [{ pid: 4242, role: 'worker', identityId: 'U-1', agentId: 'claude', registeredAt: stale }] }, new Date().toISOString()),
+        ],
+      }),
+    });
+    await waitFor(() => expect(screen.getByText('api token')).toBeInTheDocument());
+    expect(screen.getByText('api token')).toHaveAttribute('title', 'Connected with an API token');
+    expect(screen.getByText('oauth')).toHaveAttribute('title', 'Connected with an OAuth access token');
+    expect(screen.queryByText('service')).toBeNull();
+    expect(screen.getByText('3 logged ·', { exact: false })).toHaveTextContent('3 logged · 1 online');
+  });
+});
+
 describe('Workspace Log: the audit panel', () => {
   const rows = { days: 90, entries: [{ ts: '2026-10-24T08:00:00.000Z', action: 'task.deleted', actor: 'U-1', agent: 'claude', subject: 'T-7', projectId: 'P-1', result: 'ok', errorCode: '', data: '{}' }] };
 

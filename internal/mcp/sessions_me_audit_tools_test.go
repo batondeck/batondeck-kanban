@@ -75,11 +75,11 @@ func TestDisconnectAgentEndsTheSession(t *testing.T) {
 		if got := sessionKeys(ada.call("list_agent_sessions", map[string]any{})); !slices.Equal(got, []string{"u-ada::agent-ada"}) {
 			t.Fatalf("ada's own sessions: %v", got)
 		}
-		if got := sessionKeys(root.call("list_agent_sessions", map[string]any{"all": true})); !slices.Equal(got, []string{"u-ada::agent-ada", "u-grace::id:u-grace"}) {
+		if got := sessionKeys(root.call("list_agent_sessions", map[string]any{"all": true})); !slices.Equal(got, []string{"u-ada::agent-ada", "u-grace::harness"}) {
 			t.Fatalf("every session, as the admin: %v", got)
 		}
 		wantCode(t, ada.cs, "list_agent_sessions", map[string]any{"all": true}, "FORBIDDEN")
-		wantCode(t, ada.cs, "disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "id:u-grace"}, "FORBIDDEN")
+		wantCode(t, ada.cs, "disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "harness"}, "FORBIDDEN")
 		wantCode(t, ada.cs, "disconnect_agent", map[string]any{"identityId": "u-nobody", "agentId": "x"}, "FORBIDDEN")
 		wantCode(t, ada.cs, "disconnect_agent", map[string]any{"identityId": "u-ada", "agentId": "never-connected"}, "NOT_FOUND")
 		wantCode(t, ada.cs, "disconnect_agent", map[string]any{"identityId": "u-ada", "agentId": ""}, "VALIDATION")
@@ -87,7 +87,7 @@ func TestDisconnectAgentEndsTheSession(t *testing.T) {
 			t.Fatalf("grace's session before the disconnect: %v", err)
 		}
 
-		if got := root.call("disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "id:u-grace"}); got["disconnected"] != true {
+		if got := root.call("disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "harness"}); got["disconnected"] != true {
 			t.Fatalf("disconnect_agent answered %v", got)
 		}
 		if code, body := postOnSession(t, h.URL(), stackGrace, grace.ID()); code != http.StatusNotFound || !strings.Contains(body, "session not found") {
@@ -100,19 +100,19 @@ func TestDisconnectAgentEndsTheSession(t *testing.T) {
 		if got := sessionKeys(ada.call("list_agent_sessions", map[string]any{})); !slices.Equal(got, []string{"u-ada::agent-ada"}) {
 			t.Fatalf("ada's session after grace's disconnect: %v", got)
 		}
-		if got := sessionKeys(root.call("list_agent_sessions", map[string]any{"all": true})); slices.Contains(got, "u-grace::id:u-grace") {
+		if got := sessionKeys(root.call("list_agent_sessions", map[string]any{"all": true})); slices.Contains(got, "u-grace::harness") {
 			t.Fatalf("grace's row survived the disconnect: %v", got)
 		}
 
 		// Not sticky: grace initialises again and is served.
 		again := &caller{t: t, cs: h.Connect(t, stackGrace), called: map[string]int{}}
-		if got := sessionKeys(again.call("list_agent_sessions", map[string]any{})); !slices.Equal(got, []string{"u-grace::id:u-grace"}) {
+		if got := sessionKeys(again.call("list_agent_sessions", map[string]any{})); !slices.Equal(got, []string{"u-grace::harness"}) {
 			t.Fatalf("grace after initialising again: %v", got)
 		}
 		// Its own session, from inside it, raw: the answer arrives whole, then the session ends.
 		// (go-sdk's client is not asked: with retries off it closes itself the moment its standalone
 		// GET stream ends, racing the answer it has already been sent.)
-		code, body := rawCall(t, h.URL(), stackGrace, again.cs.ID(), `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"disconnect_agent","arguments":{"identityId":"u-grace","agentId":"id:u-grace"}}}`)
+		code, body := rawCall(t, h.URL(), stackGrace, again.cs.ID(), `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"disconnect_agent","arguments":{"identityId":"u-grace","agentId":"harness"}}}`)
 		if code != http.StatusOK || !strings.Contains(body, `"disconnected":true`) {
 			t.Fatalf("a self-disconnect answered %d %q, want 200 with disconnected true", code, body)
 		}
@@ -132,7 +132,7 @@ func TestDisconnectAgentEndsTheSession(t *testing.T) {
 		for _, r := range root.call("list_audit_log", map[string]any{"action": "agent.disconnected"})["entries"].([]any) {
 			rows = append(rows, str(obj(r)["actor"])+">"+str(obj(r)["subject"])+" "+str(obj(r)["data"]))
 		}
-		if want := []string{`u-grace>u-grace {"agentId":"id:u-grace"}`, `u-ada>u-grace {"agentId":"id:u-grace"}`}; !slices.Equal(rows, want) {
+		if want := []string{`u-grace>u-grace {"agentId":"harness"}`, `u-ada>u-grace {"agentId":"harness"}`}; !slices.Equal(rows, want) {
 			t.Fatalf("agent.disconnected rows %v, want %v (newest first; the refused calls wrote none)", rows, want)
 		}
 	})

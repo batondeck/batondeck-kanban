@@ -106,7 +106,7 @@ func TestContextTools(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
 	ada, admin := h.Connect(t, bearerAda), h.Connect(t, bearerAdmin)
-	callers := map[*sdk.ClientSession]domain.Caller{ada: toolsResolver().Callers[bearerAda], admin: toolsResolver().Callers[bearerAdmin]}
+	callers := map[*sdk.ClientSession]domain.Caller{ada: atService(toolsResolver().Callers[bearerAda]), admin: atService(toolsResolver().Callers[bearerAdmin])}
 	cases := contextCases()
 	if len(cases) != 10 {
 		t.Fatalf("%d cases, want the 10 context tools", len(cases))
