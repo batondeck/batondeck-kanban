@@ -7152,30 +7152,6 @@
               "string"
             ]
           },
-          "policy": {
-            "typeSet": [
-              "object"
-            ],
-            "properties": {
-              "autoReviewCycle": {
-                "typeSet": [
-                  "boolean"
-                ]
-              },
-              "openPrForReview": {
-                "typeSet": [
-                  "boolean"
-                ]
-              },
-              "reviewerAgent": {
-                "typeSet": [
-                  "null",
-                  "string"
-                ]
-              }
-            },
-            "additionalProperties": false
-          },
           "projectId": {
             "typeSet": [
               "string"
@@ -7186,11 +7162,6 @@
               "object"
             ],
             "properties": {
-              "fallbackBroadcast": {
-                "typeSet": [
-                  "boolean"
-                ]
-              },
               "mode": {
                 "typeSet": [
                   "string"
@@ -29171,40 +29142,11 @@
                   "string"
                 ]
               },
-              "policy": {
-                "typeSet": [
-                  "object"
-                ],
-                "properties": {
-                  "autoReviewCycle": {
-                    "typeSet": [
-                      "boolean"
-                    ]
-                  },
-                  "openPrForReview": {
-                    "typeSet": [
-                      "boolean"
-                    ]
-                  },
-                  "reviewerAgent": {
-                    "typeSet": [
-                      "null",
-                      "string"
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              },
               "routing": {
                 "typeSet": [
                   "object"
                 ],
                 "properties": {
-                  "fallbackBroadcast": {
-                    "typeSet": [
-                      "boolean"
-                    ]
-                  },
                   "mode": {
                     "typeSet": [
                       "string"

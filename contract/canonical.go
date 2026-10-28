@@ -396,7 +396,7 @@ func Marshal(v any) ([]byte, error) {
 // Deltas are every departure from conductor's surface, each one a reviewable line.
 type Deltas struct {
 	RemovedTools      []string      `json:"removedTools"`
-	RemovedProps      []string      `json:"removedProps"`
+	RemovedProps      []RemovedProp `json:"removedProps"`
 	RemovedEnumValues []string      `json:"removedEnumValues"`
 	RenamedEnumValues []RenamedEnum `json:"renamedEnumValues"`
 	AddedEnumValues   []AddedEnum   `json:"addedEnumValues"`
@@ -412,6 +412,36 @@ type ErrorDelta struct {
 	Conductor string `json:"conductor"`
 	Go        string `json:"go"`
 	Why       string `json:"why"`
+}
+
+// RemovedProp removes the property at Pointer (…/properties/<name>). In deltas.json it is the bare
+// pointer, or {pointer, why} for a property this server served and then retired, where Why says which
+// change and whose decision took it out (P-310's on-call policy settings, owner decision 6).
+type RemovedProp struct {
+	Pointer string `json:"pointer"`
+	Why     string `json:"why,omitzero"`
+}
+
+// UnmarshalJSON reads either form; the object form must say why.
+func (r *RemovedProp) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, &r.Pointer); err == nil {
+		r.Why = ""
+		return nil
+	}
+	var o struct {
+		Pointer string `json:"pointer"`
+		Why     string `json:"why"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&o); err != nil {
+		return fmt.Errorf("removedProps: an entry is a pointer or {pointer, why}: %w", err)
+	}
+	if o.Pointer == "" || strings.TrimSpace(o.Why) == "" {
+		return fmt.Errorf("removedProps: %q: an object entry names its pointer and says why", o.Pointer)
+	}
+	r.Pointer, r.Why = o.Pointer, o.Why
+	return nil
 }
 
 // RenamedEnum renames the enum value at Pointer (…/enum/<value>) to To, keeping the enum's place
@@ -479,7 +509,8 @@ func Apply(s Surface, d Deltas) error {
 		}
 		delete(s.Tools, name)
 	}
-	for _, p := range d.RemovedProps {
+	for _, rp := range d.RemovedProps {
+		p := rp.Pointer
 		parent, name, err := s.propParent(p)
 		if err != nil {
 			return fmt.Errorf("removedProps: %w", err)

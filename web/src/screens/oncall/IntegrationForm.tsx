@@ -35,7 +35,7 @@ import type {
   RoutingMode,
 } from '../../types.js';
 import { Cluster, Note, Panel, Stack } from '../../ui.js';
-import { ChainField, FieldGroup, ListField, MapEditor, RadioRow, TextField, Toggle } from './fields.js';
+import { ChainField, FieldGroup, ListField, MapEditor, RadioRow, TextField } from './fields.js';
 
 const PRIORITIES: readonly Priority[] = ['low', 'normal', 'high', 'urgent'];
 const ALERT_STATUSES: readonly AlertStatus[] = ['firing', 'resolved', 'test'];
@@ -53,16 +53,12 @@ export interface FormState {
   jwtJwksUrl: string;
   routingMode: RoutingMode;
   onCallAgent: string;
-  fallbackBroadcast: boolean;
   pdUserMap: Record<string, string>;
   lifecycle: LifecycleMode;
   severityMap: Record<string, string>;
   labels: string[] | undefined;
   annotationAllowlist: string[] | undefined;
   titleTemplate: string;
-  openPrForReview: boolean;
-  autoReviewCycle: boolean;
-  reviewerAgent: string;
   ratePerMin: string;
   payloadCapKb: string;
   extract: NonNullable<IntegrationMappingBody['extract']>;
@@ -86,16 +82,12 @@ export function blankForm(source: OncallSource | undefined): FormState {
     jwtJwksUrl: '',
     routingMode: 'broadcast',
     onCallAgent: '',
-    fallbackBroadcast: false,
     pdUserMap: {},
     lifecycle: 'correlate',
     severityMap: {},
     labels: undefined,
     annotationAllowlist: undefined,
     titleTemplate: '',
-    openPrForReview: false,
-    autoReviewCycle: false,
-    reviewerAgent: '',
     ratePerMin: '',
     payloadCapKb: '',
     extract: {},
@@ -118,16 +110,12 @@ export function formFrom(i: Integration): FormState {
     authMode: i.auth.mode,
     routingMode: r.mode ?? 'broadcast',
     onCallAgent: r.onCallAgent ?? '',
-    fallbackBroadcast: r.fallbackBroadcast ?? false,
     pdUserMap: r.pdUserMap ?? {},
     lifecycle: i.lifecycle,
     severityMap: (m.severityMap ?? {}) as Record<string, string>,
     labels: m.labels,
     annotationAllowlist: m.annotationAllowlist,
     titleTemplate: m.titleTemplate ?? '',
-    openPrForReview: Boolean((i.policy as { openPrForReview?: boolean }).openPrForReview),
-    autoReviewCycle: Boolean((i.policy as { autoReviewCycle?: boolean }).autoReviewCycle),
-    reviewerAgent: (i.policy as { reviewerAgent?: string | null }).reviewerAgent ?? '',
     ratePerMin: String(i.limits.ratePerMin),
     payloadCapKb: String(i.limits.payloadCapKb),
     extract: m.extract ?? {},
@@ -188,16 +176,10 @@ const commonBody = (f: FormState, isWebhook: boolean) => ({
   routing: {
     mode: f.routingMode,
     ...(trimmed(f.onCallAgent) ? { onCallAgent: f.onCallAgent.trim() } : {}),
-    ...(f.fallbackBroadcast ? { fallbackBroadcast: true } : {}),
     ...(someOf(f.pdUserMap) ? { pdUserMap: f.pdUserMap } : {}),
   },
   ...(mappingOf(f, isWebhook) ? { mapping: mappingOf(f, isWebhook) } : {}),
   lifecycle: f.lifecycle,
-  policy: {
-    ...(f.openPrForReview ? { openPrForReview: true } : {}),
-    ...(f.autoReviewCycle ? { autoReviewCycle: true } : {}),
-    ...(trimmed(f.reviewerAgent) ? { reviewerAgent: f.reviewerAgent.trim() } : {}),
-  },
   ...(trimmed(f.ratePerMin) || trimmed(f.payloadCapKb)
     ? {
         limits: {
@@ -423,15 +405,6 @@ export function IntegrationForm({
               hint="The agent's display name — the same namespace as a ticket assignee."
             />
           )}
-          {form.routingMode !== 'broadcast' && (
-            <Toggle
-              id="oc-fallback"
-              label="Broadcast when the named agent cannot be reached"
-              checked={form.fallbackBroadcast}
-              onChange={(fallbackBroadcast) => set({ fallbackBroadcast })}
-              hint="Never fires when the agent is deliberately disabled — only when it is unreachable."
-            />
-          )}
           {form.routingMode === 'upstream' && (
             <MapEditor
               id="oc-pdmap"
@@ -440,7 +413,7 @@ export function IntegrationForm({
               onChange={(pdUserMap) => set({ pdUserMap })}
               keyPlaceholder="PXXXXXX"
               valuePlaceholder="claude-oncall"
-              hint="A miss falls back to broadcast (or to nobody, if the toggle above is off)."
+              hint="A miss falls back to broadcast."
             />
           )}
         </Stack>
@@ -655,7 +628,7 @@ export function IntegrationForm({
       )}
 
       <Panel
-        title="Ticket shaping, policy and limits"
+        title="Ticket shaping and limits"
         pad
         right={
           <button className="btn secondary" type="button" onClick={() => setShowAdvanced((v) => !v)}>
@@ -665,8 +638,7 @@ export function IntegrationForm({
       >
         {!showAdvanced ? (
           <Note>
-            Severity → priority, stamped labels, the annotation allowlist, the PR/review policy and
-            the rate limits. Defaults are sensible; open this when you need to change one.
+            Severity → priority, stamped labels, the annotation allowlist and the rate limits. Defaults are sensible; open this when you need to change one.
           </Note>
         ) : (
           <Stack gap={12}>
@@ -700,26 +672,6 @@ export function IntegrationForm({
               value={form.titleTemplate}
               onChange={(titleTemplate) => set({ titleTemplate })}
               hint="Blank → the alert's own title."
-            />
-            <Toggle
-              id="oc-pr"
-              label="Ask the agent to open a PR and move the ticket to REVIEW"
-              checked={form.openPrForReview}
-              onChange={(openPrForReview) => set({ openPrForReview })}
-              hint="A human still merges. Nothing auto-merges and nothing auto-releases."
-            />
-            <Toggle
-              id="oc-review"
-              label="Run a review cycle automatically"
-              checked={form.autoReviewCycle}
-              onChange={(autoReviewCycle) => set({ autoReviewCycle })}
-            />
-            <TextField
-              id="oc-reviewer"
-              label="Reviewer agent"
-              value={form.reviewerAgent}
-              onChange={(reviewerAgent) => set({ reviewerAgent })}
-              placeholder="blank → the project default"
             />
             <Cluster gap={8} wrap>
               <TextField

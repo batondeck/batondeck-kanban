@@ -10,8 +10,9 @@ import (
 type Comments interface {
 	// AddComment is add_comment.
 	// Tier: write. Resolves the body's @mentions against the project's members. Event:
-	// comment.added. Audit: none. Doorbell: none, and it rings no master either (ADR-0004 "Comments
-	// ring nobody"). Replays on idempotencyKey.
+	// comment.added. Audit: none. Doorbell: none (ADR-0004 "Comments ring nobody"), but for a
+	// mention: assigned to each mentioned member, other than the caller, with a live worker session
+	// on this device (owner decision 5, P-310). It rings no master. Replays on idempotencyKey.
 	AddComment(ctx context.Context, caller domain.Caller, req AddCommentReq) (AddCommentResp, error)
 
 	// ListComments is list_comments.

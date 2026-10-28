@@ -337,9 +337,6 @@ func (s oncallSvc) CreateIntegration(ctx context.Context, caller domain.Caller, 
 		if in.Routing, err = marshalObject(req.Routing); err != nil {
 			return Integration{}, err
 		}
-		if in.Policy, err = marshalObject(req.Policy); err != nil {
-			return Integration{}, err
-		}
 		if in.Limits, err = limitsJSON(req.Limits, IntegrationLimits{RatePerMin: DefaultRatePerMin, PayloadCapKb: DefaultPayloadCapKb}); err != nil {
 			return Integration{}, err
 		}
@@ -373,7 +370,7 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 	}
 	p := req.Patch
 	var routing *IntegrationRouting
-	if p.Routing.Mode != "" || p.Routing.OnCallAgent.Set || p.Routing.FallbackBroadcast || p.Routing.PDUserMap != nil {
+	if p.Routing.Mode != "" || p.Routing.OnCallAgent.Set || p.Routing.PDUserMap != nil {
 		routing = &p.Routing
 	}
 	if err := checkIntegrationFields(p.Name, p.Lifecycle, routing, p.Limits); err != nil {
@@ -440,11 +437,6 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 		}
 		if routing != nil {
 			if patch.Routing, err = marshalObject(p.Routing); err != nil {
-				return Integration{}, err
-			}
-		}
-		if p.Policy != (IntegrationPolicy{}) {
-			if patch.Policy, err = marshalObject(p.Policy); err != nil {
 				return Integration{}, err
 			}
 		}
