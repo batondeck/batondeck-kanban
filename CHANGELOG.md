@@ -89,6 +89,12 @@ this section's headings in CHANGELOG.md, are all part of it.
   patch inside mermaid's own `^3.3.3`: `web/package-lock.json` moves that one entry, no other
   package changes, and `web/dist` is rebuilt. The remaining advisories are dev-only (vite,
   vitest, undici, source-map-js) or need the breaking mermaid 12 (katex, low), and stay open.
+- `user passwd LOGIN` ends every browser session of that user (P-51). A reset after a leaked
+  password left the old sessions signed in for the rest of their 7 days, so the reset did not lock
+  out whoever held them. Their requests are 401 from then on, and an open `/api/stream` closes at
+  its next ping (20 s by default). Other users' sessions stay. API and OAuth tokens are separate
+  credentials and also stay: `token revoke ID` ends one, `user disable` ends them all. The command
+  now says how many sessions it ended and points at `token list --user`.
 - A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
   ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
   mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept

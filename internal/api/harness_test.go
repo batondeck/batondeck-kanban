@@ -43,7 +43,7 @@ func newHarness(t *testing.T, build func(st *memstore.Store) Options) *harness {
 	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Params: fastArgon}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st, Params: fastArgon}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	return mountHarness(t, a, build(st))
 }
 
@@ -58,7 +58,7 @@ func newStackHarness(t *testing.T, s *servicetest.Stack, o Options) *harness {
 func newStackHarnessAt(t *testing.T, s *servicetest.Stack, o Options, now func() time.Time) *harness {
 	t.Helper()
 	o.Services, o.Bus = s.Services, s.Bus
-	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store, Now: now}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Sessions: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store, Now: now}
 	return mountHarness(t, a, o)
 }
 
@@ -133,6 +133,21 @@ func (h *harness) login(login, password string) {
 	if h.cookie == nil || h.csrf == "" {
 		h.t.Fatal("login set no session or CSRF cookie")
 	}
+}
+
+// loginStatus is a sign-in that only answers its status: it keeps no cookie.
+func (h *harness) loginStatus(login, password string) int {
+	h.t.Helper()
+	form := url.Values{"login": {login}, "password": {password}}
+	req, _ := http.NewRequest("POST", h.srv.URL+"/api/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
 
 // request is a request of the signed-in user (none when cookie is nil: a bearer caller); header entries override the defaults (an empty

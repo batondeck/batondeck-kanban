@@ -72,7 +72,7 @@ type wakeTuning struct {
 
 // composeWith is compose with the directory's tuning given.
 func composeWith(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, wt wakeTuning) (*app, error) {
-	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	var as *oauth.Server
 	if publicURL != "" {
 		var err error
