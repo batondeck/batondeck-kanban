@@ -125,8 +125,8 @@ func TestInitializeAnswersTheSurface(t *testing.T) {
 	}
 	first := touches[0]
 	req := first.Req.(service.TouchAgentSessionReq)
-	if len(touches) != 1 || first.Caller.Identity != "u-ada" || req.SessionKey != "u-ada::id:u-ada" || req.ClientName != "harness" ||
-		req.ClientVersion != "0.0.1" || req.AgentName != "harness" || req.Kind != "service_account" || req.Tool != "" {
+	if len(touches) != 1 || first.Caller.Identity != "u-ada" || req.SessionKey != "u-ada::harness" || req.ClientName != "harness" ||
+		req.ClientVersion != "0.0.1" || req.AgentName != "harness" || req.Kind != "api_token" || req.Tool != "" {
 		t.Errorf("touches = %+v; want one, the connection of client harness 0.0.1 as u-ada (no list or ping counts as one)", touches)
 	}
 }
@@ -381,8 +381,8 @@ func TestAgentSessionRemovedWithItsLastMCPSession(t *testing.T) {
 	}
 	_ = two.Close()
 	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
-	if r := calls(f, "Sessions.RemoveAgentSession")[0].Req.(service.RemoveAgentSessionReq); r.SessionKey != "u-ada::id:u-ada" {
-		t.Errorf("removed %q, want u-ada::id:u-ada", r.SessionKey)
+	if r := calls(f, "Sessions.RemoveAgentSession")[0].Req.(service.RemoveAgentSessionReq); r.SessionKey != "u-ada::harness" {
+		t.Errorf("removed %q, want u-ada::harness", r.SessionKey)
 	}
 }
 
@@ -451,12 +451,12 @@ func TestSessionsCollectedWhenIdle(t *testing.T) {
 	for _, c := range calls(f, "Sessions.RemoveAgentSession") {
 		removed[c.Req.(service.RemoveAgentSessionReq).SessionKey] = true
 	}
-	if !removed["u-ada::id:u-ada"] || removed["u-grace::id:u-grace"] {
-		t.Errorf("removed %v, want the idle session's u-ada::id:u-ada only", removed)
+	if !removed["u-ada::harness"] || removed["u-grace::harness"] {
+		t.Errorf("removed %v, want the idle session's u-ada::harness only", removed)
 	}
 	refreshed := 0
 	for _, c := range calls(f, "Sessions.TouchAgentSession")[start:] {
-		if r := c.Req.(service.TouchAgentSessionReq); r.SessionKey == "u-grace::id:u-grace" && r.Tool == "whoami" {
+		if r := c.Req.(service.TouchAgentSessionReq); r.SessionKey == "u-grace::harness" && r.Tool == "whoami" {
 			refreshed++
 		}
 	}

@@ -41,7 +41,7 @@ func TestSettingsCLITokenAuthenticatesMCPUntilRevoked(t *testing.T) {
 		if code, body := j.api(alice, "GET", "/api/me/cli-tokens", ""); code != http.StatusOK || !strings.Contains(body, `"id":"`+minted.ID+`"`) || strings.Contains(body, secret) {
 			t.Fatalf("list: %d %s (it must name the token and never carry its secret)", code, body)
 		}
-		if code, body := j.api(bob, "GET", "/api/me/cli-tokens", ""); code != http.StatusOK || strings.Contains(body, minted.ID) || !strings.Contains(body, `"label":"join"`) {
+		if code, body := j.api(bob, "GET", "/api/me/cli-tokens", ""); code != http.StatusOK || strings.Contains(body, minted.ID) || !strings.Contains(body, `"label":"join-bob"`) {
 			t.Fatalf("bob's list: %d %q, want his own token and none of alice's", code, body)
 		}
 

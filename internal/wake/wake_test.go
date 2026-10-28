@@ -94,12 +94,12 @@ func TestCoalescerCapHighestAndForget(t *testing.T) {
 // The frame names its board since P-191 (owner 2026-10-24: "add boardId to the doorbell").
 func TestFrameBytes(t *testing.T) {
 	f := Frame{Kind: KindAssigned, Cursor: 42, ProjectID: "P-1", BoardID: "B-1"}
-	b := string(frameBytes("S-1", "", f))
+	b := string(frameBytes("S-1", "", f, ""))
 	want := `{"type":"user","session_id":"S-1","message":{"role":"user","content":"batondeck: work was assigned to you on P-1 (cursor 42); call claim_next {projectId: P-1, boardId: B-1}, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":42,\"projectId\":\"P-1\",\"boardId\":\"B-1\"}"}}` + "\n"
 	if b != want {
 		t.Fatalf("frame\n got %q\nwant %q", b, want)
 	}
-	if a := string(frameBytes("S-1", "tok", f)); a != `{"type":"auth","token":"tok"}`+"\n"+want {
+	if a := string(frameBytes("S-1", "tok", f, "")); a != `{"type":"auth","token":"tok"}`+"\n"+want {
 		t.Fatalf("with a token %q", a)
 	}
 	for _, bad := range []string{"priority", "from", "taskId", "title"} {
@@ -191,6 +191,47 @@ func TestFrameBoards(t *testing.T) {
 	} {
 		if line := c.f.Line(); !strings.Contains(line, c.want) {
 			t.Fatalf("line %q\nwant it to hold %q", line, c.want)
+		}
+	}
+}
+
+// P-276: a worker registered under an agent label hears its assigned doorbell as claim_next with
+// assignee: <label>, then without it (work routed to its account); its broadcast and a master's
+// changed are Line's. The positive control: label "" is Line, word for word.
+func TestLineForALabelledWorker(t *testing.T) {
+	one := Frame{Kind: KindAssigned, Cursor: 7, ProjectID: "P-1", BoardID: "B-1"}
+	for _, c := range []struct {
+		f     Frame
+		label string
+		want  string
+	}{
+		{one, "agent-a", `; call claim_next {projectId: P-1, boardId: B-1, assignee: "agent-a"}, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindAssigned, ProjectID: "P-1", BoardIDs: []string{"B-a", "B-b"}}, "my agent", `; call claim_next {projectId: P-1, boardId, assignee: "my agent"} for each boardId of B-a, B-b, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindAssigned, ProjectID: "P-1"}, "agent-a", `; call list_boards {projectId: P-1}, then claim_next {projectId, boardId, assignee: "agent-a"} on each board, then claim_next without assignee, then list_notifications.`},
+		{Frame{Kind: KindBroadcast, ProjectID: "P-1", BoardID: "B-1"}, "agent-a", "; call claim_next {projectId: P-1, boardId: B-1}, then list_notifications."},
+		{Frame{Kind: KindChanged, ProjectID: "P-1", BoardID: "B-1"}, "agent-a", "; call next_task {projectId: P-1, boardId: B-1, includeInbox: true}, then list_notifications."},
+	} {
+		if line := c.f.LineFor(c.label); !strings.Contains(line, c.want) {
+			t.Fatalf("line %q\nwant it to hold %q", line, c.want)
+		}
+	}
+	if one.LineFor("") != one.Line() || strings.Contains(one.Line(), "assignee") {
+		t.Fatalf("label \"\" is not Line: %q vs %q", one.LineFor(""), one.Line())
+	}
+	if got := string(frameBytes("S-1", "", one, "agent-a")); !strings.Contains(got, `assignee: \"agent-a\"`) {
+		t.Fatalf("frameBytes does not carry the label's line: %s", got)
+	}
+	// The entry's label: a worker's agent, never a master's or a derived id:<identity>.
+	for _, c := range []struct {
+		e    entry
+		want string
+	}{
+		{entry{role: "worker", agent: "agent-a"}, "agent-a"},
+		{entry{role: "worker", agent: "id:U-1"}, ""},
+		{entry{role: "master", agent: "agent-a"}, ""},
+	} {
+		if got := c.e.label(); got != c.want {
+			t.Fatalf("label of %+v = %q, want %q", c.e, got, c.want)
 		}
 	}
 }

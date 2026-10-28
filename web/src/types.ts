@@ -245,16 +245,11 @@ export interface AgentSession {
   agentName: string;
   identityId: string;
   identityDisplay?: string | null; // T-409: human label for the OWNER column; null = no account row
-  kind: 'service_account' | 'oauth_user' | 'dev';
+  kind: 'api_token' | 'oauth_user' | 'service_account' | 'dev'; // service_account and dev: rows written before P-257
   clientName?: string;
   clientVersion?: string;
   firstSeenAt: string;
-  lastSeenAt: string; // moves on a TOOL CALL only — see wakeAttachedAt
-  /** T-558: when this session last held live wake credentials, i.e. was attached to the doorbell bus.
-   * The sibling `lastSeenAt` moves only on a tool call, so an agent idling on its Pub/Sub subscription
-   * has a fresh value HERE and a stale one there — which is exactly the case presence used to get
-   * wrong. ABSENT = not attached (row predates it, wake is off, or it never listened). */
-  wakeAttachedAt?: string;
+  lastSeenAt: string; // the session's last MCP request; a `device:` row's last presence frame
   sessionCount: number;
   requestCount: number;
   toolCounts: Record<string, number>;

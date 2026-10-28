@@ -187,8 +187,15 @@ type AgentSession struct {
 // SessionKind is how an agent session authenticated.
 type SessionKind string
 
-// SessionKindValues are SessionKind's values, in the schema's order.
-var SessionKindValues = []SessionKind{"dev", "oauth_user", "service_account"}
+// SessionKindValues are SessionKind's values: conductor's three, then api_token (P-257).
+var SessionKindValues = []SessionKind{"dev", "oauth_user", "service_account", "api_token"}
+
+// The session kinds the MCP transport writes (D6): an OAuth access token's, an API token's. "dev"
+// and "service_account" are conductor's, kept so a stored row of either still reads.
+const (
+	SessionKindOAuth    SessionKind = "oauth_user"
+	SessionKindAPIToken SessionKind = "api_token"
+)
 
 // DisconnectAgentReq is disconnect_agent's input.
 type DisconnectAgentReq struct {

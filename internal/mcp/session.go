@@ -113,9 +113,14 @@ func (t *sessionTable) leave(key string) (last bool) {
 	return true
 }
 
-// sessionKind is how a session's caller authenticated. R0's only bearer is a CLI API token.
-// TODO(R0.13): oauth_user for an OAuth access token.
-const sessionKind service.SessionKind = "service_account"
+// sessionKind is how a session's caller authenticated (D6): an OAuth access token, else an API
+// token, the only other bearer /mcp takes.
+func sessionKind(c domain.Caller) service.SessionKind {
+	if c.Via == domain.ViaOAuth {
+		return service.SessionKindOAuth
+	}
+	return service.SessionKindAPIToken
+}
 
 // sessionMiddleware keeps the agent_sessions row of each MCP session: written at initialize (a
 // session over the bound is refused there, and go-sdk drops a session whose initialize failed),
@@ -123,7 +128,9 @@ const sessionKind service.SessionKind = "service_account"
 // collection, DELETE or close, when that was the last live MCP session of its agent. A bookkeeping
 // failure is logged and never fails the request.
 //
-// The row is keyed by (identity, agent), not by MCP session: one agent may hold several sessions,
+// The row is keyed by (identity, agent), not by MCP session: the agent is Caller.Agent (the token's
+// label, the OAuth client's name, else the session's clientInfo.name), so two clients on one token
+// with different names are two rows, and one agent may hold several sessions,
 // and service.Sessions reads a touch with no tool as a connection (its session count grows), so
 // only initialize sends one.
 func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
@@ -139,7 +146,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return s.initialize(ctx, ss, caller, method, req, next)
 		case method == "tools/call":
 			touch := service.TouchAgentSessionReq{SessionKey: service.SessionKey(caller.Identity, service.AgentID(caller)), AgentName: agentName(caller, ss.InitializeParams()),
-				Kind: sessionKind, Tool: toolName(req)}
+				Kind: sessionKind(caller), Tool: toolName(req)}
 			if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
 				s.log.Printf("mcp: touch agent session %s failed: %+v", touch.SessionKey, err)
 			}
@@ -167,7 +174,7 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 	}
 	params, _ := req.GetParams().(*mcp.InitializeParams)
 	key := service.SessionKey(caller.Identity, service.AgentID(caller))
-	touch := service.TouchAgentSessionReq{SessionKey: key, AgentName: agentName(caller, params), Kind: sessionKind}
+	touch := service.TouchAgentSessionReq{SessionKey: key, AgentName: agentName(caller, params), Kind: sessionKind(caller), OAuthClientID: caller.OAuthClientID}
 	if params != nil && params.ClientInfo != nil {
 		touch.ClientName, touch.ClientVersion = params.ClientInfo.Name, params.ClientInfo.Version
 	}

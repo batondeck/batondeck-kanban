@@ -115,7 +115,7 @@ func seedDirectory(t *testing.T) (*countedSQLite, person, person, person, string
 		if err != nil {
 			t.Fatal(err)
 		}
-		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "test", time.Hour)
+		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "test-"+login, time.Hour) // a label is one user's
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -462,6 +462,7 @@ func (s *dirServer) lastChange(t *testing.T) int64 {
 // assignment by someone else writes EXACTLY the R3.1 frame into its socket within 1 s of the commit:
 // the auth line from the key file, then one user frame naming the registry's sessionId, whose content
 // is one plain line and the contentless {kind, cursor, projectId, boardId} (boardId since P-191).
+// The line names claim_next with the worker's agent label as assignee (P-276).
 func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 	// Serial: it times the doorbell against a 1 s bound; parallel runs' load made it miss (review rev289-301).
 	s := startDirectory(t, nil)
@@ -490,8 +491,8 @@ func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
 		t.Fatalf("the doorbell came %v after the commit, want under 1s", d)
 	}
 	want := fmt.Sprintf(`{"type":"auth","token":"peer-token-xyz"}`+"\n"+
-		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next {projectId: %s, boardId: %s}, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\",\"boardId\":\"%s\"}"}}`+"\n",
-		c.session, s.project, cur, s.project, s.board, cur, s.project, s.board)
+		`{"type":"user","session_id":%q,"message":{"role":"user","content":"batondeck: work was assigned to you on %s (cursor %d); call claim_next {projectId: %s, boardId: %s, assignee: \"%s\"}, then claim_next without assignee, then list_notifications.\n{\"kind\":\"assigned\",\"cursor\":%d,\"projectId\":\"%s\",\"boardId\":\"%s\"}"}}`+"\n",
+		c.session, s.project, cur, s.project, s.board, rows[0].AgentID, cur, s.project, s.board)
 	if string(b) != want {
 		t.Fatalf("the doorbell bytes\n got %q\nwant %q", b, want)
 	}

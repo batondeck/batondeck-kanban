@@ -14032,6 +14032,7 @@
                     "string"
                   ],
                   "enum": [
+                    "api_token",
                     "dev",
                     "oauth_user",
                     "service_account"

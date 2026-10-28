@@ -233,7 +233,7 @@ func benchIdle(t *testing.T, engine string) []metric {
 		if err != nil {
 			t.Fatal(err)
 		}
-		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "bench", time.Hour)
+		tok, info, err := (&auth.TokenService{Store: st}).Create(ctx, u.ID, "", "bench-"+login, time.Hour) // a label is one user's
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -86,6 +86,35 @@ this section's headings in CHANGELOG.md, are all part of it.
   web UI), a name that is no member and a non-member ring nobody and do not error, and masters stay
   silent. A comment without a mention still rings nobody.
 
+- Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
+  `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
+  `created_by_agent` and every event's agent stayed empty and `agent_sessions` held one row per
+  user. The agent is now the API token's label (`token create --label`), else the OAuth client's
+  registered `client_name`, else the MCP initialize `clientInfo.name`, with control characters
+  dropped, trimmed and cut to 64 characters. The default label `cli` names no agent, so two clients
+  on one default token are two `agent_sessions` rows by their client names; two on one labelled
+  token are that label's one row. The row's `kind` says `api_token` or `oauth_user` (a new enum
+  value, `contract/deltas.json`) instead of the hard-coded `service_account`. No migration:
+  `agent_sessions` was keyed by (identity, agent) already. A claim belongs to its agent: the same
+  identity's other agent claiming a held task is `CONFLICT_LOCKED`, and the same agent's second
+  session still shares the lease (P-278); a lease taken before the upgrade has no agent, so its
+  agent's re-claim is `CONFLICT_LOCKED` until it expires. A follow-up on a held task now targets the
+  holding agent (the claim's `agentId`, conductor's resolveTarget) rather than its account; the
+  account's own browser session still acks it, another agent of the account does not. A label is
+  one user's: `token create` and `POST /api/me/cli-tokens` refuse with `VALIDATION` a label another
+  user's token has ever carried, revoked or expired included, so the first user to mint a label keeps
+  it. Below master, an explicit `assignee` on `claim_next` or `next_task`, or a `handoff_task`
+  `toAgent`, naming a label a live token carries, or one another user's token has ever carried
+  (so a lapsed owner's queued work stays hers, P-338), is `FORBIDDEN` unless the caller is on a
+  token carrying it and no other user's token has ever carried it (P-277); an OAuth `client_name`
+  or a `clientInfo.name` never holds a label. Two users minting one new label at the same instant
+  can both land (the check is a read before the insert); the label then stays `FORBIDDEN` to both
+  below master, and revoking either token does not free it, so each picks another label. A master
+  may name any label, and `claim_task {taskId}` does not check the assignee. A label-registered
+  worker's assigned doorbell line names
+  `claim_next {projectId, boardId, assignee: "<label>"}` (P-276). The Agents screen counts a session
+  online when the device directory lists it or its last request is recent, not by
+  `wakeAttachedAt`, which nothing writes, and its Auth column says `api token` or `oauth`.
 - Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
   Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
   now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every

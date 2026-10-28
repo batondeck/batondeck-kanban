@@ -47,8 +47,9 @@ type Service struct {
 	// access token issued for any other is refused.
 	OAuthResource string
 
-	mu    sync.Mutex
-	cache map[string]accountEntry
+	mu          sync.Mutex
+	cache       map[string]accountEntry
+	clientNames map[string]string // OAuth client id -> its agent name (oauthClientName)
 }
 
 type accountEntry struct {
@@ -132,5 +133,8 @@ func (s *Service) ResolveCaller(ctx context.Context, bearer string) (domain.Call
 	if !e.usable {
 		return domain.Caller{}, errUnauthenticated()
 	}
-	return callerFor(row.IdentityID, e), nil
+	c := callerFor(row.IdentityID, e)
+	c.Via, c.Agent = domain.ViaAPIToken, domain.TokenAgent(row.Label) // audit B1
+	c.Labelled = c.Agent != ""
+	return c, nil
 }

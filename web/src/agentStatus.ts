@@ -6,16 +6,13 @@
  *   offline   (red)    — no recent activity (session went stale)
  *   connecting(blue)   — a session just appeared and is still spinning up
  *
- * Liveness has TWO independent inputs and neither subsumes the other:
- *   - `lastSeenAt`     — moves on an MCP TOOL CALL (including the worker's ~50s long-poll).
- *   - `wakeAttachedAt` — moves when the agent MINTS WAKE CREDENTIALS, i.e. is attached to the Pub/Sub
- *                        doorbell bus (T-558). Its own ~3-minute cadence, hence its own window below.
- * "busy" comes from a task whose live claim names the agent, and still outranks both.
- *
- * *** THIS BLOCK SAID "No new backend surface" UNTIL T-558, AND THAT LINE WAS THE BUG. *** Deriving
- * presence from `lastSeenAt` alone is only correct if every live agent makes tool calls. An agent
- * parked on its wake subscription makes NONE — it is idle precisely because it is waiting to be given
- * work — so the readiest agent in the fleet rendered OFFLINE after `presenceOfflineAfterMs` (75s).
+ * Liveness has TWO inputs (P-257, drift D9):
+ *   - a `device:<pid>` row — the device session directory's presence frame lists the live CLI processes
+ *     on this machine, the whole list each time (api/stream.ts), so a row it lists IS live, however long
+ *     ago it registered; a process that leaves the directory leaves the list (presenceMerge.ts).
+ *   - `lastSeenAt` — any other session's last MCP request, fresh within `presenceOfflineAfterMs`.
+ * "busy" comes from a task whose live claim names the agent, and still outranks both. A process waiting
+ * for work makes no requests, which is why the device directory and not a request count says it is there.
  */
 import type { AgentSession, Task } from './types.js';
 import { toolKey, type ToolKey } from './ToolLogo.js';
@@ -41,50 +38,29 @@ export const STATE_META: Record<AgentState, { color: string; label: string }> = 
   connecting: { color: 'var(--ready)', label: 'Connecting' }, // blue
 };
 
-// A worker idles by long-polling wait_for_task (~50s/cycle), so lastSeenAt refreshes at least that
-// often while it's alive and waiting; allow a cycle + buffer before calling it offline. The threshold
-// is admin-tunable (uiSettings().presenceOfflineAfterMs).
+// A session just created and with at most two requests shows "connecting" for this long. How long an
+// MCP session with no request stays online is admin-tunable (uiSettings().presenceOfflineAfterMs).
 const CONNECTING_WINDOW_MS = 12_000;
 
-/**
- * How long a wake-credential mint vouches for an agent. NOT admin-tunable, deliberately: unlike
- * `presenceOfflineAfterMs` this is not a taste threshold, it is derived from two constants on the
- * credential path — `WAKE_TTL_SECS` (300, `wake/src/lib.rs`) and the listener's `REFRESH_SLACK` (120,
- * `skill/wake-listener/`). An attached agent held a stream for its token's life, so this is one cadence
- * plus a whole spare one: a single dropped refresh does not blink the dot, and a departed agent still
- * ages out inside the 300s its credential remains valid. Retune it only when those constants move.
- */
-const WAKE_ATTACHED_WINDOW_MS = 360_000;
-
-/** Was this session attached to the doorbell bus recently enough to count as present? */
-function wakeAttached(s: Pick<AgentSession, 'wakeAttachedAt'>, now: number): boolean {
-  if (!s.wakeAttachedAt) return false; // absent = not attached, NEVER "attached long ago"
-  const t = Date.parse(s.wakeAttachedAt);
-  return !Number.isNaN(t) && now - t < WAKE_ATTACHED_WINDOW_MS;
+/** Is this a row of the device session directory's live list (api/stream.ts presenceSessions)? */
+function isDeviceRow(s: Pick<AgentSession, 'sessionKey'>): boolean {
+  return s.sessionKey.startsWith('device:');
 }
 
-/**
- * The freshest evidence this session was alive, by EITHER route. Used only to pick between sibling
- * rows of the same agent name — a row idling on the bus is more current than one whose last tool call
- * is older, and collapsing on `lastSeenAt` alone would discard the live one and show its dot as stale.
- */
-function livenessAt(s: Pick<AgentSession, 'lastSeenAt' | 'wakeAttachedAt'>): number {
-  const seen = Date.parse(s.lastSeenAt);
-  const att = s.wakeAttachedAt ? Date.parse(s.wakeAttachedAt) : Number.NaN;
-  if (Number.isNaN(seen)) return att;
-  if (Number.isNaN(att)) return seen;
-  return Math.max(seen, att);
+/** The session's last activity, as a time; NaN when it has none. */
+function livenessAt(s: Pick<AgentSession, 'lastSeenAt'>): number {
+  return Date.parse(s.lastSeenAt);
 }
 
 export interface AgentEntry {
   name: string;
   state: AgentState;
   lastSeenAt: string;
-  /** T-558 — carried so `isLiveEntry` can see bus attachment too, not just tool calls. */
-  wakeAttachedAt?: string;
-  /** Carried for the same reason, one signal over: `isLiveEntry` does NOT consult `state`, it re-checks
-   * attachment itself — so without this a revoked row passes it through the wake branch even after
-   * `deriveAgentState` has called it offline, and `AgentSelect` offers it as an assignment target. */
+  /** The entry is a row of the device directory's live list, so `isLiveEntry` counts it live. */
+  device?: boolean;
+  /** Carried because `isLiveEntry` does NOT consult `state`, it re-checks liveness itself — so without
+   * this a revoked device row would pass through it even after `deriveAgentState` has called it
+   * offline, and `AgentSelect` would offer it as an assignment target. */
   revokedAt?: string;
   identityId?: string;
   tool: ToolKey | null;
@@ -103,29 +79,23 @@ export function busyAgentNames(tasks: Task[]): Set<string> {
 
 /**
  * *** THE ONE ONLINE RULE. *** Both presence surfaces route through this: `deriveAgentState` below
- * (the dots) and the Agents screen's "N online" count and per-row badge. They were two separate
- * expressions of the same threshold, under a comment promising they agreed — so T-558 had to be fixed
- * in both, and the next change to either would have silently split them. Add a signal HERE.
+ * (the dots) and the Agents screen's "N online" count and per-row badge. Add a signal HERE.
  *
- * OFFLINE requires BOTH signals to be stale. Either alone is sufficient evidence of life, and they have
- * different cadences — a tool call every ~50s while working, a credential mint every ~180s while merely
- * listening — so each keeps its own window rather than being blended into one threshold.
+ * Online is a row of the device directory's live list, or a session whose last request is within
+ * `presenceOfflineAfterMs`. Either alone is sufficient evidence of life.
  */
 export function isSessionOnline(
-  s: Pick<AgentSession, 'lastSeenAt' | 'wakeAttachedAt' | 'revokedAt'>,
+  s: Pick<AgentSession, 'sessionKey' | 'lastSeenAt' | 'revokedAt'>,
   now: number,
 ): boolean {
-  // *** REVOKED OUTRANKS EVERY LIVENESS SIGNAL. *** `disconnect_agent` DELETES the Pub/Sub
-  // subscription (spec §4 C4), so a revoked row is not merely stale — its doorbell no longer exists
-  // and assigning to it rings nothing. The row still carries the timestamps it had at revoke time, and
-  // nothing else on the presence path looks at `revokedAt` (`Admin.tsx` reads it, for opacity only),
-  // so without this a disconnected agent stayed in the Board rail and the AgentSelect menu until its
-  // stale timestamps aged out. That was already true of `lastSeenAt` for ~75s; adding the 360s wake
-  // window widened the same hole ~5x, which is what made it worth closing here.
+  // *** REVOKED OUTRANKS EVERY LIVENESS SIGNAL. *** A disconnected session's row still carries the
+  // timestamps it had at revoke time, and nothing else on the presence path looks at `revokedAt`
+  // (`Admin.tsx` reads it, for opacity only), so without this a disconnected agent stayed in the Board
+  // rail and the AgentSelect menu until its stale timestamps aged out.
   if (s.revokedAt) return false;
-  const sinceSeen = now - Date.parse(s.lastSeenAt);
-  if (!Number.isNaN(sinceSeen) && sinceSeen <= uiSettings().presenceOfflineAfterMs) return true;
-  return wakeAttached(s, now);
+  if (isDeviceRow(s)) return true;
+  const sinceSeen = now - livenessAt(s);
+  return !Number.isNaN(sinceSeen) && sinceSeen <= uiSettings().presenceOfflineAfterMs;
 }
 
 export function deriveAgentState(s: AgentSession, busyNames: Set<string>, now: number): AgentState {
@@ -161,20 +131,22 @@ export function buildAgentList(
   for (const s of sessions) {
     if (!s.agentName) continue;
     const prev = byName.get(s.agentName);
-    // Compare on `livenessAt`, not `lastSeenAt`: of two rows for one agent name, the one attached to
-    // the bus is the current one even if the other made a tool call more recently.
+    // A device row (listed live by the directory) outranks an MCP row of the same name, then the
+    // newer activity wins.
     //
     // REVOCATION IS THE FIRST KEY, because reconnecting mints a NEW session and leaves the old one
     // revoked beside it: on `livenessAt` alone the dead row can win (it may carry newer timestamps than
     // a freshly-created one) and the agent renders offline while it is connected and working.
     if (prev && !prev.revokedAt !== !s.revokedAt) {
       if (!prev.revokedAt) continue; // keep the live one
+    } else if (prev && (prev.device ?? false) !== isDeviceRow(s)) {
+      if (prev.device) continue; // keep the one the directory lists
     } else if (prev && livenessAt(prev) >= livenessAt(s)) continue;
     byName.set(s.agentName, {
       name: s.agentName,
       state: deriveAgentState(s, busyNames, now),
       lastSeenAt: s.lastSeenAt,
-      wakeAttachedAt: s.wakeAttachedAt,
+      ...(isDeviceRow(s) ? { device: true } : {}),
       revokedAt: s.revokedAt,
       identityId: s.identityId,
       tool: toolKey(s.agentName, s.clientName),
@@ -214,9 +186,9 @@ export function toolByAgent(sessions: AgentSession[]): Map<string, ToolKey> {
  * of dead generated-name sessions — which buries any actually-active agent.
  */
 export function isLiveEntry(a: AgentEntry, now: number): boolean {
-  if (a.revokedAt) return false; // disconnected: its subscription is deleted, so it is not a target
+  if (a.revokedAt) return false; // disconnected: not a target
   if (a.state === 'busy') return true;
-  if (wakeAttached(a, now)) return true; // T-558: attached to the bus IS "around now"
+  if (a.device) return true; // the device directory lists it live now
   if (!a.lastSeenAt) return false;
   const seen = Date.parse(a.lastSeenAt);
   return !Number.isNaN(seen) && now - seen < uiSettings().presenceWindowMs;

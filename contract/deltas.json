@@ -487,6 +487,10 @@
     {
       "pointer": "/tools/list_notifications/output/properties/notifications/items/properties/type/enum/handoff",
       "why": "P-275 (audit A12), owner-approved migration 0006 (2026-10-24): handoff_task writes the receiver a handoff notification, which conductor lists in notify.ts as a TODO."
+    },
+    {
+      "pointer": "/tools/list_agent_sessions/output/properties/sessions/items/properties/kind/enum/api_token",
+      "why": "P-257 (drift D6): an MCP session on an API token says api_token, one on an OAuth access token oauth_user; conductor's service_account named its WorkOS machine keys, which this server has not got. No migration: agent_sessions.kind has no CHECK."
     }
   ],
   "addedTools": [

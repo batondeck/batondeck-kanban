@@ -323,7 +323,7 @@ func sessionsMeAuditOnTheStack(t *testing.T, h *bk.Harness, c *caller, deleted s
 	if _, err := grace.ListTools(testCtx(t), nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := root.call("disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "id:u-grace"}); got["disconnected"] != true {
+	if got := root.call("disconnect_agent", map[string]any{"identityId": "u-grace", "agentId": "harness"}); got["disconnected"] != true {
 		t.Fatalf("disconnect_agent answered %v", got)
 	}
 	if _, err := grace.ListTools(testCtx(t), nil); err == nil {

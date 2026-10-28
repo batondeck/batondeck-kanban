@@ -56,7 +56,7 @@ func ownKey(caller domain.Caller, key string) (string, error) {
 // contract_sessions.go's "records one request" is the second form). Tool "" is the MCP initialize:
 // a connection, so the session count grows and the client fields are written
 // (store.UpsertAgentSession). A tool name is one tools/call: the request and per-tool counts grow
-// (store.TouchAgentSession). A CLI bearer token's session is SessionKind service_account.
+// (store.TouchAgentSession). The transport's kind is SessionKindAPIToken or SessionKindOAuth.
 func (s sessions) TouchAgentSession(ctx context.Context, caller domain.Caller, req TouchAgentSessionReq) (resp TouchAgentSessionResp, err error) {
 	defer s.c.recovered("touch_agent_session", &err)
 	agent, err := ownKey(caller, req.SessionKey)
