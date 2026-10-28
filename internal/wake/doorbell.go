@@ -34,7 +34,7 @@ const (
 	KindChanged   = "changed"
 )
 
-// The coalescing windows per entry and kind (plan Amendment B "The doorbell frame"): assigned is
+// The coalescing windows per entry and kind (ADR-0004 §B, the coalesced doorbell frame): assigned is
 // released AssignedQuiet after its last doorbell, within AssignedMaxHold of its first; broadcast and
 // changed at most once per SlowWindow.
 const (
