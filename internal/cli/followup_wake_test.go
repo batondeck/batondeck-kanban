@@ -39,7 +39,7 @@ func TestDirectoryFollowUpRingsItsTargetAndACommentNobody(t *testing.T) {
 		t.Fatalf("the assignment rang %v, want an assigned among them", kinds)
 	}
 
-	before := s.a.dir.Writes()
+	before := s.writesAfter(t, len(kinds))
 	if _, err := s.a.core.Comments().AddComment(ctx, s.bob.caller(), service.AddCommentReq{ProjectID: s.project, TaskID: task.ID, Body: "@alice looks good"}); err != nil {
 		t.Fatal(err)
 	}

@@ -315,6 +315,35 @@ func (c *client) none(t *testing.T, d time.Duration) {
 	}
 }
 
+// drain reads the doorbells c is still being written until none comes for quiet: under load one
+// burst of changes can straddle a window and release twice, and a no-ring step after it must not
+// meet the burst's tail.
+func (c *client) drain(t *testing.T, quiet time.Duration) []wake.Frame {
+	t.Helper()
+	var got []wake.Frame
+	for {
+		select {
+		case b := <-c.got:
+			got = append(got, content(t, b))
+		case <-time.After(quiet):
+			return got
+		}
+	}
+}
+
+// writesAfter is the directory's write count once it covers the seen doorbells the clients have
+// read (P-319): the dispatcher counts a write after the socket has its bytes, so a count read
+// straight after a frame can miss that frame's own write and charge it to the step after.
+func (s *dirServer) writesAfter(t *testing.T, seen int) int64 {
+	t.Helper()
+	for deadline := time.Now().Add(time.Second); s.a.dir.Writes() < int64(seen); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the directory counts %d writes, but the clients read %d doorbells", s.a.dir.Writes(), seen)
+		}
+	}
+	return s.a.dir.Writes()
+}
+
 // content is a doorbell's frame, read from its user frame's content.
 func content(t *testing.T, b []byte) wake.Frame {
 	t.Helper()
@@ -434,7 +463,7 @@ func (s *dirServer) lastChange(t *testing.T) int64 {
 // the auth line from the key file, then one user frame naming the registry's sessionId, whose content
 // is one plain line and the contentless {kind, cursor, projectId, boardId} (boardId since P-191).
 func TestDirectoryRingsAWorkerWithTheExactFrame(t *testing.T) {
-	t.Parallel()
+	// Serial: it times the doorbell against a 1 s bound; parallel runs' load made it miss (review rev289-301).
 	s := startDirectory(t, nil)
 	c := s.client(t, "f73a2587-0000-4000-8000-000000000001", "peer-token-xyz")
 	changed := s.a.dir.Changed()
@@ -486,8 +515,14 @@ func TestDirectoryNoSelfRing(t *testing.T) {
 	if f := content(t, w.frame(t, s.win.Slow+time.Second)); f.Kind != wake.KindBroadcast {
 		t.Fatalf("bob's creates rang the worker %+v, want one broadcast", f)
 	}
+	extra := w.drain(t, s.win.Slow+500*time.Millisecond)
+	for _, f := range extra {
+		if f.Kind != wake.KindBroadcast {
+			t.Fatalf("bob's creates rang the worker %+v, want broadcasts only", f)
+		}
+	}
 	m.none(t, 0) // bob's own creates ring bob's master nothing (it has had the window above)
-	before := s.a.dir.Writes()
+	before := s.writesAfter(t, 1+len(extra))
 	if _, err := s.a.core.Lifecycle().Claim(ctx, s.alice.caller(), service.ClaimTaskReq{ProjectID: s.project, TaskID: open.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +575,7 @@ func TestDirectoryMasterCoalescesAt5s(t *testing.T) {
 // AC4 (tested): kill -9 of a registered process drops its entry and its row within 1 s, with no
 // unregister call.
 func TestDirectoryDropsAKilledProcessWithin1s(t *testing.T) {
-	t.Parallel()
+	// Serial: it times the drop against a 1 s bound; parallel runs' load made it miss (review rev289-301).
 	s := startDirectory(t, nil)
 	c := s.client(t, "s-1", "")
 	s.register(t, s.alice, c, "worker")
@@ -595,7 +630,7 @@ func TestDirectoryDeliveryRechecksTheBearer(t *testing.T) {
 // AC5 (tested), by the sweep: with nothing to deliver, a disabled user's entry is dropped within
 // one sweep; an idle sweep costs 3 statements per entry.
 func TestDirectorySweepDropsADisabledUser(t *testing.T) {
-	t.Parallel()
+	// Serial: it counts one sweep's statements, which a slow sweep under load doubles; parallel runs' load made it miss (review rev289-301).
 	s := startDirectoryWith(t, nil, dirOpts{sweep: shortSweep})
 	c := s.client(t, "s-1", "")
 	s.register(t, s.alice, c, "worker")
@@ -855,7 +890,7 @@ func TestDirectoryDropsAReusedPidAtDelivery(t *testing.T) {
 	s.register(t, s.alice, c, "worker")
 	s.task(t, s.bob, s.alice.id)
 	_ = c.frame(t, 2*time.Second)
-	before := s.a.dir.Writes()
+	before := s.writesAfter(t, 1)
 	s.setProcStart(t, c, "Sat Oct 24 09:00:00 2026")
 	s.task(t, s.bob, s.alice.id)
 	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its pid now names another process", c.pid, s.alice.id), 1)
@@ -877,6 +912,10 @@ func TestDirectoryHandoffToSelfRingsNobody(t *testing.T) {
 	mine, theirs := s.task(t, s.alice, ""), s.task(t, s.alice, "")
 	_ = b.frame(t, s.win.Slow+time.Second) // the creates' broadcast to bob; alice's own is not rung
 	_ = a.frame(t, time.Second)
+	seen := 2 // and any tail of that burst, so the handoff's silence below is its own
+	for _, c := range []*client{a, b} {
+		seen += len(c.drain(t, s.win.Slow+500*time.Millisecond))
+	}
 	handoff := func(task service.Task, to string) {
 		t.Helper()
 		cl, err := s.a.core.Lifecycle().Claim(ctx, s.alice.caller(), service.ClaimTaskReq{ProjectID: s.project, TaskID: task.ID})
@@ -887,7 +926,7 @@ func TestDirectoryHandoffToSelfRingsNobody(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before := s.a.dir.Writes()
+	before := s.writesAfter(t, seen)
 	handoff(mine, s.alice.id)
 	a.none(t, s.win.Slow+500*time.Millisecond)
 	if n := s.a.dir.Writes() - before; n != 0 {
@@ -917,7 +956,7 @@ func TestDirectoryMasterSilentTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.none(t, s.win.Slow+500*time.Millisecond) // the claim (ruled) is quiet before the extras start
-	before := s.a.dir.Writes()
+	before := s.writesAfter(t, 1)
 	steps := []struct {
 		tool string
 		run  func() error
