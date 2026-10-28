@@ -175,6 +175,24 @@ this section's headings in CHANGELOG.md, are all part of it.
 - The race test run's per-package timeout is 20 minutes (was Go's 10-minute default): `internal/cli`
   reached it under load with no hung test, failing three gates (owner 2026-10-25). P-289 shortens
   the package instead of leaning on the bound.
+- The device-directory tests run in parallel with shorter coalescing waits (P-289). They waited
+  ADR-0004's real 5 s broadcast and changed window one after another, and set package variables,
+  so they could not run together. `wake.Options.Windows` now takes the windows (a zero field is the
+  production value: assigned 300 ms quiet within 1 s, broadcast and changed 5 s), and serve's
+  composition passes none; a test hands its registry, sweep and windows to `composeWith`, and the
+  tests that wait the slow window out hold it at 2 s. `TestProductionWindowsAreADR0004s` and
+  `TestServeDirectoryHoldsTheProductionWindows` pin the production numbers. Every bound and every
+  expected silence is unchanged, and so is every expected ring but one: before its silent step,
+  `TestDirectoryHandoffToSelfRingsNobody` now drains the creates' burst, so it no longer fails when
+  that burst rings more than once. Four other tests still catch a broadcast window that does not
+  coalesce (`NoSelfRing`, `RebuildsAndCatchesUp`, `RefusesAnotherIdentityTakingAPid`,
+  `RingsAWorkerWithTheExactFrame`), and `MasterCoalescesAt5s` pins the slow window. The three tests that time or count against a bound
+  (`RingsAWorkerWithTheExactFrame`, `DropsAKilledProcessWithin1s`, `SweepDropsADisabledUser`) stay
+  serial, and the no-ring tests count from the writes their clients have read, since the directory
+  counts a doorbell just after writing it (P-319's "wrote 1 doorbells, want 0"). On 4 vCPUs with
+  Postgres, `go test -race -count=1 ./internal/cli/` went from 584 s to 451 s (the directory tests
+  from 197 s run serially to a 51 s parallel phase); the rest of the package is serial and
+  untouched, so the 20-minute timeout stays.
 - Sign-in is bounded (P-220, audit G4). Each password check allocates argon2id's 64 MiB, and 64
   concurrent bad logins took `serve` from 124 MB to 2.47 GB RSS. Now at most 2 checks (128 MiB) run
   at once process-wide, whatever the core count, and a caller that waits 3 s for a slot is refused.

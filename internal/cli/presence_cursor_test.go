@@ -10,6 +10,7 @@ import (
 // written to it, then the change-log id of that doorbell, equal to its wake_sessions row's
 // last_cursor; the delivery signals Changed, so the presence frames carry the new cursor.
 func TestPresenceEntryCarriesTheDeliveredCursor(t *testing.T) {
+	t.Parallel()
 	s := startDirectory(t, nil)
 	c := s.client(t, "f73a2587-0000-4000-8000-0000000000c5", "peer-token-cursor")
 	s.register(t, s.alice, c, "worker")
