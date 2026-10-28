@@ -185,3 +185,51 @@ func TestDiffNamesThePointer(t *testing.T) {
 		t.Errorf("Diff = %v", d)
 	}
 }
+
+// TestRemovedPropMustSayWhy pins RemovedProp's reading of deltas.json (P-310): a bare pointer, or
+// {pointer, why} with both filled. An object entry with no why, a blank why, no pointer or an
+// unknown key is refused, beside the two accepted forms (the positive control) and the four entries
+// P-310 shipped, each of which reads with its reason.
+func TestRemovedPropMustSayWhy(t *testing.T) {
+	const ptr = "/tools/create_integration/input/properties/policy"
+	for name, in := range map[string]string{
+		"a bare pointer":         `"` + ptr + `"`,
+		"an object with its why": `{"pointer":"` + ptr + `","why":"owner decision 6"}`,
+	} {
+		var r RemovedProp
+		if err := json.Unmarshal([]byte(in), &r); err != nil || r.Pointer != ptr {
+			t.Errorf("%s: %s read as %+v, %v; want pointer %s", name, in, r, err, ptr)
+		}
+	}
+	for name, in := range map[string]string{
+		"no why":         `{"pointer":"` + ptr + `"}`,
+		"an empty why":   `{"pointer":"` + ptr + `","why":""}`,
+		"a blank why":    `{"pointer":"` + ptr + `","why":"  \t"}`,
+		"no pointer":     `{"why":"owner decision 6"}`,
+		"an unknown key": `{"pointer":"` + ptr + `","why":"owner decision 6","reason":"x"}`,
+	} {
+		var r RemovedProp
+		err := json.Unmarshal([]byte(in), &r)
+		if err == nil || !strings.Contains(err.Error(), "removedProps:") {
+			t.Errorf("%s: %s read as %+v, %v; want refused", name, in, r, err)
+		} else {
+			t.Logf("%s refused: %v", name, err)
+		}
+	}
+	var d Deltas
+	if err := ReadJSON("deltas.json", &d); err != nil {
+		t.Fatal(err)
+	}
+	why := 0
+	for _, r := range d.RemovedProps {
+		if r.Why != "" {
+			why++
+			if !strings.HasPrefix(r.Why, "P-310, owner decision 6") {
+				t.Errorf("%s: why %q", r.Pointer, r.Why)
+			}
+		}
+	}
+	if why != 4 {
+		t.Errorf("deltas.json removedProps carries %d entries with a why; want P-310's 4", why)
+	}
+}
