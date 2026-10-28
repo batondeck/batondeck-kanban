@@ -1,5 +1,5 @@
 -- +goose Up
--- ADR-0005, owner-approved 2026-10-23 (zone Z2): five states. TODO replaces
+-- ADR-0005, owner-approved 2026-10-23 with plan Amendment E (zone Z2): five states. TODO replaces
 -- READY and BACKLOG is gone, so no task is a draft. Every BACKLOG or READY task becomes TODO; on each
 -- board the BACKLOG columns fold into its first READY column (lowest position, then id), which
 -- keeps its name, unless that is the default "Ready" (then "To do"), and its WIP limit, and takes
