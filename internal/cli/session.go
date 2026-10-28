@@ -25,8 +25,9 @@ Both run from a client's SessionStart and SessionEnd hooks. They reach the serve
 first unix:// entry of its listen config, with the bearer in BATONDECK_TOKEN. The session is the
 Claude Code process whose registry entry names $CLAUDE_CODE_MESSAGING_SOCKET, else the parent
 process. --agent takes only a label the bearer may claim for: its token's own label, or a name no
-other account's token carries; another agent's label is refused FORBIDDEN. A failure is one line
-on stderr and exit 0, so a hook never breaks a session start.
+other account's token carries; another agent's label is refused FORBIDDEN, and so is id:<identity>
+for any identity but the bearer's own. A failure is one line on stderr and exit 0, so a hook never
+breaks a session start.
 every subcommand takes -config PATH.
 `)
 }

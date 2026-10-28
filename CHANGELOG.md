@@ -103,6 +103,23 @@ this section's headings in CHANGELOG.md, are all part of it.
   worker's identity owns the label, so a case or local-part variant registered by another member is
   not read as the owner's. No migration.
 
+- A wake entry's `id:` agent is only its caller's own (P-345). `CheckWakeAgent` passed any agent
+  starting `id:` before the label rule, so `session register --agent id:<another identity>` (or a
+  token label or OAuth `client_name` of that shape) wrote an entry under the id `AgentID` derives
+  for that other member. `id:` followed by anything but the caller's identity is now `FORBIDDEN`
+  and writes no entry, and `serve`'s start-up rebuild drops such a stored entry with the log
+  reason `names another identity`. `id:<own identity>` and every name the label rule allows still
+  register. No migration.
+
+- An agent profile and its skill stats are written and used only by their label's owner (P-340,
+  the profile half of P-335). They are keyed by the agent name alone, so an OAuth `client_name` or
+  an MCP `clientInfo.name` equal to another member's token label wrote over that member's profile
+  and stats, which `rank_tasks {useProfile: true}` reads. `register_agent_profile` and
+  `rank_tasks {useProfile: true}` under another agent's label (the wake register's rule: token rows
+  of any status count, no admin pass) are now `FORBIDDEN` with `details.label`;
+  `complete_task` and `block_task` still transition, and record the outcome under the caller's
+  identity instead of the label. `get_skill_stats` is unchanged. No migration.
+
 - Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
   `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
   `created_by_agent` and every event's agent stayed empty and `agent_sessions` held one row per

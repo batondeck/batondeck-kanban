@@ -100,7 +100,7 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 	var out []ranked
 	profiled := false
 	if req.UseProfile {
-		key, err := agentKey(caller)
+		key, err := s.c.ownProfileKey(ctx, caller, "rank_tasks")
 		if err != nil {
 			return RankTasksResp{}, err
 		}

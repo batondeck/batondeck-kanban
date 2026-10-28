@@ -525,7 +525,12 @@ func (c *Core) labelRefused(ctx context.Context, caller domain.Caller, label str
 	if err != nil {
 		return false, err
 	}
-	now := c.nowMs()
+	return labelRefusedIn(tokens, caller, label, c.nowMs()), nil
+}
+
+// labelRefusedIn is labelRefused's rule over token rows already read, so a caller inside a
+// transaction (an outcome's agent key, P-340) applies it to the rows that transaction reads.
+func labelRefusedIn(tokens []store.Token, caller domain.Caller, label string, now int64) bool {
 	carried, others := false, false
 	for _, t := range tokens {
 		if domain.TokenAgent(t.Label) != label {
@@ -535,7 +540,7 @@ func (c *Core) labelRefused(ctx context.Context, caller domain.Caller, label str
 		others = others || t.IdentityID != caller.Identity
 	}
 	carried = carried || others // another identity's row of any status: its label is that identity's (R2-Q1, P-338)
-	return carried && (others || !caller.Labelled || caller.Agent != label), nil
+	return carried && (others || !caller.Labelled || caller.Agent != label)
 }
 
 // Heartbeat is heartbeat_task: the lease's expiry moves to now + leaseSeconds (store.Heartbeat, one
