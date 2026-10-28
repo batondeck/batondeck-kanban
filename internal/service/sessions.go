@@ -228,10 +228,17 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 // ownLabel's own test (labelRefused), with no master pass: an entry has no project, and a label
 // has no admin override (P-322; REVIEW-257 R2-Q1, R2-Q2). The entry would otherwise be rung on
 // AgentScope(agent) and told to claim_next for a label whose claims are refused to it (P-276's
-// line), and alias a mention of the label (P-343). An "id:" agent, a name no token carries and
-// the caller's own token's label pass. Not tenant-scoped; one read of every token row.
+// line), and alias a mention of the label (P-343). An "id:<identity>" agent is the id AgentID
+// derives for a caller that names none, so it is the caller's own or no one's: "id:" followed by
+// anything but the caller's identity is FORBIDDEN, whatever named it (--agent, a token label, an
+// OAuth client_name), and is never a label (P-345). A name no token carries and the caller's own
+// token's label pass. Not tenant-scoped; one read of every token row for a non-"id:" agent.
 func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agent string) error {
-	if strings.HasPrefix(agent, "id:") {
+	if id, ok := strings.CutPrefix(agent, "id:"); ok {
+		if id != caller.Identity {
+			return forbidden("agent names another identity: an id: agent is only the caller's own, id:<its identity>",
+				map[string]any{"field": "agent", "agent": agent})
+		}
 		return nil
 	}
 	refused, err := s.c.labelRefused(ctx, caller, agent)
