@@ -25,10 +25,13 @@ containerd image store and arm64 emulation (Docker Desktop has both), `gh` signe
    dir=$(mktemp -d)/batondeck-kanban
    git clone https://github.com/batondeck/batondeck-kanban.git "$dir" && cd "$dir"
    git checkout --detach "$CANDIDATE"
+   make hooks
    scripts/release-check.sh 0.1.0
    ```
 
-   It prints `release-check: 0.1.0 agrees in compose.yaml, plugin/.claude-plugin/plugin.json,
+   `make hooks` points this clone at the versioned hooks in `githooks/` (`core.hooksPath`); a clone
+   starts without it, and step 3's push is gated only by the pre-push hook it turns on. The check
+   prints `release-check: 0.1.0 agrees in compose.yaml, plugin/.claude-plugin/plugin.json,
    CHANGELOG.md and the binary`, or names each file that disagrees and exits 1.
 
 2. **The bench numbers stand.** The README's performance block is the numbers of
@@ -43,14 +46,21 @@ containerd image store and arm64 emulation (Docker Desktop has both), `gh` signe
    candidate changes and this sequence starts again. On another machine `make bench` compares
    nothing and says so: re-measure there with `make bench-baseline` and commit before going on.
 
-3. **Gate green on the tag commit, annotated tag.** Tag the candidate from a checkout of it and push
-   the tag; the pre-push hook runs `make check` on both engines on the checked-out tree, which is
-   the tag's commit, and refuses the push if it fails:
+3. **Gate green on the tag commit, annotated tag.** Tag the candidate in the same clone, with
+   `$CANDIDATE` still checked out, and push the tag; the pre-push hook runs `make check` on both
+   engines on the checked-out tree, which is the tag's commit, and refuses the push if it fails. The
+   hook is required: unless both `test`s pass (`make hooks` ran in this clone, and HEAD is the
+   candidate), nothing is tagged or pushed.
 
    ```
-   git tag -a v0.1.0 -m "batondeck-kanban 0.1.0 — the first release; CHANGELOG.md has the notes" "$CANDIDATE"
-   git push origin v0.1.0
+   test "$(git config core.hooksPath)" = githooks && test "$(git rev-parse HEAD)" = "$CANDIDATE" &&
+     git tag -a v0.1.0 -m "batondeck-kanban 0.1.0 — the first release; CHANGELOG.md has the notes" "$CANDIDATE" &&
+     git push origin v0.1.0
    ```
+
+   The hook gates HEAD, not the ref it is handed, so it prints `pre-push: NOTE — gating the
+   checked-out tree (<candidate>), not <tag object>` for the annotated tag's own SHA; that is
+   expected, and is why `$CANDIDATE` has to stay checked out.
 
    `scripts/release-check.sh` resolves the tag to its commit (`v0.1.0^{commit}`), and the fixtures
    `make release-check` builds are annotated.

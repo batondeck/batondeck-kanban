@@ -1,6 +1,7 @@
 # batondeck-kanban on Postgres 16. README.md's quickstart says how to run it; in short:
 #
 #   printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+#   printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
 #   docker compose up -d
 #   curl -fsS http://127.0.0.1:8080/healthz
 #
@@ -9,8 +10,8 @@
 #
 # The orchestrator keeps its blobs on the `data` volume, and the SQLite file too when it runs on
 # SQLite: set BATONDECK_DATABASE_URL=/data/batondeck-kanban.db (in .env, or in the shell) and start it
-# with `docker compose up -d --no-deps batondeck-kanban`. The image alone (`docker run`) runs on that
-# SQLite file by default.
+# with `docker compose up -d --no-deps batondeck-kanban` (compose still reads the postgres service, so
+# .env keeps both lines). The image alone (`docker run`) runs on that SQLite file by default.
 #
 # The board is published on 127.0.0.1 only. The claude.ai connector needs it at a public HTTPS URL:
 # put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL.
@@ -23,7 +24,7 @@ services:
     environment:
       # A postgres:// URL selects Postgres; a file path selects SQLite. `doctor` reports the engine
       # the connection answers as.
-      BATONDECK_DATABASE_URL: ${BATONDECK_DATABASE_URL:-postgres://batondeck:${BATONDECK_POSTGRES_PASSWORD:-batondeck}@postgres:5432/batondeck?sslmode=disable}
+      BATONDECK_DATABASE_URL: ${BATONDECK_DATABASE_URL:-postgres://batondeck:${BATONDECK_POSTGRES_PASSWORD:?set BATONDECK_POSTGRES_PASSWORD, for example in .env beside compose.yaml - openssl rand -hex 24 (hex, since it goes into the URL unescaped)}@postgres:5432/batondeck?sslmode=disable}
       BATONDECK_BLOB_DIR: /data/blobs
       # On Postgres there is no master.key file beside a SQLite file, so the key comes from here:
       # without one, attachments and the wake directory's inbox tokens are refused.
@@ -40,7 +41,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: batondeck
-      POSTGRES_PASSWORD: ${BATONDECK_POSTGRES_PASSWORD:-batondeck}
+      POSTGRES_PASSWORD: ${BATONDECK_POSTGRES_PASSWORD:?set BATONDECK_POSTGRES_PASSWORD, for example in .env beside compose.yaml - openssl rand -hex 24 (hex, since it goes into the URL unescaped)}
       POSTGRES_DB: batondeck
     volumes:
       - pgdata:/var/lib/postgresql/data

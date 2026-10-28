@@ -3,8 +3,8 @@
 An open-source, self-hosted BatonDeck: one Go binary that serves the MCP task orchestrator (agents claim,
 complete and are woken on dependency-gated tasks) and the embedded React UI for the humans on the board.
 
-Status: 0.1.0, the first release (`CHANGELOG.md`). The plan of record is
-`docs/release/plan-2026-10-22.md`.
+Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`; until that tag exists,
+build from source. The plan of record is `docs/release/plan-2026-10-22.md`.
 
 Build from source: `make build` (Go from `go.mod`), then `./batondeck-kanban version`. `make hooks`
 installs the git hooks, and `make check` is the gate they run.
@@ -42,11 +42,13 @@ batondeck-kanban serve          # leave it running; the next steps are in anothe
 ```
 
 **Or the image**, on Postgres 16, with `compose.yaml` from this repository. On Postgres there is no
-`master.key` file beside a SQLite file, so the key comes from `.env`; compose refuses to start
-without it.
+`master.key` file beside a SQLite file, so the key comes from `.env`, and so does the database
+password (hex, since it goes into the connection URL unescaped); compose refuses to start without
+either.
 
 ```bash
 printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
 docker compose up -d
 curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 ```
@@ -104,7 +106,7 @@ holds a doorbell, and what the hooks may do.
 Sessions off this device (claude.ai, ChatGPT, Cursor, Codex CLI, Gemini CLI, or Claude Code without
 the plugin) are never rung. They pull: each turn, `list_notifications`, then
 `claim_next {projectId, boardId}`; the server's MCP instructions say so to every client. The web UI's
-**Connect MCP** page shows the setup for Claude Code, Codex CLI, Gemini CLI and Cursor.
+**Connect MCP** dialog shows the setup for Claude Code, Codex CLI, Gemini CLI and Cursor.
 
 ### 6. The claude.ai connector
 

@@ -8,15 +8,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [0.1.0]
 
-The first release: its date is the tag `v0.1.0`'s. The entries under the headings below this summary
-are the ones recorded while it was built, and they are all part of it.
+The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
+this section's headings in CHANGELOG.md, are all part of it.
 
 - **One binary, two engines.** `batondeck-kanban serve` runs the MCP server at `/mcp` (Streamable HTTP,
   API tokens or OAuth), the REST API behind the web UI, the embedded web UI and `/healthz`, on a
   SQLite file or, with a `postgres://` `database.url`, on Postgres. `migrate`, `user`, `token`,
   `session`, `doctor`, `healthcheck` and `version` are its other subcommands. The image
-  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64, and
-  `compose.yaml` runs it on Postgres 16.
+  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64 by `make image`
+  (arm64 needs emulation, which Docker Desktop has), and `compose.yaml` runs it on Postgres 16.
 - **86 tools, 4 prompts and 11 resource templates**, by area:
   projects and members (`create_project`, `get_project`, `list_projects`, `update_settings`,
   `delete_project`, `add_member`, `remove_member`);
@@ -62,7 +62,8 @@ are the ones recorded while it was built, and they are all part of it.
   doorbell for Claude Code and SSE for the web UI, ADR-0004) and BigQuery (replaced by the local
   `tool_calls` table). Also dropped, by the owner's scope: billing, WorkOS, admin, the plugin maker,
   the router facade, the CLI-token tools and `prune_agent_sessions` (ADR-0004).
-- **The Claude Code plugin, 0.1.0** (`plugin/`): the board's MCP tools, SessionStart and SessionEnd
+- **The Claude Code plugin, 0.1.0** (`plugin/`; its pre-release numbers 0.1.2 and 0.1.3 in the entries
+  below reset to the release's 0.1.0): the board's MCP tools, SessionStart and SessionEnd
   hooks that register the session in the server's device directory so it is rung over its own
   messaging socket when work arrives, the `batondeck-worker` and `batondeck-chronicle` skills and six
   commands. There is no channel and no Stop hook; clients off the device pull each turn.
