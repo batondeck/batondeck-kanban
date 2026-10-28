@@ -215,9 +215,11 @@ Notable changes to batondeck-kanban. The format follows
   heading does not carry its id. The plan of record gains a one-line "Superseded by" banner on each
   passage ADR-0001, ADR-0002 or ADR-0004 replaced (the channel, `/wake`, subscribe push, the Actions
   workflow) and a "superseded by measurement" note on the query pins, the resource template count
-  and the CLI list; its "plan Amendment B/E" citations, and the code's, name ADR-0004 and ADR-0005.
-  ADR-0001 is amended in place to the code's rules (cancel by the live lease holder; un-poison
-  lands TODO). Docs and comments only.
+  and the CLI list. The plan's "plan Amendment B/E" citations and `internal/wake/doorbell.go`'s
+  name ADR-0004 and ADR-0005; the two `migrations/*/0004_five_states.sql` headers keep "plan
+  Amendment E" (zone Z2, left for the owner). ADR-0001 is amended in place to the code's rules
+  (cancel by the live lease holder; un-poison lands TODO), and ADR-0004 to the doorbell frame's
+  `boardId`/`boardIds`. Docs and comments only.
 - Browser security headers on every response (P-250). One middleware around the composed handler
   sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
   a `Content-Security-Policy` on every response; the `/mcp`, `/hooks` and `/blobs` routes drop the
