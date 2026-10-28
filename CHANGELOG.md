@@ -15,8 +15,8 @@ this section's headings in CHANGELOG.md, are all part of it.
   API tokens or OAuth), the REST API behind the web UI, the embedded web UI and `/healthz`, on a
   SQLite file or, with a `postgres://` `database.url`, on Postgres. `migrate`, `user`, `token`,
   `session`, `doctor`, `healthcheck` and `version` are its other subcommands. The image
-  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64 by `make image`
-  (arm64 needs emulation, which Docker Desktop has), and `compose.yaml` runs it on Postgres 16.
+  `ghcr.io/batondeck/batondeck-kanban:0.1.0` is built for linux/amd64 and linux/arm64 by `make image`,
+  which cross-compiles and so needs no arm64 emulation, and `compose.yaml` runs it on Postgres 16.
 - **86 tools, 4 prompts and 11 resource templates**, by area:
   projects and members (`create_project`, `get_project`, `list_projects`, `update_settings`,
   `delete_project`, `add_member`, `remove_member`);
@@ -77,6 +77,12 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Changed
 
+- `make image` builds linux/arm64 on a host without arm64 emulation (P-336). The `Dockerfile`'s
+  build stage ran the arm64 golang image for the arm64 build, so on an amd64 host with no QEMU (a CI
+  runner, a Linux machine without binfmt) it stopped at `go mod download: exec /bin/sh: exec format
+  error`. It now runs on the builder's platform (`FROM --platform=$BUILDPLATFORM`) and cross-compiles
+  with `GOOS`/`GOARCH` from `TARGETOS`/`TARGETARCH`; the final stage, which only copies, is
+  unchanged. `make release-check` holds the `Dockerfile` to both.
 - A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
   ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
   mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept

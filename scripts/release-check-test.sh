@@ -4,9 +4,11 @@
 # HEAD tagged with another version; passing on a clean checkout of the tag, with binaries that
 # record vcs.modified=false. `make image` against the same fixtures and a stubbed docker: refused
 # on a dirty tree and an untagged HEAD; otherwise both platforms, both tags and the version, --push
-# only with PUSH=1, and refused when compose.yaml pulls another version. Then the binary check
-# alone: a build from a modified tree, a build with no VCS stamp, a build of another commit and a
-# build by a Go other than go.mod's pin are each refused. Then the versions check
+# only with PUSH=1, and refused when compose.yaml pulls another version. Then the repository's
+# Dockerfile read for cross-compiling (the build stage on $BUILDPLATFORM, GOOS/GOARCH from the
+# target, nothing run in the final stage), and copies of it with each part broken refused. Then
+# the binary check alone: a build from a modified tree, a build with no VCS stamp, a build of
+# another commit and a build by a Go other than go.mod's pin are each refused. Then the versions check
 # (`release-check.sh VERSION`): passing when compose.yaml, plugin.json, CHANGELOG.md and the binary
 # agree, and refused, naming the file, when any one of them does not. Run by `make check`.
 set -euo pipefail
@@ -173,6 +175,59 @@ expect_image_refused "image of HEAD past the tag" "$d" "not v9.9.9"
 d=$(fixture imagecompose)
 (cd "$d" && sed -i.bak 's/:9\.9\.9$/:9.9.8/' compose.yaml && rm compose.yaml.bak && g commit -q -am 'compose at 9.9.8' && g tag -f -a v9.9.9 -m v9.9.9 >/dev/null)
 expect_image_refused "image of a VERSION compose.yaml does not pull" "$d" "compose.yaml: pulls ghcr.io/batondeck/batondeck-kanban:9.9.8, not ghcr.io/batondeck/batondeck-kanban:9.9.9"
+
+# The Dockerfile cross-compiles, so `make image` builds linux/arm64 without emulation (P-336): the
+# build stage runs on the builder's platform (`FROM --platform=$BUILDPLATFORM ... AS build`), declares
+# TARGETOS and TARGETARCH and hands them to `go build` as GOOS and GOARCH (undeclared, they are empty
+# and the arm64 image would carry an amd64 binary), and the final stage runs nothing. The stubbed
+# docker builds nothing, so this reads the file; the repository's Dockerfile is the control, and
+# copies of it with each part broken are refused.
+cross_compiles() {
+  awk '
+    function norm(s) { gsub(/\$\{/, "$", s); gsub(/\}/, "", s); return s }
+    /^[[:space:]]*#/ { next }
+    { line = (cont ? line " " : "") $0; cont = sub(/\\[[:space:]]*$/, "", line); if (cont) next }
+    { l = norm(line); line = "" }
+    toupper(l) ~ /^[[:space:]]*FROM[[:space:]]/ {
+      build = (tolower(l) ~ /[[:space:]]as[[:space:]]+build[[:space:]]*$/); last_run = 0
+      if (build) { saw_build = 1; if (l !~ /--platform=\$BUILDPLATFORM[[:space:]]/) print "the build stage does not run on $BUILDPLATFORM" }
+      next
+    }
+    build && toupper(l) ~ /^[[:space:]]*ARG[[:space:]]/ { if (l ~ /[[:space:]]TARGETOS([[:space:]=]|$)/) os = 1; if (l ~ /[[:space:]]TARGETARCH([[:space:]=]|$)/) arch = 1 }
+    build && l ~ /go build/ {
+      saw_go = 1
+      if (!os || !arch) print "the build stage does not declare ARG TARGETOS and TARGETARCH before go build"
+      if (l !~ /GOOS=\$TARGETOS[[:space:]]/ || l !~ /GOARCH=\$TARGETARCH[[:space:]]/) print "go build does not take GOOS=$TARGETOS and GOARCH=$TARGETARCH"
+    }
+    toupper(l) ~ /^[[:space:]]*RUN[[:space:]]/ { last_run = 1 }
+    END {
+      if (!saw_build) print "no build stage (FROM ... AS build)"
+      else if (!saw_go) print "the build stage has no go build"
+      if (last_run) print "the final stage runs a command, which needs emulation for another platform"
+    }' "$1"
+}
+expect_cross() {
+  local name=$1 file=$2 why=$3 out
+  out=$(cross_compiles "$file")
+  if [ -z "$why" ]; then
+    if [ -z "$out" ]; then pass "$name: cross-compiles"; else bad "$name: $out"; fi
+  elif [ -z "$out" ]; then
+    bad "$name: accepted"
+  elif ! grep -qF "$why" <<<"$out"; then
+    bad "$name: refused, but not for '$why': $out"
+  else
+    pass "$name: refused"
+  fi
+}
+expect_cross "the repository's Dockerfile" "$root/Dockerfile" ""
+sed 's/^FROM --platform=\$BUILDPLATFORM /FROM /' "$root/Dockerfile" > "$tmp/Dockerfile.noplatform"
+expect_cross "Dockerfile without --platform=\$BUILDPLATFORM" "$tmp/Dockerfile.noplatform" "does not run on \$BUILDPLATFORM"
+sed '/^ARG TARGETOS TARGETARCH$/d' "$root/Dockerfile" > "$tmp/Dockerfile.noarg"
+expect_cross "Dockerfile without ARG TARGETOS TARGETARCH" "$tmp/Dockerfile.noarg" "does not declare ARG TARGETOS and TARGETARCH"
+sed 's/ GOARCH=\$TARGETARCH / /' "$root/Dockerfile" > "$tmp/Dockerfile.nogoarch"
+expect_cross "Dockerfile whose go build drops GOARCH" "$tmp/Dockerfile.nogoarch" "GOARCH=\$TARGETARCH"
+sed 's/^USER nonroot$/RUN ["\/batondeck-kanban", "version"]\nUSER nonroot/' "$root/Dockerfile" > "$tmp/Dockerfile.finalrun"
+expect_cross "Dockerfile running a command in the final stage" "$tmp/Dockerfile.finalrun" "the final stage runs a command"
 
 # The binary check on builds dist would not make, each in a tree that is otherwise a clean tag.
 d=$(fixture binaries)

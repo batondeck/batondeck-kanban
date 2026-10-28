@@ -12,8 +12,9 @@ them against fixture repositories.
 
 ## Cutting a release
 
-The steps run on the maintainer's machine that runs the gate: Go from `go.mod`, Docker with the
-containerd image store and arm64 emulation (Docker Desktop has both), `gh` signed in to
+The steps run on the maintainer's machine that runs the gate: Go from `go.mod`, Docker with buildx and
+the containerd image store (Docker Desktop's default; no arm64 emulation is needed, since the
+`Dockerfile` cross-compiles), `gh` signed in to
 `batondeck/batondeck-kanban`. `CANDIDATE` is the full SHA of the commit being released, on `main`.
 
 1. **The versions agree on the candidate.** A release bumps the version in `compose.yaml`'s image
