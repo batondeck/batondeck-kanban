@@ -86,6 +86,17 @@ this section's headings in CHANGELOG.md, are all part of it.
   web UI), a name that is no member and a non-member ring nobody and do not error, and masters stay
   silent. A comment without a mention still rings nobody.
 
+- A wake entry takes only an agent its caller may claim for, and a label mention reaches only the
+  label's owner (P-322, P-343, Fable B1 on #78). `session register --agent` stored any label, so a
+  member could register under another agent's token label and be rung, and mention-notified, for
+  work and comments addressed to it. The register now applies `claim_next`'s own label rule
+  (REVIEW-257 R2-Q1: the first minter owns a label, token rows of any status count, and there is no
+  admin pass): another account's label, or a live label of the caller's own that the calling token
+  does not carry, is `FORBIDDEN` and writes no entry; `serve`'s start-up rebuild drops, and logs, a
+  stored entry the rule refuses. A comment's `@label` aliases a worker entry only when that
+  worker's identity owns the label, so a case or local-part variant registered by another member is
+  not read as the owner's. No migration.
+
 - Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
   `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
   `created_by_agent` and every event's agent stayed empty and `agent_sessions` held one row per

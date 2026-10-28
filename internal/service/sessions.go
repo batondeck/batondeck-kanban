@@ -201,6 +201,9 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 	if agent == "" {
 		agent = AgentID(caller)
 	}
+	if err := s.CheckWakeAgent(ctx, caller, agent); err != nil {
+		return resp, err
+	}
 	now := s.c.now()
 	w := store.WakeSession{
 		ID: id, IdentityID: caller.Identity, AgentID: agent, SocketPath: req.SocketPath,
@@ -219,6 +222,27 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 		return resp, s.c.mapErr("register_wake_session", err)
 	}
 	return RegisterWakeSessionResp{ID: w.ID, AgentID: agent, ExpiresAt: isoMs(w.ExpiresAt)}, nil
+}
+
+// CheckWakeAgent refuses, FORBIDDEN, an entry agent that is another agent's label for caller by
+// ownLabel's own test (labelRefused), with no master pass: an entry has no project, and a label
+// has no admin override (P-322; REVIEW-257 R2-Q1, R2-Q2). The entry would otherwise be rung on
+// AgentScope(agent) and told to claim_next for a label whose claims are refused to it (P-276's
+// line), and alias a mention of the label (P-343). An "id:" agent, a name no token carries and
+// the caller's own token's label pass. Not tenant-scoped; one read of every token row.
+func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agent string) error {
+	if strings.HasPrefix(agent, "id:") {
+		return nil
+	}
+	refused, err := s.c.labelRefused(ctx, caller, agent)
+	if err != nil {
+		return s.c.mapErr("register_wake_session", err)
+	}
+	if refused {
+		return forbidden("agent is another agent's label: a session registers only under its own token's label or a name no other account's token carries",
+			map[string]any{"field": "agent", "label": agent})
+	}
+	return nil
 }
 
 // ListWakeSessions opens each row's bearer and socket token under the row's own AAD.

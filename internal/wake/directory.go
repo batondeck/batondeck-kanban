@@ -181,6 +181,13 @@ func (d *Directory) restore(ctx context.Context, r service.WakeSessionRow) strin
 	if err != nil || caller.Identity != r.IdentityID {
 		return "its bearer no longer resolves to its identity"
 	}
+	if err := d.o.Sessions.CheckWakeAgent(ctx, caller, r.AgentID); err != nil {
+		// A row written before the register check held (P-322), or under a name since minted.
+		if be, ok := domain.AsBatonDeckError(err); ok && be.Code == domain.CodeForbidden {
+			return fmt.Sprintf("its agent %q is another agent's label", r.AgentID)
+		}
+		return "reading its agent's label failed"
+	}
 	scopes, err := d.o.Scopes(ctx, caller)
 	if err != nil {
 		return "reading its scopes failed"
