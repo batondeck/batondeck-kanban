@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 
 	"github.com/batondeck/batondeck-kanban/internal/service"
 )
@@ -80,7 +81,13 @@ func (h HookRoutes) serve(w http.ResponseWriter, r *http.Request) {
 	case service.HookTooLarge:
 		tooLarge(w)
 	case service.HookRateLimited:
+		retryAfter(w, out.RetryAfter)
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"code": "RATE_LIMITED", "retryable": true, "results": out.Results})
+	case service.HookUnavailable:
+		// A retryable ingest failure is a 5xx, the only answer Alertmanager and PagerDuty both
+		// retry; a 4xx would drop the alert (P-233).
+		retryAfter(w, out.RetryAfter)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": out.Code, "message": out.Detail, "retryable": true, "results": out.Results})
 	case service.HookUnauthorized:
 		// An RFC 7617 sender (Cloud Monitoring among them) sends credentials only after a challenge.
 		if out.Challenge {
@@ -124,6 +131,11 @@ func CapBody(next http.Handler, maxBytes int64, refused func(r *http.Request, de
 		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
 		next.ServeHTTP(w, r)
 	})
+}
+
+// retryAfter sets Retry-After to seconds, at least 1 (RFC 9110 §10.2.3, delay-seconds).
+func retryAfter(w http.ResponseWriter, seconds int) {
+	w.Header().Set("Retry-After", strconv.Itoa(max(1, seconds)))
 }
 
 func tooLarge(w http.ResponseWriter) {

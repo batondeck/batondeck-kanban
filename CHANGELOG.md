@@ -1379,3 +1379,10 @@ this section's headings in CHANGELOG.md, are all part of it.
   when alone, then shares it for its lifetime, so a serve beside another does not migrate.
   Postgres keeps goose's session lock. `TestFirstMigrationsOnOneFileBothSucceed` moved to
   `internal/cli` and runs the real migrations through `migrate`, 30 rounds.
+- `POST /hooks/{id}` answers a verified delivery whose ingest failed retryably (a lost race,
+  `STALE`, or a store fault, `INTERNAL`) with 503, `Retry-After: 1` and
+  `{"code","message","retryable":true,"results"}` naming the events that landed ahead of it, not
+  400 (P-233). Alertmanager and PagerDuty drop a 4xx other than 429 and retry a 5xx, so the alert
+  was lost; the retry now replays the landed events and lands the failed one once. Every 429 carries
+  `Retry-After`: `ceil(60/ratePerMin)` seconds for the integration's budget, 1 for the pre-check.
+  A non-retryable refusal stays 400 `VALIDATION`.

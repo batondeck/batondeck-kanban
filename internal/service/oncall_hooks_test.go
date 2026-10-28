@@ -169,7 +169,8 @@ func TestHookRateLimit(t *testing.T) {
 		}
 	}
 	tasks := f.taskCount(t)
-	if out := send(10); out.Refusal != HookRateLimited || f.taskCount(t) != tasks {
+	// P-233: the refusal says when a token is back: ceil(60/40) seconds.
+	if out := send(10); out.Refusal != HookRateLimited || out.RetryAfter != 2 || f.taskCount(t) != tasks {
 		t.Fatalf("the 11th delivery: %+v (tasks %d -> %d)", out, tasks, f.taskCount(t))
 	}
 	// 6a: the tools are refused on the spent budget too; another integration's is its own.

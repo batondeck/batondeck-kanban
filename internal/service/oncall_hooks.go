@@ -54,16 +54,33 @@ const (
 	// HookBadRequest is a verified body that is not JSON or not the source's shape: a rejected
 	// delivery row whose error names the field.
 	HookBadRequest HookRefusal = "bad_request"
+	// HookUnavailable is a verified delivery whose ingest failed retryably (a lost race, STALE, or
+	// a store fault, INTERNAL): nothing of the failed event landed, and the sender is told to retry,
+	// since Alertmanager and PagerDuty retry a 5xx and drop a 4xx other than 429 (P-233).
+	HookUnavailable HookRefusal = "unavailable"
 )
 
 // HookOutcome is what Hook did: Refusal "" accepted, with one result per event the body carried.
 // Challenge asks the route for a Basic WWW-Authenticate (an RFC 7617 sender authenticates only
-// after one); Detail is a bad request's reason, the sender's to read.
+// after one); Detail is a bad request's or an unavailable ingest's reason, the sender's to read;
+// Code is an unavailable ingest's error code; RetryAfter is the seconds a rate-limited or
+// unavailable sender should wait before it retries.
 type HookOutcome struct {
-	Refusal   HookRefusal
-	Detail    string
-	Challenge bool
-	Results   []HookResult
+	Refusal    HookRefusal
+	Detail     string
+	Code       string
+	RetryAfter int
+	Challenge  bool
+	Results    []HookResult
+}
+
+// rateRetryAfter is the whole seconds the rate budget takes to refill one token at ratePerMin
+// (the limiter refills ratePerMin a minute, at least 1): ceil(60/ratePerMin), at least 1.
+func rateRetryAfter(ratePerMin int) int {
+	if ratePerMin < 1 {
+		ratePerMin = 1
+	}
+	return max(1, (60+ratePerMin-1)/ratePerMin)
 }
 
 // HookResult is one event's delivery: its id, what it did and the ticket it touched.
@@ -88,7 +105,9 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		return HookOutcome{Refusal: why}, nil
 	}
 	if !c.limiter.PreCheck(integrationID, now) {
-		return refuse(HookRateLimited, "over the pre-check burst")
+		out, err := refuse(HookRateLimited, "over the pre-check burst")
+		out.RetryAfter = 1 // the pre-check refills prePerSec tokens a second
+		return out, err
 	}
 	integration, err := c.store.GetIntegrationByID(ctx, integrationID)
 	if isNotFound(err) {
@@ -163,10 +182,16 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID)
 		if e, ok := domain.AsBatonDeckError(err); ok {
 			if e.Code == domain.CodeRateLimited {
-				out.Refusal = HookRateLimited
+				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))
 				return out, nil
 			}
 			c.log.Printf("ingest: integration %s delivery %s refused: %s %s", integration.ID, deliveryID, e.Code, e.Message)
+			if e.Retryable {
+				// Nothing of this event landed (its transaction rolled back), and the events before it
+				// are recorded, so the sender's retry replays them and lands this one once.
+				out.Refusal, out.Code, out.Detail, out.RetryAfter = HookUnavailable, string(e.Code), e.Message, 1
+				return out, nil
+			}
 			out.Refusal, out.Detail = HookBadRequest, e.Message
 			return out, nil
 		}
