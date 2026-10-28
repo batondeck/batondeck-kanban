@@ -132,7 +132,7 @@ func EnvVars() []EnvVar {
 		{"BATONDECK_DATABASE_URL", "$XDG_DATA_HOME/batondeck-kanban/" + DefaultDBFile + ", else ~/.local/share/batondeck-kanban/" + DefaultDBFile, "a SQLite file path, or a postgres:// URL"},
 		{"BATONDECK_DATABASE_SYNCHRONOUS", "FULL", "SQLite's synchronous pragma: FULL or NORMAL"},
 		{"BATONDECK_LISTEN", "tcp://127.0.0.1:8080", "comma-separated tcp://host:port or unix:///abs/path addresses"},
-		{"BATONDECK_PUBLIC_URL", "unset, no OAuth server: API tokens only", "the externally reachable base URL, the OAuth issuer"},
+		{"BATONDECK_PUBLIC_URL", "unset, no OAuth server: API tokens only", "the externally reachable base URL: the OAuth issuer, and the base of attachment links (unset, each link takes the requesting client's host)"},
 		{"BATONDECK_RETENTION_CHANGE_LOG_DAYS", days(r.ChangeLogDays), "days the change log is kept"},
 		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS", days(r.ToolCallsDays), "days tool-call records are kept"},
 		{"BATONDECK_RETENTION_DELIVERIES_DAYS", days(r.DeliveriesDays), "days an on-call delivery is kept"},

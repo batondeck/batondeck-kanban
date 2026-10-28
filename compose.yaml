@@ -29,7 +29,8 @@ services:
       # On Postgres there is no master.key file beside a SQLite file, so the key comes from here:
       # without one, attachments and the wake directory's inbox tokens are refused.
       BATONDECK_MASTER_KEY: ${BATONDECK_MASTER_KEY:?set BATONDECK_MASTER_KEY to a base64 32-byte key, for example in .env beside compose.yaml - openssl rand -base64 32}
-      # The OAuth issuer, for the claude.ai connector; empty runs with API tokens only.
+      # The OAuth issuer, for the claude.ai connector; empty runs with API tokens only. Set, it is also
+      # the attachment links' base; empty, each link takes the host the client reached the board at.
       BATONDECK_PUBLIC_URL: ${BATONDECK_PUBLIC_URL:-}
     ports:
       - "127.0.0.1:8080:8080"

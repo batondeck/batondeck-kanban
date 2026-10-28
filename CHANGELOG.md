@@ -1411,3 +1411,16 @@ this section's headings in CHANGELOG.md, are all part of it.
   `list_attachments` signs those); `openFollowUps` and `openFollowUpCount` with the `followups`
   section (open ones only, at most 200). One statement each: the `get_task_context` pin in
   `test/perf` rises from 6 to 9.
+- Attachment links no longer point at `0.0.0.0` (P-337). With `public_url` unset, the signed
+  upload and download URLs took the listener's address, and the image listens on `tcp://:8080`, so
+  under the compose quickstart every link named `0.0.0.0:8080` or `[::]:8080`. They now start with
+  the scheme and Host of the request they are signed for (`X-Forwarded-Proto: https` gives https),
+  on the web UI and MCP alike; `public_url`, when set, is still the base. A request on the Unix
+  socket takes the first TCP listener's address, a wildcard host made `127.0.0.1`. No new setting.
+- A request body is read within 30 s (P-232). Only the headers were bounded (10 s), so a client
+  that sent headers and then stalled its body held a handler and its connection for as long as it
+  liked, on every route, `/hooks` included; an idle keep-alive connection was never closed either.
+  The server now bounds reading a request at 30 s from its first byte (a stalled body gets 400 and
+  the connection closes); the bound ends once the request has been read, so `/api/stream`, the
+  MCP stream and a long tool call run as before; a blob upload keeps its signed URL's expiry as its
+  deadline. An idle keep-alive connection closes after 30 s. No new setting.
