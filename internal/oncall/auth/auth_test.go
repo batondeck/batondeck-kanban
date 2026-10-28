@@ -155,3 +155,71 @@ func TestSafeFetchRefusesForbiddenAddresses(t *testing.T) {
 		t.Error("a hex v4-mapped loopback literal was fetched")
 	}
 }
+
+// P-231: a failed JWKS fetch, or a set that is unusable, is remembered for jwksRefetchAfter: an
+// unknown-kid bearer within it answers jwks_fetch_failed with no fetch and no outbound line; one
+// after it fetches again; a good set then replaces the failure and serves a known kid unfetched.
+func TestJWTNegativeCache(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes())}}})
+	cfg := JWT{Issuer: "https://issuer.example.com", Audience: "batondeck", JWKSURL: "https://issuer.example.com/jwks"}
+	rs := map[string]string{"alg": "RS256", "kid": "k1"}
+	good := map[string]any{"iss": cfg.Issuer, "aud": cfg.Audience, "exp": now.Add(time.Hour).Unix()}
+	junk := "Bearer " + sign(t, key, map[string]string{"alg": "RS256", "kid": "junk"}, good)
+	for _, c := range []struct {
+		name  string
+		serve func() ([]byte, error)
+	}{
+		{"a failed fetch", func() ([]byte, error) { return nil, errors.New("HTTP 500") }},
+		{"an unusable set", func() ([]byte, error) { return []byte(`{"keys":"nope"}`), nil }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clock := now
+			fetches, lines := 0, 0
+			healthy := false
+			v := &Verifier{
+				Fetch: func(context.Context, string) ([]byte, error) {
+					fetches++
+					if healthy {
+						return set, nil
+					}
+					return c.serve()
+				},
+				Logf: func(format string, _ ...any) {
+					if strings.HasPrefix(format, "ingest: outbound JWKS fetch") {
+						lines++
+					}
+				},
+				Now: func() time.Time { return clock },
+			}
+			for i := range 2 {
+				if reason, ok := v.Verify(context.Background(), junk, cfg, "I-1"); ok || reason != ReasonJWKSFetch {
+					t.Fatalf("junk bearer %d: %q, %v", i+1, reason, ok)
+				}
+			}
+			if fetches != 1 || lines != 1 {
+				t.Fatalf("two bearers within 30 s: %d fetches, %d outbound lines; want 1 and 1", fetches, lines)
+			}
+			clock = clock.Add(31 * time.Second)
+			if reason, _ := v.Verify(context.Background(), junk, cfg, "I-1"); reason != ReasonJWKSFetch || fetches != 2 {
+				t.Fatalf("a bearer at +31 s: %q, %d fetches; want the 2nd fetch", reason, fetches)
+			}
+			// Still failed at +31 s; the next good fetch, past the window, replaces the failure.
+			clock = clock.Add(31 * time.Second)
+			healthy = true
+			if reason, ok := v.Verify(context.Background(), "Bearer "+sign(t, key, rs, good), cfg, "I-1"); !ok || fetches != 3 {
+				t.Fatalf("a valid bearer once the set is good: %q, %v, %d fetches", reason, ok, fetches)
+			}
+			if reason, ok := v.Verify(context.Background(), "Bearer "+sign(t, key, rs, good), cfg, "I-1"); !ok || fetches != 3 {
+				t.Fatalf("a known kid from the good set: %q, %v, %d fetches; want no fetch", reason, ok, fetches)
+			}
+			// The good set's unknown-kid rule is unchanged: within 30 s of the fetch, no refetch.
+			if reason, _ := v.Verify(context.Background(), junk, cfg, "I-1"); !strings.HasPrefix(reason, ReasonVerifyFailed) || fetches != 3 {
+				t.Fatalf("an unknown kid against the fresh good set: %q, %d fetches", reason, fetches)
+			}
+		})
+	}
+}

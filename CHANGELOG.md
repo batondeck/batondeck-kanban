@@ -1379,3 +1379,18 @@ this section's headings in CHANGELOG.md, are all part of it.
   when alone, then shares it for its lifetime, so a serve beside another does not migrate.
   Postgres keeps goose's session lock. `TestFirstMigrationsOnOneFileBothSucceed` moved to
   `internal/cli` and runs the real migrations through `migrate`, 30 rounds.
+- `POST /hooks/{id}` answers a verified delivery whose ingest failed retryably (a lost race,
+  `STALE`, or a store fault, `INTERNAL`) with 503, `Retry-After: 1` and
+  `{"code","message","retryable":true,"results"}` naming the events that landed ahead of it, not
+  400 (P-233). Alertmanager and PagerDuty drop a 4xx other than 429 and retry a 5xx, so the alert
+  was lost; the retry now replays the landed events and lands the failed one once. Every 429 carries
+  `Retry-After`: `ceil(60/ratePerMin)` seconds for the integration's budget, 1 for the pre-check.
+  A non-retryable refusal stays 400 `VALIDATION`.
+- `POST /hooks/{id}` charges a delivery to the integration's rate budget before verifying it, and a
+  failed JWKS fetch or an unusable set is remembered for 30 s, so a sender with bad bearers can no
+  longer make the server fetch a `jwt` integration's JWKS on every request (P-231). Over the budget
+  a delivery is 429 with no fetch; a refused delivery is paid by that charge, and one that parses
+  gets it back before its events charge themselves. Because the charge comes before the delivery id
+  is known, on an empty bucket a retry of an already recorded delivery is now 429 until a token
+  refills rather than a free replay. Concurrent first misses on one URL are bounded by the bucket's
+  capacity, `ceil(ratePerMin/4)`; they are not coalesced into one fetch.

@@ -54,16 +54,33 @@ const (
 	// HookBadRequest is a verified body that is not JSON or not the source's shape: a rejected
 	// delivery row whose error names the field.
 	HookBadRequest HookRefusal = "bad_request"
+	// HookUnavailable is a verified delivery whose ingest failed retryably (a lost race, STALE, or
+	// a store fault, INTERNAL): nothing of the failed event landed, and the sender is told to retry,
+	// since Alertmanager and PagerDuty retry a 5xx and drop a 4xx other than 429 (P-233).
+	HookUnavailable HookRefusal = "unavailable"
 )
 
 // HookOutcome is what Hook did: Refusal "" accepted, with one result per event the body carried.
 // Challenge asks the route for a Basic WWW-Authenticate (an RFC 7617 sender authenticates only
-// after one); Detail is a bad request's reason, the sender's to read.
+// after one); Detail is a bad request's or an unavailable ingest's reason, the sender's to read;
+// Code is an unavailable ingest's error code; RetryAfter is the seconds a rate-limited or
+// unavailable sender should wait before it retries.
 type HookOutcome struct {
-	Refusal   HookRefusal
-	Detail    string
-	Challenge bool
-	Results   []HookResult
+	Refusal    HookRefusal
+	Detail     string
+	Code       string
+	RetryAfter int
+	Challenge  bool
+	Results    []HookResult
+}
+
+// rateRetryAfter is the whole seconds the rate budget takes to refill one token at ratePerMin
+// (the limiter refills ratePerMin a minute, at least 1): ceil(60/ratePerMin), at least 1.
+func rateRetryAfter(ratePerMin int) int {
+	if ratePerMin < 1 {
+		ratePerMin = 1
+	}
+	return max(1, (60+ratePerMin-1)/ratePerMin)
 }
 
 // HookResult is one event's delivery: its id, what it did and the ticket it touched.
@@ -78,9 +95,12 @@ type HookResult struct {
 // presented (before any read), the integration by its id alone (unknown, tombstoned or disabled is
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
-// <source id or the body's hash>#<fingerprint or index>. A verification or parse failure is a
+// <source id or the body's hash>#<fingerprint or index>. The delivery is charged to the
+// integration's rate budget before it is verified, so a refused sender cannot buy an outbound JWKS
+// fetch past the budget (P-231); a verification or parse failure is paid by that charge and is a
 // rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
-// budget lasts), charged to the rate budget. The error is an internal fault only.
+// budget lasts). A delivery that parses gets the charge back before its events are ingested, since
+// ingest charges each new delivery id itself. The error is an internal fault only.
 func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (HookOutcome, error) {
 	now := c.now()
 	refuse := func(why HookRefusal, format string, a ...any) (HookOutcome, error) {
@@ -88,7 +108,9 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		return HookOutcome{Refusal: why}, nil
 	}
 	if !c.limiter.PreCheck(integrationID, now) {
-		return refuse(HookRateLimited, "over the pre-check burst")
+		out, err := refuse(HookRateLimited, "over the pre-check burst")
+		out.RetryAfter = 1 // the pre-check refills prePerSec tokens a second
+		return out, err
 	}
 	integration, err := c.store.GetIntegrationByID(ctx, integrationID)
 	if isNotFound(err) {
@@ -111,16 +133,22 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	if len(r.Body) > capKb<<10 {
 		return refuse(HookTooLarge, "a %d-byte body is over the %d KiB cap", len(r.Body), capKb)
 	}
+	// The charge comes before verification: a jwt integration's verification may fetch its JWKS,
+	// the only outbound call in ingest (P-231).
+	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), now, "") {
+		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): a delivery refused before verification", integration.ID, int(limits.RatePerMin))
+		return HookOutcome{Refusal: HookRateLimited, RetryAfter: rateRetryAfter(int(limits.RatePerMin))}, nil
+	}
 	if reason, challenge := c.verifyHook(ctx, integration, r, now); reason != "" {
 		c.log.Printf("ingest: integration %s refused a delivery's signature: %s", integration.ID, reason)
-		if err := c.reject(ctx, integration, int(limits.RatePerMin), r.Body, reason, now); err != nil {
+		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
 		return HookOutcome{Refusal: HookUnauthorized, Challenge: challenge}, nil
 	}
 	badRequest := func(reason string) (HookOutcome, error) {
 		c.log.Printf("ingest: integration %s refused a delivery: %s", integration.ID, reason)
-		if err := c.reject(ctx, integration, int(limits.RatePerMin), r.Body, reason, now); err != nil {
+		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
 		return HookOutcome{Refusal: HookBadRequest, Detail: reason}, nil
@@ -151,6 +179,9 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	if base == "" {
 		base = bodyHash
 	}
+	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
+	// one token per new delivery id and none for a recorded one, so the charge is given back.
+	c.limiter.Refund(integration.ID, int(limits.RatePerMin))
 	caller := domain.Caller{Identity: IngestActor(integration.ID)}
 	out := HookOutcome{Results: []HookResult{}}
 	for i, ev := range events {
@@ -163,10 +194,16 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID)
 		if e, ok := domain.AsBatonDeckError(err); ok {
 			if e.Code == domain.CodeRateLimited {
-				out.Refusal = HookRateLimited
+				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))
 				return out, nil
 			}
 			c.log.Printf("ingest: integration %s delivery %s refused: %s %s", integration.ID, deliveryID, e.Code, e.Message)
+			if e.Retryable {
+				// Nothing of this event landed (its transaction rolled back), and the events before it
+				// are recorded, so the sender's retry replays them and lands this one once.
+				out.Refusal, out.Code, out.Detail, out.RetryAfter = HookUnavailable, string(e.Code), e.Message, 1
+				return out, nil
+			}
 			out.Refusal, out.Detail = HookBadRequest, e.Message
 			return out, nil
 		}
@@ -261,16 +298,12 @@ func (c *Core) hookSecrets(integration store.Integration, a oncall.Auth, now tim
 	return nil, "secret_unavailable"
 }
 
-// reject records a refused delivery (kind and result rejected, the reason its error), charged to
-// the integration's rate budget like any delivery: over it, nothing is written. The raw body (its
+// reject records a refused delivery (kind and result rejected, the reason its error), already paid
+// by Hook's charge ahead of verification (P-231), so it charges nothing itself. The raw body (its
 // first 64 KiB) is kept for the raw-body window while the integration's hourly budget of
 // oncall.RejectionsPerHour lasts. Its id is the body's hash, so a sender repeating one body is
 // recorded once.
-func (c *Core) reject(ctx context.Context, integration store.Integration, ratePerMin int, body []byte, reason string, now time.Time) error {
-	if !c.limiter.Check(integration.ID, ratePerMin, now, "") {
-		c.log.Printf("ingest: integration %s over its rate limit: a refused delivery is not recorded", integration.ID)
-		return nil
-	}
+func (c *Core) reject(ctx context.Context, integration store.Integration, body []byte, reason string, now time.Time) error {
 	deliveryID := connectors.Sha256Hex(body)[:32] + rejectionIDSuffix
 	err := c.store.Atomically(ctx, func(tx store.Store) error {
 		_, inserted, err := tx.InsertDelivery(ctx, store.Delivery{
