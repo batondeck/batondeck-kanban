@@ -1290,6 +1290,12 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- Attachment links no longer point at `0.0.0.0` (P-337). With `public_url` unset, the signed
+  upload and download URLs took the listener's address, and the image listens on `tcp://:8080`, so
+  under the compose quickstart every link named `0.0.0.0:8080` or `[::]:8080`. They now start with
+  the scheme and Host of the request they are signed for (`X-Forwarded-Proto: https` gives https),
+  on the web UI and MCP alike; `public_url`, when set, is still the base. A request on the Unix
+  socket takes the first TCP listener's address, a wildcard host made `127.0.0.1`. No new setting.
 - /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
   request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
   proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an

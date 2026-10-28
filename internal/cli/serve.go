@@ -160,12 +160,20 @@ const internalPrefix = "/internal/"
 // handler is the app's routes on both networks. Over TCP every path under /internal/ is 404 whatever
 // its method, before the mux sees it, so a socket-only route answers there exactly as one that does
 // not exist (no 405, no Allow header naming its method). Every response carries web.SecurityHeaders.
+// A TCP request with a Host carries its origin (auth.RequestOrigin) as service.RequestBase, the base
+// of the blob URLs signed for it while public_url is unset; one on the socket carries none, so
+// those take the listener fallback (mediaOptions).
 func (a *app) handler(version string) http.Handler {
 	mux := engineHandler(version, a.engine, a.mcp.Handler(), a.mount)
 	return web.SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !core.ViaUnixSocket(r.Context()) && strings.HasPrefix(r.URL.Path, internalPrefix) {
-			http.NotFound(w, r)
-			return
+		if !core.ViaUnixSocket(r.Context()) {
+			if strings.HasPrefix(r.URL.Path, internalPrefix) {
+				http.NotFound(w, r)
+				return
+			}
+			if r.Host != "" {
+				r = r.WithContext(service.WithRequestBase(r.Context(), auth.RequestOrigin(r)))
+			}
 		}
 		mux.ServeHTTP(w, r)
 	}))
@@ -193,8 +201,10 @@ func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, 
 }
 
 // mediaOptions is the blob store at cfg.BlobDir() and, with a keyring, the URL signer keyed by its
-// blob.SigningLabel key. The URLs start with public_url, else with the first TCP listener's
-// address. Without a keyring attach_file is refused and no download URL is signed, said once.
+// blob.SigningLabel key. The URLs start with public_url, else with the origin of the request they
+// are signed for (handler), else, for a request on the Unix socket, with the first TCP listener's
+// address (listenerBase). Without a keyring attach_file is refused and no download URL is signed,
+// said once.
 func mediaOptions(cfg *core.Config, keys *core.Keyring, lns []net.Listener, logger *log.Logger) (service.MediaOptions, error) {
 	files, err := blob.Open(cfg.BlobDir())
 	if err != nil {
@@ -212,13 +222,34 @@ func mediaOptions(cfg *core.Config, keys *core.Keyring, lns []net.Listener, logg
 	if m.Signer, err = blob.NewSigner(key); err != nil {
 		return service.MediaOptions{}, err
 	}
-	for _, ln := range lns {
-		if m.BaseURL == "" && ln.Addr().Network() == "tcp" {
-			m.BaseURL = "http://" + ln.Addr().String()
-		}
+	m.FallbackURL = listenerBase(lns)
+	at := m.BaseURL + "/blobs/"
+	if m.BaseURL == "" {
+		at = "the requesting client's host, " + cmp.Or(m.FallbackURL, "none") + " for one on the Unix socket"
 	}
-	logger.Printf("serve: blobs in %s, up to %d bytes each, signed URLs at %s/blobs/", files.Dir(), m.MaxBytes, m.BaseURL)
+	logger.Printf("serve: blobs in %s, up to %d bytes each, signed URLs at %s", files.Dir(), m.MaxBytes, at)
 	return m, nil
+}
+
+// listenerBase is http:// and the first TCP listener's address, its host 127.0.0.1 when the
+// listener is on every interface (0.0.0.0 or ::, which no client can dial; Go's wildcard
+// listener is dual-stack, so the IPv4 loopback reaches it), or "" with no TCP listener.
+func listenerBase(lns []net.Listener) string {
+	for _, ln := range lns {
+		if ln.Addr().Network() != "tcp" {
+			continue
+		}
+		addr := ln.Addr().String()
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return "http://" + addr
+		}
+		if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+			host = "127.0.0.1"
+		}
+		return "http://" + net.JoinHostPort(host, port)
+	}
+	return ""
 }
 
 // shutdownBudget bounds the MCP session close and the HTTP drain; flushBudget the tool-call flush
