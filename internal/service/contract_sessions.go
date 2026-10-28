@@ -43,6 +43,11 @@ type WakeStore interface {
 	// RegisterWakeSession is Sessions.RegisterWakeSession.
 	RegisterWakeSession(ctx context.Context, caller domain.Caller, req RegisterWakeSessionReq) (RegisterWakeSessionResp, error)
 
+	// CheckWakeAgent is RegisterWakeSession's agent check alone (P-322): nil when caller may hold an
+	// entry under agent, FORBIDDEN when agent is another agent's label. The start-up rebuild asks it
+	// of each row with the row's re-resolved caller, so a row written before the check holds is dropped.
+	CheckWakeAgent(ctx context.Context, caller domain.Caller, agent string) error
+
 	// ListWakeSessions is every directory row with its secrets opened, for the directory's start-up
 	// rebuild. A row whose secrets do not open is listed with Sealed false and an empty Bearer, so
 	// the directory drops it.

@@ -50,11 +50,16 @@ func (c *Core) liveWorkers() map[string][]string {
 
 // mentionsOf resolves the body's @mentions against the project's members: a member's identity, its
 // account's email and display name, and the agent label of each of its live worker sessions
-// (workers). A body with no @token reads nothing; otherwise one member list and one account read
-// per member (conductor's memberAliases, bounded by the member count).
+// (workers) that the member owns (ownedLabels). A body with no @token reads nothing; otherwise one
+// member list, one account read per member (conductor's memberAliases, bounded by the member
+// count), and one token read when a live worker has a label.
 func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, error) {
 	if len(domain.MentionTokens(body)) == 0 {
 		return []string{}, nil
+	}
+	workers, err := t.ownedLabels(body, workers)
+	if err != nil {
+		return nil, err
 	}
 	members, err := t.Tx.ListMembers(t.ctx, t.ProjectID)
 	if err != nil {
@@ -75,6 +80,62 @@ func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, er
 		aliases[m.IdentityID] = append(slices.Clone(aliases[m.IdentityID]), u.Email, u.DisplayName)
 	}
 	return domain.ResolveMentions(body, ids, aliases), nil
+}
+
+// ownedLabels is workers with a worker's label dropped where a mention of another identity's token
+// label in body would resolve to it: a label is its first minter's, revoked or expired rows included
+// (P-257, REVIEW-257 R2-Q1), so "@<label>" names only the identity that owns it (P-343, Fable B1 on
+// #78). The match is domain.ResolveMentions' own (case, spaces, an email's local part), not the
+// exact string, since that is how the alias is read. A name no other identity's token carries keeps
+// aliasing its worker's identity, and every identity keeps its live worker (the ring by @login).
+func (t *txn) ownedLabels(body string, workers map[string][]string) (map[string][]string, error) {
+	labelled := false
+	for _, ls := range workers {
+		labelled = labelled || len(ls) > 0
+	}
+	if !labelled {
+		return workers, nil
+	}
+	tokens, err := t.Tx.ListTokens(t.ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	inBody := map[string]bool{}
+	for _, tok := range domain.MentionTokens(body) {
+		inBody[tok] = true
+	}
+	type held struct{ mention, identity string }
+	var named []held // the token labels this body mentions, each with its holder
+	for _, r := range tokens {
+		a := domain.TokenAgent(r.Label)
+		if a == "" {
+			continue
+		}
+		for _, tok := range domain.MentionTokens("@" + a) {
+			if inBody[tok] {
+				named = append(named, held{"@" + a, r.IdentityID})
+				break
+			}
+		}
+	}
+	if len(named) == 0 {
+		return workers, nil
+	}
+	out := make(map[string][]string, len(workers))
+	for id, ls := range workers {
+		kept := []string{}
+		for _, l := range ls {
+			other := false
+			for _, h := range named {
+				other = other || (h.identity != id && len(domain.ResolveMentions(h.mention, []string{"\x00"}, map[string][]string{"\x00": {l}})) > 0)
+			}
+			if !other {
+				kept = append(kept, l)
+			}
+		}
+		out[id] = kept
+	}
+	return out, nil
 }
 
 // AddComment is add_comment. The task's version does not move (conductor's addComment writes beside
