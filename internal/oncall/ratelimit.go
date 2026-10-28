@@ -101,6 +101,17 @@ func (l *RateLimiter) Check(integrationID string, ratePerMin int, now time.Time,
 	return true
 }
 
+// Refund gives one token back to integrationID's bucket, never past Capacity(ratePerMin): a charge
+// taken before a delivery is verified (P-231) is returned once the delivery's events charge
+// themselves. A bucket it has never charged is left alone.
+func (l *RateLimiter) Refund(integrationID string, ratePerMin int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.buckets[integrationID]; ok {
+		b.tokens = math.Min(float64(Capacity(ratePerMin)), b.tokens+1)
+	}
+}
+
 // Capacity is the burst Check allows ratePerMin: ceil(ratePerMin/4), at least 1.
 func Capacity(ratePerMin int) int { return int(math.Ceil(math.Max(1, float64(ratePerMin)) / 4)) }
 

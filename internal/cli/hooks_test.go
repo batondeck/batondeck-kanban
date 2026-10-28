@@ -534,7 +534,15 @@ func TestHook429CarriesRetryAfter(t *testing.T) {
 				send := func(i int) hookAnswer {
 					return h.post(t, in.Integration.ID, fmt.Appendf(nil, `{"fingerprint":"fp-%d","status":"firing","severity":"critical","title":"t"}`, i), key)
 				}
-				for i := range (c.rate + 3) / 4 {
+				wrong := func() hookAnswer {
+					return h.post(t, in.Integration.ID, []byte(`{}`), map[string]string{service.HeaderAPIKey: "wrong-0123456789"})
+				}
+				// An unauthorized delivery is 401 with no Retry-After, and it spends a token: the
+				// charge comes before verification (P-231).
+				if got := wrong(); got.status != http.StatusUnauthorized || got.header.Get("Retry-After") != "" {
+					t.Fatalf("an unauthorized delivery: %d Retry-After %q", got.status, got.header.Get("Retry-After"))
+				}
+				for i := range (c.rate+3)/4 - 1 {
 					if got := send(i); got.status != http.StatusAccepted || got.header.Get("Retry-After") != "" {
 						t.Fatalf("rate %d, delivery %d: %d Retry-After %q", c.rate, i, got.status, got.header.Get("Retry-After"))
 					}
@@ -542,8 +550,8 @@ func TestHook429CarriesRetryAfter(t *testing.T) {
 				if got := send(99); got.status != http.StatusTooManyRequests || got.header.Get("Retry-After") != c.want {
 					t.Fatalf("rate %d over the budget: %d Retry-After %q, want %s", c.rate, got.status, got.header.Get("Retry-After"), c.want)
 				}
-				if got := h.post(t, in.Integration.ID, []byte(`{}`), map[string]string{service.HeaderAPIKey: "wrong-0123456789"}); got.status != http.StatusUnauthorized || got.header.Get("Retry-After") != "" {
-					t.Fatalf("an unauthorized delivery: %d Retry-After %q", got.status, got.header.Get("Retry-After"))
+				if got := wrong(); got.status != http.StatusTooManyRequests || got.header.Get("Retry-After") != c.want {
+					t.Fatalf("an unauthorized delivery over the budget: %d Retry-After %q, want 429 %s", got.status, got.header.Get("Retry-After"), c.want)
 				}
 			}
 			// The pre-check: a flood on one presented id (unknown, so 404 until the burst is spent).

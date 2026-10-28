@@ -10,10 +10,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -548,5 +551,168 @@ func TestHookStampsTheConfiguredWindows(t *testing.T) {
 	}
 	if n, err := f.st.DeleteExpiredDeliveryRawBodies(f.ctx, now.Add(day).UnixMilli(), 100); err != nil || n != 1 {
 		t.Fatalf("raw bodies past their expiry at 1 day: %d, %v; want the refused one", n, err)
+	}
+}
+
+// P-231: the rate budget is charged before a delivery is verified, and a failed JWKS fetch is
+// remembered, so junk bearers buy no outbound fetch past the budget; on both engines, with a JWKS
+// fetch that fails for …/bad and serves a real set for …/good, counted. (a) At 40 a minute (a burst
+// of 10) 12 junk bearers, each with its own body: 10 unauthorized (one fetch, then the remembered
+// failure), 2 rate_limited before verification, 10 rejected rows. (b) At 1 a minute one junk bearer
+// fetches once; at +31 s (the failure forgotten, the bucket at 0.52) the next is rate_limited
+// unverified, so still one fetch. Controls: an hmac integration's 10 bad signatures are 10 rejected
+// rows and the 11th is 429 (a rejection is charged once); a valid bearer on …/good is accepted.
+func TestHookChargesBeforeVerifying(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k", "n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes())}}})
+	const bad, good = "https://jwks.example.com/bad", "https://jwks.example.com/good"
+	for _, e := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			clk := &clock{t: time.Now()}
+			var mu sync.Mutex
+			fetches := map[string]int{}
+			fetch := func(_ context.Context, u string) ([]byte, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				fetches[u]++
+				if u == good {
+					return set, nil
+				}
+				return nil, errors.New("HTTP 500 from the JWKS host")
+			}
+			count := func(u string) int {
+				mu.Lock()
+				defer mu.Unlock()
+				return fetches[u]
+			}
+			logs := &logBuf{}
+			c := New(st, Options{ToolCallFlush: -1, Sealer: oncallKeyring(t), Now: clk.now, JWKSFetch: fetch, Logger: log.New(logs, "", 0)})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			root := domain.Caller{Identity: "carol", Agent: "claude", TokenScope: "carol", WorkspaceAdmin: true}
+			p, err := c.Projects().Create(ctx, root, CreateProjectReq{Name: "Q"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := c.Boards().Create(ctx, root, CreateBoardReq{ProjectID: p.ProjectID, Name: "B"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration := func(name string, rate int64, a IntegrationAuthInput) CreateIntegrationResp {
+				t.Helper()
+				source := IntegrationSource("gcp")
+				if a.Mode == "hmac" {
+					source = "generic"
+				}
+				out, err := c.Oncall().CreateIntegration(ctx, root, CreateIntegrationReq{ProjectID: p.ProjectID, BoardID: b.Board.ID, Name: name, Source: source,
+					Auth: a, Routing: IntegrationRouting{Mode: "broadcast"}, Limits: IntegrationLimitsIn{RatePerMin: rate}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return out
+			}
+			jwtAt := func(u string) IntegrationAuthInput {
+				return IntegrationAuthInput{Mode: "jwt", JWT: IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: u}}
+			}
+			gcp := func(i int) []byte {
+				return fmt.Appendf(nil, `{"version":"1.2","incident":{"incident_id":"i-%d","state":"open","policy_name":"p","started_at":1729764000}}`, i)
+			}
+			bearer := func(tok string) func(string) string {
+				h := http.Header{}
+				h.Set(HeaderAuthorize, "Bearer "+tok)
+				return h.Get
+			}
+			hdr, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "junk"})
+			junk := bearer(b64url(hdr) + ".e30.AAAA")
+			hook := func(iid string, r HookRequest) HookOutcome {
+				t.Helper()
+				out, err := c.Hook(ctx, iid, r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return out
+			}
+			rejected := func(iid string) int {
+				t.Helper()
+				page, err := st.ListDeliveries(ctx, p.ProjectID, iid, store.DeliveryFilter{}, "", 200)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := 0
+				for _, d := range page.Deliveries {
+					if d.Result == store.ResultRejected {
+						n++
+					}
+				}
+				return n
+			}
+
+			// (a) 12 junk bearers at 40 a minute.
+			a := integration("a", 40, jwtAt(bad))
+			got := map[HookRefusal]int{}
+			for i := range 12 {
+				got[hook(a.Integration.ID, HookRequest{Header: junk, Body: gcp(i)}).Refusal]++
+			}
+			if got[HookUnauthorized] != 10 || got[HookRateLimited] != 2 || count(bad) != 1 || rejected(a.Integration.ID) != 10 {
+				t.Fatalf("(a) refusals %v, fetches %d, rejected rows %d; want 10 unauthorized, 2 rate_limited, 1 fetch, 10 rows",
+					got, count(bad), rejected(a.Integration.ID))
+			}
+			if want := "ingest: integration " + a.Integration.ID + " over its rate limit (40 a minute): a delivery refused before verification"; !strings.Contains(logs.String(), want) {
+				t.Fatalf("no line %q", want)
+			}
+			if n := strings.Count(logs.String(), "ingest: outbound JWKS fetch GET "+bad); n != 1 {
+				t.Fatalf("%d outbound-fetch lines, want 1", n)
+			}
+
+			// (b) 1 a minute: the second junk bearer, past the remembered failure, is not verified.
+			clk.advance(time.Minute) // (a)'s failure is forgotten
+			before := count(bad)
+			one := integration("b", 1, jwtAt(bad))
+			if out := hook(one.Integration.ID, HookRequest{Header: junk, Body: gcp(100)}); out.Refusal != HookUnauthorized || count(bad) != before+1 {
+				t.Fatalf("(b) the first junk bearer: %+v, fetches %d (was %d)", out, count(bad), before)
+			}
+			clk.advance(31 * time.Second)
+			if out := hook(one.Integration.ID, HookRequest{Header: junk, Body: gcp(101)}); out.Refusal != HookRateLimited || out.RetryAfter != 60 || count(bad) != before+1 {
+				t.Fatalf("(b) at +31 s: %+v, fetches %d; want rate_limited unverified, fetches %d", out, count(bad), before+1)
+			}
+
+			// Control: an hmac integration's bad signatures, each charged once.
+			h := integration("h", 40, IntegrationAuthInput{Mode: "hmac"})
+			for i := range 10 {
+				r := signedHook("whsec_not-the-secret", clk.now(), genericBody(fmt.Sprint("bad-", i), "firing", "t"))
+				if out := hook(h.Integration.ID, r); out.Refusal != HookUnauthorized {
+					t.Fatalf("bad signature %d of 10: %+v", i+1, out)
+				}
+			}
+			if out := hook(h.Integration.ID, signedHook("whsec_not-the-secret", clk.now(), genericBody("bad-10", "firing", "t"))); out.Refusal != HookRateLimited || rejected(h.Integration.ID) != 10 {
+				t.Fatalf("the 11th bad signature: %+v, rejected rows %d", out, rejected(h.Integration.ID))
+			}
+
+			// Control: a valid bearer on the good set is accepted, twice, on one fetch.
+			ok := integration("ok", 40, jwtAt(good))
+			for i := range 2 {
+				hd, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k"})
+				cl, _ := json.Marshal(map[string]any{"iss": "https://accounts.google.com", "aud": "batondeck", "exp": clk.now().Add(time.Hour).Unix()})
+				in := b64url(hd) + "." + b64url(cl)
+				d := sha256.Sum256([]byte(in))
+				sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+				if out := hook(ok.Integration.ID, HookRequest{Header: bearer(in + "." + b64url(sig)), Body: gcp(200 + i)}); out.Refusal != "" || len(out.Results) != 1 {
+					t.Fatalf("valid bearer %d: %+v", i+1, out)
+				}
+			}
+			if count(good) != 1 {
+				t.Fatalf("the good set was fetched %d times, want 1", count(good))
+			}
+		})
 	}
 }
