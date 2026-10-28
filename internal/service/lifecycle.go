@@ -499,15 +499,33 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 // so another worker cannot name it while the owner's token has lapsed (P-338, delivered in P-257
 // review round 3). A string no other identity's token and no live token carries names no agent and
 // passes, as before. Read only when a label is named, so the claim's statement pins do not move.
+// The test itself is labelRefused, which a directory entry's agent also answers to (P-322).
 func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
 	if domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
 	}
-	tokens, err := l.c.store.ListTokens(ctx, "")
+	refused, err := l.c.labelRefused(ctx, caller, label)
 	if err != nil {
 		return l.c.mapErr(field, err)
 	}
-	now := l.c.nowMs()
+	if refused {
+		return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
+			map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})
+	}
+	return nil
+}
+
+// labelRefused is ownLabel's test without its master pass: true when label is another agent's for
+// caller. It is, when another identity's token row of any status carries it (the first minter owns
+// a label, R2-Q1), or when a live token carries it and caller is not that label's own token
+// (Caller.Labelled with Agent == label). A string no token carries, and the caller's own lapsed
+// label, are not refused. One read of every token row (REVIEW-78 A6, accepted).
+func (c *Core) labelRefused(ctx context.Context, caller domain.Caller, label string) (bool, error) {
+	tokens, err := c.store.ListTokens(ctx, "")
+	if err != nil {
+		return false, err
+	}
+	now := c.nowMs()
 	carried, others := false, false
 	for _, t := range tokens {
 		if domain.TokenAgent(t.Label) != label {
@@ -517,11 +535,7 @@ func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access,
 		others = others || t.IdentityID != caller.Identity
 	}
 	carried = carried || others // another identity's row of any status: its label is that identity's (R2-Q1, P-338)
-	if carried && (others || !caller.Labelled || caller.Agent != label) {
-		return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
-			map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})
-	}
-	return nil
+	return carried && (others || !caller.Labelled || caller.Agent != label), nil
 }
 
 // Heartbeat is heartbeat_task: the lease's expiry moves to now + leaseSeconds (store.Heartbeat, one
