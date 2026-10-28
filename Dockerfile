@@ -1,13 +1,18 @@
 # batondeck-kanban image: one static binary on distroless, non-root, state on /data.
 # Copied from hdtp-gateway's Dockerfile, its limits sidecar removed.
-FROM golang:1.26.9-alpine@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
+# The build stage runs on the builder's own platform (BUILDPLATFORM) and cross-compiles for the
+# image's (TARGETOS/TARGETARCH, which buildx sets per --platform): Go needs no emulation to build
+# for another architecture, so `make image` builds linux/arm64 on an amd64 host without QEMU. The
+# final stage only copies, so it runs nothing on the target platform either.
+FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 ARG VERSION=0.1.0-dev
+ARG TARGETOS TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION}" \
       -o /batondeck-kanban ./cmd/batondeck-kanban
 RUN mkdir /data-skel
