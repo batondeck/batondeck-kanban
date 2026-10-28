@@ -7,8 +7,9 @@ package domain
 import "fmt"
 
 // Status is a ticket's workflow state. There are five (ADR-0005: no created task is a
-// draft, so every one lands TODO); CANCELLED and DEAD_LETTER do not exist here (plan §Ticket
-// states: CANCELLED is a hard delete, DEAD_LETTER is BLOCKED with reason "poison").
+// draft, so every one lands TODO); CANCELLED and DEAD_LETTER do not exist here (ADR-0001:
+// cancel_task moves a task to DONE with the system label "cancelled" and delete_task is the hard
+// delete; DEAD_LETTER is BLOCKED with reason "poison" and the system label "poisoned").
 type Status string
 
 const (

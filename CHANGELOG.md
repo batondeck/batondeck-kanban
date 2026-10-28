@@ -136,10 +136,11 @@ Notable changes to batondeck-kanban. The format follows
   deletes the session row (`Store.DeleteSession`, both engines) and expires both cookies: sign-out
   called the unmounted `/auth/logout` before (P-198). New `GET` and `POST /api/users`, the workspace
   admin's only (anyone else is 403 `FORBIDDEN`): list the local accounts (login, name, role,
-  disabled) and add a member, whose generated password the answer carries once; disable, password
-  reset and role changes stay with `batondeck-kanban user`. Settings shows the Users panel to the
-  workspace admin in place of the WorkOS invitation panel, and `web/src/api/tenants.ts` is gone. A
-  disabled user's open session is 401 within the 60 s account-cache window.
+  disabled) and add a member, whose generated password the answer carries once; disable and
+  password reset stay with `batondeck-kanban user disable|passwd`, and nothing changes a role yet.
+  Settings shows the Users panel to the workspace admin in place of the WorkOS invitation panel, and
+  `web/src/api/tenants.ts` is gone. A disabled user's open session is 401 within the 60 s
+  account-cache window.
 - The SPA on five states (R1.14, ADR-0005): `Status` is `TODO · IN_PROGRESS · BLOCKED · REVIEW ·
   DONE`, derived from the exported `STATUSES`; every status map, filter, chart order, the move-button
   fallback table and the ticket-search aliases follow it (no `CANCELLED`, `BACKLOG`, `READY`, and the
@@ -153,10 +154,10 @@ Notable changes to batondeck-kanban. The format follows
   TODO) and a worker sees it disabled. A task blocked by a dependency keeps the plain `Blocked` badge.
 - `web/src/api.ts` is gone: every client function lives in one `web/src/api/<area>.ts`, one per
   `internal/api/<area>.go` (new: `session`, `projects`, `boards`, `tasks`, `lifecycle`, `context`,
-  `media`, `feed`, `stream`, and `tenants` for the four unmounted invitation calls Settings still
-  makes), `http.ts` holds `req`, `ApiError` and the local-edit marks, and every screen imports its
-  areas directly. The studio, admin, billing, tenant-switch and onboarding functions, which no kept
-  screen called, are dropped with the routes.
+  `media`, `feed` and `stream`; the interim `tenants` file went with the WorkOS invitation panel),
+  `http.ts` holds `req`, `ApiError` and the local-edit marks, and every screen imports its areas
+  directly. The studio, admin, billing, tenant-switch and onboarding functions, which no kept screen
+  called, are dropped with the routes.
 - Live board from `/api/stream`: presence frames (the device session directory's entries) become
   `device:<pid>` session rows that each frame replaces, and a `resync` frame or a rebuilt socket
   refetches the board, its tasks and its feed, since no board frame comes until the next change.
@@ -207,6 +208,18 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Added
 
+- `docs/adr/`: the five decision records the tree cites, ADR-0001 to ADR-0005, copied unchanged
+  from the planning workspace, until now their only home (P-309, audit D4), and a README.
+  `TestADRReferencesResolve` (`internal/arch`, so `make check`'s `arch` step) fails on any
+  `ADR-NNNN` in a tracked or new file with no `docs/adr/NNNN-*.md`, and on a record whose name or
+  heading does not carry its id. The plan of record gains a one-line "Superseded by" banner on each
+  passage ADR-0001, ADR-0002 or ADR-0004 replaced (the channel, `/wake`, subscribe push, the Actions
+  workflow) and a "superseded by measurement" note on the query pins, the resource template count
+  and the CLI list. The plan's "plan Amendment B/E" citations and `internal/wake/doorbell.go`'s
+  name ADR-0004 and ADR-0005; the two `migrations/*/0004_five_states.sql` headers keep "plan
+  Amendment E" (zone Z2, left for the owner). ADR-0001 is amended in place to the code's rules
+  (cancel by the live lease holder; un-poison lands TODO), and ADR-0004 to the doorbell frame's
+  `boardId`/`boardIds`. Docs and comments only.
 - Browser security headers on every response (P-250). One middleware around the composed handler
   sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and
   a `Content-Security-Policy` on every response; the `/mcp`, `/hooks` and `/blobs` routes drop the
@@ -259,7 +272,7 @@ Notable changes to batondeck-kanban. The format follows
   `/api/me/cli-tokens` routes replace R1.12's stubs: a CLI token minted on the Settings page answers
   its plaintext once, is listed without it, and revoked there is 401 at the next MCP initialize;
   another user's token id is 404; the page mints at most 10 live tokens per identity (conductor's cap,
-  400 `VALIDATION` past it) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
+  400 `VALIDATION` past it; the host's `token create` has no cap) and keeps no plaintext in react-query's mutation cache after Done. Minting and revoking a CLI token, on the page or with `token
   create|revoke` (actor `host`), write `cli_token.minted` and `cli_token.revoked` (P-159). New `GET
   /api/audit`, list_audit_log for the Workspace Log's admin-only audit panel. A device entry in the
   presence frames carries `lastDeliveredCursor` (`wake_sessions.last_cursor`), and a delivery signals
@@ -456,7 +469,8 @@ Notable changes to batondeck-kanban. The format follows
   registered nor pending, so `pending.json` only shrinks: each lane removes its names when it
   registers them. `TestSurfaceSnapshot` pins the served tool, prompt and template names for an admin
   and a member. `contract.CheckLive` and `contract.Pending` carry the rules (`contract/live.go`).
-- `test/perf/queries_per_call_test.go`: `get_task` 2, `list_tasks` 2, `get_board` 2, `claim_next` 4
+- `test/perf/queries_per_call_test.go`: `get_task` 2 (3 since R2.1's artifacts), `list_tasks` 2,
+  `get_board` 2, `claim_next` 4
   (Postgres 5: the change row's `NotifyChanges`), `get_task_context` 6, `next_task` 3, each a
   commented constant measured on SQLite and Postgres with the membership cached and the board
   snapshot in the state the pin names; the other snapshot state and a fresh core are printed beside

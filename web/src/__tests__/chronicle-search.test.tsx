@@ -72,7 +72,7 @@ const TOPICED: ChroniclePage[] = [
   rec('CP-11', 'adr', 'adr/t-501', 'Resolve accounts by wuid', '2026-07-03T00:00:00Z', {
     topics: ['authz'],
     coverage: 'partial',
-    supersededBy: ['ADR-0044'],
+    supersededBy: ['ADR-0004'],
     updatedBy: { author: 'svc@example.com', agent: 'chronicle-bot' },
   }),
   // NO record fields at all — the 238-page case. It must render, and must count toward nothing.
@@ -389,7 +389,7 @@ describe('the index has navigation, not one wall of rows', () => {
     expect(screen.getByText('full')).toBeTruthy();
     expect(screen.getByText('partial')).toBeTruthy();
     // Names WHICH record replaced it — "superseded" with no successor is a dead end.
-    expect(screen.getByText('superseded by ADR-0044')).toBeTruthy();
+    expect(screen.getByText('superseded by ADR-0004')).toBeTruthy();
     // The byline resolves an agent by display name and a human by the email's name part.
     expect(screen.getByText(/· by alice/)).toBeTruthy();
     expect(screen.getByText(/· by chronicle-bot/)).toBeTruthy();
