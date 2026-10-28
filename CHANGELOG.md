@@ -1379,3 +1379,20 @@ this section's headings in CHANGELOG.md, are all part of it.
   when alone, then shares it for its lifetime, so a serve beside another does not migrate.
   Postgres keeps goose's session lock. `TestFirstMigrationsOnOneFileBothSucceed` moved to
   `internal/cli` and runs the real migrations through `migrate`, 30 rounds.
+- `complete_task` takes `artifacts` (P-235, P-143). It answered UNSUPPORTED ("there is no artifact
+  store until R2.1") on any entry, so the skill's one-call completion with its pr and branch failed.
+  The entries now merge into the task's by `add_artifact`'s rules (normalised, de-duplicated against
+  the live entries, the 50 cap counting tombstones) in the completion's own transaction, before the
+  status change, and the answer's task carries its artifacts. `artifactPolicy` is judged after the
+  merge: a task with no live artifact is refused VALIDATION under `enforce` (nothing written), and
+  under `warn` or an unset policy (read as `warn`, as `get_sprint` does) completes with a warning
+  and a `task.artifact_missing` event; `off` judges nothing. `task.completed`'s `artifacts` is the
+  number of entries added.
+- `get_task_context` returns the task's artifacts, attachments and open follow-ups (P-236, P-154).
+  All three came back empty, and `openFollowUpCount` 0, whatever the task held, so an agent
+  resuming another's task saw none of its evidence, files or open questions. `artifacts` is always
+  read (a retracted entry with its tombstone); `attachments` with the `attachments` section
+  (`gcsUri` the `blob:` locator, `sha256` once the upload is ready, no download URL:
+  `list_attachments` signs those); `openFollowUps` and `openFollowUpCount` with the `followups`
+  section (open ones only, at most 200). One statement each: the `get_task_context` pin in
+  `test/perf` rises from 6 to 9.
