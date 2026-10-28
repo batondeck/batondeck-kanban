@@ -8,6 +8,25 @@ Notable changes to batondeck-kanban. The format follows
 
 ### Changed
 
+- Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
+  `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
+  `created_by_agent` and every event's agent stayed empty and `agent_sessions` held one row per
+  user. The agent is now the API token's label (`token create --label`), else the OAuth client's
+  registered `client_name`, else the MCP initialize `clientInfo.name`, with control characters
+  dropped, trimmed and cut to 64 characters. The default label `cli` names no agent, so two clients
+  on one default token are two `agent_sessions` rows by their client names; two on one labelled
+  token are that label's one row. The row's `kind` says `api_token` or `oauth_user` (a new enum
+  value, `contract/deltas.json`) instead of the hard-coded `service_account`. No migration:
+  `agent_sessions` was keyed by (identity, agent) already. A claim belongs to its agent: the same
+  identity's other agent claiming a held task is `CONFLICT_LOCKED`, and the same agent's second
+  session still shares the lease (P-278). A follow-up on a held task now targets the holding agent
+  (the claim's `agentId`, conductor's resolveTarget) rather than its account. An explicit `assignee` on `claim_next` or `next_task`, or
+  a `handoff_task` `toAgent`, naming another live token's label is `FORBIDDEN` below master unless
+  the caller is on that token (P-277); an OAuth `client_name` or a `clientInfo.name` never holds a
+  label. A label-registered worker's assigned doorbell line names
+  `claim_next {projectId, boardId, assignee: "<label>"}` (P-276). The Agents screen counts a session
+  online when the device directory lists it or its last request is recent, not by
+  `wakeAttachedAt`, which nothing writes, and its Auth column says `api token` or `oauth`.
 - Every tool carries MCP annotations (P-286, audit B2). All 86 advertised `annotations: {}`, and
   Codex headless (`approval_policy=never`) cancelled even `list_tasks`. Each `domain.Posture` row
   now has an `Effect` (read, write or destructive) and `Idempotent`, and `tools/list` gives every

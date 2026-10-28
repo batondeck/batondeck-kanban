@@ -101,10 +101,19 @@ func leaseHeld(t store.Task, leaseID string, caller domain.Caller, now int64) er
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
 
 // heldBy is whether t is IN_PROGRESS under a live lease of the caller that store.ClaimTask would
-// replace as the caller's own (claimInput sets no agent handle), on a task it would still claim.
+// replace as the caller's own (the same identity under the same agent, claimInput's AgentID), on a
+// task it would still claim.
 func heldBy(t store.Task, caller domain.Caller, now int64) bool {
 	return t.Status == domain.InProgress && liveLease(t, now) && t.Claim.Owner == caller.Identity &&
-		t.Claim.AgentID == nil && !t.Racing && len(t.BlockedBy) == 0
+		sameAgentID(t.Claim.AgentID, callerAgent(caller)) && !t.Racing && len(t.BlockedBy) == 0
+}
+
+// sameAgentID is store's sameAgent: two agent handles, nil only equal to nil.
+func sameAgentID(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // retryStale re-runs a call that carries no expected version when its versioned write lost a race
@@ -133,8 +142,10 @@ func statusColumn(b store.Board, s domain.Status) string {
 	return ""
 }
 
+// claimInput is the caller's claim. Its AgentID is the caller's agent (Caller.Agent), so two agents
+// of one identity are two holders (CONFLICT_LOCKED), while the sessions of one agent share its lease.
 func claimInput(caller domain.Caller, leaseID string, now, secs int64, columnID string) store.ClaimInput {
-	return store.ClaimInput{Owner: caller.Identity, Agent: callerAgent(caller), LeaseID: leaseID, ExpiresAt: now + secs*1000, Now: now, ColumnID: columnID}
+	return store.ClaimInput{Owner: caller.Identity, Agent: callerAgent(caller), AgentID: callerAgent(caller), LeaseID: leaseID, ExpiresAt: now + secs*1000, Now: now, ColumnID: columnID}
 }
 
 func claimView(t store.Task) domain.ClaimView {
@@ -230,9 +241,9 @@ func replayedLease(task *Task, now time.Time) error {
 // performClaim sets none). It rings nobody (owner ruling 2026-10-23): mutate's change row is
 // ChangeKindChanged. A claim of a task whose live lease the caller already holds answers that lease
 // and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
-// (G6): one identity in several sessions never mints a second lease that would silently end the
-// first. The served path carries no per-session agent handle yet (P-257), so the
-// lease is shared rather than refused CONFLICT_LOCKED as conductor does for two distinct handles.
+// (G6): one agent in several sessions never mints a second lease that would silently end the
+// first. Another agent of the same identity (Caller.Agent, P-257) is another holder and is refused
+// CONFLICT_LOCKED, as conductor does for two distinct handles.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -443,9 +454,9 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 }
 
 // ownAssignee refuses, below master, an assignee naming another identity: another account (by
-// email or id) or another member of the project. Any other assignee is an agent label, which names
-// no identity and cannot be checked until a caller carries its agent (audit A2), so it passes. Read
-// only on this path, so the claim's statement pins do not move.
+// email or id) or another member of the project. Any other assignee is an agent label, refused when
+// another agent holds it (ownLabel). Read only on this path, so the claim's statement pins do not
+// move.
 func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a access, projectID, assignee string) error {
 	if assignee == caller.Identity || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
@@ -473,6 +484,30 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 	}
 	if e.member {
 		return other
+	}
+	return l.ownLabel(ctx, caller, a, "assignee", assignee)
+}
+
+// ownLabel refuses, below master, a label another agent holds (P-277, audit A2): a live API token's
+// label (domain.TokenAgent) is the agent of whoever presents that token, so claiming or reading its
+// assigned work, or handing work to it, is its own or a master's to do. The caller holds a label
+// when its own bearer carries it (Caller.Labelled); a name a client declared (clientInfo.name) or
+// registered (an OAuth client_name) holds none. A string no live token carries names no agent and
+// passes, as before. Read only when a label is named, so the claim's statement pins do not move.
+func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
+	if (caller.Labelled && caller.Agent == label) || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
+		return nil
+	}
+	tokens, err := l.c.store.ListTokens(ctx, "")
+	if err != nil {
+		return l.c.mapErr(field, err)
+	}
+	now := l.c.nowMs()
+	for _, t := range tokens {
+		if t.RevokedAt == 0 && t.ExpiresAt > now && domain.TokenAgent(t.Label) == label {
+			return forbidden(field+" is another agent's label: only that agent or a master may claim, read or hand it work",
+				map[string]any{"field": field, "label": label, "requiredRole": domain.RoleMaster, "role": a.Role})
+		}
 	}
 	return nil
 }
@@ -1106,13 +1141,17 @@ func (c *Core) reap(ctx context.Context, caller domain.Caller, a access, project
 // Handoff is handoff_task: the caller's live lease dropped, the task TODO with toAgent as its
 // assignee and no backoff, the note kept as the task-scope memory entry "handoff" {note, toAgent,
 // from} (conductor SRS §8.4), all in one transaction. toAgent is rung assigned, even when it was
-// already the assignee (conductor's publishAssignment).
+// already the assignee (conductor's publishAssignment). A toAgent that is another agent's label is
+// FORBIDDEN below master (ownLabel, P-277).
 func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req HandoffTaskReq) (HandoffTaskResp, error) {
 	a, err := l.leaseArgs(ctx, caller, "handoff_task", req.ProjectID, req.TaskID, req.LeaseID, domain.GrantSubject{})
 	if err != nil {
 		return HandoffTaskResp{}, err
 	}
 	if err := checkLabel("toAgent", req.ToAgent); err != nil {
+		return HandoffTaskResp{}, err
+	}
+	if err := l.ownLabel(ctx, caller, a, "toAgent", req.ToAgent); err != nil {
 		return HandoffTaskResp{}, err
 	}
 	if err := reasonArg("memoryNote", req.MemoryNote, false); err != nil {

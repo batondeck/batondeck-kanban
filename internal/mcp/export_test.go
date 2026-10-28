@@ -25,6 +25,17 @@ func (h *harness) Connect(t testing.TB, bearer string) *mcp.ClientSession {
 	return h.connect(t, bearer)
 }
 
+// ConnectAs is Connect for a client whose initialize clientInfo.name is client.
+func (h *harness) ConnectAs(t testing.TB, bearer, client string) *mcp.ClientSession {
+	t.Helper()
+	cs, err := h.dialAs(bearer, client)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", client, err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
 // ConnectNotified is Connect for a session that sends bearer to n on each tools/list_changed.
 func (h *harness) ConnectNotified(t *testing.T, bearer string, n chan<- string) *mcp.ClientSession {
 	return dialNotified(t, h, bearer, n)

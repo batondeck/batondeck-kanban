@@ -46,7 +46,7 @@ func TestSearchTasksTool(t *testing.T) {
 			if len(got) != 1 || !reflect.DeepEqual(got[0].Req, want) {
 				t.Fatalf("search_tasks reached the service as %+v, want %#v", got, want)
 			}
-			if c := toolsResolver().Callers[b.bearer]; got[0].Caller != c {
+			if c := atService(toolsResolver().Callers[b.bearer]); got[0].Caller != c {
 				t.Errorf("caller %+v, want the resolver's %+v", got[0].Caller, c)
 			}
 			if w := asJSON(t, resp); !reflect.DeepEqual(res.StructuredContent, w) {

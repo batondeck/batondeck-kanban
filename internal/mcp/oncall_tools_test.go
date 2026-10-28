@@ -91,7 +91,7 @@ func TestOncallTools(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
 	ada, admin := h.Connect(t, bearerAda), h.Connect(t, bearerAdmin)
-	callers := map[*sdk.ClientSession]domain.Caller{ada: toolsResolver().Callers[bearerAda], admin: toolsResolver().Callers[bearerAdmin]}
+	callers := map[*sdk.ClientSession]domain.Caller{ada: atService(toolsResolver().Callers[bearerAda]), admin: atService(toolsResolver().Callers[bearerAdmin])}
 	cases := oncallCases()
 	if len(cases) != len(oncallTools) {
 		t.Fatalf("%d cases, want the %d on-call tools", len(cases), len(oncallTools))

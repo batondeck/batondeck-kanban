@@ -36,13 +36,23 @@ func bearerFor(code domain.Code) string { return "bk_test_trigger_" + string(cod
 func toolsResolver() authfake.Resolver {
 	r := authfake.Resolver{Callers: map[string]domain.Caller{
 		// Every Caller field is set on one bearer or the other, so a transport dropping any fails.
-		bearerAda:   {Identity: "u-ada", Agent: "agent-ada", Role: string(domain.RoleWorker), TokenScope: "u-ada"},
-		bearerAdmin: {Identity: "u-admin", TokenScope: "u-admin", WorkspaceAdmin: true},
+		bearerAda:   {Identity: "u-ada", Agent: "agent-ada", Labelled: true, Via: domain.ViaAPIToken, Role: string(domain.RoleWorker), TokenScope: "u-ada"},
+		bearerAdmin: {Identity: "u-admin", TokenScope: "u-admin", WorkspaceAdmin: true, Via: domain.ViaOAuth, OAuthClientID: "c-admin"},
 	}}
 	for _, c := range triggerCodes {
 		r.Callers[bearerFor(c)] = domain.Caller{Identity: servicefake.Trigger(c), TokenScope: "u-trigger"}
 	}
 	return r
+}
+
+// atService is the caller a tool hands the service for the resolver's c over the harness: a
+// bearer that names no agent works as its client's initialize clientInfo.name, the harness's
+// "harness" (P-257, audit B1).
+func atService(c domain.Caller) domain.Caller {
+	if c.Agent == "" {
+		c.Agent = "harness"
+	}
+	return c
 }
 
 // bootTools is the harness with every registered area's tools over svc.
@@ -192,7 +202,7 @@ func TestProjectsBoardsTools(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
 	ada, admin := h.Connect(t, bearerAda), h.Connect(t, bearerAdmin)
-	callers := map[*sdk.ClientSession]domain.Caller{ada: toolsResolver().Callers[bearerAda], admin: toolsResolver().Callers[bearerAdmin]}
+	callers := map[*sdk.ClientSession]domain.Caller{ada: atService(toolsResolver().Callers[bearerAda]), admin: atService(toolsResolver().Callers[bearerAdmin])}
 	triggered := map[domain.Code]*sdk.ClientSession{}
 	for _, c := range triggerCodes {
 		triggered[c] = h.Connect(t, bearerFor(c))

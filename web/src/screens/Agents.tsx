@@ -83,9 +83,8 @@ export function Agents() {
     [qc],
   );
   const sessions = sessionsQ.data?.sessions ?? [];
-  // T-558: the SHARED rule, not a second copy of the threshold. This was an inline re-derivation under
-  // a comment promising it agreed with the presence rail; it did, until wake attachment became a second
-  // input and only one of the two learned about it.
+  // The SHARED rule, not a second copy of the threshold: a device-directory row, or a session's last
+  // request within presenceOfflineAfterMs (agentStatus.ts isSessionOnline).
   const isOnline = (s: AgentSession): boolean => isSessionOnline(s, Date.now());
   const onlineSessions = sessions.filter(isOnline);
   const totalOps = sessions.reduce((a, s) => a + s.requestCount, 0);
@@ -217,9 +216,10 @@ export function Agents() {
                               session AUTHENTICATED, and it was rendering `oauth_user` as `USER` in a
                               badge styled like a role — so every row read "USER", which is not a role
                               anyone holds and told you nothing (an AGENT connecting under a human's
-                              OAuth token is not a user). `oauth` vs `service` is the actual distinction
-                              the field carries; the member's real role lives on the project. */}
-                          <td><span className="chip" title={s.kind === 'oauth_user' ? 'Connected with a human’s OAuth token' : s.kind === 'service_account' ? 'Connected as a service account' : s.kind}>{s.kind === 'oauth_user' ? 'oauth' : s.kind === 'service_account' ? 'service' : s.kind}</span></td>
+                              OAuth token is not a user). `api token` vs `oauth` is the actual distinction
+                              the field carries (P-257; `service` and `dev` are rows written before it);
+                              the member's real role lives on the project. */}
+                          <td><span className="chip" title={s.kind === 'api_token' ? 'Connected with an API token' : s.kind === 'oauth_user' ? 'Connected with an OAuth access token' : s.kind === 'service_account' ? 'Connected as a service account' : s.kind}>{s.kind === 'api_token' ? 'api token' : s.kind === 'oauth_user' ? 'oauth' : s.kind === 'service_account' ? 'service' : s.kind}</span></td>
                           <td style={{ textAlign: 'right' }} className="mono">{s.sessionCount}</td>
                           <td style={{ textAlign: 'right' }} className="mono">{s.requestCount}</td>
                           <td className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }} title={Object.entries(s.toolCounts).map(([t, n]) => `${t}: ${n}`).join('\n')}>{topTools(s.toolCounts)}</td>

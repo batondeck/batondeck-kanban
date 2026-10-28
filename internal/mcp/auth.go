@@ -75,14 +75,33 @@ func CallerFrom(ctx context.Context) (domain.Caller, bool) {
 	return c, ok
 }
 
-// withCaller puts the request's caller on its context, for every method handler after it.
+// withCaller puts the request's caller on its context, for every method handler after it. A caller
+// whose bearer names no agent (an API token with the default label) is told apart by the MCP
+// initialize clientInfo.name of its session (audit B1), the initialize's own on that request.
 func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if c, ok := callerOf(req); ok {
+			if c.Agent == "" {
+				c.Agent = clientAgent(req)
+			}
 			ctx = context.WithValue(ctx, callerCtxKey{}, c)
 		}
 		return next(ctx, method, req)
 	}
+}
+
+// clientAgent is the clientInfo.name of req's initialize, or of its session's, as an agent name.
+func clientAgent(req mcp.Request) string {
+	p, _ := req.GetParams().(*mcp.InitializeParams)
+	if p == nil {
+		if ss, ok := req.GetSession().(*mcp.ServerSession); ok {
+			p = ss.InitializeParams()
+		}
+	}
+	if p == nil || p.ClientInfo == nil {
+		return ""
+	}
+	return domain.AgentLabel(p.ClientInfo.Name)
 }
 
 func callerOf(req mcp.Request) (domain.Caller, bool) {

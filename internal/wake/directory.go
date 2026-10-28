@@ -584,6 +584,16 @@ func (d *Directory) sweep(ctx context.Context) {
 	}
 }
 
+// label is the agent label a worker entry registered under (its bearer's token label, or the
+// --agent it registered with), which its assigned doorbell names (Frame.LineFor); "" for a master
+// or an entry under its identity's derived id.
+func (e *entry) label() string {
+	if e.role != service.RoleWorker || strings.HasPrefix(e.agent, "id:") {
+		return ""
+	}
+	return e.agent
+}
+
 // deliver writes one released frame to its entry's socket, after the recheck: a revoked bearer, a
 // gone registry entry, a reused pid or a socket nobody answers drops the entry instead. The cursor
 // is the lower of the frame's and the bus's frontier (P-108), and is recorded once written.
@@ -624,7 +634,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	if token == "" {
 		token = e.socketToken
 	}
-	if err := writeDoorbell(reg.MessagingSocketPath, frameBytes(reg.SessionID, token, f), d.o.WriteTimeout); err != nil {
+	if err := writeDoorbell(reg.MessagingSocketPath, frameBytes(reg.SessionID, token, f, e.label()), d.o.WriteTimeout); err != nil {
 		if gone(err) {
 			d.drop(ctx, e.pid, "its socket is gone: "+err.Error())
 			return
