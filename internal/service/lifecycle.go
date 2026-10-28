@@ -756,9 +756,12 @@ func (l lifecycle) inbox(ctx context.Context, req NextTaskReq, assignee *string,
 // assignee and is rung assigned, and the review record names it when it is a member (a non-member is
 // warned, as conductor's T-246). DONE runs the poison-aware unblock over every dependent, under the
 // project lock (a dependent's row is locked after it, never before, so add_dependency cannot
-// deadlock with it). checkpointPolicy warn/enforce reads two context-item pages. artifacts are
-// refused: there is no artifact store until R2.1, and artifactPolicy is not judged for the same
-// reason.
+// deadlock with it). checkpointPolicy warn/enforce reads two context-item pages. artifacts merge into
+// the task's own by add_artifact's rules (normalised, de-duplicated against the live entries, the 50
+// cap counting tombstones) in the same transaction, before the status change, and artifactPolicy is
+// judged after the merge: a task with no live artifact is refused under enforce and warned under
+// warn, which an unset policy reads as (get_sprint's orWarn); off judges nothing. The answer's task
+// carries its artifacts.
 func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req CompleteTaskReq) (CompleteTaskResp, error) {
 	proj, perr := l.c.store.GetProject(ctx, req.ProjectID)
 	subject := domain.GrantSubject{}
@@ -779,8 +782,9 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 	if jsLen(req.Reviewer) > maxReviewerChars {
 		return CompleteTaskResp{}, domain.Validation("reviewer must be 1 to 320 characters", map[string]any{"field": "reviewer"})
 	}
-	if len(req.Artifacts) > 0 {
-		return CompleteTaskResp{}, unsupported("artifacts", "there is no artifact store until R2.1")
+	incoming, err := normalizeArtifacts(req.Artifacts, false, req.ProjectID, req.TaskID, caller)
+	if err != nil {
+		return CompleteTaskResp{}, err
 	}
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return CompleteTaskResp{}, err
@@ -789,6 +793,7 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 	if err != nil {
 		return CompleteTaskResp{}, l.c.mapErr("complete_task", err)
 	}
+	artifactPolicy := orWarn(settings.ArtifactPolicy)
 	target := domain.Done
 	if proj.Settings.ReviewEnabled {
 		target = domain.Review
@@ -814,6 +819,13 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 					return CompleteTaskResp{}, domain.Validation(cpGap, map[string]any{"taskId": cur.ID})
 				}
 				warnings = append(warnings, cpGap)
+			}
+			added, artGap, err := t.completeArtifacts(cur, incoming, artifactPolicy)
+			if err != nil {
+				return CompleteTaskResp{}, err
+			}
+			if artGap != "" {
+				warnings = append(warnings, artGap)
 			}
 			board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 			if err != nil {
@@ -861,8 +873,13 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 			if err := t.rollUpSkill(cur, true); err != nil {
 				return CompleteTaskResp{}, err
 			}
-			if err := t.event(after, domain.EventTaskCompleted, map[string]any{"to": target, "hasDeliverable": req.Deliverable != "", "artifacts": 0}); err != nil {
+			if err := t.event(after, domain.EventTaskCompleted, map[string]any{"to": target, "hasDeliverable": req.Deliverable != "", "artifacts": added}); err != nil {
 				return CompleteTaskResp{}, err
+			}
+			if artGap != "" {
+				if err := t.event(after, domain.EventTaskArtifactMissing, map[string]any{"policy": artifactPolicy}); err != nil {
+					return CompleteTaskResp{}, err
+				}
 			}
 			if cpGap != "" {
 				if err := t.event(after, domain.EventTaskCheckpointMissing, map[string]any{"policy": settings.CheckpointPolicy}); err != nil {
@@ -897,7 +914,7 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 					return CompleteTaskResp{}, err
 				}
 			}
-			if resp.Task, err = withSummary(ctx, t.Tx, after); err != nil {
+			if resp.Task, err = t.taskWithContext(after); err != nil {
 				return CompleteTaskResp{}, err
 			}
 			resp.Warnings = warnings
@@ -939,6 +956,35 @@ func (t *txn) checkpointGap(task store.Task, policy PolicyMode) (string, error) 
 	return task.ID + " is being completed with no REJECTED checkpoint. Record what you tried and abandoned, " +
 		"and why — as a context item with `REJECTED` as its own heading. Label the task `" + labelNoAlternatives +
 		"` if nothing was genuinely weighed.", nil
+}
+
+// completeArtifacts is complete_task's artifacts: incoming merged into task's (mergeArtifacts), then
+// artifactPolicy judged over the result. The gap is a task with no live artifact once the merge is
+// done: under enforce it is the VALIDATION (the transaction writes nothing), under warn it is the
+// warning returned; off reads nothing when nothing comes in. added is the number of entries written.
+func (t *txn) completeArtifacts(task store.Task, incoming []store.AddArtifactInput, policy PolicyMode) (added int, gap string, err error) {
+	if len(incoming) == 0 && policy != "warn" && policy != "enforce" {
+		return 0, "", nil
+	}
+	fresh, have, err := t.mergeArtifacts(task.ID, incoming)
+	if err != nil {
+		return 0, "", err
+	}
+	live := len(fresh)
+	for _, a := range have {
+		if a.Retraction == nil {
+			live++
+		}
+	}
+	if live > 0 || policy != "warn" && policy != "enforce" {
+		return len(fresh), "", nil
+	}
+	gap = task.ID + " is being completed with no artifact. Bind the evidence (a pr, branch, commit or file entry) " +
+		"with add_artifact or complete_task's artifacts."
+	if policy == "enforce" {
+		return 0, "", domain.Validation(gap+" The project's artifactPolicy is enforce.", map[string]any{"taskId": task.ID})
+	}
+	return len(fresh), gap, nil
 }
 
 // Block is block_task: the caller's live lease dropped and the task BLOCKED with the reason. Each

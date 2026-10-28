@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/batondeck/batondeck-kanban/internal/blob"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
@@ -33,6 +34,10 @@ const (
 	// contextDefaultLimit and contextMaxLimit are get_task_context's limit (default 20, max 100).
 	contextDefaultLimit = 20
 	contextMaxLimit     = 100
+	// contextFollowUpsMax is get_task_context's openFollowUps page: the store's largest (200), so a
+	// worker acting on each open follow-up sees them all; a task with more reads the oldest 200, and
+	// openFollowUpCount counts that page (list_follow_ups {openOnly} pages the rest).
+	contextFollowUpsMax = 200
 )
 
 func jsLen(s string) int { return len(utf16.Encode([]rune(s))) }
@@ -130,9 +135,11 @@ func (s contextSvc) SetSummary(ctx context.Context, caller domain.Caller, req Se
 	})
 }
 
-// GetTaskContext is get_task_context: the briefing of one task. The default call costs six
+// GetTaskContext is get_task_context: the briefing of one task. The default call costs nine
 // statements (the get_task_context pin): the task, its summary, a page of its items, its memory
-// window, and the edges on each side of it; the lanes come from the board snapshot (no statement
+// window, the edges on each side of it, its artifacts, its attachments and its open follow-ups, one
+// statement per area and never one per row; an excluded section (include) issues none, and
+// artifacts, not a section, are always read. The lanes come from the board snapshot (no statement
 // when warm, store.GetBoard's two when cold), the membership from the access cache. upstream and
 // projectMemory are opt-in and outside the pin: one ListTasksByIDs and a GetSummary per upstream
 // task (at most limit), and one or two RecallMemory.
@@ -184,8 +191,8 @@ func (s contextSvc) compose(ctx context.Context, caller domain.Caller, req GetTa
 		Items: []ContextItem{}, Memory: []MemoryEntry{}, OpenFollowUps: []OpenFollowUp{},
 		Deps:     TaskDeps{BlockedBy: []string{}, Blocks: []string{}, Edges: []DependencyEdge{}},
 		Workflow: Workflow{Status: task.Status, AllowedMoves: domain.AllowedNext(task.Status), Lanes: snap.Board.Columns},
-		// TODO(spec): resume (conductor's resumeState over the task's artifacts and checkpoint items),
-		// follow-ups, attachments and artifacts have no store yet; they read as null and empty.
+		// TODO(spec): resume (conductor's resumeState over the task's artifacts and checkpoint items)
+		// is unported (P-117); it reads as null.
 		Deliverable: task.Deliverable,
 	}
 	if out.Workflow.AllowedMoves == nil {
@@ -196,6 +203,32 @@ func (s contextSvc) compose(ctx context.Context, caller domain.Caller, req GetTa
 	}
 	if out.ModelHint, err = modelHintOut(task.ModelHint); err != nil {
 		return GetTaskContextResp{}, err
+	}
+	arts, err := st.ListArtifacts(ctx, req.ProjectID, req.TaskID)
+	if err != nil {
+		return GetTaskContextResp{}, err
+	}
+	for _, a := range arts {
+		out.Artifacts = append(out.Artifacts, artifactOut(a))
+	}
+	if include["attachments"] {
+		atts, err := st.ListAttachments(ctx, req.ProjectID, req.TaskID)
+		if err != nil {
+			return GetTaskContextResp{}, err
+		}
+		for _, a := range atts {
+			out.Attachments = append(out.Attachments, attachmentBriefOut(a))
+		}
+	}
+	if include["followups"] {
+		page, err := st.ListFollowUps(ctx, req.ProjectID, req.TaskID, store.FollowUpsQuery{OpenOnly: true, Limit: contextFollowUpsMax})
+		if err != nil {
+			return GetTaskContextResp{}, err
+		}
+		for _, f := range page.Items {
+			out.OpenFollowUps = append(out.OpenFollowUps, followUpOut(f))
+		}
+		out.OpenFollowUpCount = float64(len(out.OpenFollowUps))
 	}
 	if include["summary"] {
 		sum, err := st.GetSummary(ctx, req.ProjectID, req.TaskID)
@@ -341,7 +374,8 @@ func isoPtr(ms *int64) *string {
 }
 
 // taskOut is a store task as the wire carries it. summary is the task's contextSummary, which lives
-// in its own table (store.Summaries). Artifacts have no store yet and are left out.
+// in its own table (store.Summaries). Artifacts are in theirs (store.Artifacts) and are left out
+// here; withArtifacts adds them where the answer carries them.
 func taskOut(t store.Task, summary string) (Task, error) {
 	out := Task{
 		Assignee: t.Assignee, BlockedBy: nonNil(t.BlockedBy), Blocks: nonNil(t.Blocks), BoardID: t.BoardID,
@@ -375,6 +409,22 @@ func taskOut(t store.Task, summary string) (Task, error) {
 		out.Chars = *chars
 	}
 	return out, nil
+}
+
+// attachmentBriefOut is an attachment as get_task_context carries it: list_attachments' row
+// (media.go) without a download URL, so the briefing signs nothing. gcsUri is "blob:" and the
+// upload ref; sha256 is set once the attachment is ready; thumbUri and extractedText are null (no
+// media function).
+func attachmentBriefOut(a store.Attachment) AttachmentBrief {
+	out := AttachmentBrief{
+		Bytes: float64(a.Bytes), CreatedBy: a.CreatedBy, GCSURI: "blob:" + blob.Ref{ProjectID: a.ProjectID, TaskID: a.TaskID, AttachmentID: a.ID}.String(),
+		ID: a.ID, Kind: MediaKind(a.Kind), MimeType: a.MimeType, Status: AttachmentStatus(a.Status), TaskID: a.TaskID, Ts: isoMs(a.TS),
+	}
+	if a.Status == store.AttachmentReady {
+		sha := a.BlobSHA256
+		out.SHA256 = &sha
+	}
+	return out
 }
 
 func itemOut(it store.ContextItem) ContextItem {

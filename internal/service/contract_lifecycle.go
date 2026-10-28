@@ -32,7 +32,9 @@ type Lifecycle interface {
 	Next(ctx context.Context, caller domain.Caller, req NextTaskReq) (NextTaskResp, error)
 
 	// Complete is complete_task.
-	// Lease-guarded. Event: task.completed, plus task.review_requested when review sends it to
+	// Lease-guarded. artifacts merge into the task's by add_artifact's rules, in the same
+	// transaction; artifactPolicy (unset reads as warn) is judged over the merged entries. Event:
+	// task.completed (its artifacts the number added), plus task.review_requested when review sends it to
 	// REVIEW, task.artifact_missing / task.checkpoint_missing under a warn policy, and
 	// task.dependency_cleared on each dependent DONE unblocks. Audit: none. Doorbell: assigned to the
 	// reviewer when the task lands REVIEW (none when the reviewer is the caller); for each dependent DONE unblocks, assigned to its assignee
