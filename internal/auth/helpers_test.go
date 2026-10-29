@@ -46,7 +46,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f := &fixture{st: st, clk: &clock{t: time.UnixMilli(1_800_000_000_000)}}
 	f.svc = &Service{
-		Accounts: &Accounts{Store: st, Now: f.clk.now, Params: testArgon, Limits: &LoginLimits{}},
+		Accounts: &Accounts{Store: st, Sessions: st, Now: f.clk.now, Params: testArgon, Limits: &LoginLimits{}},
 		Tokens:   &TokenService{Store: st, Now: f.clk.now},
 		Sessions: st,
 		Now:      f.clk.now,

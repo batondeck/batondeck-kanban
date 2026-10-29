@@ -65,3 +65,46 @@ func TestUntouched(t *testing.T) {
 		}
 	}
 }
+
+// P-231: Refund gives one token back, never past the burst; a bucket never charged is untouched.
+func TestRateLimiterRefund(t *testing.T) {
+	l := NewRateLimiter()
+	t0 := time.Unix(1_700_000_000, 0)
+	for i := range 10 {
+		if !l.Check("I-r", 40, t0, "") {
+			t.Fatalf("charge %d of 10 refused", i+1)
+		}
+	}
+	if l.Check("I-r", 40, t0, "") {
+		t.Fatal("the 11th charge was allowed (control)")
+	}
+	l.Refund("I-r", 40)
+	if !l.Check("I-r", 40, t0, "") {
+		t.Fatal("the refunded token is not there")
+	}
+	if l.Check("I-r", 40, t0, "") {
+		t.Fatal("a refund gave back more than one token")
+	}
+	full := NewRateLimiter()
+	if !full.Check("I-f", 40, t0, "") {
+		t.Fatal("the first charge was refused")
+	}
+	for range 5 {
+		full.Refund("I-f", 40)
+	}
+	for i := range Capacity(40) {
+		if !full.Check("I-f", 40, t0, "") {
+			t.Fatalf("charge %d after refunds refused", i+1)
+		}
+	}
+	if full.Check("I-f", 40, t0, "") {
+		t.Fatal("refunds raised the bucket past Capacity")
+	}
+	l.Refund("I-never", 40)
+	l.mu.Lock()
+	_, made := l.buckets["I-never"]
+	l.mu.Unlock()
+	if made {
+		t.Fatal("a refund made a bucket it never charged")
+	}
+}

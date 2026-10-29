@@ -114,6 +114,61 @@ func (t *txn) taskWithContext(after store.Task) (Task, error) {
 	return withArtifacts(t.ctx, t.Tx, out)
 }
 
+// normalizeArtifacts is normalizeArtifact over a request's entries, 1 to 50 of them when required
+// (add_artifact), else 0 to 50 (complete_task); the first bad entry is the VALIDATION.
+func normalizeArtifacts(list []ArtifactInput, required bool, projectID, taskID string, caller domain.Caller) ([]store.AddArtifactInput, error) {
+	if n := len(list); n > maxArtifactsPerTask || required && n == 0 {
+		lo := "0"
+		if required {
+			lo = "1"
+		}
+		return nil, domain.Validation("artifacts holds "+lo+" to 50 entries", map[string]any{"field": "artifacts"})
+	}
+	out := make([]store.AddArtifactInput, 0, len(list))
+	for _, in := range list {
+		n, err := normalizeArtifact(in, projectID, taskID, caller)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+// mergeArtifacts appends incoming to taskID's artifacts in the mutation's transaction, by
+// add_artifact's rules (conductor's mergeArtifacts): an entry whose artifactKey matches a live one,
+// or an earlier incoming one, is dropped, and the cap counts tombstones. It returns the entries it
+// wrote and the task's entries as they were before them (one ListArtifacts, one insert per entry).
+func (t *txn) mergeArtifacts(taskID string, incoming []store.AddArtifactInput) ([]store.AddArtifactInput, []store.Artifact, error) {
+	have, err := t.Tx.ListArtifacts(t.ctx, t.ProjectID, taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	seen := map[string]bool{}
+	for _, x := range have {
+		if x.Retraction == nil {
+			seen[artifactKey(ArtifactKind(x.Kind), x.URL, x.Ref)] = true
+		}
+	}
+	var fresh []store.AddArtifactInput
+	for _, in := range incoming {
+		k := artifactKey(ArtifactKind(in.Kind), in.URL, in.Ref)
+		if !seen[k] {
+			seen[k] = true
+			fresh = append(fresh, in)
+		}
+	}
+	if len(have)+len(fresh) > maxArtifactsPerTask {
+		return nil, nil, domain.Validation("Task "+taskID+" would exceed 50 artifacts", map[string]any{"have": len(have), "adding": len(incoming)})
+	}
+	for _, in := range fresh {
+		if _, err := t.Tx.AddArtifact(t.ctx, in); err != nil {
+			return nil, nil, err
+		}
+	}
+	return fresh, have, nil
+}
+
 // AddArtifact is add_artifact: the entries are de-duplicated against the task's live ones and each
 // other, the cap counts tombstones (conductor's merged.length), and the version moves once even when
 // every entry was a duplicate, as conductor's txn.set does.
@@ -125,48 +180,21 @@ func (s artifactsSvc) AddArtifact(ctx context.Context, caller domain.Caller, req
 	if err := required("taskId", req.TaskID); err != nil {
 		return AddArtifactResp{}, err
 	}
-	if n := len(req.Artifacts); n == 0 || n > maxArtifactsPerTask {
-		return AddArtifactResp{}, domain.Validation("artifacts holds 1 to 50 entries", map[string]any{"field": "artifacts"})
-	}
-	incoming := make([]store.AddArtifactInput, 0, len(req.Artifacts))
-	for _, in := range req.Artifacts {
-		n, err := normalizeArtifact(in, req.ProjectID, req.TaskID, caller)
-		if err != nil {
-			return AddArtifactResp{}, err
-		}
-		incoming = append(incoming, n)
+	incoming, err := normalizeArtifacts(req.Artifacts, true, req.ProjectID, req.TaskID, caller)
+	if err != nil {
+		return AddArtifactResp{}, err
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_artifact", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
 		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: versionOf(req.Version), Access: a,
 	}, func(t *txn) (AddArtifactResp, error) {
-		have, err := t.Tx.ListArtifacts(ctx, req.ProjectID, req.TaskID)
+		fresh, _, err := t.mergeArtifacts(req.TaskID, incoming)
 		if err != nil {
 			return AddArtifactResp{}, err
 		}
-		seen := map[string]bool{}
-		for _, x := range have {
-			if x.Retraction == nil {
-				seen[artifactKey(ArtifactKind(x.Kind), x.URL, x.Ref)] = true
-			}
-		}
-		var fresh []store.AddArtifactInput
 		kinds := make([]string, 0, len(incoming))
 		for _, in := range incoming {
 			kinds = append(kinds, string(in.Kind))
-			k := artifactKey(ArtifactKind(in.Kind), in.URL, in.Ref)
-			if !seen[k] {
-				seen[k] = true
-				fresh = append(fresh, in)
-			}
-		}
-		if len(have)+len(fresh) > maxArtifactsPerTask {
-			return AddArtifactResp{}, domain.Validation("Task "+req.TaskID+" would exceed 50 artifacts", map[string]any{"have": len(have), "adding": len(incoming)})
-		}
-		for _, in := range fresh {
-			if _, err := t.Tx.AddArtifact(ctx, in); err != nil {
-				return AddArtifactResp{}, err
-			}
 		}
 		data, err := json.Marshal(map[string]any{"kinds": kinds, "added": len(fresh)})
 		if err != nil {

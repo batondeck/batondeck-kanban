@@ -118,6 +118,20 @@ func (s *Store) DeleteSession(ctx context.Context, idHash string) error {
 	})
 }
 
+func (s *Store) DeleteUserSessions(ctx context.Context, userID string) (int64, error) {
+	var n int64
+	err := s.do(ctx, func(st *state) error {
+		for h, sess := range st.sessions {
+			if sess.UserID == userID {
+				delete(st.sessions, h)
+				n++
+			}
+		}
+		return nil
+	})
+	return n, err
+}
+
 func (s *Store) CreateToken(ctx context.Context, t store.Token) error {
 	return s.do(ctx, func(st *state) error {
 		if _, ok := st.tokens[t.ID]; ok {

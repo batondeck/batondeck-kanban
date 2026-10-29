@@ -64,8 +64,9 @@ type Verifier struct {
 	Logf  func(format string, args ...any)
 	Now   func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]keySet
+	mu     sync.Mutex
+	cache  map[string]keySet
+	failed map[string]time.Time // a URL's last failed fetch or unusable set (P-231)
 }
 
 type keySet struct {
@@ -176,7 +177,9 @@ func audienceHas(raw json.RawMessage, want string) bool {
 }
 
 // key is kid's key from rawURL's set: cached for jwksTTL, fetched again for an unknown kid once the
-// cached set is jwksRefetchAfter old.
+// cached set is jwksRefetchAfter old. A fetch that fails, or a set that is unusable, is remembered
+// for jwksRefetchAfter too: until then the URL answers jwks_fetch_failed with no fetch (P-231), and
+// a good fetch after it clears it.
 func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (*rsa.PublicKey, string) {
 	now := v.now()
 	v.mu.Lock()
@@ -189,6 +192,12 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 	if fresh && now.Sub(ks.fetched) < jwksRefetchAfter {
 		return nil, ReasonVerifyFailed + ": no key " + kid
 	}
+	v.mu.Lock()
+	at, failed := v.failed[rawURL]
+	v.mu.Unlock()
+	if failed && now.Sub(at) < jwksRefetchAfter {
+		return nil, ReasonJWKSFetch
+	}
 	fetch := v.Fetch
 	if fetch == nil {
 		fetch = SafeFetch
@@ -197,11 +206,13 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 	body, err := fetch(ctx, rawURL)
 	if err != nil {
 		v.logf("ingest: JWKS fetch %s for integration %s failed: %v", rawURL, integrationID, err)
+		v.fetchFailed(rawURL, now)
 		return nil, ReasonJWKSFetch
 	}
 	keys, err := parseJWKS(body)
 	if err != nil {
 		v.logf("ingest: JWKS %s for integration %s is unusable: %v", rawURL, integrationID, err)
+		v.fetchFailed(rawURL, now)
 		return nil, ReasonJWKSFetch
 	}
 	v.mu.Lock()
@@ -209,11 +220,22 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 		v.cache = map[string]keySet{}
 	}
 	v.cache[rawURL] = keySet{keys: keys, fetched: now}
+	delete(v.failed, rawURL)
 	v.mu.Unlock()
 	if k := pickKey(keys, kid); k != nil {
 		return k, ""
 	}
 	return nil, ReasonVerifyFailed + ": no key " + kid
+}
+
+// fetchFailed remembers rawURL's failed fetch at now.
+func (v *Verifier) fetchFailed(rawURL string, now time.Time) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.failed == nil {
+		v.failed = map[string]time.Time{}
+	}
+	v.failed[rawURL] = now
 }
 
 // pickKey is kid's key; a token with no kid takes the set's only key.

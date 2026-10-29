@@ -83,6 +83,18 @@ this section's headings in CHANGELOG.md, are all part of it.
   error`. It now runs on the builder's platform (`FROM --platform=$BUILDPLATFORM`) and cross-compiles
   with `GOOS`/`GOARCH` from `TARGETOS`/`TARGETARCH`; the final stage, which only copies, is
   unchanged. `make release-check` holds the `Dockerfile` to both.
+- The web UI bundles dompurify 3.4.17, not 3.4.14 (P-57). mermaid, which renders a chronicle's
+  diagrams, pulls dompurify in, and `npm audit` rated 3.4.14 critical (DOM XSS: GHSA-p98j-92pf-mc4p,
+  GHSA-6688-9rhm-gjv2, GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f). The fix is a
+  patch inside mermaid's own `^3.3.3`: `web/package-lock.json` moves that one entry, no other
+  package changes, and `web/dist` is rebuilt. The remaining advisories are dev-only (vite,
+  vitest, undici, source-map-js) or need the breaking mermaid 12 (katex, low), and stay open.
+- `user passwd LOGIN` ends every browser session of that user (P-51). A reset after a leaked
+  password left the old sessions signed in for the rest of their 7 days, so the reset did not lock
+  out whoever held them. Their requests are 401 from then on, and an open `/api/stream` closes at
+  its next ping (20 s by default). Other users' sessions stay. API and OAuth tokens are separate
+  credentials and also stay: `token revoke ID` ends one, `user disable` ends them all. The command
+  now says how many sessions it ended and points at `token list --user`.
 - A comment mention wakes the mentioned agent (P-310, owner decision 5, the one exception to
   ADR-0004's "comments ring nobody"). `add_comment` already recorded mentions and wrote each
   mentioned member a `mention` notification, but rang nobody, so a worker named in a comment slept
@@ -102,6 +114,23 @@ this section's headings in CHANGELOG.md, are all part of it.
   stored entry the rule refuses. A comment's `@label` aliases a worker entry only when that
   worker's identity owns the label, so a case or local-part variant registered by another member is
   not read as the owner's. No migration.
+
+- A wake entry's `id:` agent is only its caller's own (P-345). `CheckWakeAgent` passed any agent
+  starting `id:` before the label rule, so `session register --agent id:<another identity>` (or a
+  token label or OAuth `client_name` of that shape) wrote an entry under the id `AgentID` derives
+  for that other member. `id:` followed by anything but the caller's identity is now `FORBIDDEN`
+  and writes no entry, and `serve`'s start-up rebuild drops such a stored entry with the log
+  reason `names another identity`. `id:<own identity>` and every name the label rule allows still
+  register. No migration.
+
+- An agent profile and its skill stats are written and used only by their label's owner (P-340,
+  the profile half of P-335). They are keyed by the agent name alone, so an OAuth `client_name` or
+  an MCP `clientInfo.name` equal to another member's token label wrote over that member's profile
+  and stats, which `rank_tasks {useProfile: true}` reads. `register_agent_profile` and
+  `rank_tasks {useProfile: true}` under another agent's label (the wake register's rule: token rows
+  of any status count, no admin pass) are now `FORBIDDEN` with `details.label`;
+  `complete_task` and `block_task` still transition, and record the outcome under the caller's
+  identity instead of the label. `get_skill_stats` is unchanged. No migration.
 
 - Every MCP call carries the agent that made it (P-257, audit B1; P-276; P-277; drifts D6 and D9).
   `Caller.Agent` was set nowhere on the served path, so `tool_calls.agent`, `tasks.claim_agent`,
@@ -1379,3 +1408,48 @@ this section's headings in CHANGELOG.md, are all part of it.
   when alone, then shares it for its lifetime, so a serve beside another does not migrate.
   Postgres keeps goose's session lock. `TestFirstMigrationsOnOneFileBothSucceed` moved to
   `internal/cli` and runs the real migrations through `migrate`, 30 rounds.
+- `POST /hooks/{id}` answers a verified delivery whose ingest failed retryably (a lost race,
+  `STALE`, or a store fault, `INTERNAL`) with 503, `Retry-After: 1` and
+  `{"code","message","retryable":true,"results"}` naming the events that landed ahead of it, not
+  400 (P-233). Alertmanager and PagerDuty drop a 4xx other than 429 and retry a 5xx, so the alert
+  was lost; the retry now replays the landed events and lands the failed one once. Every 429 carries
+  `Retry-After`: `ceil(60/ratePerMin)` seconds for the integration's budget, 1 for the pre-check.
+  A non-retryable refusal stays 400 `VALIDATION`.
+- `POST /hooks/{id}` charges a delivery to the integration's rate budget before verifying it, and a
+  failed JWKS fetch or an unusable set is remembered for 30 s, so a sender with bad bearers can no
+  longer make the server fetch a `jwt` integration's JWKS on every request (P-231). Over the budget
+  a delivery is 429 with no fetch; a refused delivery is paid by that charge, and one that parses
+  gets it back before its events charge themselves. Because the charge comes before the delivery id
+  is known, on an empty bucket a retry of an already recorded delivery is now 429 until a token
+  refills rather than a free replay. Concurrent first misses on one URL are bounded by the bucket's
+  capacity, `ceil(ratePerMin/4)`; they are not coalesced into one fetch.
+- `complete_task` takes `artifacts` (P-235, P-143). It answered UNSUPPORTED ("there is no artifact
+  store until R2.1") on any entry, so the skill's one-call completion with its pr and branch failed.
+  The entries now merge into the task's by `add_artifact`'s rules (normalised, de-duplicated against
+  the live entries, the 50 cap counting tombstones) in the completion's own transaction, before the
+  status change, and the answer's task carries its artifacts. `artifactPolicy` is judged after the
+  merge: a task with no live artifact is refused VALIDATION under `enforce` (nothing written), and
+  under `warn` or an unset policy (read as `warn`, as `get_sprint` does) completes with a warning
+  and a `task.artifact_missing` event; `off` judges nothing. `task.completed`'s `artifacts` is the
+  number of entries added.
+- `get_task_context` returns the task's artifacts, attachments and open follow-ups (P-236, P-154).
+  All three came back empty, and `openFollowUpCount` 0, whatever the task held, so an agent
+  resuming another's task saw none of its evidence, files or open questions. `artifacts` is always
+  read (a retracted entry with its tombstone); `attachments` with the `attachments` section
+  (`gcsUri` the `blob:` locator, `sha256` once the upload is ready, no download URL:
+  `list_attachments` signs those); `openFollowUps` and `openFollowUpCount` with the `followups`
+  section (open ones only, at most 200). One statement each: the `get_task_context` pin in
+  `test/perf` rises from 6 to 9.
+- Attachment links no longer point at `0.0.0.0` (P-337). With `public_url` unset, the signed
+  upload and download URLs took the listener's address, and the image listens on `tcp://:8080`, so
+  under the compose quickstart every link named `0.0.0.0:8080` or `[::]:8080`. They now start with
+  the scheme and Host of the request they are signed for (`X-Forwarded-Proto: https` gives https),
+  on the web UI and MCP alike; `public_url`, when set, is still the base. A request on the Unix
+  socket takes the first TCP listener's address, a wildcard host made `127.0.0.1`. No new setting.
+- A request body is read within 30 s (P-232). Only the headers were bounded (10 s), so a client
+  that sent headers and then stalled its body held a handler and its connection for as long as it
+  liked, on every route, `/hooks` included; an idle keep-alive connection was never closed either.
+  The server now bounds reading a request at 30 s from its first byte (a stalled body gets 400 and
+  the connection closes); the bound ends once the request has been read, so `/api/stream`, the
+  MCP stream and a long tool call run as before; a blob upload keeps its signed URL's expiry as its
+  deadline. An idle keep-alive connection closes after 30 s. No new setting.

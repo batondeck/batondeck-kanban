@@ -44,9 +44,10 @@ const (
 	// the other processes' WatchChanges (internal/store/watch.go). Raised from the plan's 4 for that
 	// statement alone; SQLite holds 4.
 	pinClaimNextPostgres = 5
-	// get_task_context, snapshot cached: the task, its summary, a page of items, its memory and the
-	// edges on each side.
-	pinGetTaskContext = 6
+	// get_task_context, snapshot cached: the task, its summary, a page of items, its memory, the
+	// edges on each side, its artifacts, its attachments and its open follow-ups. Raised from 6 by
+	// P-236 for the last three: one statement each, never one per row.
+	pinGetTaskContext = 9
 	// next_task: the frontier preview and the summary of the task it names.
 	pinNextTask = 3
 	// GET /api/analytics/operations (service.Analytics, no tool): the one GROUP BY over tool_calls.
@@ -89,7 +90,7 @@ type fixture struct {
 	alice   domain.Caller
 	project string
 	board   string
-	full    string // a task holding a summary, an item, a memory entry and an edge on each side
+	full    string // a task holding a summary, an item, a memory entry, an edge on each side, an artifact, an attachment and an open and an acked follow-up
 }
 
 // open seeds, through the service, a project, a board, a task with context of every kind (blocked
@@ -132,6 +133,18 @@ func open(t *testing.T, engine string) *fixture {
 	must(err)
 	_, err = f.core.Context().AddDependency(ctx, f.alice, service.AddDependencyReq{ProjectID: f.project, FromTaskID: full.ID, ToTaskID: dependent.ID, Type: "blocks"})
 	must(err)
+	_, err = f.core.Artifacts().AddArtifact(ctx, f.alice, service.AddArtifactReq{ProjectID: f.project, TaskID: full.ID, Artifacts: []service.ArtifactInput{{Kind: "branch", Ref: "feat/x"}}})
+	must(err)
+	_, err = f.core.Media().AttachFile(ctx, f.alice, service.AttachFileReq{ProjectID: f.project, TaskID: full.ID, FileName: "a.png", MimeType: "image/png", Kind: "image", Bytes: 1})
+	must(err)
+	for _, body := range []string{"open", "acked"} {
+		r, err := f.core.FollowUps().AddFollowUp(ctx, f.alice, service.AddFollowUpReq{ProjectID: f.project, TaskID: full.ID, Body: body})
+		must(err)
+		if body == "acked" {
+			_, err = f.core.FollowUps().AckFollowUp(ctx, f.alice, service.AckFollowUpReq{ProjectID: f.project, TaskID: full.ID, FollowUpID: r.FollowUp.ID})
+			must(err)
+		}
+	}
 	// serve's bus tap marks the snapshot cache live (cli.feedSnapshots); this stack has no tap, so
 	// the test does. Every write below goes through this core, which drops its own snapshots.
 	f.core.ResetSnapshots(true)

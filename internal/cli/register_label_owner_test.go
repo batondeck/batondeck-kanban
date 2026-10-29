@@ -149,3 +149,60 @@ func TestARestartDropsARowUnderAnothersLabel(t *testing.T) {
 		t.Fatalf("rows after the restart %+v, want alice's alone", rows)
 	}
 }
+
+// P-345, over the real serve composition and socket: carol cannot register a worker as bob's
+// derived agent id, "id:<bob's identity>": FORBIDDEN, naming the identity rule, and no entry for her
+// pid, so no presence frame lists her process as bob's agent. Her own "id:<carol's identity>" is the
+// positive control and registers.
+func TestARegisterAsAnotherIdentitysIDIsRefused(t *testing.T) {
+	s := startDirectory(t, nil)
+	c, own := s.client(t, "s-carol-as-bob", ""), s.client(t, "s-carol-own-id", "")
+	agent := "id:" + s.bob.id
+	body := fmt.Sprintf(`{"pid":%d,"role":"worker","agent":%q,"socket":%q,"sessionId":%q}`, c.pid, agent, c.sock, c.session)
+	code, got := httpDo(t, unixHTTP(s.sock), http.MethodPost, "http://x/internal/wake-session", s.carol.token, body)
+	if code != http.StatusForbidden || !strings.Contains(got, `"FORBIDDEN"`) || !strings.Contains(got, "agent names another identity") {
+		t.Fatalf("register pid %d as %q: %d %s, want 403 FORBIDDEN (agent names another identity)", c.pid, agent, code, got)
+	}
+	if slices.Contains(s.pids(), c.pid) {
+		t.Fatalf("refused pid %d is in the directory: %v", c.pid, s.pids())
+	}
+	s.registerAgent(t, s.carol, own, "id:"+s.carol.id)
+	for _, e := range s.a.core.DeviceSessions().Entries() {
+		if e.AgentID == agent {
+			t.Fatalf("a presence entry names %q: %+v", agent, e)
+		}
+	}
+}
+
+// P-345 requirement 5, the start-up rebuild: a row whose agent is another identity's derived id, as
+// a server before the identity check wrote it, is dropped when serve restarts with a logged reason
+// that says so, while the registrant's own row is restored.
+func TestARestartDropsARowUnderAnotherIdentitysID(t *testing.T) {
+	s := startDirectory(t, nil)
+	ctx := context.Background()
+	own, impostor := s.client(t, "s-alice-own", ""), s.client(t, "s-carol-pre-fix-id", "")
+	s.register(t, s.alice, own, "worker")
+	s.registerAgent(t, s.carol, impostor, "pre-fix-free")
+	s.stop()
+	rows, err := s.st.ListWakeSessions(ctx)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows %+v, %v; want two", rows, err)
+	}
+	agent := "id:" + s.bob.id
+	for _, r := range rows {
+		if r.PID == impostor.pid {
+			r.AgentID = agent // what an unchecked register stored for --agent id:<bob>
+			if err := s.st.PutWakeSession(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	again := startDirectory(t, s)
+	if got := again.pids(); !slices.Equal(got, []int64{own.pid}) {
+		t.Fatalf("restored pids %v, want only alice's %d", got, own.pid)
+	}
+	want := fmt.Sprintf(`dropped the row of pid %d at start-up: its agent %q names another identity`, impostor.pid, agent)
+	if !strings.Contains(again.logs.String(), want) {
+		t.Fatalf("the drop is not logged as %q:\n%s", want, again.logs.String())
+	}
+}

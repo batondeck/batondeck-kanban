@@ -117,6 +117,9 @@ internet, so put a TLS reverse proxy in front of `127.0.0.1:8080` and give the s
 export BATONDECK_PUBLIC_URL=https://board.example.com
 ```
 
+`public_url` is also the base of the signed attachment links. Unset, each link takes the host the
+client reached the server at, so behind a proxy that rewrites the Host header, set it.
+
 With `public_url` set, `serve` also runs the OAuth 2.1 authorization server: `/mcp` answers a client
 with no token 401 and the RFC 9728 metadata that leads it to dynamic client registration, the
 board's sign-in page, a consent page (worker preselected) and a token. In claude.ai, add a custom

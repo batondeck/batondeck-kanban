@@ -117,3 +117,88 @@ func TestAWakeEntryTakesOnlyAnAgentItsCallerMayClaimFor(t *testing.T) {
 		}
 	})
 }
+
+// P-345: an "id:" agent is the id AgentID derives for a caller that names none, so a directory entry
+// takes "id:<x>" only when x is the caller's own identity. On every engine, RegisterWakeSession
+// refuses FORBIDDEN {field: agent, agent}, writing no row, "id:<another identity>" and a bare "id:",
+// whatever names it: the --agent value, an OAuth client_name, or a token's own label. No master
+// pass: alice, the project's admin, is refused "id:bob" too. The caller's own id (named or derived),
+// its own label on its token and a free name are accepted.
+func TestAWakeEntryTakesOnlyItsOwnIdentitysID(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		_ = e.c.Close(context.Background())
+		e.c = New(e.st, Options{Logger: log.New(&logBuf{}, "", 0), Now: e.clock.now, ToolCallFlush: -1, Sealer: testKeyring(t), WakeSessionTTL: time.Hour})
+		t.Cleanup(func() { _ = e.c.Close(context.Background()) })
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		carol := e.member(t, e.project, "carol", domain.RoleWorker)
+		now := e.clock.now().UnixMilli()
+		hour := time.Hour.Milliseconds()
+		for _, tok := range []store.Token{
+			{ID: "tok-bob-own", IdentityID: "bob", Subject: "bob", SecretHash: "h-1", Label: "bob-own", CreatedAt: now, ExpiresAt: now + hour},
+			{ID: "tok-bob-id", IdentityID: "bob", Subject: "bob", SecretHash: "h-2", Label: "id:" + carol.Identity, CreatedAt: now, ExpiresAt: now + hour},
+		} {
+			if err := e.st.CreateToken(e.ctx, tok); err != nil {
+				t.Fatal(err)
+			}
+		}
+		bobCLI := bob // a default-label token: no agent of its own
+		bobCLI.Via = domain.ViaAPIToken
+		bobOwn := bob
+		bobOwn.Agent, bobOwn.Labelled, bobOwn.Via = "bob-own", true, domain.ViaAPIToken
+		bobOAuth := bob // an OAuth client that named itself after carol's derived id
+		bobOAuth.Agent, bobOAuth.Via = "id:"+carol.Identity, domain.ViaOAuth
+		bobLabel := bob // a token whose own label is carol's derived id
+		bobLabel.Agent, bobLabel.Labelled, bobLabel.Via = "id:"+carol.Identity, true, domain.ViaAPIToken
+
+		cases := []struct {
+			name    string
+			who     domain.Caller
+			agent   string // as registered; "" for the caller's own AgentID
+			refused bool
+		}{
+			{"--agent id:carol", bobCLI, "id:" + carol.Identity, true},
+			{"--agent id:carol, on his labelled token", bobOwn, "id:" + carol.Identity, true},
+			{"a bare id:", bobCLI, "id:", true},
+			{"no agent, an OAuth client named id:carol", bobOAuth, "", true},
+			{"no agent, a token labelled id:carol", bobLabel, "", true},
+			{"--agent id:bob, the project's admin", e.alice, "id:" + bob.Identity, true},
+			{"--agent id:bob, his own", bobCLI, "id:" + bob.Identity, false},
+			{"no agent, on a default token", bobCLI, "", false},
+			{"his own label on its token", bobOwn, "bob-own", false},
+			{"a name no token carries", bobCLI, "claude-rev", false},
+		}
+		accepted := 0
+		for i, c := range cases {
+			req := worker()
+			req.PID, req.Agent = int64(6000+i), c.agent
+			agent := c.agent
+			if agent == "" {
+				agent = AgentID(c.who)
+			}
+			got, err := e.c.Sessions().RegisterWakeSession(e.ctx, c.who, req)
+			if c.refused {
+				be := wantCode(t, err, domain.CodeForbidden)
+				if be.Details["field"] != "agent" || be.Details["agent"] != agent {
+					t.Fatalf("%s: register details %v, want field agent, agent %q", c.name, be.Details, agent)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("%s: register under %q: %v", c.name, agent, err)
+				}
+				if got.AgentID != agent {
+					t.Fatalf("%s: registered as %q, want %q", c.name, got.AgentID, agent)
+				}
+				accepted++
+			}
+			rows, err := e.c.WakeStore().ListWakeSessions(e.ctx)
+			if err != nil || len(rows) != accepted {
+				t.Fatalf("%s: %d rows (%v), want %d: a refused register writes none", c.name, len(rows), err, accepted)
+			}
+			for _, r := range rows {
+				if r.AgentID == "id:"+carol.Identity || r.AgentID == "id:" {
+					t.Fatalf("%s: a row names %q, which is not its registrant's", c.name, r.AgentID)
+				}
+			}
+		}
+	})
+}

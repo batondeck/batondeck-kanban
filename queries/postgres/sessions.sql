@@ -10,3 +10,6 @@ FROM sessions WHERE id_hash = $1;
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE id_hash = $1;
+
+-- name: DeleteUserSessions :execrows
+DELETE FROM sessions WHERE user_id = $1;

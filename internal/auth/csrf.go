@@ -67,12 +67,15 @@ func sameOrigin(r *http.Request) bool {
 		return site == "same-origin" || site == "none"
 	}
 	if o := r.Header.Get("Origin"); o != "" && o != "null" {
-		return o == browserOrigin(r)
+		return o == RequestOrigin(r)
 	}
 	return true
 }
 
-func browserOrigin(r *http.Request) string {
+// RequestOrigin is the scheme://host r reached the server at: https when r arrived over TLS or says
+// X-Forwarded-Proto: https, else http, and r.Host. The CSRF check compares Origin with it, and serve
+// starts the blob URLs it signs for r with it when public_url is unset.
+func RequestOrigin(r *http.Request) string {
 	scheme := "http"
 	if requestIsTLS(r) {
 		scheme = "https"

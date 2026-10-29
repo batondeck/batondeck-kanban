@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"regexp"
@@ -20,8 +21,12 @@ const BlobURLTTL = 15 * time.Minute
 type MediaOptions struct {
 	Files  *blob.Store
 	Signer *blob.Signer
-	// BaseURL is the scheme://host[:port] the signed URLs start with.
+	// BaseURL is public_url: when set, every signed URL starts with it, whatever the request.
 	BaseURL string
+	// FallbackURL is the base when BaseURL is unset and the ctx carries no request base
+	// (WithRequestBase): a request on the Unix socket, or none. serve sets the first TCP
+	// listener's address, an unspecified host made loopback; "" signs a path-only URL.
+	FallbackURL string
 	// MaxBytes is the largest attachment; zero is core.DefaultBlobMaxBytes.
 	MaxBytes int64
 }
@@ -47,6 +52,38 @@ var mediaMimePrefix = regexp.MustCompile(`^(image|audio|video|text)/`)
 // allowedMime is conductor's isAllowedMime.
 func allowedMime(m string) bool {
 	return mediaMimePrefix.MatchString(m) || slices.Contains(allowedApplicationMime, m)
+}
+
+// requestBaseKey carries the scheme://host the request reached the server at (WithRequestBase).
+type requestBaseKey struct{}
+
+// WithRequestBase is ctx carrying base, the scheme://host of the request ctx serves, which a URL
+// signed under ctx starts with when public_url is unset (BlobBase). serve sets it for every TCP
+// request; MCP carries it from the POST to the tool call.
+func WithRequestBase(ctx context.Context, base string) context.Context {
+	return context.WithValue(ctx, requestBaseKey{}, base)
+}
+
+// RequestBase is the base WithRequestBase put on ctx, "" for none.
+func RequestBase(ctx context.Context) string {
+	b, _ := ctx.Value(requestBaseKey{}).(string)
+	return b
+}
+
+// BlobBase is the base a URL signed under ctx starts with: public_url when set, else the
+// request's (RequestBase), else FallbackURL. It is chosen per call and never stored, so a
+// request's Host shapes only the URLs in its own response.
+func (c *Core) BlobBase(ctx context.Context) string {
+	return cmp.Or(c.media.BaseURL, RequestBase(ctx), c.media.FallbackURL)
+}
+
+// SignBlobURL is id's URL signed for p until exp, at BlobBase(ctx). Every signed blob URL a
+// response carries is made here; "" when serve found no keyring (no Signer).
+func (c *Core) SignBlobURL(ctx context.Context, id string, p blob.Purpose, exp time.Time) string {
+	if c.media.Signer == nil {
+		return ""
+	}
+	return c.media.Signer.URL(c.BlobBase(ctx), id, p, exp)
 }
 
 // signedExpiry is now plus BlobURLTTL, to the second the URL carries.
@@ -102,7 +139,7 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 		exp := c.signedExpiry()
 		ref := blob.Ref{ProjectID: att.ProjectID, TaskID: att.TaskID, AttachmentID: att.ID}
 		return AttachFileResp{
-			AttachmentID: att.ID, ExpiresAt: isoMs(exp.UnixMilli()), UploadURL: c.media.Signer.URL(c.media.BaseURL, ref.String(), blob.Upload, exp),
+			AttachmentID: att.ID, ExpiresAt: isoMs(exp.UnixMilli()), UploadURL: c.SignBlobURL(ctx, ref.String(), blob.Upload, exp),
 		}, nil
 	})
 }
@@ -133,7 +170,7 @@ func (m media) ListAttachments(ctx context.Context, caller domain.Caller, req Li
 			sha := a.BlobSHA256
 			row.SHA256 = &sha
 			if c.media.Signer != nil {
-				u := c.media.Signer.URL(c.media.BaseURL, sha, blob.Download, exp)
+				u := c.SignBlobURL(ctx, sha, blob.Download, exp)
 				row.DownloadURL = &u
 			}
 		}
