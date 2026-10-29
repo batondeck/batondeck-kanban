@@ -1,0 +1,140 @@
+# release-draft: the Z-03 sequence of RELEASING.md run by GitHub Actions on demand, ending in a DRAFT
+# release that a maintainer publishes (publishing creates the tag at the candidate).
+#
+# WHY A WORKFLOW WHEN RELEASING.md SAYS RELEASES ARE CUT LOCALLY. The owner's 2026-10-29 ruling: the
+# cloud session that drove v0.1.0 to its candidate cannot push a tag, create a release or log in to
+# ghcr (its GitHub proxy refuses all three), and the owner wants a draft to publish rather than the
+# local sequence. This file does what RELEASING.md steps 1, 4, 5 and 6 do, with the GITHUB_TOKEN:
+# the version check, a local annotated tag (step 3's tag, made in the runner only) so `make dist`,
+# `make sbom` and `make image` accept the tree, two independent dist builds compared, the SBOM, the
+# multi-arch image pushed to ghcr (optional), and `gh release create --draft`. Nothing here is
+# pushed to the repository: the real tag appears when the draft is published, at the same commit
+# the local tag named, so the binaries' stamped vcs.revision is the tag's commit.
+#
+# What it does NOT do: step 2 (`make bench`, which compares nothing off the baseline machine), the
+# gate (step 3's pre-push `make check` on both engines: the candidate must be a commit whose tree
+# the gate has passed, which every commit on main is, since main lands through gated pushes), step
+# 5's `docker run … version` smoke, and the publish itself. Run it with the candidate's full SHA;
+# it refuses a candidate that is not on main.
+name: release-draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Full SHA of the commit to release (must be on main)
+        required: true
+      version:
+        description: Version to release (compose.yaml, plugin.json and CHANGELOG.md must agree)
+        required: true
+        default: "0.1.0"
+      push_image:
+        description: Push ghcr.io/batondeck/batondeck-kanban:<version> (and :latest)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      CANDIDATE: ${{ inputs.candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate }}
+          fetch-depth: 0
+
+      - name: The candidate is on main and is a full SHA
+        run: |
+          case "$CANDIDATE" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "candidate must be a full SHA"; exit 1 ;;
+          esac
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$CANDIDATE" origin/main || { echo "candidate is not on main"; exit 1; }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Step 1, the versions agree on the candidate
+        run: scripts/release-check.sh "$VERSION"
+
+      - name: Local annotated tag, so the tree checks pass (publishing the draft creates the real one here)
+        run: |
+          git config user.name "release-draft"
+          git config user.email "release-draft@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "batondeck-kanban $VERSION — CHANGELOG.md has the notes" "$CANDIDATE"
+          test "$(git rev-parse "v$VERSION^{commit}")" = "$CANDIDATE"
+
+      - name: Step 4, make dist and make sbom
+        run: |
+          make dist VERSION="$VERSION"
+          make sbom VERSION="$VERSION"
+
+      - name: Step 4, a second independent build reproduces SHA256SUMS
+        run: |
+          dir2=$(mktemp -d)/batondeck-kanban
+          git clone -q . "$dir2"
+          git -C "$dir2" checkout -q "$CANDIDATE"
+          git -C "$dir2" tag -a "v$VERSION" -m "second build" "$CANDIDATE" 2>/dev/null || true
+          make -C "$dir2" dist VERSION="$VERSION"
+          diff dist/SHA256SUMS "$dir2/dist/SHA256SUMS" && echo reproduced
+
+      - uses: docker/setup-buildx-action@v3
+        if: ${{ inputs.push_image }}
+
+      - uses: docker/login-action@v3
+        if: ${{ inputs.push_image }}
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Step 5, make image for linux/amd64 and linux/arm64, pushed
+        if: ${{ inputs.push_image }}
+        run: |
+          make image VERSION="$VERSION" PUSH=1
+          docker buildx imagetools inspect "ghcr.io/batondeck/batondeck-kanban:$VERSION" | tee image-inspect.txt
+          grep -q 'linux/amd64' image-inspect.txt
+          grep -q 'linux/arm64' image-inspect.txt
+          sed -n 's/^Digest: *//p' image-inspect.txt | head -1 > image-digest.txt
+
+      - name: Step 6, the notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 { f = 1; next } /^(## |### )/ { f = 0 } f' CHANGELOG.md > notes.md
+          if [ -s image-digest.txt ]; then
+            printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` (%s), linux/amd64 and linux/arm64.\n' "$VERSION" "$(cat image-digest.txt)" >> notes.md
+          else
+            printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` for linux/amd64 and linux/arm64, built from this tag with `make image VERSION=%s`.\n' "$VERSION" "$VERSION" >> notes.md
+          fi
+          cat notes.md
+
+      - name: Step 6, the DRAFT release with its assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft --target "$CANDIDATE" \
+            --title "v$VERSION" --notes-file notes.md \
+            dist/batondeck-kanban_${VERSION}_* dist/SHA256SUMS dist/sbom.cdx.json THIRD_PARTY_NOTICES
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish,assets --jq '{isDraft, targetCommitish, assets: [.assets[].name]}'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ inputs.version }}-${{ inputs.candidate }}
+          path: |
+            dist/
+            notes.md
+            image-inspect.txt
+          if-no-files-found: error
