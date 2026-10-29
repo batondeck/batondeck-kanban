@@ -597,6 +597,37 @@ func TestStreamClosesAfterLogout(t *testing.T) {
 	})
 }
 
+// A password change ends the user's sessions, so a stream an old session opened closes at the next
+// ping and the old cookie is refused everywhere; the new password signs in afresh (P-51).
+func TestStreamClosesAfterPasswordChange(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: 200 * time.Millisecond})
+		pid, bid := seedBoard(t, l.harness, l.core, "P")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		c.pings(t, 1, time.Second)
+		const newPassword = "a brand new password"
+		ended, err := l.auth.Accounts.SetPassword(context.Background(), "alice", newPassword)
+		if err != nil || ended < 1 {
+			t.Fatalf("SetPassword: %d sessions ended, %v; want at least the stream's", ended, err)
+		}
+		at := time.Now()
+		c.closes(t, time.Second)
+		t.Logf("closed %v after the password change", time.Since(at).Round(time.Millisecond))
+		if again := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil); again.status != http.StatusUnauthorized {
+			t.Fatalf("reconnect with the old cookie: %d %s, want 401", again.status, again.body)
+		}
+		if st, body := l.do("GET", "/api/session", "", nil); st != http.StatusUnauthorized {
+			t.Fatalf("GET /api/session with the old cookie: %d %s, want 401", st, body)
+		}
+		if st := l.loginStatus("alice", testPassword); st != http.StatusUnauthorized {
+			t.Fatalf("login with the old password: %d, want 401", st)
+		}
+		l.login("alice", newPassword) // fatal unless 204
+		fresh := openBoardStream(t, l.harness, pid, bid, nil)
+		fresh.pings(t, 1, time.Second)
+	})
+}
+
 // A disable reaches an open stream within the account cache's bound: the cached entry keeps it
 // open until DefaultAccountCacheTTL has passed on the auth clock, then the next ping closes it.
 func TestStreamClosesWhenTheUserIsDisabled(t *testing.T) {

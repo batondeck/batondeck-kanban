@@ -99,7 +99,7 @@ func TestSetPasswordReplacesTheOldOne(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	f.addUser(t, "alice", "old")
-	if err := f.svc.Accounts.SetPassword(ctx, "alice", "new"); err != nil {
+	if _, err := f.svc.Accounts.SetPassword(ctx, "alice", "new"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "old")
@@ -107,8 +107,62 @@ func TestSetPasswordReplacesTheOldOne(t *testing.T) {
 	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "new"); err != nil {
 		t.Fatal(err)
 	}
-	wantCode(t, f.svc.Accounts.SetPassword(ctx, "nobody", "x"), domain.CodeNotFound)
-	wantCode(t, f.svc.Accounts.SetPassword(ctx, "alice", ""), domain.CodeValidation)
+	_, err = f.svc.Accounts.SetPassword(ctx, "nobody", "x")
+	wantCode(t, err, domain.CodeNotFound)
+	_, err = f.svc.Accounts.SetPassword(ctx, "alice", "")
+	wantCode(t, err, domain.CodeValidation)
 	_, err = f.svc.Accounts.Disable(ctx, "nobody")
 	wantCode(t, err, domain.CodeNotFound)
+}
+
+// A password change ends every browser session of that user (P-51) and nothing else: another
+// user's session and the user's own API token still resolve, because a token is a separate
+// credential that `token revoke` ends.
+func TestSetPasswordEndsTheUsersSessionsOnly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	alice := f.addUser(t, "alice", "pw")
+	f.addUser(t, "bob", "pw")
+	a1, _ := f.session(t, "alice")
+	a2, _ := f.session(t, "alice")
+	b1, _ := f.session(t, "bob")
+	tok, _, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended, err := f.svc.Accounts.SetPassword(ctx, "alice", "new-password")
+	if err != nil || ended != 2 {
+		t.Fatalf("SetPassword: ended %d, %v; want 2 sessions ended", ended, err)
+	}
+	for _, s := range []string{a1, a2} {
+		_, _, err := f.svc.ResolveSession(ctx, s)
+		wantCode(t, err, domain.CodeUnauthenticated)
+	}
+	if _, _, err := f.svc.ResolveSession(ctx, b1); err != nil {
+		t.Fatalf("bob's session after alice's password change: %v", err)
+	}
+	if c, err := f.svc.ResolveCaller(ctx, tok); err != nil || c.Identity != alice.ID {
+		t.Fatalf("alice's API token after her password change: %+v %v, want it to resolve", c, err)
+	}
+	_, err = f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw")
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "new-password"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Accounts without Sessions refuses a password change before writing the hash, so no caller can
+// change a password and leave the old sessions open.
+func TestSetPasswordWithoutSessionsChangesNothing(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.addUser(t, "alice", "pw")
+	acc := *f.svc.Accounts
+	acc.Sessions = nil
+	if _, err := acc.SetPassword(ctx, "alice", "new-password"); err == nil {
+		t.Fatal("SetPassword without Sessions: no error")
+	}
+	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw"); err != nil {
+		t.Fatalf("the old password after a refused change: %v, want it unchanged", err)
+	}
 }

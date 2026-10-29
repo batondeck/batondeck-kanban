@@ -61,6 +61,41 @@ func sessions(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// A password change ends every session of that user and no one else's.
+	t.Run("SessionsDeleteUserEndsOnlyTheirs", func(t *testing.T) {
+		s := migrated(t, newStore)
+		for i, id := range []string{"U-1", "U-2"} {
+			if err := s.CreateUser(ctx, testUser(id, id+"@x.test", int64(i+1))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h2, bob := sess, sess
+		h2.IDHash = "h2"
+		bob.IDHash, bob.UserID = "h3", "U-2"
+		for _, x := range []store.Session{sess, h2, bob} {
+			if err := s.CreateSession(ctx, x); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n, err := s.DeleteUserSessions(ctx, "U-1"); err != nil || n != 2 {
+			t.Fatalf("DeleteUserSessions: %d %v, want 2", n, err)
+		}
+		for _, h := range []string{"h1", "h2"} {
+			if _, err := s.GetSession(ctx, h); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("GetSession(%s) after DeleteUserSessions: %v, want ErrNotFound", h, err)
+			}
+		}
+		if got, err := s.GetSession(ctx, "h3"); err != nil || got != bob {
+			t.Fatalf("another user's session: %+v %v, want it kept", got, err)
+		}
+		if n, err := s.DeleteUserSessions(ctx, "U-1"); err != nil || n != 0 {
+			t.Fatalf("DeleteUserSessions again: %d %v, want 0", n, err)
+		}
+		if n, err := s.DeleteUserSessions(ctx, "U-none"); err != nil || n != 0 {
+			t.Fatalf("DeleteUserSessions of no user: %d %v, want 0", n, err)
+		}
+	})
+
 	t.Run("SessionsRefuseAnUnknownUser", func(t *testing.T) {
 		s := migrated(t, newStore)
 		if err := s.CreateSession(ctx, sess); err == nil {

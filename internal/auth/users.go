@@ -44,6 +44,8 @@ const (
 // `batondeck-kanban user add`.
 type Accounts struct {
 	Store store.Users
+	// Sessions are the browser sessions SetPassword ends; SetPassword refuses to run without them.
+	Sessions store.Sessions
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Params are the argon2id costs for new hashes; the zero value means DefaultArgon2.
@@ -141,20 +143,34 @@ func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error
 	return a.Store.GetUser(ctx, u.ID)
 }
 
-// SetPassword replaces the user's password.
-func (a *Accounts) SetPassword(ctx context.Context, login, password string) error {
+// SetPassword replaces the user's password and ends every browser session of the user, returning
+// how many it ended: a reset after a leak must not leave a session the old password opened. The
+// hash is written first, so a sign-in with the old password cannot land between the two writes and
+// keep a session. API and OAuth tokens are separate credentials and stay (`token revoke` ends one;
+// `user disable` ends them all). Without Sessions it refuses before writing anything.
+func (a *Accounts) SetPassword(ctx context.Context, login, password string) (ended int64, err error) {
+	if a.Sessions == nil {
+		return 0, errors.New("auth: Accounts.Sessions is nil: a password change must end the user's sessions")
+	}
 	if err := checkPassword(password); err != nil {
-		return err
+		return 0, err
 	}
 	u, err := a.Lookup(ctx, login)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	hash, err := HashPassword(password, a.params())
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return a.Store.SetUserPassword(ctx, u.ID, hash)
+	if err := a.Store.SetUserPassword(ctx, u.ID, hash); err != nil {
+		return 0, err
+	}
+	n, err := a.Sessions.DeleteUserSessions(ctx, u.ID)
+	if err != nil {
+		return 0, fmt.Errorf("the password was changed but the user's sessions were not ended (run it again): %w", err)
+	}
+	return n, nil
 }
 
 // List returns every user, oldest first.

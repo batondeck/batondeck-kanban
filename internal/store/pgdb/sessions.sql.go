@@ -18,6 +18,18 @@ func (q *Queries) DeleteSession(ctx context.Context, idHash string) error {
 	return err
 }
 
+const deleteUserSessions = `-- name: DeleteUserSessions :execrows
+DELETE FROM sessions WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserSessions(ctx context.Context, userID string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUserSessions, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getSession = `-- name: GetSession :one
 SELECT id_hash, user_id, csrf_token, created_at, last_seen_at, expires_at
 FROM sessions WHERE id_hash = $1

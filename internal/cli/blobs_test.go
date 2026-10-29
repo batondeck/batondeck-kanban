@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +34,9 @@ import (
 // client of a fresh account that is a member of one project with one board.
 type blobServer struct {
 	base    string
+	token   string
+	port    string // the TCP listener's
+	sock    string // the Unix socket's path, "" for none
 	cs      *sdk.ClientSession
 	a       *app
 	media   service.MediaOptions
@@ -43,6 +48,19 @@ type blobServer struct {
 }
 
 func startBlobs(t *testing.T, st store.Store, maxBytes int64) *blobServer {
+	t.Helper()
+	return startBlobsOn(t, st, maxBytes, blobListen{tcp: "tcp://127.0.0.1:0", dial: "127.0.0.1"})
+}
+
+// blobListen is where startBlobsOn serves: tcp is the TCP listen entry, dial the host the MCP client
+// and base use for it, unix (when set) adds a Unix socket in a short temporary directory, and
+// publicURL is serve's public_url.
+type blobListen struct {
+	tcp, dial, publicURL string
+	unix                 bool
+}
+
+func startBlobsOn(t *testing.T, st store.Store, maxBytes int64, on blobListen) *blobServer {
 	t.Helper()
 	ctx := context.Background()
 	user, err := (&auth.Accounts{Store: st}).Add(ctx, "alice", "Alice", "pw", false)
@@ -68,22 +86,32 @@ func startBlobs(t *testing.T, st store.Store, maxBytes int64) *blobServer {
 	}
 	logs := &lockedLog{}
 	logger := log.New(logs, "", 0)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	entries, sock := []string{on.tcp}, ""
+	if on.unix {
+		sock = filepath.Join(shortDir(t, "bkb"), "bk.sock")
+		entries = append(entries, "unix://"+sock)
+	}
+	lns, err := listenAll(entries, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, port, err := net.SplitHostPort(lns[0].Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + net.JoinHostPort(on.dial, port)
 	dir := t.TempDir()
-	media, err := mediaOptions(&core.Config{Blob: core.Blob{Dir: dir, MaxBytes: maxBytes}}, keys, []net.Listener{ln}, logger)
+	media, err := mediaOptions(&core.Config{PublicURL: on.publicURL, Blob: core.Blob{Dir: dir, MaxBytes: maxBytes}}, keys, lns, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := compose(st, "x", "", logger, keys, media, core.Retention{})
+	a, err := compose(st, "x", on.publicURL, logger, keys, media, core.Retention{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
-	go func() { done <- serveUntil(serveCtx, []net.Listener{ln}, a, "x", logger) }()
+	go func() { done <- serveUntil(serveCtx, lns, a, "x", logger) }()
 	t.Cleanup(func() {
 		stop()
 		if err := <-done; err != nil {
@@ -91,13 +119,13 @@ func startBlobs(t *testing.T, st store.Store, maxBytes int64) *blobServer {
 		}
 	})
 	client := sdk.NewClient(&sdk.Implementation{Name: "blobs", Version: "1"}, nil)
-	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: "http://" + ln.Addr().String() + "/mcp",
+	cs, err := client.Connect(ctx, &sdk.StreamableClientTransport{Endpoint: base + "/mcp",
 		HTTPClient: &http.Client{Transport: bearerRT{token}}, MaxRetries: -1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cs.Close() })
-	return &blobServer{base: "http://" + ln.Addr().String(), cs: cs, a: a, media: media, dir: dir,
+	return &blobServer{base: base, token: token, port: port, sock: sock, cs: cs, a: a, media: media, dir: dir,
 		caller: domain.Caller{Identity: user.ID, TokenScope: user.ID}, project: p.ID, board: b.ID, logs: logs}
 }
 
@@ -129,6 +157,25 @@ func (s *blobServer) attach(t *testing.T, taskID string, n int) string {
 		t.Fatalf("attach_file: %v", out)
 	}
 	return out["uploadUrl"].(string)
+}
+
+// hostRT is bearerRT sending the Host set last, so one MCP session can be reached at two hosts.
+type hostRT struct {
+	token string
+	mu    sync.Mutex
+	host  string
+}
+
+func (h *hostRT) set(host string) { h.mu.Lock(); h.host = host; h.mu.Unlock() }
+
+func (h *hostRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	h.mu.Lock()
+	host := h.host
+	h.mu.Unlock()
+	r = r.Clone(r.Context())
+	r.Host = host
+	r.Header.Set("Authorization", "Bearer "+h.token)
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 func do(t *testing.T, method, rawURL string, body io.Reader, length int64) (int, []byte) {
@@ -250,6 +297,229 @@ func TestBlobRoutesOverTheEngines(t *testing.T) {
 			}
 			if out, ok := s.tool(t, "list_attachments", map[string]any{"projectId": other.ProjectID, "taskId": taskID}); ok || !strings.Contains(out["error"].(string), "FORBIDDEN") {
 				t.Errorf("another project's list_attachments: %v, want FORBIDDEN", out)
+			}
+		})
+	}
+}
+
+// bff is a REST BFF call as s's account: method on path (under /api), sent to dial with the Host
+// header host (dial's own when ""), extra headers set; the status and the JSON body.
+func (s *blobServer) bff(t *testing.T, c *http.Client, method, dial, host, path string, body any, header map[string]string) (int, map[string]any) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, dial+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "" {
+		req.Host = host
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	raw, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%s %s: %d %s", method, path, resp.StatusCode, raw)
+	}
+	return resp.StatusCode, out
+}
+
+// downloadURL is the first (oldest) attachment's downloadUrl in a list_attachments answer.
+func downloadURL(t *testing.T, list map[string]any) string {
+	t.Helper()
+	atts, _ := list["attachments"].([]any)
+	if len(atts) == 0 {
+		t.Fatalf("attachments %v, want one at least", list)
+	}
+	u, _ := atts[0].(map[string]any)["downloadUrl"].(string)
+	if u == "" {
+		t.Fatalf("no downloadUrl in %v", list)
+	}
+	return u
+}
+
+// at is rawURL sent to dial (scheme://host:port) instead of its own host: the signature covers the
+// blob id, the purpose and the expiry, not the host, so a URL signed for one base is served at any.
+func at(t *testing.T, rawURL, dial string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := url.Parse(dial)
+	u.Scheme, u.Host = d.Scheme, d.Host
+	return u.String()
+}
+
+// noWildcard fails for a URL that names an address no client can dial.
+func noWildcard(t *testing.T, what, u string) {
+	t.Helper()
+	if strings.Contains(u, "0.0.0.0") || strings.Contains(u, "[::]") {
+		t.Errorf("%s %s names a wildcard address", what, u)
+	}
+}
+
+// P-337: the signed blob URLs start with the address the client reached the server at, not the
+// listener's. On a wildcard listener (the image's tcp://:8080) with public_url unset, MCP's
+// attach_file and list_attachments sign at the Host the MCP client sent (localhost:<port>), the BFF
+// at the Host its request sent, https with X-Forwarded-Proto: https; a request on the Unix socket,
+// which names no usable Host, takes the TCP listener's port at 127.0.0.1. No URL names 0.0.0.0 or
+// [::], and each one PUTs and GETs. With public_url set, every URL starts with it whatever the Host.
+func TestBlobURLBaseOverTheEngines(t *testing.T) {
+	for _, e := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(e.name+"/wildcard", func(t *testing.T) {
+			s := startBlobsOn(t, e.open(t), 64, blobListen{tcp: "tcp://:0", dial: "localhost", unix: true})
+			loop := "http://127.0.0.1:" + s.port
+			local := "http://localhost:" + s.port
+			taskID := s.task(t)
+			body := []byte("over the wildcard")
+			upload := s.attach(t, taskID, len(body))
+			noWildcard(t, "MCP uploadUrl", upload)
+			if !strings.HasPrefix(upload, local+"/blobs/") {
+				t.Fatalf("MCP uploadUrl %s, want it at %s, the Host the MCP client sent", upload, local)
+			}
+			if code, got := do(t, http.MethodPut, upload, bytes.NewReader(body), int64(len(body))); code != http.StatusOK {
+				t.Fatalf("PUT the MCP uploadUrl: %d %s", code, got)
+			}
+			list, ok := s.tool(t, "list_attachments", map[string]any{"projectId": s.project, "taskId": taskID})
+			if !ok {
+				t.Fatalf("list_attachments: %v", list)
+			}
+			download := downloadURL(t, list)
+			noWildcard(t, "MCP downloadUrl", download)
+			if !strings.HasPrefix(download, local+"/blobs/") {
+				t.Fatalf("MCP downloadUrl %s, want it at %s", download, local)
+			}
+			if code, got := do(t, http.MethodGet, download, nil, 0); code != http.StatusOK || !bytes.Equal(got, body) {
+				t.Fatalf("GET the MCP downloadUrl: %d %q, want 200 %q", code, got, body)
+			}
+
+			// The base is each POST's, not the initialize's: go-sdk keeps the initialize request's
+			// context values on the session, so a tool call that reaches the same session at another
+			// host must still be signed at that host (TokenInfo.Extra carries it per POST).
+			host := &hostRT{token: s.token}
+			host.set("localhost:" + s.port)
+			moved, err := sdk.NewClient(&sdk.Implementation{Name: "moved", Version: "1"}, nil).Connect(context.Background(),
+				&sdk.StreamableClientTransport{Endpoint: loop + "/mcp", HTTPClient: &http.Client{Transport: host}, MaxRetries: -1}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { moved.Close() })
+			host.set("127.0.0.1:" + s.port)
+			res, err := moved.CallTool(context.Background(), &sdk.CallToolParams{Name: "attach_file", Arguments: map[string]any{
+				"projectId": s.project, "taskId": taskID, "fileName": "m.bin", "mimeType": "application/octet-stream", "kind": "file", "bytes": 1}})
+			if err != nil || res.IsError {
+				t.Fatalf("attach_file at the moved host: %v %+v", err, res)
+			}
+			if up, _ := res.StructuredContent.(map[string]any)["uploadUrl"].(string); !strings.HasPrefix(up, loop+"/blobs/") {
+				t.Errorf("uploadUrl of a tool call sent with Host 127.0.0.1 on a session initialised at localhost: %q, want it at %s", up, loop)
+			}
+
+			path := "/api/projects/" + s.project + "/tasks/" + taskID + "/attachments"
+			tcp := &http.Client{Timeout: 10 * time.Second}
+			for _, c := range []struct {
+				name, host, want string
+				header           map[string]string
+			}{
+				{"Host localhost", "localhost:" + s.port, local, nil},
+				{"Host 127.0.0.1", "", loop, nil},
+				{"X-Forwarded-Proto https", "localhost:" + s.port, "https://localhost:" + s.port, map[string]string{"X-Forwarded-Proto": "https"}},
+			} {
+				code, list := s.bff(t, tcp, http.MethodGet, loop, c.host, path, nil, c.header)
+				if code != http.StatusOK {
+					t.Fatalf("%s: BFF list: %d %v", c.name, code, list)
+				}
+				u := downloadURL(t, list)
+				noWildcard(t, c.name+": BFF downloadUrl", u)
+				if !strings.HasPrefix(u, c.want+"/blobs/") {
+					t.Errorf("%s: BFF downloadUrl %s, want it at %s", c.name, u, c.want)
+				}
+				if code, got := do(t, http.MethodGet, at(t, u, loop), nil, 0); code != http.StatusOK || !bytes.Equal(got, body) {
+					t.Errorf("%s: GET the BFF downloadUrl: %d %q", c.name, code, got)
+				}
+			}
+			code, made := s.bff(t, tcp, http.MethodPost, loop, "localhost:"+s.port, path, map[string]any{"fileName": "g.bin", "mimeType": "application/octet-stream", "kind": "file", "bytes": 3}, nil)
+			if code != http.StatusOK && code != http.StatusCreated {
+				t.Fatalf("BFF attach: %d %v", code, made)
+			}
+			if up, _ := made["uploadUrl"].(string); !strings.HasPrefix(up, local+"/blobs/") {
+				t.Errorf("BFF uploadUrl %q, want it at %s", up, local)
+			} else if code, got := do(t, http.MethodPut, up, strings.NewReader("abc"), 3); code != http.StatusOK {
+				t.Errorf("PUT the BFF uploadUrl: %d %s", code, got)
+			}
+
+			code, list = s.bff(t, unixHTTP(s.sock), http.MethodGet, "http://x", "", path, nil, nil)
+			if code != http.StatusOK {
+				t.Fatalf("BFF list over the socket: %d %v", code, list)
+			}
+			if u := downloadURL(t, list); !strings.HasPrefix(u, loop+"/blobs/") {
+				t.Errorf("downloadUrl over the Unix socket %s, want the listener fallback %s", u, loop)
+			}
+			if want := "signed URLs at the requesting client's host, " + loop + " for one on the Unix socket"; !strings.Contains(s.logs.String(), want) {
+				t.Errorf("serve's blob line is not %q in\n%s", want, s.logs.String())
+			}
+			for _, l := range strings.Split(s.logs.String(), "\n") {
+				if strings.Contains(l, "signed URLs at") {
+					noWildcard(t, "serve's log line", l)
+				}
+			}
+		})
+		t.Run(e.name+"/public_url", func(t *testing.T) {
+			const public = "http://board.test:8443"
+			s := startBlobsOn(t, e.open(t), 64, blobListen{tcp: "tcp://127.0.0.1:0", dial: "127.0.0.1", publicURL: public})
+			taskID := s.task(t)
+			body := []byte("at public_url")
+			upload := s.attach(t, taskID, len(body))
+			if !strings.HasPrefix(upload, public+"/blobs/") {
+				t.Fatalf("MCP uploadUrl %s, want it at public_url %s", upload, public)
+			}
+			if code, got := do(t, http.MethodPut, at(t, upload, s.base), bytes.NewReader(body), int64(len(body))); code != http.StatusOK {
+				t.Fatalf("PUT: %d %s", code, got)
+			}
+			list, ok := s.tool(t, "list_attachments", map[string]any{"projectId": s.project, "taskId": taskID})
+			if !ok {
+				t.Fatalf("list_attachments: %v", list)
+			}
+			if u := downloadURL(t, list); !strings.HasPrefix(u, public+"/blobs/") {
+				t.Errorf("MCP downloadUrl %s, want it at %s", u, public)
+			}
+			path := "/api/projects/" + s.project + "/tasks/" + taskID + "/attachments"
+			code, list := s.bff(t, &http.Client{Timeout: 10 * time.Second}, http.MethodGet, s.base, "elsewhere.test:"+s.port, path, nil, map[string]string{"X-Forwarded-Proto": "https"})
+			if code != http.StatusOK {
+				t.Fatalf("BFF list: %d %v", code, list)
+			}
+			u := downloadURL(t, list)
+			if !strings.HasPrefix(u, public+"/blobs/") {
+				t.Errorf("BFF downloadUrl with a foreign Host %s, want it at %s", u, public)
+			}
+			if code, got := do(t, http.MethodGet, at(t, u, s.base), nil, 0); code != http.StatusOK || !bytes.Equal(got, body) {
+				t.Errorf("GET: %d %q", code, got)
+			}
+			if !strings.Contains(s.logs.String(), "signed URLs at "+public+"/blobs/") {
+				t.Errorf("serve's blob line does not name public_url in\n%s", s.logs.String())
 			}
 		})
 	}

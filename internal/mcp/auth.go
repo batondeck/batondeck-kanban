@@ -11,18 +11,24 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/service"
 )
 
 // callerKey carries the caller in a TokenInfo's Extra, which is how go-sdk hands a per-request
 // value to a method handler on a stateful session (RequestExtra.TokenInfo, set from each POST).
 const callerKey = "batondeck.caller"
 
+// requestBaseKey carries the POST's service.RequestBase the same way: a tool call's ctx on a
+// stateful session holds the initialize POST's values, not its own POST's, so the blob URLs it
+// signs would otherwise keep the host the session was opened at.
+const requestBaseKey = "batondeck.requestBase"
+
 // requireBearer resolves every request's bearer through r. No bearer, or one the resolver refuses
 // as UNAUTHENTICATED, is 401 with `WWW-Authenticate: Bearer`, naming resourceMetadata (RFC 9728)
 // when it is set; any other resolver error is 500. The caller's identity is the TokenInfo's UserID,
 // so go-sdk refuses (403) a session presented with another identity's bearer.
 func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger) func(http.Handler) http.Handler {
-	verify := func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
+	verify := func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
 		c, err := r.ResolveCaller(ctx, token)
 		if err != nil {
 			if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeUnauthenticated {
@@ -31,7 +37,11 @@ func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger)
 			logger.Printf("mcp: resolve bearer failed: %+v", err)
 			return nil, fmt.Errorf("resolving the bearer failed")
 		}
-		return &sdkauth.TokenInfo{UserID: c.Identity, Extra: map[string]any{callerKey: c}}, nil
+		extra := map[string]any{callerKey: c}
+		if base := service.RequestBase(req.Context()); base != "" {
+			extra[requestBaseKey] = base
+		}
+		return &sdkauth.TokenInfo{UserID: c.Identity, Extra: extra}, nil
 	}
 	// Tokens are checked for expiry by the resolver, so the TokenInfo carries none.
 	bearer := sdkauth.RequireBearerToken(verify, &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true, ResourceMetadataURL: resourceMetadata})
@@ -77,7 +87,8 @@ func CallerFrom(ctx context.Context) (domain.Caller, bool) {
 
 // withCaller puts the request's caller on its context, for every method handler after it. A caller
 // whose bearer names no agent (an API token with the default label) is told apart by the MCP
-// initialize clientInfo.name of its session (audit B1), the initialize's own on that request.
+// initialize clientInfo.name of its session (audit B1), the initialize's own on that request. The
+// POST's request base (service.RequestBase) goes on the context too, for the blob URLs it signs.
 func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		if c, ok := callerOf(req); ok {
@@ -85,6 +96,9 @@ func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
 				c.Agent = clientAgent(req)
 			}
 			ctx = context.WithValue(ctx, callerCtxKey{}, c)
+		}
+		if base := requestBaseOf(req); base != "" {
+			ctx = service.WithRequestBase(ctx, base)
 		}
 		return next(ctx, method, req)
 	}
@@ -111,4 +125,14 @@ func callerOf(req mcp.Request) (domain.Caller, bool) {
 	}
 	c, ok := extra.TokenInfo.Extra[callerKey].(domain.Caller)
 	return c, ok
+}
+
+// requestBaseOf is the service.RequestBase of the POST that carried req, "" for none.
+func requestBaseOf(req mcp.Request) string {
+	extra := req.GetExtra()
+	if extra == nil || extra.TokenInfo == nil {
+		return ""
+	}
+	b, _ := extra.TokenInfo.Extra[requestBaseKey].(string)
+	return b
 }

@@ -287,6 +287,7 @@ func TestCompleteLandsOnReviewOrDone(t *testing.T) {
 // recorded handover, and a warning says so; the doorbell rings the agent scope.
 func TestCompleteWithANonMemberReviewerWarns(t *testing.T) {
 	e := newLC(t, engineCases[0].open(t))
+	e.settings(t, map[string]any{"artifactPolicy": "off"}) // the one warning is the reviewer's
 	task := e.task(t, domain.Todo)
 	c := e.claim(t, e.alice, task.ID, 0)
 	r, err := e.c.Lifecycle().Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reviewer: "qa-bot"})
@@ -756,8 +757,8 @@ func TestLifecycleRefusals(t *testing.T) {
 				_, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: p, TaskID: id, LeaseSeconds: 86_401})
 				return err
 			},
-			"artifacts": func() error {
-				_, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: p, TaskID: id, LeaseID: "L", Artifacts: []ArtifactInput{{Kind: "pr", URL: "https://x"}}})
+			"artifact with a non-http url": func() error {
+				_, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: p, TaskID: id, LeaseID: "L", Artifacts: []ArtifactInput{{Kind: "pr", URL: "ftp://x"}}})
 				return err
 			},
 			"shard lanes": func() error {
@@ -858,7 +859,7 @@ func TestClaimReplay(t *testing.T) {
 func TestCompleteCheckpointPolicy(t *testing.T) {
 	e := newLC(t, engineCases[0].open(t))
 	lc := e.c.Lifecycle()
-	e.settings(t, map[string]any{"checkpointPolicy": "enforce", "reviewEnabled": false})
+	e.settings(t, map[string]any{"checkpointPolicy": "enforce", "reviewEnabled": false, "artifactPolicy": "off"})
 	task := e.task(t, domain.Todo)
 	c := e.claim(t, e.alice, task.ID, 0)
 	_, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID})

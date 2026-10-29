@@ -27,7 +27,10 @@ var placeholder = regexp.MustCompile(`\$\{[^}]*\}|^\$[A-Za-z_][A-Za-z0-9_]*$|^\{
 
 // agentKey is the name a caller's profile and stats are keyed by: its agent name, else its
 // identity. An agent name that is an unexpanded placeholder is VALIDATION: a durable row must not be
-// minted from it.
+// minted from it. The key is the agent name alone, so a name the client chose (an OAuth
+// client_name, a clientInfo.name) can equal another identity's label: ownProfileKey refuses that
+// key to register_agent_profile and rank_tasks {useProfile}, and rollUpSkill records such a
+// caller's outcome under its identity instead (P-340; the label rule is labelRefused, R2-Q1).
 func agentKey(caller domain.Caller) (string, error) {
 	name := strings.TrimSpace(caller.Agent)
 	if name == "" {
@@ -38,6 +41,26 @@ func agentKey(caller domain.Caller) (string, error) {
 			map[string]any{"agentKey": name})
 	}
 	return name, nil
+}
+
+// ownProfileKey is the caller's agentKey, FORBIDDEN when it is another agent's label for the caller
+// by labelRefused, with no master pass, as at a wake register: a profile is its agent's, and a label
+// has no admin override (P-340; REVIEW-257 R2-Q2). A caller with no agent (its key is its
+// identity) reads no token row.
+func (c *Core) ownProfileKey(ctx context.Context, caller domain.Caller, tool string) (string, error) {
+	key, err := agentKey(caller)
+	if err != nil || strings.TrimSpace(caller.Agent) == "" {
+		return key, err
+	}
+	refused, err := c.labelRefused(ctx, caller, key)
+	if err != nil {
+		return "", c.mapErr(tool, err)
+	}
+	if refused {
+		return "", forbidden("agentKey is another agent's label: a profile is written and used only on that label's own token",
+			map[string]any{"field": "agentKey", "label": key})
+	}
+	return key, nil
 }
 
 // Register is register_agent_profile: one upsert.
@@ -67,7 +90,7 @@ func (s profilesSvc) Register(ctx context.Context, caller domain.Caller, req Reg
 	if req.MaxEffort != "" && !slices.Contains(EffortValues, req.MaxEffort) {
 		return RegisterAgentProfileResp{}, domain.Validation("unknown maxEffort: "+string(req.MaxEffort), map[string]any{"field": "maxEffort"})
 	}
-	key, err := agentKey(caller)
+	key, err := s.c.ownProfileKey(ctx, caller, "register_agent_profile")
 	if err != nil {
 		return RegisterAgentProfileResp{}, err
 	}
@@ -160,16 +183,26 @@ func listOrEmpty(ss []string) []string {
 // before the transition) added to the caller's stats for each of its required capabilities, in the
 // transition's transaction (conductor wrote it after the commit, best-effort; its TODO(spec) wanted
 // it inside). Handle time is approximated from cur's updatedAt, the claim time absent later edits.
-// No capability writes nothing.
+// No capability writes nothing. A key that is another agent's label for the caller (labelRefused's
+// rule over the token rows this transaction reads) is not the caller's to write: the outcome goes
+// under its identity, as for an unusable name, and the transition stands (P-340).
 func (t *txn) rollUpSkill(cur store.Task, completed bool) error {
 	if len(cur.RequiredCapabilities) == 0 {
 		return nil
 	}
+	now := t.Now.UnixMilli()
 	key, err := agentKey(t.Caller)
 	if err != nil {
 		key = t.Caller.Identity
+	} else if strings.TrimSpace(t.Caller.Agent) != "" {
+		tokens, err := t.Tx.ListTokens(t.ctx, "")
+		if err != nil {
+			return err
+		}
+		if labelRefusedIn(tokens, t.Caller, key, now) {
+			key = t.Caller.Identity
+		}
 	}
-	now := t.Now.UnixMilli()
 	return t.Tx.RecordSkillOutcome(t.ctx, store.SkillOutcome{ProjectID: t.ProjectID, AgentKey: key, Capabilities: cur.RequiredCapabilities,
 		Completed: completed, ElapsedMs: now - cur.UpdatedAt, Now: now})
 }
