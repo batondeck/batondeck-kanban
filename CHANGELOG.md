@@ -378,6 +378,9 @@ this section's headings in CHANGELOG.md, are all part of it.
   re-derived. `TestNoRemovedStatusRemains` refuses the two retired names in the surface.
 
 ### Added
+- The `release-publish` workflow (`.github/workflows/release-publish.yml`): publishes a version's draft
+  release on demand, after checking it targets the given candidate and carries the seven assets; the
+  publish creates the tag (owner 2026-10-29).
 - The `release-draft` workflow (`.github/workflows/release-draft.yml`): RELEASING.md's steps 1, 4, 5 and 6
   on demand, with step 3's tag made locally and no gate run, ending in a draft release a maintainer
   publishes (Z-03 from the cloud, owner 2026-10-29).
