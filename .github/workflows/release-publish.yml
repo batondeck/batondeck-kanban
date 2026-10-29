@@ -1,0 +1,74 @@
+# release-publish: publishes the draft that release-draft made, which creates the tag at the draft's
+# target. On demand only (workflow_dispatch), with the version and the candidate SHA the draft was
+# built from; it refuses anything else: no draft, a draft at another commit, fewer than the seven
+# assets, or a tag that already exists.
+#
+# WHY. The owner's 2026-10-29 ruling: the cloud session that drives the release cannot create or
+# edit a release (its GitHub proxy refuses), and the owner asked for the publish to run from the
+# workflow under the repository's token rather than from the GitHub UI. Publishing a draft is what
+# creates the real `v<version>` tag, at the commit the draft targets (RELEASING.md step 3's tag);
+# the binaries in the draft were built from that commit with a local tag of the same name, so
+# their stamped vcs.revision is the tag's commit.
+name: release-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version whose draft release to publish
+        required: true
+        default: "0.1.0"
+      candidate:
+        description: Full SHA the draft targets (must match, must be on main)
+        required: true
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      CANDIDATE: ${{ inputs.candidate }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The candidate is a full SHA on main, and no tag exists yet
+        run: |
+          case "$CANDIDATE" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "candidate must be a full SHA"; exit 1 ;;
+          esac
+          git merge-base --is-ancestor "$CANDIDATE" origin/main || { echo "candidate is not on main"; exit 1; }
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then echo "tag v$VERSION already exists"; exit 1; fi
+
+      - name: The draft exists, targets the candidate and carries the seven assets
+        run: |
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish,assets > draft.json
+          cat draft.json
+          test "$(jq -r .isDraft draft.json)" = true || { echo "v$VERSION is not a draft"; exit 1; }
+          test "$(jq -r .targetCommitish draft.json)" = "$CANDIDATE" || { echo "the draft targets another commit"; exit 1; }
+          for a in "batondeck-kanban_${VERSION}_linux_amd64" "batondeck-kanban_${VERSION}_linux_arm64" \
+                   "batondeck-kanban_${VERSION}_darwin_amd64" "batondeck-kanban_${VERSION}_darwin_arm64" \
+                   SHA256SUMS sbom.cdx.json THIRD_PARTY_NOTICES; do
+            jq -e --arg n "$a" '.assets[] | select(.name == $n)' draft.json > /dev/null || { echo "asset $a missing"; exit 1; }
+          done
+
+      - name: Publish the draft, which creates the tag at the candidate
+        run: |
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName,url --jq '{isDraft, tagName, url}'
+
+      - name: The tag resolves to the candidate
+        run: |
+          git fetch --tags origin
+          test "$(git rev-parse "v$VERSION^{commit}")" = "$CANDIDATE"
+          git ls-remote --tags origin "refs/tags/v$VERSION"
