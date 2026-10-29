@@ -1292,6 +1292,10 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Removed
 
+- The on-call setup's "Read the guide" and "Wiring guide" buttons (P-247). They linked to
+  `/docs/<page>.html`, which this binary does not serve (the SPA shell answered), and the
+  repository ships no on-call guide; the connector cards keep their own copy. The server still
+  sends `docsPage` in `GET /api/oncall/sources`.
 - Four on-call settings nothing read (P-310, owner decision 6, audit D5): the integration
   `policy` input (`autoReviewCycle`, `openPrForReview`, `reviewerAgent`) and
   `routing.fallbackBroadcast`. `create_integration` and `update_integration`, over MCP and REST,
@@ -1325,6 +1329,9 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- `web/package.json` declares `"license": "Apache-2.0"` (P-75), and the lockfile's root entry
+  carries the same field, so npm tooling and licence scanners no longer read the SPA as
+  unlicensed.
 - /mcp accepts the `public_url` host (P-97). go-sdk's DNS-rebinding protection refused every
   request arriving on a loopback listener with a non-localhost Host, so a deploy behind a reverse
   proxy on the same machine answered every MCP call 403 `invalid Host header`. It is replaced by an

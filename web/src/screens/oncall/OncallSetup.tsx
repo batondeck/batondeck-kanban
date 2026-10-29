@@ -37,22 +37,6 @@ import {
 const mintKey = (): string => `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
 
 /**
- * THE `.html` IS LOAD-BEARING — every "Read the guide" link was dead without it.
- *
- * `docs-site` builds flat files (`oncall-webhook.html`), and the gateway serves `/docs/` with
- * `fastifyStatic` and no extension resolution. So `/docs/oncall-webhook` misses the static handler,
- * falls through to the SPA catch-all, and React Router — which has no such route — sends the reader
- * to `/projects`. Measured on staging 2026-08-29, by RESPONSE BODY because both URLs answer 200:
- *   /docs/oncall-webhook       -> <title>BatonDeck</title> + <div id="root">   (the SPA shell)
- *   /docs/oncall-webhook.html  -> <title>Custom webhook — any source</title>   (the actual guide)
- * It broke all EIGHT connectors, not just the custom one, because both call sites built the href the
- * same way. One function so a third call site cannot reintroduce it.
- */
-export function docsHref(page: string): string {
-  return `/docs/${page}.html`;
-}
-
-/**
  * The refused payload of one delivery, in a dialog.
  *
  * THIS REPLACED A DOWNLOAD LINK THAT COULD NOT WORK MOST OF THE TIME. The delivery ROW is kept for
@@ -376,9 +360,6 @@ function SourcePicker({
                     <span>Use a custom webhook</span>
                   </Cluster>
                 </button>
-                <a className="btn secondary" href={docsHref(custom.docsPage)} target="_blank" rel="noreferrer">
-                  Read the guide
-                </a>
               </Cluster>
             </Stack>
           </Panel>
@@ -742,9 +723,6 @@ export function OncallSetup({
                 <Cluster gap={8} wrap>
                   <SourceMark id={creating.id} />
                   <span className="muted">{creating.authNote}</span>
-                  <a className="btn secondary" href={docsHref(creating.docsPage)} target="_blank" rel="noreferrer">
-                    Wiring guide
-                  </a>
                 </Cluster>
               </Panel>
               <IntegrationForm
