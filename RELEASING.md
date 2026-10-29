@@ -6,7 +6,11 @@ its agents' credentials, so "download this binary" has to be checkable: the chec
 and anyone can rebuild a tag and compare. One binary ships; there is no sidecar.
 
 No release has been cut yet. This is the sequence for v0.1.0, line by line; a later release runs
-the same lines with its own version. The Makefile's `dist`, `sbom` and `image` targets and
+the same lines with its own version. The same sequence, steps 1 and 3 to 6, also runs on demand as
+the `release-draft` workflow (`.github/workflows/release-draft.yml`, `workflow_dispatch` with the
+candidate's full SHA): it ends in a draft release with the assets and the pushed image, and a
+maintainer publishes the draft, which creates the tag at the candidate. Step 2, `make bench`, stays
+on the baseline machine. The Makefile's `dist`, `sbom` and `image` targets and
 `scripts/release-check.sh` implement it, and `make release-check` (part of `make check`) runs each of
 them against fixture repositories.
 

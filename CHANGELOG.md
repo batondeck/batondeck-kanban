@@ -378,6 +378,8 @@ this section's headings in CHANGELOG.md, are all part of it.
   re-derived. `TestNoRemovedStatusRemains` refuses the two retired names in the surface.
 
 ### Added
+- The `release-draft` workflow (`.github/workflows/release-draft.yml`): RELEASING.md's steps 1 and 3 to 6
+  on demand, ending in a draft release a maintainer publishes (Z-03 from the cloud, owner 2026-10-29).
 
 - `docs/adr/`: the five decision records the tree cites, ADR-0001 to ADR-0005, copied unchanged
   from the planning workspace, until now their only home (P-309, audit D4), and a README.
