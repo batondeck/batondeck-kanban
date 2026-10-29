@@ -61,7 +61,8 @@ func userUsage(w io.Writer) {
 
   add [--admin] [--name NAME] LOGIN   create a user; the password is read from stdin
   disable LOGIN                       disable a user: their sessions and tokens stop within 60 s
-  passwd LOGIN                        set a user's password, read from stdin
+  passwd LOGIN                        set a user's password, read from stdin; ends their browser
+                                      sessions (API tokens stay: token revoke)
   list                                list the users
 
 every subcommand takes -config PATH.
@@ -106,7 +107,7 @@ func user(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	acc := &auth.Accounts{Store: st}
+	acc := &auth.Accounts{Store: st, Sessions: st}
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "user %s: %v\n", sub, err)
 		return 1
@@ -137,10 +138,16 @@ func user(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(err)
 		}
-		if err := acc.SetPassword(ctx, fs.Arg(0), pw); err != nil {
+		ended, err := acc.SetPassword(ctx, fs.Arg(0), pw)
+		if err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "user passwd: password set for %s\n", strings.ToLower(strings.TrimSpace(fs.Arg(0))))
+		login := strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+		sessions := "sessions"
+		if ended == 1 {
+			sessions = "session"
+		}
+		fmt.Fprintf(stdout, "user passwd: password set for %s; %d browser %s ended; API tokens unchanged (token list --user %s, token revoke ID)\n", login, ended, sessions, login)
 	case "list":
 		us, err := acc.List(ctx)
 		if err != nil {

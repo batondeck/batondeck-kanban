@@ -76,6 +76,9 @@ type Sessions interface {
 	GetSession(ctx context.Context, idHash string) (Session, error)
 	// DeleteSession removes the session (sign-out); a hash with no row is not an error.
 	DeleteSession(ctx context.Context, idHash string) error
+	// DeleteUserSessions removes every session of the user (a password change) and returns how many
+	// it removed; a user with none, or no such user, is 0 and no error.
+	DeleteUserSessions(ctx context.Context, userID string) (int64, error)
 }
 
 // Tokens is the tokens table. Key: ID. Expiry and revocation are judged by the caller.
