@@ -1292,6 +1292,10 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Removed
 
+- The on-call setup's "Read the guide" and "Wiring guide" buttons (P-247). They linked to
+  `/docs/<page>.html`, which this binary does not serve (the SPA shell answered), and the
+  repository ships no on-call guide; the connector cards keep their own copy. The server still
+  sends `docsPage` in `GET /api/oncall/sources`.
 - Four on-call settings nothing read (P-310, owner decision 6, audit D5): the integration
   `policy` input (`autoReviewCycle`, `openPrForReview`, `reviewerAgent`) and
   `routing.fallbackBroadcast`. `create_integration` and `update_integration`, over MCP and REST,

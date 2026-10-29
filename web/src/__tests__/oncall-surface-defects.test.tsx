@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, cleanup, waitFor, within } from '@testing-library/react';
-import { OncallSetup, docsHref } from '../screens/oncall/OncallSetup.js';
+import { OncallSetup } from '../screens/oncall/OncallSetup.js';
 import { SOURCE_LOGOS, sourceLogo } from '../screens/oncall/logos.js';
 import type { Integration } from '../types.js';
 
@@ -80,26 +80,6 @@ describe('On-call and Notifications do not draw the same icon', () => {
     // swapping in a *different* bell would pass the test above and fail this one.
     expect(oncallPath()).not.toMatch(/^M12 2a7 7/);
     expect(oncallPath()).toMatch(/^M12 21v-7/);
-  });
-});
-
-/* ------------------------------------------------------- 2. the guide links (all eight) -- */
-
-describe('docs links resolve to a document, not the SPA shell', () => {
-  /**
-   * `/docs/oncall-webhook` answers 200 with the SPA shell, so React Router redirects the reader to
-   * `/projects`. Only `/docs/oncall-webhook.html` serves the guide. It broke all EIGHT connectors.
-   */
-  it('appends .html', () => {
-    expect(docsHref('oncall-webhook')).toBe('/docs/oncall-webhook.html');
-  });
-
-  it('no call site builds a /docs/ href by hand', () => {
-    // The bug was two call sites interpolating the same broken shape. A third would reintroduce it,
-    // and would not be caught by the unit test above.
-    const setup = src('screens/oncall/OncallSetup.tsx');
-    const raw = setup.match(/href=\{`\/docs\/[^`]*`\}/g) ?? [];
-    expect(raw, `build docs hrefs with docsHref(), found: ${raw.join(', ')}`).toEqual([]);
   });
 });
 
