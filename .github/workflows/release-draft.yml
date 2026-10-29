@@ -4,16 +4,18 @@
 # WHY A WORKFLOW WHEN RELEASING.md SAYS RELEASES ARE CUT LOCALLY. The owner's 2026-10-29 ruling: the
 # cloud session that drove v0.1.0 to its candidate cannot push a tag, create a release or log in to
 # ghcr (its GitHub proxy refuses all three), and the owner wants a draft to publish rather than the
-# local sequence. This file does exactly what RELEASING.md steps 1, 3-6 do, with the GITHUB_TOKEN:
-# the version check, a local annotated tag so `make dist`/`make sbom`/`make image` accept the tree,
-# two independent dist builds compared, the SBOM, the multi-arch image pushed to ghcr (optional),
-# and `gh release create --draft`. Nothing here is pushed to the repository: the real tag appears
-# when the draft is published, at the same commit the local tag named, so the binaries' stamped
-# vcs.revision is the tag's commit.
+# local sequence. This file does what RELEASING.md steps 1, 4, 5 and 6 do, with the GITHUB_TOKEN:
+# the version check, a local annotated tag (step 3's tag, made in the runner only) so `make dist`,
+# `make sbom` and `make image` accept the tree, two independent dist builds compared, the SBOM, the
+# multi-arch image pushed to ghcr (optional), and `gh release create --draft`. Nothing here is
+# pushed to the repository: the real tag appears when the draft is published, at the same commit
+# the local tag named, so the binaries' stamped vcs.revision is the tag's commit.
 #
-# What it does NOT do: step 2 (`make bench`, which compares nothing off the baseline machine) and
-# the publish itself. Run it with the candidate's full SHA; it refuses a candidate that is not on
-# main.
+# What it does NOT do: step 2 (`make bench`, which compares nothing off the baseline machine), the
+# gate (step 3's pre-push `make check` on both engines: the candidate must be a commit whose tree
+# the gate has passed, which every commit on main is, since main lands through gated pushes), step
+# 5's `docker run … version` smoke, and the publish itself. Run it with the candidate's full SHA;
+# it refuses a candidate that is not on main.
 name: release-draft
 
 on:
@@ -34,6 +36,10 @@ on:
 permissions:
   contents: write
   packages: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   draft:
@@ -101,7 +107,8 @@ jobs:
         run: |
           make image VERSION="$VERSION" PUSH=1
           docker buildx imagetools inspect "ghcr.io/batondeck/batondeck-kanban:$VERSION" | tee image-inspect.txt
-          grep -q 'linux/amd64' image-inspect.txt && grep -q 'linux/arm64' image-inspect.txt
+          grep -q 'linux/amd64' image-inspect.txt
+          grep -q 'linux/arm64' image-inspect.txt
           sed -n 's/^Digest: *//p' image-inspect.txt | head -1 > image-digest.txt
 
       - name: Step 6, the notes from CHANGELOG.md
