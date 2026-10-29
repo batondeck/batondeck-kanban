@@ -1,14 +1,15 @@
 /**
  * FIVE DEFECTS REPORTED FROM STAGING, 2026-08-29 — each pinned by the cheapest check that can see it.
  *
- * Four of the five are invisible to every existing test, which is how they shipped: they are about
- * an icon's shape, a URL suffix, a CSS class and which branch of a state machine a Cancel lands in.
- * Nothing asserts those, so nothing broke when they were wrong.
+ * Four of the five were invisible to every existing test, which is how they shipped: they are about
+ * an icon's shape, a CSS class and which branch of a state machine a Cancel lands in. (The fifth, the
+ * guide links' URL suffix, went with the links themselves in P-247: the binary serves no `/docs/`, and
+ * `oncall-no-docs-links.test.tsx` pins their absence.) Nothing asserted those, so nothing broke.
  *
  * WHAT JSDOM CANNOT DO HERE, stated so no one reads more into a green run than is there: it resolves
  * no custom properties and lays nothing out, so "the icons look different" and "the page is aligned"
  * are NOT provable. What is provable is the thing that actually regressed each time — the `d` string,
- * the class, the href, the branch — and that is what each test below asserts.
+ * the class, the branch — and that is what each test below asserts.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
