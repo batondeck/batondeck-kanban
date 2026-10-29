@@ -11,7 +11,9 @@ the same lines with its own version. Steps 1, 4, 5 and 6 also run on demand as t
 `release-draft` workflow (`.github/workflows/release-draft.yml`, `workflow_dispatch` with the
 candidate's full SHA), with step 3's tag made locally in the runner only: it ends in a draft release
 with the assets and the pushed image, and a maintainer publishes the draft, which creates the tag at
-the candidate. The workflow runs no gate (`make check`) and no `docker run … version` smoke, so the
+the candidate; the `release-publish` workflow (`.github/workflows/release-publish.yml`) does that
+publish on demand too, after checking the draft targets the candidate and carries the seven assets.
+The draft workflow runs no gate (`make check`) and no `docker run … version` smoke, so the
 candidate must be a commit whose tree the gate has passed (every commit on `main` lands through a
 gated push); step 2, `make bench`, stays on the baseline machine. The Makefile's `dist`, `sbom` and `image` targets and
 `scripts/release-check.sh` implement it, and `make release-check` (part of `make check`) runs each of
