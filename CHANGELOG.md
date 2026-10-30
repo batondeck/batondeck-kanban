@@ -13,6 +13,11 @@ Notable changes to batondeck-kanban. The format follows
   URL's 15 minutes ran out. A write now stores each URL this server signed in one stable form, and
   every read of the page, a version or a conflict, over REST and MCP, signs it afresh. Records written
   before the fix are re-signed on read too. A forged or foreign URL is left as it is.
+- **`resume` is filled in** (P-117, P-161). `claim_task`, `claim_next` and `get_task_context` always
+  answered `resume: null`, which reads as "nothing to resume". They now answer the task's newest live
+  `branch` and `commit` artifacts and its newest checkpoint note (DONE, NEXT, REJECTED, UNCERTAIN),
+  and null only when the task holds none of the three. Nothing is stored for it and no migration runs.
+  `claim_next` costs two more read statements for it, after the claim commits.
 
 ## [0.1.0]
 

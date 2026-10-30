@@ -916,6 +916,16 @@ func (s *lcCounting) ListExpiredLeases(ctx context.Context, p, b string, now int
 	return s.Store.ListExpiredLeases(ctx, p, b, now, limit)
 }
 
+func (s *lcCounting) ListArtifacts(ctx context.Context, p, id string) ([]store.Artifact, error) {
+	s.n.hit("ListArtifacts")
+	return s.Store.ListArtifacts(ctx, p, id)
+}
+
+func (s *lcCounting) ListContextItems(ctx context.Context, p, id string, q store.ContextItemsQuery) (store.ContextItemsPage, error) {
+	s.n.hit("ListContextItems")
+	return s.Store.ListContextItems(ctx, p, id, q)
+}
+
 func (s *lcCounting) CountTasks(ctx context.Context, p string, f store.TaskFilter) (int64, error) {
 	s.n.hit("CountTasks")
 	return s.Store.CountTasks(ctx, p, f)
@@ -952,8 +962,10 @@ func reads(m map[string]int) (r int, w int) {
 	return r, w
 }
 
-// AC8: claim_next costs at most four read statements and next_task at most three, with the
-// membership cached; cold (no snapshot) and warm (the bus live) are both measured.
+// AC8: claim_next costs at most six read statements and next_task at most three, with the
+// membership cached; cold (no snapshot) and warm (the bus live) are both measured. claim_next's pin
+// rose from four by P-117 for resume's two reads after the commit, the artifacts and one items page;
+// both are asserted, so neither can go uncounted.
 func TestClaimNextAndNextStatementPins(t *testing.T) {
 	f := newFixture(t, Options{})
 	n := &calls{m: map[string]int{}}
@@ -976,7 +988,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		pin  int
 		run  func() error
 	}{
-		{"claim_next cold", 4, func() error {
+		{"claim_next cold", 6, func() error {
 			r, err := lc.ClaimNext(f.ctx, f.alice, ClaimNextReq{ProjectID: f.project.ID, BoardID: f.board.ID})
 			if err == nil && r.Task == nil {
 				t.Fatal("claim_next won nothing")
@@ -984,7 +996,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 			return err
 		}},
 		{"next_task", 3, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
-		{"claim_next warm", 4, func() error {
+		{"claim_next warm", 6, func() error {
 			f.c.ObserveChange(store.Change{ID: 1, Payload: json.RawMessage(`{}`)})
 			if _, err := f.c.boardSnapshot(f.ctx, f.project.ID, f.board.ID); err != nil {
 				return err
@@ -1003,6 +1015,9 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		t.Logf("%-16s %d read statements, %d rows written: %v", c.name, r, w, m)
 		if r > c.pin {
 			t.Fatalf("%s issued %d read statements %v, the pin is %d", c.name, r, m, c.pin)
+		}
+		if strings.HasPrefix(c.name, "claim_next") && (m["ListArtifacts"] != 1 || m["ListContextItems"] != 1) {
+			t.Fatalf("%s read resume with %v, want one ListArtifacts and one ListContextItems", c.name, m)
 		}
 	}
 	// next_task on an empty frontier: the preview and the lazy reap's one read.
