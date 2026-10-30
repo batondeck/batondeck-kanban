@@ -55,7 +55,7 @@ func (c *Core) ownProfileKey(ctx context.Context, caller domain.Caller, projectI
 	if err != nil || strings.TrimSpace(caller.Agent) == "" {
 		return key, err
 	}
-	refused, err := c.labelRefused(ctx, caller, key)
+	refused, err := c.labelRefused(ctx, c.store, caller, key)
 	if err != nil {
 		return "", c.mapErr(tool, err)
 	}

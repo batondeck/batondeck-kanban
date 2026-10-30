@@ -20,6 +20,15 @@ Notable changes to batondeck-kanban. The format follows
   (`details.agentKey`) for a key that is another account's id or another project member's id, and
   the outcomes `complete_task` and `block_task` record go under the caller's own identity instead.
   A caller naming its own id, or naming no agent, keeps its own profile as before.
+- `claim_task {taskId}` applies `claim_next`'s assignee rule (P-334, P-297). Below master, a task
+  assigned to another account's id or login (email, any case), to another project member's id, to
+  a label another identity's token has ever carried (live, revoked or expired), or to a live label
+  the caller is not on that label's own token for, answers `FORBIDDEN` and is not claimed, from
+  MCP, REST and the task drawer's "Claim to work" alike; a re-claim of a task reassigned to another
+  is refused the same way. An unassigned task, the caller's own id or login, its own label on that
+  label's token, and a string naming no identity and no token's label are claimed as before, and a
+  master or admin claims any task. A browser session names no agent, so its claim of a task
+  assigned to the member's own agent label is refused, as `claim_next` is.
 
 ## [0.1.0]
 
