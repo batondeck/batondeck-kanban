@@ -183,8 +183,9 @@ func TestDirectoryIdleIssuesNoRecheck(t *testing.T) {
 }
 
 // holdRecheck arms s's listed hook: the first ListProjects for identity after it blocks its caller
-// (the dispatcher, inside a recheck) until release or 30 s; held is closed once it blocks. The test's
-// end releases it.
+// (the dispatcher, inside a recheck) until release; held is closed once it blocks. The test's end
+// releases it, so a failing test never leaves the loop held. It has no time-out: a hold that let go
+// by itself would let the loop drain while a slow (-race) writer is still filling the tap.
 func holdRecheck(t *testing.T, s *dirServer, identity string) (held <-chan struct{}, release func()) {
 	t.Helper()
 	h, r := make(chan struct{}), make(chan struct{})
@@ -194,10 +195,7 @@ func holdRecheck(t *testing.T, s *dirServer, identity string) (held <-chan struc
 	hook := func(id string) {
 		if id == identity && first.CompareAndSwap(false, true) {
 			close(h)
-			select {
-			case <-r:
-			case <-time.After(30 * time.Second):
-			}
+			<-r
 		}
 	}
 	s.st.listed.Store(&hook)
