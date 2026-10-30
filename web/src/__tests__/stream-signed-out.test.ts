@@ -128,4 +128,21 @@ describe('a CLOSED stream asks /api/session whether the session is gone', () => 
     await vi.advanceTimersByTimeAsync(0);
     expect(heard).not.toHaveBeenCalled();
   });
+
+  it('a 401 that lands after the reconnect replaced the socket speaks for the old one: ignored', async () => {
+    let answer: (r: Response) => void = () => {};
+    const s = closedStream(() => new Promise<Response>((r) => (answer = r)));
+    await vi.advanceTimersByTimeAsync(1000); // the reconnect drop() armed fires before the probe settles
+    expect(FakeES.instances).toHaveLength(2);
+    const second = FakeES.instances[1]!;
+    second.readyState = 1;
+    second.emit('open'); // e.g. the user signed in again in another tab meanwhile
+    answer({ status: 401, ok: false } as Response);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.unauthorized).not.toHaveBeenCalled();
+    expect(second.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000); // and the live socket is left alone
+    expect(FakeES.instances).toHaveLength(2);
+    s.stop();
+  });
 });
