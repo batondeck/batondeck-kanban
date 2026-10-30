@@ -13,13 +13,14 @@ import * as contextApi from '../../api/context.js';
 import * as feedApi from '../../api/feed.js';
 import * as mediaApi from '../../api/media.js';
 import * as projectsApi from '../../api/projects.js';
+import * as streamApi from '../../api/stream.js';
 import * as tasksApi from '../../api/tasks.js';
 import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
-import { keepCachedDevices } from '../../presenceMerge.js';
+import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -79,6 +80,20 @@ export function useTaskDetail(projectId: string, taskId: string) {
     },
     staleTime: 60_000,
   });
+  // The kept device rows are retired only by a presence frame, so this hook writes the frames itself:
+  // on the full task page no Board is mounted to do it, and a session that left would otherwise stay
+  // listed through every refetch (P-197). In the drawer the Board writes the same rows the same way.
+  // Joining the shared socket opens no second one; a frame is the device's whole live list.
+  useEffect(
+    () =>
+      streamApi.userStream({
+        onPresence: (sessions) =>
+          qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
+            sessions: replaceDevicePresence(old?.sessions, sessions),
+          })),
+      }),
+    [qc],
+  );
   const task = taskQ.data?.task;
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [

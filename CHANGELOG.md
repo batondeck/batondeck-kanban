@@ -23,7 +23,8 @@ Notable changes to batondeck-kanban. The format follows
   the rows the stream's presence frame had put in place, and a frame comes only when the device's
   session directory changes, so an idle session read "no agents online" from the board's load, and
   again after any refetch, until the next change. The answer now keeps those rows, as the Agents
-  screen already did.
+  screen already did, and task detail applies the presence frames itself, so on the full task page
+  too a session that leaves is gone with the next frame.
 
 ## [0.1.0]
 

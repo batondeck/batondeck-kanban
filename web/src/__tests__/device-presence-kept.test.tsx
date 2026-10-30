@@ -12,6 +12,8 @@ import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { Board } from '../screens/Board.js';
 import { useTaskDetail } from '../screens/task/useTaskDetail.js';
+import { TaskPage } from '../screens/TaskPage.js';
+import * as streamApi from '../api/stream.js';
 import type { AgentSession, Task } from '../types.js';
 
 class FakeES {
@@ -44,6 +46,7 @@ const frame = { sessions: [{ pid: 4242, role: 'worker', identityId: 'U-1', agent
 
 // The list answers are held until the test releases them, so it decides whether a frame lands first.
 let pending: Array<() => void> = [];
+let listed: AgentSession[] = []; // what /api/agents/sessions answers (never a device: row)
 const release = (): void => {
   for (const r of pending.splice(0)) r();
 };
@@ -51,13 +54,14 @@ const release = (): void => {
 beforeEach(() => {
   FakeES.instances = [];
   pending = [];
+  listed = [];
   vi.stubGlobal('EventSource', FakeES);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       const body = (b: unknown) => ({ ok: true, status: 200, json: async () => b }) as Response;
-      if (/\/agents\/sessions/.test(url)) return new Promise<Response>((r) => pending.push(() => r(body({ sessions: [] }))));
+      if (/\/agents\/sessions/.test(url)) return new Promise<Response>((r) => pending.push(() => r(body({ sessions: listed }))));
       const routes: Array<[RegExp, unknown]> = [
         [/\/boards\/b1\/tasks\?/, { tasks: [task] }],
         [/\/boards\/b1\/feed$/, { events: [] }],
@@ -128,23 +132,89 @@ describe('the Board keeps a live device session online across list answers (P-19
   });
 });
 
-describe('task detail shares the entry and keeps the device rows the same way (P-197)', () => {
-  it('its list answer keeps the cached device row', async () => {
-    const qc = newClient();
-    const device: AgentSession = {
-      sessionKey: 'device:4242', agentId: 'obs-alice', agentName: 'obs-alice', identityId: 'U-1', kind: 'dev',
-      firstSeenAt: '2026-10-30T00:00:00.000Z', lastSeenAt: new Date().toISOString(), sessionCount: 1, requestCount: 0, toolCounts: {}, lastDeliveredCursor: 0,
-    };
-    qc.setQueryData(['agentsessions'], { sessions: [device] }, { updatedAt: 0 }); // stale: the hook fetches
-    const wrapper = ({ children }: { children: ReactNode }) => (
+const session = (sessionKey: string, kind: AgentSession['kind'] = 'dev'): AgentSession => ({
+  sessionKey, agentId: 'obs-alice', agentName: 'obs-alice', identityId: 'U-1', kind,
+  firstSeenAt: '2026-10-30T00:00:00.000Z', lastSeenAt: new Date().toISOString(), sessionCount: 1, requestCount: 0, toolCounts: {}, lastDeliveredCursor: 0,
+});
+const keys = (qc: QueryClient) => qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions.map((s) => s.sessionKey);
+const hookWrapper = (qc: QueryClient) =>
+  function Wrapper({ children }: { children: ReactNode }) {
+    return (
       <QueryClientProvider client={qc}>
         <MemoryRouter>{children}</MemoryRouter>
       </QueryClientProvider>
     );
-    const { result } = renderHook(() => useTaskDetail('p1', 'T-1'), { wrapper });
+  };
+
+describe('task detail shares the entry and keeps the device rows the same way (P-197)', () => {
+  it('its list answer keeps the device rows the cache holds when the answer lands', async () => {
+    const qc = newClient();
+    qc.setQueryData(['agentsessions'], { sessions: [session('device:4242')] }, { updatedAt: 0 }); // stale: the hook fetches
+    const { result } = renderHook(() => useTaskDetail('p1', 'T-1'), { wrapper: hookWrapper(qc) });
+    await waitFor(() => expect(pending.length).toBeGreaterThan(0)); // the list request is in flight
+    // Meanwhile the directory changed: a frame replaced 4242 with 5151. The answer must keep 5151, so
+    // the cache is read when the answer lands, not when the request left (which held 4242).
+    act(() => qc.setQueryData(['agentsessions'], { sessions: [session('device:5151')] }));
+    act(release);
+    await settled(qc);
+    expect(result.current.agentsQ.data?.sessions.map((s) => s.sessionKey)).toEqual(['device:5151']);
+  });
+
+  it('a non-device session the list stops answering is dropped (a disconnect_agent invalidation)', async () => {
+    const qc = newClient();
+    qc.setQueryData(['agentsessions'], { sessions: [session('device:4242')] }, { updatedAt: 0 });
+    listed = [session('S-mcp', 'service_account')];
+    renderHook(() => useTaskDetail('p1', 'T-1'), { wrapper: hookWrapper(qc) });
     await waitFor(() => expect(pending.length).toBeGreaterThan(0));
     act(release);
     await settled(qc);
-    expect(result.current.agentsQ.data?.sessions.map((s) => s.sessionKey)).toEqual(['device:4242']);
+    expect(keys(qc)).toEqual(expect.arrayContaining(['S-mcp', 'device:4242']));
+    // Settings' disconnect_agent invalidates the entry; the server no longer lists the session.
+    listed = [];
+    act(() => void qc.invalidateQueries({ queryKey: ['agentsessions'] }));
+    await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+    act(release);
+    await settled(qc);
+    expect(keys(qc)).toEqual(['device:4242']);
+  });
+});
+
+describe('the full task page retires a device session that left (P-197)', () => {
+  it('a frame without the session, then a refetch: the row is gone', async () => {
+    const qc = newClient();
+    // The Board put the live session in the cache, then the user went to the full task page.
+    qc.setQueryData(['agentsessions'], { sessions: [session('device:4242')] }, { updatedAt: 0 });
+    // Another subscriber of the shared socket (the app's own userStream), so a socket exists whether or
+    // not the page joins it: what this test asks is whether the page writes the frames it carries.
+    const other = streamApi.userStream({});
+    try {
+      render(
+        <QueryClientProvider client={qc}>
+          <MemoryRouter initialEntries={['/projects/p1/boards/b1/tasks/T-1']}>
+            <Routes>
+              <Route path="/projects/:projectId/boards/:boardId/tasks/:taskId" element={<TaskPage />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      act(release);
+      await settled(qc);
+      expect(keys(qc)).toEqual(['device:4242']); // kept across the page's own list answer
+      const es = FakeES.instances.at(-1)!;
+      act(() => {
+        es.readyState = 1;
+        es.emit('open');
+        es.emit('presence', { sessions: [] }); // the process left the directory
+      });
+      await tick();
+      act(() => void qc.invalidateQueries({ queryKey: ['agentsessions'] })); // a later refetch
+      await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      act(release);
+      await settled(qc);
+      expect(keys(qc)).toEqual([]);
+    } finally {
+      other();
+    }
   });
 });
