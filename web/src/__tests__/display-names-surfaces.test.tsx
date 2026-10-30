@@ -93,6 +93,63 @@ describe('comments', () => {
   });
 });
 
+describe('the comment composer and comment bodies', () => {
+  /** Posts recorded from the routed fetch: [path, the JSON body]. */
+  function routed(comments: unknown[]): Array<[string, Record<string, unknown>]> {
+    const posts: Array<[string, Record<string, unknown>]> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const p = String(input).split('?')[0]!;
+        if (init?.method === 'POST') posts.push([p, JSON.parse(String(init.body)) as Record<string, unknown>]);
+        const routes: Record<string, unknown> = { '/api/projects/p1': project, '/api/projects/p1/tasks/T-1/comments': { comments } };
+        return { ok: true, status: 200, json: async () => routes[p] ?? {} } as Response;
+      }),
+    );
+    return posts;
+  }
+  const type = (ta: HTMLTextAreaElement, text: string): void => {
+    fireEvent.change(ta, { target: { value: text, selectionStart: text.length } });
+  };
+
+  it('suggests people by name, and a picked name posts a mention the server resolves', async () => {
+    const posts = routed([]);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[ALICE, BOB, GHOST]} />);
+    const ta = (await screen.findByPlaceholderText(/@mention a teammate/)) as HTMLTextAreaElement;
+    await waitFor(() => expect(screen.queryByText('No comments yet.')).toBeInTheDocument());
+    // The names load with the project read; by name is how a person is found.
+    type(ta, 'see @ali');
+    const alice = await screen.findByRole('button', { name: /Alice Doe/ });
+    expect(screen.queryByRole('button', { name: /bob/ })).toBeNull();
+    noRawIds(document.body);
+    fireEvent.click(alice);
+    // "Alice Doe" is two words, which the server's mention pattern cannot read as one handle: the
+    // composer shows the name and the post carries her id.
+    expect(ta.value).toBe('see @Alice Doe ');
+    type(ta, `${ta.value}and @bo`);
+    fireEvent.click(await screen.findByRole('button', { name: /bob/ }));
+    // "bob" is one token, which the server resolves as his alias: it is posted as is.
+    expect(ta.value).toBe('see @Alice Doe and @bob ');
+    // A member nothing names is offered by its shortened id, and posted by the whole one.
+    type(ta, `${ta.value}and @U-9f`);
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(GHOST_SHORT) }));
+    expect(ta.value).toBe(`see @Alice Doe and @bob and @${GHOST_SHORT} `);
+    type(ta, `see @Alice Doe and @bob, and @${GHOST_SHORT} please.`);
+    noRawIds(document.body);
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    await waitFor(() => expect(posts.length).toBe(1));
+    expect(posts[0]).toEqual(['/api/projects/p1/tasks/T-1/comments', { body: `see @${ALICE} and @bob, and @${GHOST} please.` }]);
+  });
+
+  it("render a body's account-id mentions by name, and shorten an unnamed one", async () => {
+    routed([{ id: 'c1', taskId: 'T-1', author: BOB, body: `@${ALICE} please look, and @${GHOST} too`, parentCommentId: null, mentions: [ALICE, GHOST], ts: TS }]);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    await screen.findByText(/please look/);
+    await waitFor(() => expect(screen.getByText(/please look/).textContent).toBe(`@Alice Doe please look, and @${GHOST_SHORT} too`));
+    noRawIds(document.body);
+  });
+});
+
 describe('follow-ups', () => {
   it("name the author, the target and the composer's holder", async () => {
     const fu: FollowUp = { id: 'f1', taskId: 'T-1', projectId: 'p1', body: 'please rebase', author: ALICE, target: BOB, status: 'open', reopened: false, ts: TS };

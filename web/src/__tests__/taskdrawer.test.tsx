@@ -198,9 +198,10 @@ describe('TaskDrawer — ticket details', () => {
     const ta = screen.getByPlaceholderText(/Write a comment/);
     ta.focus();
     fireEvent.change(ta, { target: { value: '@ali', selectionStart: 4 } });
-    expect(await screen.findByText('alice@example.com')).toBeInTheDocument(); // suggestion appears
+    // The suggestion is the member's name as the comments show it (P-314): a login's local part.
+    expect(await screen.findByRole('button', { name: /^human alice\s+alice$/ })).toBeInTheDocument(); // suggestion appears
     fireEvent.keyDown(ta, { key: 'Escape' });
-    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument(); // popup gone…
+    expect(screen.queryByRole('button', { name: /^human alice\s+alice$/ })).not.toBeInTheDocument(); // popup gone…
     expect(document.activeElement).toBe(ta); // …composer keeps focus
     expect(onClose).not.toHaveBeenCalled();
   });

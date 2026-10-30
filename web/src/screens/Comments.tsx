@@ -15,6 +15,37 @@ import { InlineLoader } from '../brand.js';
 
 const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' };
 
+/**
+ * MENTIONS NAME PEOPLE, NOT ACCOUNT IDS (P-314). A member is a `U-<hex>` account id, and the server
+ * resolves an @token to a member by that id or by an alias, the account's login or display name, or
+ * the local part of either (`internal/service/comments.go` mentionsOf, `internal/domain/mentions.go`).
+ * A token is one word (MENTION_TOKEN is the server's handle pattern), so the composer inserts the
+ * person's name: as is when it is one token, which the server reads as their alias; and when it is
+ * not ("Mara Master"), the draft remembers whose name it is and the post sends that person's id,
+ * which the body then renders back as the name. A body's `@U-<hex>`, posted so or written by hand
+ * or by an agent, renders through `personName`: the name, else the shortened id.
+ */
+const MENTION_TOKEN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]{0,62}[a-zA-Z0-9])?$/;
+const ACCOUNT_ID = /^U-[0-9a-f-]{8,}$/i;
+const ACCOUNT_MENTION = /(^|[^a-zA-Z0-9._%+@-])@(U-[0-9a-f-]{8,})/gi;
+
+/** The body as a reader sees it: every `@<account id>` named. */
+function namedBody(body: string, names: DisplayNames): string {
+  return body.replace(ACCOUNT_MENTION, (_m, pre: string, id: string) => `${pre}@${personName(id, names)}`);
+}
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The body as posted: each picked multi-word `@Name` becomes `@<its account id>`, longest first. */
+function wireBody(body: string, picked: Record<string, string>): string {
+  let out = body;
+  for (const name of Object.keys(picked).sort((a, b) => b.length - a.length)) {
+    const re = new RegExp(`(^|[^a-zA-Z0-9._%+@-])@${escapeRe(name)}(?![a-zA-Z0-9_%+-])`, 'g');
+    out = out.replace(re, (_m, pre: string) => `${pre}@${picked[name]}`);
+  }
+  return out;
+}
+
 interface TreeNode {
   comment: Comment;
   children: TreeNode[];
@@ -68,7 +99,7 @@ function CommentNode({
           </button>
         </Cluster>
         <div className="md" style={{ marginTop: 6, fontSize: 14 }}>
-          <ReactMarkdown components={mdComponents} remarkPlugins={mdPlugins}>{c.body}</ReactMarkdown>
+          <ReactMarkdown components={mdComponents} remarkPlugins={mdPlugins}>{namedBody(c.body, names)}</ReactMarkdown>
         </div>
       </div>
       {node.children.length > 0 && (
@@ -103,13 +134,20 @@ export function Comments({
   const [err, setErr] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // @mention autocomplete: when the caret follows an "@partial", suggest matching candidates.
+  // @mention autocomplete: when the caret follows an "@partial", suggest the candidates whose name
+  // matches it. A candidate is an account id or an agent label; it is shown and matched by its name.
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  // Name → account id for the names this draft inserted that the server cannot read as one token.
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const candidates = useMemo(
+    () => mentionCandidates.map((id) => ({ id, name: personName(id, names) })),
+    [mentionCandidates, names],
+  );
   const suggestions = useMemo(() => {
     if (mentionQuery == null) return [];
     const q = mentionQuery.toLowerCase();
-    return mentionCandidates.filter((c) => c.toLowerCase().includes(q)).slice(0, 6);
-  }, [mentionQuery, mentionCandidates]);
+    return candidates.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [mentionQuery, candidates]);
 
   const onBodyChange = (text: string, caret: number): void => {
     setBody(text);
@@ -118,7 +156,10 @@ export function Comments({
     setMentionQuery(m ? m[1] ?? '' : null);
   };
 
-  const insertMention = (handle: string): void => {
+  const insertMention = ({ id, name }: { id: string; name: string }): void => {
+    const account = ACCOUNT_ID.test(id);
+    const handle = account ? name : id; // an agent label is its own handle
+    if (account && !MENTION_TOKEN.test(name)) setPicked((p) => ({ ...p, [name]: id }));
     const ta = taRef.current;
     const caret = ta ? ta.selectionStart : body.length;
     const before = body.slice(0, caret).replace(/@([\w.@%+-]*)$/, `@${handle} `);
@@ -129,13 +170,14 @@ export function Comments({
   };
 
   const post = async (): Promise<void> => {
-    const text = body.trim();
+    const text = wireBody(body.trim(), picked);
     if (!text || busy) return;
     setBusy(true);
     setErr(null);
     try {
       await commentsApi.addComment(projectId, taskId, text, replyTo?.id);
       setBody('');
+      setPicked({});
       setReplyTo(null);
       await qc.invalidateQueries({ queryKey: ['comments', projectId, taskId] });
       void qc.invalidateQueries({ queryKey: ['hist', projectId] });
@@ -188,8 +230,8 @@ export function Comments({
         {suggestions.length > 0 && (
           <div className="assign-menu" style={{ position: 'absolute', left: 8, bottom: 44, zIndex: 20 }}>
             {suggestions.map((s) => (
-              <button key={s} className="assign-item" onClick={() => insertMention(s)}>
-                <Avatar id={s} /> <span style={{ fontSize: 12 }}>{s}</span>
+              <button key={s.id} className="assign-item" onClick={() => insertMention(s)}>
+                <Avatar id={s.id} label={s.name} nameOnly /> <span style={{ fontSize: 12 }}>{s.name}</span>
               </button>
             ))}
           </div>
