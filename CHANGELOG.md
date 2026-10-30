@@ -34,6 +34,22 @@ Notable changes to batondeck-kanban. The format follows
   `/.well-known/oauth-protected-resource[/mcp]` are therefore 404, so an MCP client probing
   discovery after `/mcp`'s 401 reads "no OAuth" instead of failing to parse a web page (P-302). A
   mistyped address in the browser now shows the 404 instead of redirecting to `/projects`.
+- **A Chronicle record that shows an attachment keeps showing it** (P-244). A block that embeds a
+  download URL from `list_attachments` used to store it as written, and the image broke once the
+  URL's 15 minutes ran out. A write now stores such a URL in one stable form when it is still live,
+  or when the page already held that attachment (an editor left open past the 15 minutes), and every
+  read of the page, a version or a conflict, over REST and MCP, signs that form afresh. Any other
+  expired URL is stored as written and stays expired, so a URL cannot be renewed by pasting it into a
+  page after it ran out; the stable form itself is refused where the page did not hold it. Records
+  written before the fix are re-signed on read when their URL was live as it was written. A forged or
+  foreign URL is left as it is. The web editor's conflict panel and the history diff compare block
+  text with those signatures masked, so an untouched image no longer shows as changed.
+- **`resume` is filled in** (P-117, P-161). `claim_task`, `claim_next` and `get_task_context` always
+  answered `resume: null`, which reads as "nothing to resume". They now answer the task's newest live
+  `branch` and `commit` artifacts and its newest checkpoint note (DONE, NEXT, REJECTED, UNCERTAIN),
+  the checkpoint sought among its newest 200 context items, and null when none of the three is
+  found. Nothing is stored for it and no migration runs.
+  `claim_next` costs two more read statements for it, after the claim commits.
 
 ## [0.1.0]
 

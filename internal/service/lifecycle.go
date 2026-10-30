@@ -300,7 +300,7 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if err != nil {
 				return ClaimTaskResp{}, err
 			}
-			// TODO(spec): resume is conductor's resumeState, unported (P-117); sprint is F6's.
+			// sprint is F6's.
 			return ClaimTaskResp{LeaseID: leaseID, Task: out}, nil
 		})
 	})
@@ -311,6 +311,11 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 		if err := replayedLease(&resp.Task, l.c.now()); err != nil {
 			return ClaimTaskResp{}, err
 		}
+	}
+	// resume is read after the claim commits, on every path (a fresh claim, the holder's re-claim, a
+	// replay): it lengthens no write transaction, and a replay answers the task's resume now.
+	if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, resp.Task.ID); err != nil {
+		return ClaimTaskResp{}, l.c.mapErr("claim_task", err)
 	}
 	return resp, nil
 }
@@ -411,6 +416,12 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 			return ClaimNextResp{}, err
 		}
 		resp.Attempts = 0 // attempts diagnoses this call, which tried nothing (conductor)
+	}
+	if resp.Task != nil {
+		// resume, as Claim: after the commit, on a replay too.
+		if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, resp.Task.ID); err != nil {
+			return ClaimNextResp{}, l.c.mapErr("claim_next", err)
+		}
 	}
 	return resp, nil
 }
