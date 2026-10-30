@@ -71,7 +71,8 @@ func TestSecurityHeaders(t *testing.T) {
 		method, path, ctype, csp string
 	}{
 		{"GET", "/", "text/html", web.AppCSP},
-		{"GET", "/login?next=/x", "text/html", web.AppCSP},
+		{"GET", "/projects?next=/x", "text/html", web.AppCSP},
+		{"GET", "/login?next=/x", "text/plain", web.AppCSP}, // not a client route: the catch-all's 404 (P-303)
 		{"GET", "/api/projects", "", web.AppCSP},
 		{"GET", "/api/nope", "", web.AppCSP},
 		{"GET", authorize, "text/html", consentCSP}, // the OAuth page keeps its stricter policy
@@ -79,9 +80,10 @@ func TestSecurityHeaders(t *testing.T) {
 		{"POST", "/hooks/I-none", "application/json", ""},
 		{"GET", "/blobs/x", "application/json", ""},
 		{"PUT", "/blobs/x", "application/json", ""},
-		// A path under an exempt route that no route answers is the SPA shell, a page: it has the policy.
-		{"GET", "/hooks/I-none", "text/html", web.AppCSP},
-		{"GET", "/blobs/x/y", "text/html", web.AppCSP},
+		// A path under an exempt route that no route answers is the catch-all's 404, which keeps the
+		// policy (P-303: it is no longer the shell).
+		{"GET", "/hooks/I-none", "text/plain", web.AppCSP},
+		{"GET", "/blobs/x/y", "text/plain", web.AppCSP},
 	} {
 		req, _ := http.NewRequest(c.method, public+c.path, strings.NewReader("{}"))
 		resp, err := http.DefaultClient.Do(req)
