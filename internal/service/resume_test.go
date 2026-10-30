@@ -2,7 +2,9 @@ package service
 
 import (
 	"testing"
+	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -87,5 +89,32 @@ func TestResumeDerivation(t *testing.T) {
 	}
 	if r := resumeFrom(nil, lastCheckpoint(items[3:])); r == nil || r.Branch != nil || r.HeadCommit != nil || r.LastCheckpoint == nil {
 		t.Fatalf("a checkpoint alone: resume %+v, want it with null branch and commit", r)
+	}
+}
+
+// TestResumeCheckpointWindow (P-117 review B4): the checkpoint is sought among the task's newest
+// 200 context items, as get_task_context's description says: behind 199 newer items it
+// is found; behind 200 it is not, and a task with no branch or commit answers null.
+func TestResumeCheckpointWindow(t *testing.T) {
+	f := newFixture(t, Options{})
+	task := f.task(t, domain.Todo, nil)
+	add := func(body string) {
+		t.Helper()
+		if _, err := f.st.AddContextItem(f.ctx, store.AddContextItemInput{ProjectID: f.project.ID, TaskID: task.ID, Kind: store.ContextNote, Body: body, Author: "alice"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("DONE: the first half\nNEXT: the second half")
+	time.Sleep(2 * time.Millisecond) // strictly older than every note after it
+	for i := 0; i < 199; i++ {
+		add("a plain note")
+	}
+	r, err := f.c.resumeOf(f.ctx, f.project.ID, task.ID)
+	if err != nil || r == nil || r.LastCheckpoint == nil || r.LastCheckpoint.DONE == nil || *r.LastCheckpoint.DONE != "the first half" {
+		t.Fatalf("behind 199 newer items: resume %+v, %v, want the checkpoint", r, err)
+	}
+	add("a plain note")
+	if r, err := f.c.resumeOf(f.ctx, f.project.ID, task.ID); err != nil || r != nil {
+		t.Fatalf("behind 200 newer items: resume %+v, %v, want null", r, err)
 	}
 }

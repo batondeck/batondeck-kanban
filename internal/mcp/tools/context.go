@@ -14,7 +14,7 @@ func RegisterContext(s *mcp.Server, svc service.Services) {
 		"Add a note, decision, link or field item to a task's context; get_task_context returns it under items. A retry with the same idempotencyKey replays the original item.",
 		c.AddItem)
 	mcp.Tool(s, "context", "get_task_context",
-		"A task's briefing: summary, fields, items, deps, attachments, memory, workflow, and resume: an earlier worker's branch, head commit and last checkpoint, null only when the task holds none.",
+		"A task's briefing: summary, fields, items, deps, attachments, memory, workflow, and resume: a prior worker's branch, head commit and last checkpoint (sought in the newest 200 items); null if none.",
 		c.GetTaskContext)
 	mcp.Tool(s, "context", "set_summary",
 		"Replace a task's rolling summary. Version-checked: a stale version is STALE. Returns the task with its new version.",

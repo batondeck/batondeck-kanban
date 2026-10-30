@@ -227,7 +227,7 @@ func TestContextTaskBriefingShape(t *testing.T) {
 	if r, ok := out["resume"]; !ok || r != nil {
 		t.Errorf("get_task_context answered resume %v (present %v), want null", r, ok)
 	}
-	if want := "branch, head commit and last checkpoint, null only when the task holds none"; !strings.Contains(tool.Description, want) || strings.Contains(tool.Description, "not yet available") {
+	if want := "branch, head commit and last checkpoint (sought in the newest 200 items); null if none"; !strings.Contains(tool.Description, want) || strings.Contains(tool.Description, "not yet available") || strings.Contains(tool.Description, "only when") {
 		t.Errorf("get_task_context's description %q does not say %q", tool.Description, want)
 	}
 	t.Logf("get_task_context output properties: %d; items, workflow.allowedMoves present; no title/description/id; resume present", len(props))
