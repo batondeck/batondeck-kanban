@@ -40,7 +40,7 @@ server's device directory, so the server can start a turn in it when there is wo
    | `BATONDECK_TOKEN` | `.mcp.json` (the `Authorization` header) and both hooks | the token from `token create` |
    | `BATONDECK_LISTEN` or `BATONDECK_CONFIG` | both hooks | the same listen list or config file the server runs with; the hooks use its first `unix://` entry |
    | `BATONDECK_ROLE` | SessionStart | `worker` (the default) or `master` |
-   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no token carries; the server refuses another account's label (revoked or expired tokens included), a live label of your own account that this token does not carry, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
+   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token and no live token of your own carries (your own revoked or expired label included); the server refuses another account's label (revoked or expired tokens included), a live label of your own account that this token does not carry, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
 
    `batondeck-kanban` must be on `PATH`.
 4. Start Claude Code with the plugin loaded for that session:

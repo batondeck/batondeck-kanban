@@ -144,16 +144,18 @@ func TestAFreeNameEqualToAMembersOwnNameAliasesNobody(t *testing.T) {
 
 // P-348 AC3, on every engine: bob's email-form label is named by its local part, so carol's free
 // "pbob" aliases nothing and "@pbob" mentions bob alone; bob's "pt bob" is compared whole, so
-// carol's free "pt" keeps aliasing her and "@pt" mentions carol alone. A label only its own
-// identity's rows carry aliases as before (requirement 2), even where a body token also names
-// another identity's label: bob's own "qcarol" and carol's own "qcarol@x.example" both alias, so
-// "@qcarol" mentions both (which of the two a mint should refuse is lane L4's rule).
+// carol's free "pt" keeps aliasing her and "@pt" mentions carol alone. Where a body token names
+// several identities' own labels, it is the first minter's (REVIEW-L5 B1): bob minted "qcarol"
+// before carol minted "qcarol@x.example", so "@qcarol" mentions bob alone and rings and notifies
+// carol nothing.
 func TestAMentionNamesALabelAsItResolvesOnEveryEngine(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		ctx := context.Background()
 		ada, bob, carol := j.user("ada"), j.user("bob"), j.user("carol")
+		clock := time.Now()
+		ts := &auth.TokenService{Store: j.st, Now: func() time.Time { clock = clock.Add(time.Second); return clock }}
 		for _, m := range []struct{ id, label string }{{bob.id, "pbob@x.example"}, {bob.id, "pt bob"}, {bob.id, "qcarol"}, {carol.id, "qcarol@x.example"}} {
-			if _, _, err := (&auth.TokenService{Store: j.st}).Create(ctx, m.id, "", m.label, time.Hour); err != nil {
+			if _, _, err := ts.Create(ctx, m.id, "", m.label, time.Hour); err != nil {
 				t.Fatalf("%s mints %q: %v", m.id, m.label, err)
 			}
 		}
@@ -177,7 +179,7 @@ func TestAMentionNamesALabelAsItResolvesOnEveryEngine(t *testing.T) {
 		}{
 			{"@pbob please look", []string{bob.id}, false},
 			{"@pt please look", []string{carol.id}, true},
-			{"@qcarol please look", []string{bob.id, carol.id}, true},
+			{"@qcarol please look", []string{bob.id}, false},
 		} {
 			m, rung, notified := commentOutcome(t, j, ada, p, task, c.body, carol.id)
 			t.Logf("%s: %s mentions %v, carol rung %v, notified %v", j.engine, c.body, m, rung, notified)

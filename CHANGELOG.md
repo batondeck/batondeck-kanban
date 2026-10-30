@@ -16,10 +16,12 @@ Notable changes to batondeck-kanban. The format follows
   `claude-code` sessions are two agents; on the board and in the assign menus, bob's live claim no
   longer shows alice's own same-named session as Busy, and two users' same-named agents stay two
   entries (P-335).
-- A worker registered under a name no token carried no longer keeps its wake doorbell after another
-  identity mints that name: delivery re-reads the label's owner and drops the entry, logged as
-  `its agent "<name>" is another agent's label`, instead of ringing it with the minter's work. A
-  worker under its own token's label is rung with no extra read (P-344).
+- A worker registered under a name no token carried no longer keeps its wake doorbell once that
+  name is a label it may not claim: another identity mints it, or its own identity mints it on a
+  token other than the one the worker registered from, while that token is live. Delivery re-reads
+  the label's owner and drops the entry, logged as `its agent "<name>" is another agent's label`,
+  instead of ringing it with that label's work. A worker under its own token's label is rung with
+  no extra read (P-344).
 - A mention reads a worker's label the way it resolves one. A body token names a label when it is
   the label or the label's local part (`@pbob` names `pbob@x.example`), and never names a label it
   only starts (`@pt` does not name `pt bob`). So a free name a mention of another identity's label
@@ -28,6 +30,11 @@ Notable changes to batondeck-kanban. The format follows
   longer aliases its registrant: `@will` rings will alone. The `session` usage, the plugin README
   and the register refusal now say a live label of the bearer's own account, on a token that does
   not carry it, is refused as well (P-348, P-349).
+- A mention of a label is its first minter's. A member who mints a case or local-part variant of
+  a label another member minted first (`OPS-BOT` of `ops-bot`, `deploy-bot@evil.example` of
+  `deploy-bot`) no longer takes that label's mentions: `@ops-bot` and `@deploy-bot` mention, ring
+  and notify the first minter alone, and `@deploy-bot@evil.example` still reaches the variant's
+  own worker (P-348).
 
 ## [0.1.0]
 

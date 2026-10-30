@@ -87,13 +87,15 @@ func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, er
 }
 
 // ownedLabels is workers with only the labels that may alias their identity. A label is its first
-// minter's, revoked or expired rows included (P-257,
-// REVIEW-257 R2-Q1): one another identity's token row carries never aliases (P-343, Fable B1 on
-// #78), and one only its own identity's rows carry aliases as before. A name no token carries is
-// dropped when a body token that names it (domain.MentionNames, ResolveMentions' own match) also
-// names another identity's token label (P-348, Fable A1/A2) or another member's own name in names,
-// its identity, email or display name (P-349, Fable F1). Every identity keeps its live worker (the
-// ring by @login). The token rows are read only when a live worker has a label.
+// minter's, revoked or expired rows included (P-257, REVIEW-257 R2-Q1): one another identity's
+// token row carries never aliases (P-343, Fable B1 on #78). One only its own identity's rows carry
+// aliases unless a body token that names it (domain.MentionNames, ResolveMentions' own match) also
+// names a token label first minted by another identity: a case or local-part variant minted later
+// does not take the first minter's mentions, and the first minter keeps them (REVIEW-L5 B1). A
+// name no token carries is dropped when a body token that names it also names another identity's
+// token label (P-348, Fable A1/A2) or another member's own name in names, its identity, email or
+// display name (P-349, Fable F1). Every identity keeps its live worker (the ring by @login). The
+// token rows are read only when a live worker has a label.
 func (t *txn) ownedLabels(body string, workers, names map[string][]string) (map[string][]string, error) {
 	labelled := false
 	for _, ls := range workers {
@@ -106,11 +108,33 @@ func (t *txn) ownedLabels(body string, workers, names map[string][]string) (map[
 	if err != nil {
 		return nil, err
 	}
-	holders := map[string][]string{} // each token label, with the identities whose rows carry it
+	holders := map[string][]string{}   // each token label, with the identities whose rows carry it
+	firsts := map[string]store.Token{} // each token label's first row: its creation, then its id
+	earlier := func(a, b store.Token) bool {
+		return a.CreatedAt < b.CreatedAt || (a.CreatedAt == b.CreatedAt && a.ID < b.ID)
+	}
 	for _, r := range tokens {
-		if a := domain.TokenAgent(r.Label); a != "" && !slices.Contains(holders[a], r.IdentityID) {
+		a := domain.TokenAgent(r.Label)
+		if a == "" {
+			continue
+		}
+		if !slices.Contains(holders[a], r.IdentityID) {
 			holders[a] = append(holders[a], r.IdentityID)
 		}
+		if f, ok := firsts[a]; !ok || earlier(r, f) {
+			firsts[a] = r
+		}
+	}
+	// firstMinter is the identity whose row is the first of every token label tk names.
+	firstMinter := func(tk string) string {
+		var first store.Token
+		found := false
+		for a, f := range firsts {
+			if domain.MentionNames(tk, a) && (!found || earlier(f, first)) {
+				first, found = f, true
+			}
+		}
+		return first.IdentityID
 	}
 	inBody := domain.MentionTokens(body)
 	// namesOther is whether tk names a token label, or a member's own name, of another identity
@@ -135,6 +159,9 @@ func (t *txn) ownedLabels(body string, workers, names map[string][]string) (map[
 			hs := holders[l]
 			if slices.ContainsFunc(hs, func(h string) bool { return h != id }) {
 				continue // another identity's label
+			}
+			if len(hs) > 0 && slices.ContainsFunc(inBody, func(tk string) bool { return domain.MentionNames(tk, l) && firstMinter(tk) != id }) {
+				continue // its own label, but this body's token reads first another identity's
 			}
 			if len(hs) == 0 && slices.ContainsFunc(inBody, func(tk string) bool { return domain.MentionNames(tk, l) && namesOther(tk, id) }) {
 				continue // a free name this body's token also reads as another identity's

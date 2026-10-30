@@ -246,7 +246,7 @@ func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agen
 		return s.c.mapErr("register_wake_session", err)
 	}
 	if refused {
-		return forbidden("agent is another agent's label: a session registers only under its own token's label or a name no token carries; another account's label, or a live label of its own account on a token that does not carry it, is refused",
+		return forbidden("agent is another agent's label: a session registers only under its own token's label or a name no other account's token and no live token of its own carries; another account's label, or a live label of its own account on a token that does not carry it, is refused",
 			map[string]any{"field": "agent", "label": agent})
 	}
 	return nil
