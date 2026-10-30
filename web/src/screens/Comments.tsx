@@ -20,10 +20,13 @@ const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacin
  * resolves an @token by that id, which names exactly one member, or by an alias (a login, a display
  * name, the local part of either), which every member sharing it answers to
  * (`internal/service/comments.go` mentionsOf, `internal/domain/mentions.go`). So a picked person is
- * posted by their id, always: the textarea shows `@<their name>`, the draft remembers where each
- * pick sits and whose it is (one entry per occurrence, so two people with one name stay two), and
- * the post replaces each still-intact pick with `@<id>`. A body's `@U-<hex>` then renders as the
- * name, else the shortened id, as text: a name is never read as markdown, and code is left as written.
+ * posted by their id: the textarea shows `@<their name>`, the draft remembers where each pick sits
+ * and whose it is (one entry per occurrence, so two people with one name stay two), each edit moves
+ * the picks after it (placed by the caret as well as the text) and drops a pick it touched, and the
+ * post replaces each pick still intact where it sits with `@<id>`. A dropped pick's text is posted as
+ * typed, which the server resolves as before. An agent label is inserted and posted as itself. A
+ * body's `@U-<hex>` renders as the name, else the shortened id, as text: a name is never read as
+ * markdown, and code is left as written.
  */
 const ACCOUNT_ID = /^U-[0-9a-f-]{8,}$/i;
 /**
@@ -41,16 +44,27 @@ const ACCOUNT_MENTION = /(^|[^a-zA-Z0-9._%+@-])@(U-[0-9a-f-]{7,}[0-9a-f])(?![a-z
 export interface Pick { at: number; name: string; id: string }
 
 /**
- * The picks after the draft changed from `prev` to `next`: a pick before the edit stays, one after it
- * moves with it, and one the edit touched is dropped (its text is no longer what was picked).
+ * The picks after the draft changed from `prev` to `next`, with the caret at `caret` in `next`: a pick
+ * before the edit stays, one after it moves with it, and one the edit touched is dropped (its text is
+ * no longer what was picked).
+ *
+ * The text alone cannot place an edit when the changed text repeats its neighbour: deleting the first
+ * "@Ann " of "@Ann @Ann Lee" reads as deleting "@Ann " after the first one just as well, which would
+ * keep the deleted pick and drop the other. The caret settles it, because a keystroke, a paste or a
+ * deleted selection leaves it at the end of what was typed (where the deletion was, for a deletion).
+ * So the unchanged head ends by `caret - max(0, shift)`, where typed text began, and the unchanged
+ * tail starts at the caret or later.
  */
-export function movePicks(picks: Pick[], prev: string, next: string): Pick[] {
-  let head = 0;
-  while (head < prev.length && head < next.length && prev[head] === next[head]) head++;
-  let tail = 0;
-  while (tail < prev.length - head && tail < next.length - head && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail++;
-  const editEnd = prev.length - tail;
+export function movePicks(picks: Pick[], prev: string, next: string, caret: number): Pick[] {
   const shift = next.length - prev.length;
+  const c = Math.min(Math.max(caret, 0), next.length);
+  const headMax = Math.max(0, Math.min(prev.length, next.length, c - Math.max(0, shift)));
+  const tailMax = next.length - c;
+  let head = 0;
+  while (head < headMax && prev[head] === next[head]) head++;
+  let tail = 0;
+  while (tail < tailMax && tail < prev.length - head && tail < next.length - head && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail++;
+  const editEnd = prev.length - tail;
   return picks.flatMap((k) => {
     const end = k.at + 1 + k.name.length;
     if (end <= head) return [k];
@@ -205,8 +219,10 @@ export function Comments({
     return candidates.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 6);
   }, [mentionQuery, candidates]);
 
-  const onBodyChange = (text: string, caret: number): void => {
-    setPicks((ks) => movePicks(ks, body, text));
+  // `editEnd` is where the change left the selection's end: the caret after typing or deleting, and the
+  // end of the restored text when an undo selects it.
+  const onBodyChange = (text: string, caret: number, editEnd: number): void => {
+    setPicks((ks) => movePicks(ks, body, text, editEnd));
     setBody(text);
     const before = text.slice(0, caret);
     const m = /(?:^|\s)@([\w.@%+-]*)$/.exec(before);
@@ -222,7 +238,9 @@ export function Comments({
     const before = body.slice(0, caret).replace(/@([\w.@%+-]*)$/, () => `@${handle} `);
     const next = before + body.slice(caret);
     const at = before.length - handle.length - 2;
-    setPicks((ks) => [...movePicks(ks, body, next), ...(account ? [{ at, name, id }] : [])]);
+    // An agent label is posted as inserted, so it is no pick: its name (personName cuts "bot@ci" to
+    // "bot") is not its text.
+    setPicks((ks) => [...movePicks(ks, body, next, before.length), ...(account ? [{ at, name, id }] : [])]);
     setBody(next);
     setMentionQuery(null);
     queueMicrotask(() => ta?.focus());
@@ -274,7 +292,7 @@ export function Comments({
           style={{ width: '100%', minHeight: 64, resize: 'vertical', fontFamily: 'inherit' }}
           placeholder="Write a comment… markdown supported, @mention a teammate"
           value={body}
-          onChange={(e) => onBodyChange(e.target.value, e.target.selectionStart)}
+          onChange={(e) => onBodyChange(e.target.value, e.target.selectionStart, e.target.selectionEnd)}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void post();
             if (e.key === 'Escape') {
