@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/blob"
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
@@ -471,6 +473,80 @@ func TestAutocloseSparesEveryTaskWrite(t *testing.T) {
 						}
 					}
 				}
+			}
+		})
+	}
+}
+
+// P-226: the retention sweep of alert states changes no ingest outcome, on memstore, SQLite and
+// Postgres. An open ticket's state, expired and passed by a sweep, still correlates the next firing,
+// which appends to that ticket; once the ticket is DONE, its expired state is swept and the next
+// firing files a new ticket, as it does with the row in place (the control).
+func TestASweptAlertStateChangesNoIngest(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"memstore", func(t *testing.T) store.Store {
+			s := memstore.New()
+			t.Cleanup(func() { s.Close() })
+			if _, err := s.Migrate(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}},
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(eng.name, func(t *testing.T) {
+			e := newAutocloseEnv(t, eng.open(t))
+			sweep := func() retention.Swept {
+				return (&retention.Sweeper{Store: e.st, Windows: retention.WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: e.clock.now,
+					Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(e.ctx)
+			}
+			done := func(id string) {
+				t.Helper()
+				for _, to := range []domain.Status{domain.InProgress, domain.Review, domain.Done} {
+					if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: id, Version: e.version(id), ToStatus: to}); err != nil {
+						t.Fatalf("move %s to %s: %v", id, to, err)
+					}
+				}
+			}
+			first := e.deliver("fp", "firing")
+			if first.Result != "created" {
+				t.Fatalf("the first firing: %+v, want created", first)
+			}
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 0 {
+				t.Fatalf("the sweep over the open ticket's expired state: %+v, want it kept", got)
+			}
+			if st, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "fp"); err != nil || st.ExpiresAt > e.clock.now().UnixMilli() {
+				t.Fatalf("the open ticket's state after the sweep: %+v %v, want it kept and expired", st, err)
+			}
+			if again := e.deliver("fp", "firing"); again.Result != "appended" || *again.TaskID != *first.TaskID {
+				t.Fatalf("a firing after the sweep: %+v, want appended to %s", again, *first.TaskID)
+			}
+			done(*first.TaskID)
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 1 {
+				t.Fatalf("the sweep over the DONE ticket's expired state: %+v, want it deleted", got)
+			}
+			if _, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "fp"); err == nil {
+				t.Fatal("the DONE ticket's expired state outlived the sweep")
+			}
+			next := e.deliver("fp", "firing")
+			if next.Result != "created" || *next.TaskID == *first.TaskID {
+				t.Fatalf("a firing after the DONE ticket's state went: %+v, want a new ticket", next)
+			}
+			// The control: with the row in place, a firing over a DONE ticket files a new one too.
+			control := e.deliver("control", "firing")
+			done(*control.TaskID)
+			if _, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "control"); err != nil {
+				t.Fatalf("the control's state: %v, want it in place", err)
+			}
+			if again := e.deliver("control", "firing"); again.Result != "created" || *again.TaskID == *control.TaskID {
+				t.Fatalf("a firing over a DONE ticket with its row in place: %+v, want a new ticket", again)
 			}
 		})
 	}

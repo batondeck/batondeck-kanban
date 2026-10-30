@@ -10,6 +10,30 @@ import (
 	"database/sql"
 )
 
+const deleteExpiredAlertStates = `-- name: DeleteExpiredAlertStates :execrows
+DELETE FROM alert_states WHERE (project_id, integration_id, fingerprint_hash) IN (
+  SELECT a.project_id, a.integration_id, a.fingerprint_hash FROM alert_states a
+  WHERE a.expires_at IS NOT NULL AND a.expires_at <= $1::bigint
+    AND NOT EXISTS (SELECT 1 FROM tasks k WHERE k.project_id = a.project_id AND k.id = a.task_id AND k.status <> 'DONE')
+  ORDER BY a.expires_at, a.fingerprint_hash COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteExpiredAlertStatesParams struct {
+	Now       int64
+	PageLimit int64
+}
+
+// The bounded sweep of alert states: at most page_limit rows expired at or before now whose
+// ticket is gone or DONE, oldest expiry first. A row of an open ticket stays whatever its expiry,
+// since the next firing appends to that ticket through it; a row with no expiry stays.
+func (q *Queries) DeleteExpiredAlertStates(ctx context.Context, arg DeleteExpiredAlertStatesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAlertStates, arg.Now, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredDeliveries = `-- name: DeleteExpiredDeliveries :execrows
 DELETE FROM deliveries WHERE (project_id, integration_id, id) IN (
   SELECT d.project_id, d.integration_id, d.id FROM deliveries d WHERE d.expires_at <= $1::bigint

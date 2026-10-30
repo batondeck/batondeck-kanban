@@ -186,6 +186,11 @@ type Oncall interface {
 	// DeleteExpiredDeliveryRawBodies deletes at most limit raw bodies expired at or before now,
 	// oldest expiry first, leaving their deliveries, and returns how many.
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
+	// DeleteExpiredAlertStates deletes at most limit alert states expired at or before now whose
+	// ticket is gone or DONE, oldest expiry first, and returns how many (the retention sweep's). An
+	// expired row of an open ticket stays, since the next firing appends to that ticket through it,
+	// and so does a row with no expiry.
+	DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error)
 }
 
 var (

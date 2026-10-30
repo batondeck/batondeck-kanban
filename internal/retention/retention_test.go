@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
@@ -295,6 +296,76 @@ func TestASweepRemovesLapsedOAuthCodesAndTokens(t *testing.T) {
 	}
 }
 
+// P-226: a sweep deletes the alert state expired with its ticket DONE, and keeps the expired one of
+// an open ticket (its next firing appends through it) and an unexpired one, on memstore and both
+// engines; a second sweep deletes nothing.
+func TestASweepRemovesTheExpiredAlertStatesOfClosedTickets(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "on-call", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bd, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "B", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task := func(status domain.Status) string {
+				for _, c := range bd.Columns {
+					if c.Status == status {
+						tk, err := s.CreateTask(ctx, store.CreateTaskInput{ProjectID: p.ID, BoardID: bd.ID, ColumnID: c.ID, Status: status, Title: string(status),
+							OrderKey: "a0", CreatedBy: "alice", CreatedAt: now.Add(-40 * day).UnixMilli()})
+						if err != nil {
+							t.Fatal(err)
+						}
+						return tk.ID
+					}
+				}
+				t.Fatalf("the board has no %s column", status)
+				return ""
+			}
+			open, done := task(domain.Todo), task(domain.Done)
+			if _, err := s.CreateIntegration(ctx, store.CreateIntegrationInput{ProjectID: p.ID, ID: "I-r", Name: "r", Source: "generic", BoardID: bd.ID,
+				Auth: json.RawMessage(`{"mode":"api_key"}`), Routing: json.RawMessage(`{"mode":"broadcast"}`), Lifecycle: "correlate",
+				Limits: json.RawMessage(`{"ratePerMin":60,"payloadCapKb":256}`), CreatedBy: "alice", CreatedAt: 1}); err != nil {
+				t.Fatal(err)
+			}
+			for _, a := range []struct {
+				fp, task string
+				expires  time.Duration
+			}{
+				{"fp-closed", done, -day},     // expired a day ago, its ticket DONE: deleted
+				{"fp-open", open, -day},       // expired a day ago, its ticket open: kept
+				{"fp-closed-live", done, day}, // its ticket DONE, expiring tomorrow: kept
+			} {
+				if err := s.PutAlertState(ctx, store.AlertState{ProjectID: p.ID, IntegrationID: "I-r", Fingerprint: a.fp, TaskID: a.task, Occurrences: 1,
+					FirstAt: now.Add(-31 * day).UnixMilli(), LastAt: now.Add(-31 * day).UnixMilli(), AlertStatus: "firing", ExpiresAt: now.Add(a.expires).UnixMilli()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			if got := sw.Sweep(ctx); got.AlertStates != 1 {
+				t.Fatalf("swept %+v, want one alert state", got)
+			}
+			if _, err := s.GetAlertState(ctx, p.ID, "I-r", "fp-closed"); err == nil {
+				t.Fatal("the expired alert state of a DONE ticket outlived the sweep")
+			}
+			for _, fp := range []string{"fp-open", "fp-closed-live"} {
+				if _, err := s.GetAlertState(ctx, p.ID, "I-r", fp); err != nil {
+					t.Fatalf("alert state %s: %v, want it kept", fp, err)
+				}
+			}
+			if again := sw.Sweep(ctx); again.AlertStates != 0 {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+		})
+	}
+}
+
 // fake deletes whatever it is asked to, or fails one step.
 type fake struct {
 	calls map[string]int
@@ -349,6 +420,10 @@ func (f *fake) DeleteExpiredDeliveryRawBodies(_ context.Context, _ int64, limit 
 	return f.del("raw bodies", limit)
 }
 
+func (f *fake) DeleteExpiredAlertStates(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("alert states", limit)
+}
+
 func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
 	return nil, nil
 }
@@ -359,7 +434,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {

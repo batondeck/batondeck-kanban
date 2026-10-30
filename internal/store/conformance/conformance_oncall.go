@@ -15,7 +15,8 @@ func init() { register("oncall", oncall) }
 
 // oncall is the on-call area: an integration created, read, merged under its version, tombstoned
 // and listed newest first; a delivery recorded once, paged newest first by kind; a raw body kept
-// and swept apart from its delivery; a project delete taking all of it; and the refusals.
+// and swept apart from its delivery; the expired alert states of closed tickets swept, oldest
+// first; a project delete taking all of it; and the refusals.
 func oncall(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -358,6 +359,62 @@ func oncall(t *testing.T, newStore Factory) {
 			}
 			_, err = s.GetDeliveryRawBody(ctx, p, "I-a", "r3")
 			wantErr(t, err, domain.CodeNotFound, "DeliveryRawBody")
+		})
+
+		t.Run("ExpiredAlertStatesOfClosedTicketsAreSweptOldestFirst", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			create(t, s, p, b, "I-a", 1)
+			open := seedTasks(t, sd, p, b, "open")[0]
+			done := make([]string, 2)
+			for i := range done {
+				id, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: fmt.Sprintf("done %d", i), Status: domain.Done})
+				noErr(t, err)
+				done[i] = id
+			}
+			for _, a := range []struct {
+				fp, task string
+				expires  int64
+			}{
+				{"fp-done-old", done[0], 100},  // expired, its ticket DONE: the first taken
+				{"fp-gone", "T-gone", 200},     // expired, its ticket deleted: taken
+				{"fp-done-at", done[1], 250},   // expired at the cutoff itself: taken
+				{"fp-done-late", done[1], 300}, // its ticket DONE, not yet expired: kept
+				{"fp-open", open, 50},          // expired the longest, its ticket TODO: kept
+				{"fp-none", done[0], 0},        // no expiry: kept
+			} {
+				noErr(t, s.PutAlertState(ctx, store.AlertState{ProjectID: p, IntegrationID: "I-a", Fingerprint: a.fp, TaskID: a.task,
+					Occurrences: 1, FirstAt: 1, LastAt: 1, AlertStatus: "firing", ExpiresAt: a.expires}))
+			}
+			for _, limit := range []int{0, -1} {
+				_, err := s.DeleteExpiredAlertStates(ctx, 250, limit)
+				wantErr(t, err, domain.CodeValidation, "")
+			}
+			for _, page := range []struct {
+				limit int
+				want  int64
+			}{{1, 1}, {10, 2}, {10, 0}} {
+				n, err := s.DeleteExpiredAlertStates(ctx, 250, page.limit)
+				if err != nil || n != page.want {
+					t.Fatalf("limit %d: %d %v, want %d", page.limit, n, err, page.want)
+				}
+				if page.limit == 1 {
+					// The first page took the oldest expiry of the closed tickets', not the open one's.
+					_, err := s.GetAlertState(ctx, p, "I-a", "fp-done-old")
+					wantErr(t, err, domain.CodeNotFound, "AlertState")
+					if _, err := s.GetAlertState(ctx, p, "I-a", "fp-gone"); err != nil {
+						t.Fatalf("fp-gone after the first page: %v, want it kept", err)
+					}
+				}
+			}
+			for _, fp := range []string{"fp-done-old", "fp-gone", "fp-done-at"} {
+				_, err := s.GetAlertState(ctx, p, "I-a", fp)
+				wantErr(t, err, domain.CodeNotFound, "AlertState")
+			}
+			for _, fp := range []string{"fp-done-late", "fp-open", "fp-none"} {
+				if _, err := s.GetAlertState(ctx, p, "I-a", fp); err != nil {
+					t.Fatalf("%s: %v, want it kept", fp, err)
+				}
+			}
 		})
 
 		t.Run("AProjectDeleteTakesItsOncallRows", func(t *testing.T) {
