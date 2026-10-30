@@ -120,7 +120,7 @@ func TestSubcommandHelpExitsZero(t *testing.T) {
 // a flag that does not parse is still the error and the flags on stderr, exit 2.
 func TestEveryFlagSetHelpExitsZero(t *testing.T) {
 	commands := [][]string{{"serve"}, {"migrate"}, {"doctor"}, {"healthcheck"},
-		{"user", "add"}, {"user", "disable"}, {"user", "passwd"}, {"user", "list"},
+		{"user", "add"}, {"user", "disable"}, {"user", "enable"}, {"user", "passwd"}, {"user", "list"},
 		{"token", "create"}, {"token", "list"}, {"token", "revoke"},
 		{"session", "register"}, {"session", "unregister"}}
 	for _, cmd := range commands {

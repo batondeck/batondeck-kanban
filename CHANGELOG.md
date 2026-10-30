@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`batondeck-kanban user enable LOGIN`**, the way back from `user disable`: it clears the
+  user's disabled mark, and their unexpired browser sessions and tokens resolve again within the
+  account cache's 60 s. Enabling a user who is not disabled says so and changes nothing; an unknown
+  login exits 1 (P-46).
+
 ### Fixed
 
 - **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and

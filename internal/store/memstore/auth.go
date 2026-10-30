@@ -76,6 +76,18 @@ func (s *Store) DisableUser(ctx context.Context, id string, at int64) error {
 	})
 }
 
+func (s *Store) EnableUser(ctx context.Context, id string) error {
+	return s.do(ctx, func(st *state) error {
+		u, ok := st.users[id]
+		if !ok {
+			return store.ErrNotFound
+		}
+		u.DisabledAt = 0
+		st.users[id] = u
+		return nil
+	})
+}
+
 func (s *Store) SetUserPassword(ctx context.Context, id, passwordHash string) error {
 	return s.do(ctx, func(st *state) error {
 		u, ok := st.users[id]

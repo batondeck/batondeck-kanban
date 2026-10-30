@@ -27,6 +27,19 @@ func (q *Queries) DisableUser(ctx context.Context, arg DisableUserParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const enableUser = `-- name: EnableUser :execrows
+UPDATE users SET disabled_at = NULL WHERE id = $1
+`
+
+// Rows matched, not rows changed: an enabled user counts too, so 0 means no such user.
+func (q *Queries) EnableUser(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.Exec(ctx, enableUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getUser = `-- name: GetUser :one
 SELECT id, email, display_name, password_hash, created_at, disabled_at, workspace_admin
 FROM users WHERE id = $1

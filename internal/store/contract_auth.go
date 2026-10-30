@@ -64,6 +64,9 @@ type Users interface {
 	// DisableUser sets disabled_at to at unless it is already set (the first time stands);
 	// ErrNotFound when no user has id.
 	DisableUser(ctx context.Context, id string, at int64) error
+	// EnableUser clears disabled_at, the way back from DisableUser; an enabled user stays as it is.
+	// ErrNotFound when no user has id.
+	EnableUser(ctx context.Context, id string) error
 	// SetUserPassword replaces the password hash; ErrNotFound when no user has id.
 	SetUserPassword(ctx context.Context, id, passwordHash string) error
 }
