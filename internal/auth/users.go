@@ -173,6 +173,24 @@ func (a *Accounts) SetPassword(ctx context.Context, login, password string) (end
 	return n, nil
 }
 
+// Name is how the account with this id is shown to people: its display name, else its login (the
+// Email field holds a local account's login), as the service's memberDisplay names a member
+// (internal/service/projects.go displayNames). An id with no account row is "" and no error, so a
+// caller can omit the name rather than fail.
+func (a *Accounts) Name(ctx context.Context, id string) (string, error) {
+	u, err := a.Store.GetUser(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName, nil
+	}
+	return u.Email, nil
+}
+
 // List returns every user, oldest first.
 func (a *Accounts) List(ctx context.Context) ([]store.User, error) { return a.Store.ListUsers(ctx) }
 

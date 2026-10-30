@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 )
 
 func TestPasswordHashIsArgon2idAndVerifies(t *testing.T) {
@@ -164,5 +166,40 @@ func TestSetPasswordWithoutSessionsChangesNothing(t *testing.T) {
 	}
 	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw"); err != nil {
 		t.Fatalf("the old password after a refused change: %v, want it unchanged", err)
+	}
+}
+
+// Name is the display name, else the login, and "" with no error for an id with no account (P-314:
+// /api/session's displayName). The login-only row is written to the store directly, since Add
+// always fills the display name; it stands for an account made before names were required.
+func TestAccountName(t *testing.T) {
+	mem := memstore.New()
+	if _, err := mem.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	engines := map[string]store.Users{"sqlite": newFixture(t).st, "memstore": mem}
+	for engine, users := range engines {
+		t.Run(engine, func(t *testing.T) {
+			ctx := context.Background()
+			a := &Accounts{Store: users, Params: testArgon}
+			alice, err := a.Add(ctx, "alice@example.test", "Alice Doe", "pw", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hash, err := HashPassword("pw", testArgon)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const bob = "U-0000000000000b0b"
+			if err := users.CreateUser(ctx, store.User{ID: bob, Email: "bob", PasswordHash: hash, CreatedAt: 1}); err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range []struct{ id, want string }{{alice.ID, "Alice Doe"}, {bob, "bob"}, {"U-ffffffffffffffff", ""}} {
+				got, err := a.Name(ctx, c.id)
+				if err != nil || got != c.want {
+					t.Fatalf("Name(%s) = %q, %v; want %q, nil", c.id, got, err, c.want)
+				}
+			}
+		})
 	}
 }

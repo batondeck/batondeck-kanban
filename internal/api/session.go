@@ -2,13 +2,11 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // The permission slugs the SPA gates its admin and on-call screens on (conductor's
@@ -83,24 +81,18 @@ func sessionRoutes(o *Options) []route {
 	}
 }
 
-// accountName is the identity's display name, else its login (the store's Email field holds a local
-// account's login), as the service's memberDisplay names a member (internal/service/projects.go
-// displayNames). Empty when there are no accounts or no row for the identity: the field is then
-// omitted, and the SPA falls back to memberDisplay and then a shortened id. A failed read is logged
-// and omitted too: a missing name must not fail the session read the whole SPA boots on.
+// accountName is the identity's display name, else its login (auth.Accounts.Name). Empty when there
+// are no accounts or no row for the identity: the field is then omitted, and the SPA falls back to
+// memberDisplay and then a shortened id. A failed read is logged and omitted too: a missing name
+// must not fail the session read the whole SPA boots on.
 func accountName(ctx context.Context, o *Options, identity string) string {
 	if o.Users == nil || o.Users.Store == nil {
 		return ""
 	}
-	u, err := o.Users.Store.GetUser(ctx, identity)
+	name, err := o.Users.Name(ctx, identity)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			o.logger().Printf("api: session display name: %v", err)
-		}
+		o.logger().Printf("api: session display name: %v", err)
 		return ""
 	}
-	if u.DisplayName != "" {
-		return u.DisplayName
-	}
-	return u.Email
+	return name
 }
