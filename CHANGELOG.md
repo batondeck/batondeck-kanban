@@ -6,6 +6,12 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+- An MCP session is bound to how its bearer authenticated and the agent it carries, as well as its
+  identity: a later request on the same identity's token with another label, on its default-label
+  token or on its OAuth token is refused 403 (`session user mismatch`), instead of acting as another
+  agent under the session's `agent_sessions` row. A rotated token of the same label still works
+  (P-323).
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

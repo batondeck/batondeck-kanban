@@ -164,6 +164,74 @@ func bearerResolvesOrIs401(t *testing.T, svc service.Services) {
 	}
 }
 
+// P-323: a session is bound to its bearer's identity, how it authenticated and the agent it
+// carries. Another bearer of the same identity that would act as another agent is refused 403;
+// one that keeps all three (a rotated token of the same label, another default-label token) works.
+func TestASessionRefusesABearerOfTheSameIdentityWithAnotherAgent(t *testing.T) {
+	const (
+		labelledA  = "bk_swap_label_a"
+		labelledA2 = "bk_swap_label_a_rotated"
+		labelledB  = "bk_swap_label_b"
+		plain      = "bk_swap_plain"
+		plain2     = "bk_swap_plain_other"
+		oauth      = "bk_swap_oauth"
+	)
+	res := authfake.Resolver{Callers: map[string]domain.Caller{
+		labelledA:  {Identity: "u-ada", TokenScope: "u-ada", Agent: "agent-a", Labelled: true, Via: domain.ViaAPIToken},
+		labelledA2: {Identity: "u-ada", TokenScope: "u-ada", Agent: "agent-a", Labelled: true, Via: domain.ViaAPIToken},
+		labelledB:  {Identity: "u-ada", TokenScope: "u-ada", Agent: "agent-b", Labelled: true, Via: domain.ViaAPIToken},
+		plain:      {Identity: "u-ada", TokenScope: "u-ada", Via: domain.ViaAPIToken},
+		plain2:     {Identity: "u-ada", TokenScope: "u-ada", Via: domain.ViaAPIToken},
+		oauth:      {Identity: "u-ada", Role: "admin", Agent: "agent-a", Via: domain.ViaOAuth, OAuthClientID: "c-1"},
+	}}
+	h := bootHarness(t, servicefake.New().Services(), res)
+	open := func(bearer string) string {
+		t.Helper()
+		resp := rawPOST(t, h.url, bearer, "", initBody)
+		sid := resp.Header.Get("Mcp-Session-Id")
+		if resp.StatusCode != http.StatusOK || sid == "" {
+			t.Fatalf("initialize on %s: status %d, session %q", bearer, resp.StatusCode, sid)
+		}
+		if r := rawPOST(t, h.url, bearer, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`); r.StatusCode/100 != 2 {
+			t.Fatalf("initialized on %s: status %d", bearer, r.StatusCode)
+		}
+		return sid
+	}
+	list := func(bearer, sid string) (int, string) {
+		resp := rawPOST(t, h.url, bearer, sid, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	onA := open(labelledA)
+	for _, c := range []struct {
+		name, bearer string
+		want         int
+	}{
+		{"another token labelled agent-b", labelledB, http.StatusForbidden},
+		{"a default-label token", plain, http.StatusForbidden},
+		{"an OAuth token whose client is named agent-a", oauth, http.StatusForbidden},
+		{"a rotated token labelled agent-a", labelledA2, http.StatusOK},
+		{"the session's own token", labelledA, http.StatusOK},
+	} {
+		code, body := list(c.bearer, onA)
+		if code != c.want {
+			t.Errorf("agent-a's session, tools/list on %s: status %d (%s), want %d", c.name, code, body, c.want)
+		}
+		if code == http.StatusOK && !strings.Contains(body, `"tools"`) {
+			t.Errorf("agent-a's session, tools/list on %s: body %s, want the tool list", c.name, body)
+		}
+	}
+
+	onPlain := open(plain)
+	if code, body := list(plain2, onPlain); code != http.StatusOK || !strings.Contains(body, `"tools"`) {
+		t.Errorf("a default-label session, tools/list on another default-label token: status %d (%s), want 200", code, body)
+	}
+	if code, _ := list(labelledA, onPlain); code != http.StatusForbidden {
+		t.Errorf("a default-label session, tools/list on a token labelled agent-a: status %d, want 403", code)
+	}
+}
+
 func TestResolverFailureIs500(t *testing.T) {
 	h := bootHarness(t, servicefake.New().Services(), failingResolver{})
 	resp := rawPOST(t, h.url, tokenAda, "", initBody)
