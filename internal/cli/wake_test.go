@@ -778,9 +778,11 @@ func TestDirectoryDropsOnADeadSocket(t *testing.T) {
 	for len(s.pids()) != 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(s.pids()) != 0 || !strings.Contains(s.logs.String(), "its socket is gone") {
+	if len(s.pids()) != 0 {
 		t.Fatalf("pids %v after a delivery to a closed socket; log:\n%s", s.pids(), s.logs.String())
 	}
+	// drop removes the entry, then logs why (P-339): wait for the line, not read it once.
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its socket is gone", c.pid, s.alice.id), 1)
 }
 
 // The start-up rebuild: a restarted server restores a live entry from its row, drops a dead one's,
