@@ -9,7 +9,7 @@ import * as projectsApi from '../api/projects.js';
 import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
-import { Avatar, EmptyState, PageHeader, leaseLeft, timeAgo } from '../components.js';
+import { Avatar, EmptyState, PageHeader, eventActor, leaseLeft, personName, timeAgo } from '../components.js';
 import { useProject } from '../projectContext.js';
 import { displayAgentName, isSessionOnline } from '../agentStatus.js';
 import { ToolLogo, toolKey, toolLabel } from '../ToolLogo.js';
@@ -317,15 +317,17 @@ export function Agents() {
                   <div style={{ position: 'absolute', left: 11, top: 8, bottom: 8, width: 1, background: 'var(--border)', zIndex: 0 }} />
                 )}
                 {handoffs.map((e) => {
+                  // Either end may be an account id: the event's agent label wins, then the project's
+                  // `memberDisplay`, never the raw `U-<hex>` (P-314).
                   const to = (e.data as { toAgent?: string } | null)?.toAgent;
                   return (
                     <div key={e.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, position: 'relative', zIndex: 1 }}>
                       <span style={{ width: 24, height: 24, borderRadius: '50%', background: 'var(--surface-highest)', border: '2px solid var(--panel)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: '0 0 auto', fontSize: 11, color: 'var(--text-2)', marginTop: 2 }} aria-hidden>⇄</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                          <span className="mono" style={{ color: 'var(--text)' }}>{displayAgentName(e.actor)}</span>
+                          <span className="mono" style={{ color: 'var(--text)' }}>{displayAgentName(eventActor(e, memberDisplay))}</span>
                           <span style={{ color: 'var(--text-muted)', margin: '0 6px' }}>→</span>
-                          <span className="mono" style={{ color: 'var(--text)' }}>{to ? displayAgentName(to) : '—'}</span>
+                          <span className="mono" style={{ color: 'var(--text)' }}>{to ? displayAgentName(personName(to, memberDisplay)) : '—'}</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
                           {e.taskId && <span className="mono" style={{ fontSize: 10, color: 'var(--accent-tint)', background: 'color-mix(in srgb, var(--accent) 12%, transparent)', padding: '1px 5px', borderRadius: 'var(--r-1)' }}>{e.taskId}</span>}

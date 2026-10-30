@@ -6,6 +6,12 @@ import { UI_DEFAULTS, hydrateUiSettings, type UiSettings } from './settings.js';
 interface AuthState {
   identity: string | null;
   /**
+   * The signed-in account's display name, else its login (`/api/session` `displayName`, P-314).
+   * `identity` is an opaque `U-<hex>` account id since the identity cutover; this is what a person
+   * reads. Null while loading or when the server has no account row for the identity.
+   */
+  displayName: string | null;
+  /**
    * DERIVED ALIAS, SURVIVING FOR ONE RELEASE (T-378). Equivalent to
    * `can(permissions, SUPERADMIN)`, computed at the BFF.
    *
@@ -66,6 +72,7 @@ interface AuthState {
 
 const Ctx = createContext<AuthState>({
   identity: null,
+  displayName: null,
   isAdmin: false,
   permissions: [],
   subscriptionsEnabled: false,
@@ -81,6 +88,7 @@ const Ctx = createContext<AuthState>({
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [permissions, setPermissions] = useState<readonly string[]>([]);
   const [subscriptionsEnabled, setSubscriptionsEnabled] = useState(false);
@@ -95,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const s = await sessionApi.session();
       setIdentity(s.identity);
+      setDisplayName(s.displayName ?? null);
       setIsAdmin(s.isAdmin);
       // `?? []` at the ONE place the wire is read. Absent means none (see permissions.ts).
       setPermissions(s.permissions ?? []);
@@ -136,7 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIdentity(null);
   };
 
-  return <Ctx.Provider value={{ identity, isAdmin, permissions, subscriptionsEnabled, ui, tenantId, tenantName, pullBase, loading, login, logout, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ identity, displayName, isAdmin, permissions, subscriptionsEnabled, ui, tenantId, tenantName, pullBase, loading, login, logout, refresh }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = (): AuthState => useContext(Ctx);

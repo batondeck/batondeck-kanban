@@ -18,7 +18,7 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
-import { roleAtLeast } from '../../displayNames.js';
+import { roleAtLeast, useDisplayNames } from '../../displayNames.js';
 import type { ActivityEvent, Status, Task } from '../../types.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
@@ -67,6 +67,9 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // is just a backstop for a dropped stream.
   const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => tasksApi.getTask(projectId, taskId), refetchInterval: 30000 });
   const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId) });
+  // Account id → display name, for the header's "created by" (P-314). The same cache entry the
+  // Activity panel reads, which both ticket screens mount, so this adds no request.
+  const names = useDisplayNames(projectId);
   // Known agent names (for the Assignee picker) — assigning a task to one of these routes it to that
   // agent's `wait_for_task { assignee }` loop. Best-effort; the field still accepts any string.
   // Same tunable as Board's fetch — these share the ['agentsessions'] cache key, so the queryFns must
@@ -207,7 +210,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim,
+    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, names,
   };
 }
 

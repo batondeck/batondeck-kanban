@@ -10,7 +10,7 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { pushToast } from '../toast.js';
-import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, timeAgo } from '../components.js';
+import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, personName, timeAgo } from '../components.js';
 import { LIMITS } from '../types.js';
 import { Cluster } from '../ui.js';
 import { Icon } from '../icons.js';
@@ -255,8 +255,9 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
                 Created by <Avatar id={task.createdByAgent} /> {task.createdByAgent}
               </span>
             ) : (
-              // Bare emails read noisy — show the local part; the tooltip keeps the full address.
-              <span title={task.createdBy}>Created by {task.createdBy.split('@')[0]}</span>
+              // Bare emails read noisy — show the local part; the tooltip keeps the full name. An account
+              // id is named, never printed raw (P-314).
+              <span title={personName(task.createdBy, d.names, { full: true })}>Created by {personName(task.createdBy, d.names)}</span>
             )}
             <span>· updated {timeAgo(task.updatedAt)}</span>
           </div>

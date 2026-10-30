@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // The permission slugs the SPA gates its admin and on-call screens on (conductor's
@@ -16,9 +19,13 @@ const (
 	permOncall     = "batondeck:oncall"
 )
 
-// sessionResp is ui-backend's /api/session answer, less the hosted-only keys (tenant, pullBase).
+// sessionResp is ui-backend's /api/session answer, less the hosted-only keys (tenant, pullBase),
+// plus displayName: the account's display name, else its login, absent when the identity has no
+// account row (P-314). Identity is an opaque account id, and an account in no project is named by
+// no project's memberDisplay, so this is the one read that can name the SPA's identity chip.
 type sessionResp struct {
 	Identity             string         `json:"identity"`
+	DisplayName          string         `json:"displayName,omitempty"`
 	IsAdmin              bool           `json:"isAdmin"`
 	Permissions          []string       `json:"permissions"`
 	CSRFToken            *string        `json:"csrfToken"`
@@ -70,7 +77,30 @@ func sessionRoutes(o *Options) []route {
 			if sess, ok := auth.SessionFrom(r.Context()); ok {
 				resp.CSRFToken = &sess.CSRFToken
 			}
+			resp.DisplayName = accountName(r.Context(), o, c.Identity)
 			writeJSON(w, http.StatusOK, resp)
 		})},
 	}
+}
+
+// accountName is the identity's display name, else its login (the store's Email field holds a local
+// account's login), as the service's memberDisplay names a member (internal/service/projects.go
+// displayNames). Empty when there are no accounts or no row for the identity: the field is then
+// omitted, and the SPA falls back to memberDisplay and then a shortened id. A failed read is logged
+// and omitted too: a missing name must not fail the session read the whole SPA boots on.
+func accountName(ctx context.Context, o *Options, identity string) string {
+	if o.Users == nil || o.Users.Store == nil {
+		return ""
+	}
+	u, err := o.Users.Store.GetUser(ctx, identity)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			o.logger().Printf("api: session display name: %v", err)
+		}
+		return ""
+	}
+	if u.DisplayName != "" {
+		return u.DisplayName
+	}
+	return u.Email
 }

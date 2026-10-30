@@ -85,6 +85,25 @@ export function useMayReadIntegrations(projectId: string | undefined): boolean {
   return isAdmin && role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK.master;
 }
 
+/**
+ * Every name the caller's project list already carries (P-314): `list_projects` returns
+ * `memberDisplay` on each row, and `ProjectProvider` holds that list app-wide under `['projects']`,
+ * so this costs no request. It is the map for a surface that is not inside one project (the
+ * notifications list, the identity chip), and the floor under `useDisplayNames`: it names a person
+ * the caller shares ANY project with, which is no wider than what `list_projects` already shows them.
+ * A later row never overwrites an earlier one's name; they are the same account's label.
+ */
+export function useWorkspaceNames(): Record<string, string> {
+  const { projects } = useProject();
+  return useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const p of projects) {
+      for (const [id, name] of Object.entries(p.memberDisplay ?? {})) if (name && !(id in names)) names[id] = name;
+    }
+    return names;
+  }, [projects]);
+}
+
 export function useDisplayNames(projectId: string | undefined): Record<string, string> {
   const projectQ = useQuery({
     queryKey: ['project-member-display', projectId],
@@ -104,13 +123,16 @@ export function useDisplayNames(projectId: string | undefined): Record<string, s
     retry: false,
   });
 
+  const workspace = useWorkspaceNames();
+
   return useMemo(() => {
-    const names: Record<string, string> = { ...(projectQ.data?.memberDisplay ?? {}) };
+    // The project's own read wins over the workspace floor: it is per read, so it is the freshest.
+    const names: Record<string, string> = { ...workspace, ...(projectQ.data?.memberDisplay ?? {}) };
     for (const i of integrationsQ.data?.integrations ?? []) {
       // Keyed by the BARE integration id: `eventActor` strips the `ingest:` prefix before looking up,
       // so the same map serves both id shapes without the caller knowing which is which.
       if (i.name) names[i.id] = i.name;
     }
     return names;
-  }, [projectQ.data, integrationsQ.data]);
+  }, [workspace, projectQ.data, integrationsQ.data]);
 }

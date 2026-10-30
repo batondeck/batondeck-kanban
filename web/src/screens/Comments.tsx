@@ -7,7 +7,8 @@ import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ReactMarkdown from 'react-markdown';
 import * as commentsApi from '../api/comments.js';
-import { Avatar, mdComponents, mdPlugins, timeAgo } from '../components.js';
+import { Avatar, mdComponents, mdPlugins, personName, timeAgo, type DisplayNames } from '../components.js';
+import { useDisplayNames } from '../displayNames.js';
 import type { Comment } from '../types.js';
 import { Cluster, Stack } from '../ui.js';
 import { InlineLoader } from '../brand.js';
@@ -38,21 +39,25 @@ function CommentNode({
   node,
   depth,
   onReply,
+  names,
 }: {
   node: TreeNode;
   depth: number;
   onReply: (c: Comment) => void;
+  /** Account id → display name (P-314): the author is a `U-<hex>` id, never shown raw. */
+  names: DisplayNames;
 }) {
   const c = node.comment;
+  const author = personName(c.author, names);
   return (
     <div style={{ marginLeft: depth > 0 ? 16 : 0, borderLeft: depth > 0 ? '1px solid var(--border)' : undefined, paddingLeft: depth > 0 ? 12 : 0 }}>
       <div className="card" style={{ padding: 10 }}>
         <Cluster gap={4}>
-          <Avatar id={c.author} />
-          <span style={{ fontSize: 12, fontWeight: 600 }}>{c.author}</span>
+          <Avatar id={c.author} label={author} nameOnly />
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{author}</span>
           <span className="muted" style={{ fontSize: 11 }}>{timeAgo(c.ts)}</span>
           {c.mentions.length > 0 && (
-            <span className="chip" title={`mentioned ${c.mentions.join(', ')}`}>@{c.mentions.length}</span>
+            <span className="chip" title={`mentioned ${c.mentions.map((m) => personName(m, names)).join(', ')}`}>@{c.mentions.length}</span>
           )}
           <button
             className="btn secondary"
@@ -69,7 +74,7 @@ function CommentNode({
       {node.children.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
           {node.children.map((child) => (
-            <CommentNode key={child.comment.id} node={child} depth={depth + 1} onReply={onReply} />
+            <CommentNode key={child.comment.id} node={child} depth={depth + 1} onReply={onReply} names={names} />
           ))}
         </div>
       )}
@@ -87,6 +92,7 @@ export function Comments({
   mentionCandidates: string[];
 }) {
   const qc = useQueryClient();
+  const names = useDisplayNames(projectId);
   const commentsQ = useQuery({
     queryKey: ['comments', projectId, taskId],
     queryFn: () => commentsApi.listComments(projectId, taskId),
@@ -150,14 +156,14 @@ export function Comments({
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No comments yet.</p>
         )}
         {threads.map((t) => (
-          <CommentNode key={t.comment.id} node={t} depth={0} onReply={setReplyTo} />
+          <CommentNode key={t.comment.id} node={t} depth={0} onReply={setReplyTo} names={names} />
         ))}
       </Stack>
 
       <div style={{ marginTop: 8, position: 'relative' }}>
         {replyTo && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, marginBottom: 4 }}>
-            <span className="muted">Replying to {replyTo.author}</span>
+            <span className="muted">Replying to {personName(replyTo.author, names)}</span>
             <button className="btn secondary" style={{ padding: '0 6px' }} onClick={() => setReplyTo(null)}>×</button>
           </div>
         )}

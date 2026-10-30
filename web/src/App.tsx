@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { useAuth } from './auth.js';
-import { Avatar } from './components.js';
+import { Avatar, personName } from './components.js';
+import { useWorkspaceNames } from './displayNames.js';
 import { ProjectProvider, useProject } from './projectContext.js';
 import { ToastHost, fire } from './toast.js';
 import { SignIn } from './screens/SignIn.js';
@@ -98,7 +99,12 @@ function ProjectSwitcher() {
 
 /** Footer identity row → popover menu (Appearance, Docs, Help, Sign out). */
 function Foot() {
-  const { identity, logout } = useAuth();
+  const { identity, displayName, logout } = useAuth();
+  // The chip names the person, never the `U-<hex>` account id (P-314): the session's own
+  // `displayName` first (it is there even for an account in no project), then any project's
+  // `memberDisplay`, then the shortened id.
+  const workspace = useWorkspaceNames();
+  const me = identity ? personName(identity, displayName ? { ...workspace, [identity]: displayName } : workspace, { full: true }) : null;
   // Theme state is back (T-519) and now means something: TWO complete palettes ship, so the control
   // has somewhere to go. T-398 removed its predecessor because only one palette existed and the state
   // could only ever write the same value back — that reasoning held then and does not now.
@@ -141,9 +147,9 @@ function Foot() {
           <button role="menuitem" onClick={() => fire(logout())}>Sign out</button>
         </div>
       )}
-      <button className="identity-row" title={identity ?? undefined} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        {identity && <Avatar id={identity} />}
-        <span className="identity-email">{identity}</span>
+      <button className="identity-row" title={me ?? undefined} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {identity && me && <Avatar id={identity} label={me} nameOnly />}
+        <span className="identity-email">{me}</span>
       </button>
     </div>
   );
