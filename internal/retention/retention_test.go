@@ -213,6 +213,88 @@ func TestASweepRemovesLapsedSessionsAndTokens(t *testing.T) {
 	}
 }
 
+// P-125: a sweep deletes the OAuth code and the access and refresh tokens expired more than
+// LapsedGrace ago, used or not, and keeps a code and a token lapsed less than LapsedGrace ago, a live
+// code and token, the client and the family, on memstore and both engines; a second sweep deletes
+// nothing.
+func TestASweepRemovesLapsedOAuthCodesAndTokens(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			at := func(ago time.Duration) int64 { return now.Add(-ago).UnixMilli() }
+			const res = "https://bk.example/mcp"
+			if err := s.CreateOAuthClient(ctx, store.OAuthClient{ClientID: "C-1", ClientName: "c", RedirectURIs: []string{"https://app.example/cb"},
+				Scope: "worker", CreatedAt: at(30 * day), LastUsedAt: at(day)}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.CreateOAuthFamily(ctx, store.OAuthFamily{ID: "F-1", ClientID: "C-1", IdentityID: "U-1", Scope: "worker", Resource: res, CreatedAt: at(30 * day)}); err != nil {
+				t.Fatal(err)
+			}
+			for hash, expires := range map[string]time.Duration{"c-old": 8 * day, "c-recent": 6 * day, "c-live": -5 * time.Minute} {
+				if err := s.CreateOAuthCode(ctx, store.OAuthCode{CodeHash: hash, ClientID: "C-1", IdentityID: "U-1", RedirectURI: "https://app.example/cb",
+					CodeChallenge: "x", Scope: "worker", Resource: res, CreatedAt: at(expires + 10*time.Minute), ExpiresAt: at(expires)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.ConsumeOAuthCode(ctx, "c-old", at(8*day+time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			for _, tk := range []struct {
+				hash, kind string
+				expires    time.Duration
+			}{
+				{"a-old", store.OAuthAccess, 8 * day},     // past the grace: deleted
+				{"r-old", store.OAuthRefresh, 8 * day},    // past the grace, rotated: deleted
+				{"r-recent", store.OAuthRefresh, 6 * day}, // inside the grace: kept
+				{"a-live", store.OAuthAccess, -time.Hour}, // live: kept
+			} {
+				if err := s.CreateOAuthToken(ctx, store.OAuthToken{TokenHash: tk.hash, Kind: tk.kind, FamilyID: "F-1", ClientID: "C-1", IdentityID: "U-1",
+					Scope: "worker", Resource: res, CreatedAt: at(tk.expires + time.Hour), ExpiresAt: at(tk.expires)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.ConsumeOAuthToken(ctx, "r-old", at(9*day)); err != nil {
+				t.Fatal(err)
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			if got := sw.Sweep(ctx); got != (Swept{OAuthCodes: 1, OAuthTokens: 2}) {
+				t.Fatalf("swept %+v, want one OAuth code and two OAuth tokens", got)
+			}
+			if again := sw.Sweep(ctx); again != (Swept{}) {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+			for _, h := range []string{"a-old", "r-old"} {
+				if _, err := s.GetOAuthToken(ctx, h); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("token %s: %v, want it deleted past the grace", h, err)
+				}
+			}
+			for _, h := range []string{"r-recent", "a-live"} {
+				if _, err := s.GetOAuthToken(ctx, h); err != nil {
+					t.Fatalf("token %s: %v, want it kept", h, err)
+				}
+			}
+			// A code reads back only through its consume, so the codes are judged after both sweeps.
+			if _, err := s.ConsumeOAuthCode(ctx, "c-old", now.UnixMilli()); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("code c-old: %v, want it deleted past the grace", err)
+			}
+			for _, h := range []string{"c-recent", "c-live"} {
+				if _, err := s.ConsumeOAuthCode(ctx, h, now.UnixMilli()); err != nil {
+					t.Fatalf("code %s: %v, want it kept", h, err)
+				}
+			}
+			if _, err := s.GetOAuthClient(ctx, "C-1"); err != nil {
+				t.Fatalf("the client: %v, want it kept", err)
+			}
+			if _, err := s.GetOAuthFamily(ctx, "F-1"); err != nil {
+				t.Fatalf("the family: %v, want it kept", err)
+			}
+		})
+	}
+}
+
 // fake deletes whatever it is asked to, or fails one step.
 type fake struct {
 	calls map[string]int
@@ -251,6 +333,14 @@ func (f *fake) DeleteLapsedTokens(_ context.Context, _ int64, limit int) (int64,
 	return f.del("tokens", limit)
 }
 
+func (f *fake) DeleteExpiredOAuthCodes(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("oauth codes", limit)
+}
+
+func (f *fake) DeleteExpiredOAuthTokens(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("oauth tokens", limit)
+}
+
 func (f *fake) DeleteExpiredDeliveries(_ context.Context, _ int64, limit int) (int64, error) {
 	return f.del("deliveries", limit)
 }
@@ -269,7 +359,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {

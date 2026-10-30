@@ -10,6 +10,48 @@ import (
 	"database/sql"
 )
 
+const deleteExpiredOauthCodes = `-- name: DeleteExpiredOauthCodes :execrows
+DELETE FROM oauth_codes WHERE code_hash IN (
+  SELECT c.code_hash FROM oauth_codes c WHERE c.expires_at < CAST(?1 AS INTEGER)
+  ORDER BY c.expires_at, c.code_hash LIMIT ?2)
+`
+
+type DeleteExpiredOauthCodesParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: codes that expired before the cutoff, used or not, oldest expiry first, a
+// page at a time. The client and the family the code started stay.
+func (q *Queries) DeleteExpiredOauthCodes(ctx context.Context, arg DeleteExpiredOauthCodesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredOauthCodes, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteExpiredOauthTokens = `-- name: DeleteExpiredOauthTokens :execrows
+DELETE FROM oauth_tokens WHERE token_hash IN (
+  SELECT t.token_hash FROM oauth_tokens t WHERE t.expires_at < CAST(?1 AS INTEGER)
+  ORDER BY t.expires_at, t.token_hash LIMIT ?2)
+`
+
+type DeleteExpiredOauthTokensParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: access and refresh tokens that expired before the cutoff, whether used or
+// revoked and whatever their family's state, oldest expiry first, a page at a time. The family stays.
+func (q *Queries) DeleteExpiredOauthTokens(ctx context.Context, arg DeleteExpiredOauthTokensParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredOauthTokens, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteUnusedOauthClients = `-- name: DeleteUnusedOauthClients :execrows
 DELETE FROM oauth_clients WHERE last_used_at IS NULL AND created_at < ?
 `

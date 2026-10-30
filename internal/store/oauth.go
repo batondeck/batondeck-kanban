@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
 	"github.com/batondeck/batondeck-kanban/internal/store/sqlitedb"
 )
@@ -135,6 +136,28 @@ func (s *SQLite) DeleteUnusedOAuthClients(ctx context.Context, createdBefore int
 	return n, nil
 }
 
+func (s *SQLite) DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authWrite().DeleteExpiredOauthCodes(ctx, sqlitedb.DeleteExpiredOauthCodesParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired oauth codes", err)
+	}
+	return n, nil
+}
+
+func (s *SQLite) DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authWrite().DeleteExpiredOauthTokens(ctx, sqlitedb.DeleteExpiredOauthTokensParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired oauth tokens", err)
+	}
+	return n, nil
+}
+
 func (s *SQLite) CreateOAuthCode(ctx context.Context, c OAuthCode) error {
 	if err := s.authWrite().InsertOauthCode(ctx, oauthCodeParams(c)); err != nil {
 		return authErr("create oauth code", err)
@@ -252,6 +275,28 @@ func (s *Postgres) DeleteUnusedOAuthClients(ctx context.Context, createdBefore i
 	n, err := s.authQ().DeleteUnusedOauthClients(ctx, createdBefore)
 	if err != nil {
 		return 0, authErr("delete unused oauth clients", err)
+	}
+	return n, nil
+}
+
+func (s *Postgres) DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authQ().DeleteExpiredOauthCodes(ctx, pgdb.DeleteExpiredOauthCodesParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired oauth codes", err)
+	}
+	return n, nil
+}
+
+func (s *Postgres) DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authQ().DeleteExpiredOauthTokens(ctx, pgdb.DeleteExpiredOauthTokensParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired oauth tokens", err)
 	}
 	return n, nil
 }

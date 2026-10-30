@@ -21,6 +21,12 @@ Notable changes to batondeck-kanban. The format follows
   for good. Each identity's newest token row of each label stays, because the tokens table is also
   the record of who owns a label: a lapsed label stays its first minter's. For the week of grace
   `token list` still shows a lapsed token with its status (P-44).
+- **The retention sweep deletes lapsed OAuth codes and tokens.** An authorization code, access
+  token or refresh token expired more than 7 days ago (`retention.LapsedGrace`) is deleted, used or
+  not and whatever its grant's state, a page at a time like the other steps; before, every
+  connector authorization and every hourly refresh added rows for good. Inside the week of grace a
+  rotated refresh token or a spent code presented again still finds its row and revokes its grant.
+  The client and the grant itself stay (P-125).
 - **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and
   `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
   usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr

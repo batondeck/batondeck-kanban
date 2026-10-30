@@ -5,7 +5,8 @@
 // and the raw webhook bodies past the expiry stamped on each at write time (retention.deliveries_days
 // and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), the browser sessions expired and
 // the API tokens expired or revoked more than LapsedGrace ago (a token's newest row per label stays,
-// as the label-ownership record), and the blobs no attachment or memory entry references any more.
+// as the label-ownership record), the OAuth codes and tokens expired more than LapsedGrace ago, and
+// the blobs no attachment or memory entry references any more.
 // Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.
@@ -34,7 +35,9 @@ const (
 	AgentSessionIdle = 30 * time.Minute
 	// LapsedGrace is how long a lapsed credential's row outlives its expiry or revocation before a
 	// sweep deletes it: a browser session past its expiry, an API token past its expiry or
-	// revocation. For that week `token list` still shows a lapsed token with its status.
+	// revocation, an OAuth code or token past its expiry. For that week `token list` still shows a
+	// lapsed token with its status, and a rotated OAuth refresh token presented again still finds
+	// its row and revokes its family.
 	LapsedGrace = 7 * 24 * time.Hour
 )
 
@@ -46,6 +49,8 @@ type Store interface {
 	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
@@ -67,7 +72,8 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, Deliveries, RawBodies, Blobs int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens int64
+	Deliveries, RawBodies, Blobs                                                           int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -82,9 +88,8 @@ type Sweeper struct {
 }
 
 // Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
-// then the browser sessions and API tokens lapsed more than LapsedGrace ago, then the expired
-// deliveries
-// (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
+// then the browser sessions, API tokens, OAuth codes and OAuth tokens lapsed more than LapsedGrace
+// ago, then the expired deliveries (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
 // unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	now := time.Now
@@ -123,6 +128,8 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	lapsed := ms - LapsedGrace.Milliseconds()
 	out.Sessions = step("sessions", func(limit int) (int64, error) { return s.Store.DeleteExpiredSessions(ctx, lapsed, limit) })
 	out.Tokens = step("tokens", func(limit int) (int64, error) { return s.Store.DeleteLapsedTokens(ctx, lapsed, limit) })
+	out.OAuthCodes = step("oauth codes", func(limit int) (int64, error) { return s.Store.DeleteExpiredOAuthCodes(ctx, lapsed, limit) })
+	out.OAuthTokens = step("oauth tokens", func(limit int) (int64, error) { return s.Store.DeleteExpiredOAuthTokens(ctx, lapsed, limit) })
 	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
 	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })
 	if s.CollectBlobs != nil {

@@ -49,3 +49,17 @@ WHERE t.token_hash = $1;
 
 -- name: UseOauthToken :execrows
 UPDATE oauth_tokens SET used_at = $1 WHERE token_hash = $2 AND used_at IS NULL;
+
+-- name: DeleteExpiredOauthCodes :execrows
+-- The retention sweep: codes that expired before the cutoff, used or not, oldest expiry first, a
+-- page at a time. The client and the family the code started stay.
+DELETE FROM oauth_codes WHERE code_hash IN (
+  SELECT c.code_hash FROM oauth_codes c WHERE c.expires_at < sqlc.arg(before)::bigint
+  ORDER BY c.expires_at, c.code_hash COLLATE "C" LIMIT sqlc.arg(page_limit)::bigint);
+
+-- name: DeleteExpiredOauthTokens :execrows
+-- The retention sweep: access and refresh tokens that expired before the cutoff, whether used or
+-- revoked and whatever their family's state, oldest expiry first, a page at a time. The family stays.
+DELETE FROM oauth_tokens WHERE token_hash IN (
+  SELECT t.token_hash FROM oauth_tokens t WHERE t.expires_at < sqlc.arg(before)::bigint
+  ORDER BY t.expires_at, t.token_hash COLLATE "C" LIMIT sqlc.arg(page_limit)::bigint);
