@@ -6,6 +6,133 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `trusted_proxies` (`BATONDECK_TRUSTED_PROXIES`): the reverse proxies, as IP addresses or CIDRs,
+  whose `X-Forwarded-For` the server reads (P-291). A request from one counts against the rightmost
+  address in that header that is not itself a trusted proxy, so behind a proxy the sign-in limit
+  (`/api/login` and the OAuth sign-in page) and `/register`'s limit count each client, not every
+  user as the proxy. Unset, the header is never read and the peer counts, as before; a malformed
+  entry stops `serve` at start. The README's step 6 and `compose.yaml` say how to set it.
+- **`batondeck-kanban user enable LOGIN`**, the way back from `user disable`: it clears the
+  user's disabled mark, and their unexpired browser sessions and tokens resolve again within the
+  account cache's 60 s. Enabling a user who is not disabled says so and changes nothing; an unknown
+  login exits 1 (P-46).
+
+### Changed
+
+- `POST /hooks/{id}` over its rate budget, or over the pre-check's burst, answers
+  `503 Service Unavailable` with `Retry-After` and `{"code":"RATE_LIMITED","retryable":true,…}`,
+  not 429 (P-353; owner call 2026-10-30, a change to R2.9's "the 11th is 429"). Alertmanager's
+  webhook retries only a 5xx, so a 429 dropped the alert that tripped the limit; PagerDuty retries
+  both. `Retry-After` is unchanged: `ceil(60/ratePerMin)` seconds, 1 for the pre-check. The
+  integration form's hint says so instead of promising a retry of a 429.
+- **An agent session outlives its MCP connection (P-264, P-324).** The Agents screen and
+  `list_agent_sessions` keep an agent after it disconnects and across a serve restart, with its
+  connection and request counts; its next connection updates the same row. A row goes when
+  `disconnect_agent` deletes it or 30 minutes after its last request (plan Clarification 7).
+- A token label of the form `id:<x>` is refused at mint (P-352). `token create` and
+  `POST /api/me/cli-tokens` answer `VALIDATION` for any label whose agent (trimmed, control
+  characters dropped) starts with `id:`, the caller's own id included. That form is the agent id the
+  server derives for a caller that names no agent, so such a token presented its caller's MCP agent,
+  claims and events as that identity's agentless self. A token minted with such a label before this
+  release now names no agent, as the default label `cli` does. `ID:x` and other labels mint as
+  before, under the first-minter rule.
+- An agent name equal to another identity's id no longer reaches that identity's agentless profile
+  or stats (P-351). `register_agent_profile` and `rank_tasks {useProfile}` answer `FORBIDDEN`
+  (`details.agentKey`) for a key that is another account's id or another project member's id, and
+  the outcomes `complete_task` and `block_task` record go under the caller's own identity instead.
+  A caller naming its own id, or naming no agent, keeps its own profile as before.
+- `claim_task {taskId}` applies `claim_next`'s assignee rule (P-334, P-297). Below master, a task
+  assigned to another account's id or login (email, any case), to another project member's id, to
+  a label another identity's token has ever carried (live, revoked or expired), or to a live label
+  the caller is not on that label's own token for, answers `FORBIDDEN` and is not claimed, from
+  MCP, REST and the task drawer's "Claim to work" alike; a re-claim of a task reassigned to another
+  is refused the same way. An unassigned task, the caller's own id or login, its own label on that
+  label's token, and a string naming no identity and no token's label are claimed as before, and a
+  master or admin claims any task. A browser session names no agent, so its claim of a task
+  assigned to the member's own agent label is refused, as `claim_next` is.
+- A lease that recorded an agent is that agent's for every lease-guarded outcome (P-320).
+  `heartbeat_task`, `release_task`, `complete_task`, `block_task`, `fail_task`, `handoff_task` and
+  `orchestrate_subtasks` answer `LEASE_EXPIRED` when the claim named an agent and the caller is not
+  that agent: another agent of the same identity holding the lease id, or that identity with no
+  agent named, as a second `claim_task` already was. A lease that recorded no agent (a browser's
+  claim, or one from before agents were recorded) is acted on by any caller of its identity, as
+  before.
+
+### Fixed
+
+- A path the board does not have answers 404, not the web UI's page with 200 (P-303): the
+  catch-all serves the UI only for the paths it routes (`/projects`, a board or task link,
+  `/chronicle/…`, `/agents`, `/settings`, `/oncall` and the rest of `web/src/App.tsx`'s routes), and
+  any other GET, such as `/docs`, `/mcp/`, `/healthz/`, `/blobs/` or bare `/api`, is 404. With OAuth
+  off (no `public_url`), `/.well-known/oauth-authorization-server` and
+  `/.well-known/oauth-protected-resource[/mcp]` are therefore 404, so an MCP client probing
+  discovery after `/mcp`'s 401 reads "no OAuth" instead of failing to parse a web page (P-302). A
+  mistyped address in the browser now shows the 404 instead of redirecting to `/projects`.
+- **A Chronicle record that shows an attachment keeps showing it** (P-244). A block that embeds a
+  download URL from `list_attachments` used to store it as written, and the image broke once the
+  URL's 15 minutes ran out. A write now stores such a URL in one stable form when it is still live,
+  or when the page already held that attachment (an editor left open past the 15 minutes), and every
+  read of the page, a version or a conflict, over REST and MCP, signs that form afresh. Any other
+  expired URL is stored as written and stays expired, so a URL cannot be renewed by pasting it into a
+  page after it ran out; the stable form itself is refused where the page did not hold it. Records
+  written before the fix are re-signed on read when their URL was live as it was written. A forged or
+  foreign URL is left as it is. The web editor's conflict panel and the history diff compare block
+  text with those signatures masked, so an untouched image no longer shows as changed.
+- **`resume` is filled in** (P-117, P-161). `claim_task`, `claim_next` and `get_task_context` always
+  answered `resume: null`, which reads as "nothing to resume". They now answer the task's newest live
+  `branch` and `commit` artifacts and its newest checkpoint note (DONE, NEXT, REJECTED, UNCERTAIN),
+  the checkpoint sought among its newest 200 context items, and null when none of the three is
+  found. Nothing is stored for it and no migration runs.
+  `claim_next` costs two more read statements for it, after the claim commits.
+- **The retention sweep deletes lapsed browser sessions and API tokens.** A session expired, and
+  an API token expired or revoked, more than 7 days ago (`retention.LapsedGrace`) is deleted, a
+  page at a time like the other steps; before, every sign-in and every token rotation added a row
+  for good. Each identity's newest token row of each label stays, because the tokens table is also
+  the record of who owns a label: a lapsed label stays its first minter's. For the week of grace
+  `token list` still shows a lapsed token with its status. After the week `token list` shows only
+  each label's newest lapsed row, and `token revoke ID` of a swept row answers
+  `NOT_FOUND: token not found` (exit 1), where it had printed the time the token was revoked (P-44).
+- **The retention sweep deletes lapsed OAuth codes and tokens.** An authorization code, access
+  token or refresh token expired more than 7 days ago (`retention.LapsedGrace`) is deleted, used or
+  not and whatever its grant's state, a page at a time like the other steps; before, every
+  connector authorization and every hourly refresh added rows for good. Inside the week of grace a
+  rotated refresh token or a spent code presented again still finds its row and revokes its grant.
+  After the week such a replay is refused as an unknown grant (`invalid_grant`) and no longer
+  revokes the grant: in 0.1.0 reuse detection had no end. The client and the grant itself stay
+  (P-125).
+- **The retention sweep deletes the alert states of DONE or deleted on-call tickets.** A
+  fingerprint's correlation row, stamped with the delivery window (`retention.deliveries_days`, 30
+  days by default), is deleted once it has expired and its ticket is DONE or deleted; before, an
+  integration that sees a new fingerprint per incident added a row per incident for good. An open
+  ticket's row stays whatever its expiry, so a late firing still appends to that ticket. A DONE
+  ticket reopened after its expired row was swept is no longer correlated: its alert's next firing
+  files a new ticket, and a resolved event is recorded without annotating or closing the reopened
+  one (P-226).
+- **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and
+  `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
+  usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr
+  (P-311). A usage error still exits 2 on stderr.
+- **Two tests no longer fail at random under load.** The idempotency-window conformance test
+  bounded the replay's expiry by sleeping past the first call's 100 ms window, then renewed the key
+  inside a second 100 ms window that a slow machine could outrun; the renewed key now has an hour.
+  The Postgres bus test that fills an earlier hole took A before D, an order the bus does not
+  promise; it now takes both in either order and still judges C's hole (P-157, which delivers
+  P-94).
+- **An open agent connection keeps its row past 30 idle minutes (P-279).** The retention sweep no
+  longer deletes the agent session of a client still connected to this serve process (one that only
+  pings, or waits on a long task); its row goes 30 minutes after its last request once it
+  disconnects.
+- **A device session hears a project from the moment it joins (P-229, P-331).** A registered
+  Claude Code session added to a project, or whose user creates one, gets that project's broadcast
+  and changed doorbells at once instead of after the next 60 s directory sweep; removed or deleted,
+  it stops hearing them at once. The re-read runs only on a membership change: an idle directory
+  still makes no statements between sweeps.
+- **serve stops the device session directory before it closes the store (P-205).** serve waits for
+  the directory's dispatcher to finish a doorbell in flight before it closes the store (at most the
+  10 s shutdown budget), so no directory write follows serve's return.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

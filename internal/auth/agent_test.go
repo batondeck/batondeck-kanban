@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -152,7 +153,108 @@ func TestALabelBelongsToOneIdentity(t *testing.T) {
 	}
 }
 
+// P-44: the retention sweep deletes lapsed token rows, and label ownership survives it. Alice's two
+// scout tokens lapse far past LapsedGrace; the sweep takes the older row and keeps the newest, so
+// bob's mint of scout is still VALIDATION and alice still mints it back.
+func TestALapsedLabelStaysItsOwnersAfterTheSweep(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	alice, bob := f.addUser(t, "alice", "pw"), f.addUser(t, "bob", "pw")
+	var ids []string
+	for range 2 {
+		_, info, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "scout", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, info.ID)
+		f.clk.add(time.Millisecond)
+	}
+	if err := f.st.RevokeToken(ctx, ids[1], f.clk.now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.add(MaxTokenTTL + retention.LapsedGrace + time.Hour) // both lapsed more than the grace ago
+	swept := (&retention.Sweeper{Store: f.st, Now: f.clk.now, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(ctx)
+	if swept.Tokens != 1 {
+		t.Fatalf("swept %d tokens, want 1 (the older scout row)", swept.Tokens)
+	}
+	if _, err := f.st.GetToken(ctx, ids[0]); err == nil {
+		t.Fatal("the older lapsed scout row outlived the sweep")
+	}
+	if _, err := f.st.GetToken(ctx, ids[1]); err != nil {
+		t.Fatalf("the newest scout row: %v, want it kept", err)
+	}
+	_, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, "scout", 0)
+	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["label"] != "scout" {
+		t.Fatalf("bob mints alice's swept, lapsed scout: %v, want VALIDATION on label scout", err)
+	}
+	if _, _, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "scout", 0); err != nil {
+		t.Fatalf("alice mints her lapsed label back after the sweep: %v", err)
+	}
+}
+
 func isValidation(err error) bool {
 	e, ok := domain.AsBatonDeckError(err)
 	return ok && e.Code == domain.CodeValidation && e.Details["label"] == "agent-a"
+}
+
+// P-352: "id:<identity>" is the agent id the server derives for a caller that names no agent, so no
+// token label may take that form: a mint of one is VALIDATION for any identity, its own id
+// included, after the label's normalisation (trimmed, control characters dropped), and writes no
+// row. Other labels, "ID:" among them, mint as before.
+func TestAnIDLabelIsNeverMinted(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	bob, carol := f.addUser(t, "bob", "pw"), f.addUser(t, "carol", "pw")
+	before, err := f.st.ListTokens(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"id:" + carol.ID, "id:" + bob.ID, " id:x\t", "id:x\x00", "\x01id:x"} {
+		_, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, label, 0)
+		e, ok := domain.AsBatonDeckError(err)
+		if !ok || e.Code != domain.CodeValidation || e.Details["field"] != "label" || !strings.HasPrefix(e.Details["label"].(string), "id:") {
+			t.Fatalf("bob mints %q: %v, want VALIDATION on the label", label, err)
+		}
+	}
+	after, err := f.st.ListTokens(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("a refused mint wrote a token: %d rows, had %d", len(after), len(before))
+	}
+	for _, label := range []string{"ID:" + carol.ID, "idx", "agent-b", "x id:y"} {
+		if _, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, label, 0); err != nil {
+			t.Fatalf("bob mints %q: %v", label, err)
+		}
+	}
+}
+
+// P-352: a token labelled "id:<x>" written before Create refused that form resolves as naming no
+// agent, as the default label does, so its caller is not presented as x's agentless self; a fresh
+// labelled token still names its agent.
+func TestAStoredIDLabelNamesNoAgent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	bob, carol := f.addUser(t, "bob", "pw"), f.addUser(t, "carol", "pw")
+	const id, secret = "0123456789abcdef", "a-secret-long-enough-for-parse"
+	now := f.clk.now()
+	if err := f.st.CreateToken(ctx, store.Token{ID: id, IdentityID: bob.ID, Subject: bob.Email, SecretHash: hashSecret(secret),
+		Label: "id:" + carol.ID, Permissions: "[]", CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(time.Hour).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.ResolveCaller(ctx, TokenPrefix+id+"_"+secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Identity != bob.ID || got.Agent != "" || got.Labelled || got.Via != domain.ViaAPIToken {
+		t.Fatalf("bob's stored id:%s token resolves to %+v, want bob with no agent, not labelled", carol.ID, got)
+	}
+	tok, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, "agent-b", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.ResolveCaller(ctx, tok); err != nil || got.Agent != "agent-b" || !got.Labelled {
+		t.Fatalf("bob's agent-b token: %+v %v", got, err)
+	}
 }

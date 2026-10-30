@@ -116,15 +116,19 @@ func (s *Store) ListAgentSessions(ctx context.Context, identityID string, limit 
 	})
 }
 
-func (s *Store) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
+func (s *Store) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []store.AgentSessionKey) (int64, error) {
 	if limit <= 0 {
 		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
 	}
 	return get(ctx, s, func(st *state) (int64, error) {
-		// The longest idle first, then by (identity, agent), up to limit.
+		// The longest idle first, then by (identity, agent), up to limit; a kept key is not idle (P-279).
+		kept := make(map[[2]string]bool, len(keep))
+		for _, k := range keep {
+			kept[[2]string{k.IdentityID, k.AgentID}] = true
+		}
 		var idle [][2]string
 		for k, a := range st.agents {
-			if a.LastSeenAt < before {
+			if a.LastSeenAt < before && !kept[k] {
 				idle = append(idle, k)
 			}
 		}

@@ -152,3 +152,20 @@ func TestTokenCreateRefusesAnotherUsersLabel(t *testing.T) {
 		t.Fatalf("bob's agent-a: %d %q %q, want exit 1 and the VALIDATION refusal", code, out, errs)
 	}
 }
+
+// P-352: the host's token create refuses a label of the form "id:<identity>" on one stderr line,
+// exit 1, nothing on stdout.
+func TestTokenCreateRefusesAnIDLabel(t *testing.T) {
+	migratedDB(t)
+	withStdin(t, "pw-twelve-chars\n")
+	if code, _, errs := run("user", "add", "bob"); code != 0 {
+		t.Fatalf("user add bob: %s", errs)
+	}
+	code, out, errs := run("token", "create", "--user", "bob", "--label", "id:U-0123456789abcdef")
+	if code != 1 || out != "" || !strings.Contains(errs, "VALIDATION") || !strings.Contains(errs, `a token label cannot start with "id:"`) {
+		t.Fatalf("token create --label id:…: %d %q %q, want exit 1 and the VALIDATION refusal", code, out, errs)
+	}
+	if code, out, errs := run("token", "list"); code != 0 || strings.Contains(out, "id:U-") {
+		t.Fatalf("token list after the refusal: %d %q %q", code, out, errs)
+	}
+}

@@ -37,11 +37,16 @@ const sessionTimeout = 3 * time.Second
 
 // session is `batondeck-kanban session register|unregister`. Usage errors exit 2; every other
 // outcome exits 0, a failure as exactly one stderr line, and nothing is written to stdout (a
-// SessionStart hook's stdout becomes the model's context).
-func session(args []string, stderr io.Writer) int {
+// SessionStart hook's stdout becomes the model's context) but the usage a person asked for with
+// help, -h or --help, which no hook passes.
+func session(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		sessionUsage(stderr)
 		return 2
+	}
+	if isHelp(args[0]) {
+		sessionUsage(stdout)
+		return 0
 	}
 	sub, rest := args[0], args[1:]
 	var cfgPath, role, agent string
@@ -56,8 +61,8 @@ func session(args []string, stderr io.Writer) int {
 		sessionUsage(stderr)
 		return 2
 	}
-	if err := fs.Parse(rest); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, rest, stdout); !ok {
+		return code
 	}
 	if fs.NArg() != 0 || (sub == "register" && role != "worker" && role != "master") {
 		sessionUsage(stderr)

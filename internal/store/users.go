@@ -140,6 +140,17 @@ func (s *SQLite) DisableUser(ctx context.Context, id string, at int64) error {
 	return nil
 }
 
+func (s *SQLite) EnableUser(ctx context.Context, id string) error {
+	n, err := s.authWrite().EnableUser(ctx, id)
+	if err != nil {
+		return authErr("enable user", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLite) SetUserPassword(ctx context.Context, id, passwordHash string) error {
 	n, err := s.authWrite().SetUserPassword(ctx, sqlitedb.SetUserPasswordParams{PasswordHash: passwordHash, ID: id})
 	if err != nil {
@@ -200,6 +211,17 @@ func (s *Postgres) DisableUser(ctx context.Context, id string, at int64) error {
 	if n == 0 {
 		_, err := s.GetUser(ctx, id)
 		return err
+	}
+	return nil
+}
+
+func (s *Postgres) EnableUser(ctx context.Context, id string) error {
+	n, err := s.authQ().EnableUser(ctx, id)
+	if err != nil {
+		return authErr("enable user", err)
+	}
+	if n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

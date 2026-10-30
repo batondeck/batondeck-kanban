@@ -81,8 +81,10 @@ func (h HookRoutes) serve(w http.ResponseWriter, r *http.Request) {
 	case service.HookTooLarge:
 		tooLarge(w)
 	case service.HookRateLimited:
+		// Over the rate budget is 503, not 429: Alertmanager's webhook retries only a 5xx, so a 429
+		// dropped the alert (P-353); PagerDuty retries both. The code stays RATE_LIMITED.
 		retryAfter(w, out.RetryAfter)
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"code": "RATE_LIMITED", "retryable": true, "results": out.Results})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "RATE_LIMITED", "retryable": true, "results": out.Results})
 	case service.HookUnavailable:
 		// A retryable ingest failure is a 5xx, the only answer Alertmanager and PagerDuty both
 		// retry; a 4xx would drop the alert (P-233).

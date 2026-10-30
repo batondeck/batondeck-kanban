@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/blob"
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
 	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
@@ -471,6 +473,155 @@ func TestAutocloseSparesEveryTaskWrite(t *testing.T) {
 						}
 					}
 				}
+			}
+		})
+	}
+}
+
+// P-226: the retention sweep keeps an open ticket's alert state and sweeps a DONE one's, on
+// memstore, SQLite and Postgres. An open ticket's state, expired and passed by a sweep, still
+// correlates the next firing, which appends to that ticket; once the ticket is DONE, its expired
+// state is swept and the next firing files a new ticket, as it does with the row in place (the
+// control). A DONE ticket reopened after the sweep is the outcome the sweep does change:
+// TestATicketReopenedAfterItsAlertStateWasSweptIsNoLongerCorrelated.
+func TestTheAlertStateSweepKeepsOpenTicketsAndSweepsDoneOnes(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"memstore", func(t *testing.T) store.Store {
+			s := memstore.New()
+			t.Cleanup(func() { s.Close() })
+			if _, err := s.Migrate(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}},
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(eng.name, func(t *testing.T) {
+			e := newAutocloseEnv(t, eng.open(t))
+			sweep := func() retention.Swept {
+				return (&retention.Sweeper{Store: e.st, Windows: retention.WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: e.clock.now,
+					Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(e.ctx)
+			}
+			done := func(id string) {
+				t.Helper()
+				for _, to := range []domain.Status{domain.InProgress, domain.Review, domain.Done} {
+					if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: id, Version: e.version(id), ToStatus: to}); err != nil {
+						t.Fatalf("move %s to %s: %v", id, to, err)
+					}
+				}
+			}
+			first := e.deliver("fp", "firing")
+			if first.Result != "created" {
+				t.Fatalf("the first firing: %+v, want created", first)
+			}
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 0 {
+				t.Fatalf("the sweep over the open ticket's expired state: %+v, want it kept", got)
+			}
+			if st, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "fp"); err != nil || st.ExpiresAt > e.clock.now().UnixMilli() {
+				t.Fatalf("the open ticket's state after the sweep: %+v %v, want it kept and expired", st, err)
+			}
+			if again := e.deliver("fp", "firing"); again.Result != "appended" || *again.TaskID != *first.TaskID {
+				t.Fatalf("a firing after the sweep: %+v, want appended to %s", again, *first.TaskID)
+			}
+			done(*first.TaskID)
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 1 {
+				t.Fatalf("the sweep over the DONE ticket's expired state: %+v, want it deleted", got)
+			}
+			if _, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "fp"); err == nil {
+				t.Fatal("the DONE ticket's expired state outlived the sweep")
+			}
+			next := e.deliver("fp", "firing")
+			if next.Result != "created" || *next.TaskID == *first.TaskID {
+				t.Fatalf("a firing after the DONE ticket's state went: %+v, want a new ticket", next)
+			}
+			// The control: with the row in place, a firing over a DONE ticket files a new one too.
+			control := e.deliver("control", "firing")
+			done(*control.TaskID)
+			if _, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "control"); err != nil {
+				t.Fatalf("the control's state: %v, want it in place", err)
+			}
+			if again := e.deliver("control", "firing"); again.Result != "created" || *again.TaskID == *control.TaskID {
+				t.Fatalf("a firing over a DONE ticket with its row in place: %+v, want a new ticket", again)
+			}
+		})
+	}
+}
+
+// P-226, review B1 (the owner's ruling (a)): a DONE ticket reopened after the sweep took its expired
+// alert state is no longer correlated, on memstore, SQLite and Postgres. With the row in place (the
+// control: no sweep ran) the reopened ticket's alert appends to it on the next firing and a resolved
+// event acts on it; after the sweep a resolved event is recorded against no ticket and the next
+// firing files a new ticket, leaving the reopened one as it was.
+func TestATicketReopenedAfterItsAlertStateWasSweptIsNoLongerCorrelated(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"memstore", func(t *testing.T) store.Store {
+			s := memstore.New()
+			t.Cleanup(func() { s.Close() })
+			if _, err := s.Migrate(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}},
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(eng.name, func(t *testing.T) {
+			e := newAutocloseEnv(t, eng.open(t))
+			move := func(id string, to ...domain.Status) {
+				t.Helper()
+				for _, s := range to {
+					if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: id, Version: e.version(id), ToStatus: s}); err != nil {
+						t.Fatalf("move %s to %s: %v", id, s, err)
+					}
+				}
+			}
+			sweep := func() retention.Swept {
+				return (&retention.Sweeper{Store: e.st, Windows: retention.WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: e.clock.now,
+					Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(e.ctx)
+			}
+			// The control: DONE, expired, reopened, with no sweep in between.
+			c := e.deliver("control", "firing")
+			move(*c.TaskID, domain.InProgress, domain.Review, domain.Done)
+			e.clock.advance(DeliveryRetention + day)
+			move(*c.TaskID, domain.InProgress)
+			if got := e.deliver("control", "firing"); got.Result != string(store.ResultAppended) || got.TaskID == nil || *got.TaskID != *c.TaskID {
+				t.Fatalf("the control's firing over its reopened ticket: %+v, want appended to %s", got, *c.TaskID)
+			}
+			if got := e.deliver("control", "resolved"); got.Result == string(store.ResultRecorded) || got.TaskID == nil || *got.TaskID != *c.TaskID {
+				t.Fatalf("the control's resolved event over its reopened ticket: %+v, want it to act on %s", got, *c.TaskID)
+			}
+
+			// Swept: the same path, but the sweep runs while the ticket is DONE and its state expired.
+			s := e.deliver("swept", "firing")
+			move(*s.TaskID, domain.InProgress, domain.Review, domain.Done)
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 1 {
+				t.Fatalf("the sweep over the DONE ticket's expired state: %+v, want it alone deleted", got)
+			}
+			move(*s.TaskID, domain.InProgress)
+			if got := e.deliver("swept", "resolved"); got.Result != string(store.ResultRecorded) || got.TaskID != nil {
+				t.Fatalf("a resolved event over the reopened ticket after the sweep: %+v, want recorded against no ticket", got)
+			}
+			next := e.deliver("swept", "firing")
+			if next.Result != string(store.ResultCreated) || next.TaskID == nil || *next.TaskID == *s.TaskID {
+				t.Fatalf("a firing over the reopened ticket after the sweep: %+v, want a new ticket, not %s", next, *s.TaskID)
+			}
+			if task, err := e.st.GetTask(e.ctx, e.project, *s.TaskID); err != nil || task.Status != domain.InProgress {
+				t.Fatalf("the reopened ticket after the new one was filed: %+v, %v, want it IN_PROGRESS as it was", task, err)
+			}
+			if st, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "swept"); err != nil || st.TaskID != *next.TaskID {
+				t.Fatalf("the fingerprint's state after the new ticket: %+v, %v, want it on %s", st, err, *next.TaskID)
 			}
 		})
 	}

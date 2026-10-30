@@ -1,10 +1,12 @@
 package memstore
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -86,6 +88,41 @@ func (s *Store) DeleteUnusedOAuthClients(ctx context.Context, createdBefore int6
 			n++
 		}
 		return n, nil
+	})
+}
+
+// sweepExpired deletes, from m, at most limit rows whose expiry is before before, oldest expiry
+// first (then by key), and returns how many: the retention sweep's order on the engines.
+func sweepExpired[V any](m map[string]V, expiry func(V) int64, before int64, limit int) int64 {
+	var keys []string
+	for k, v := range m {
+		if expiry(v) < before {
+			keys = append(keys, k)
+		}
+	}
+	slices.SortFunc(keys, func(a, b string) int { return cmp.Or(cmp.Compare(expiry(m[a]), expiry(m[b])), cmp.Compare(a, b)) })
+	keys = keys[:min(len(keys), limit)]
+	for _, k := range keys {
+		delete(m, k)
+	}
+	return int64(len(keys))
+}
+
+func (s *Store) DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	return get(ctx, s, func(st *state) (int64, error) {
+		return sweepExpired(st.oauthCodes, func(c store.OAuthCode) int64 { return c.ExpiresAt }, before, limit), nil
+	})
+}
+
+func (s *Store) DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	return get(ctx, s, func(st *state) (int64, error) {
+		return sweepExpired(st.oauthTokens, func(t store.OAuthToken) int64 { return t.ExpiresAt }, before, limit), nil
 	})
 }
 

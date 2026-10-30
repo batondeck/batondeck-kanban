@@ -29,18 +29,24 @@ func (q *Queries) DeleteAgentSession(ctx context.Context, arg DeleteAgentSession
 
 const deleteIdleAgentSessions = `-- name: DeleteIdleAgentSessions :execrows
 DELETE FROM agent_sessions WHERE (identity_id, agent_id) IN (
-  SELECT a.identity_id, a.agent_id FROM agent_sessions a WHERE a.last_seen_at < $1
-  ORDER BY a.last_seen_at, a.identity_id, a.agent_id LIMIT $2::bigint)
+  SELECT a.identity_id, a.agent_id FROM agent_sessions a, (SELECT $1::text AS keep) p
+  WHERE a.last_seen_at < $2
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(p.keep::jsonb) k
+      WHERE k->>0 = a.identity_id AND k->>1 = a.agent_id)
+  ORDER BY a.last_seen_at, a.identity_id, a.agent_id LIMIT $3::bigint)
 `
 
 type DeleteIdleAgentSessionsParams struct {
+	Keep      string
 	Before    int64
 	PageLimit int64
 }
 
-// At most page_limit rows last seen before before, the longest idle first.
+// At most page_limit rows last seen before before, the longest idle first, except the rows in
+// keep, a JSON array of [identity_id, agent_id] pairs ('[]' for none): the agents with a live MCP
+// session (P-279).
 func (q *Queries) DeleteIdleAgentSessions(ctx context.Context, arg DeleteIdleAgentSessionsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteIdleAgentSessions, arg.Before, arg.PageLimit)
+	result, err := q.db.Exec(ctx, deleteIdleAgentSessions, arg.Keep, arg.Before, arg.PageLimit)
 	if err != nil {
 		return 0, err
 	}

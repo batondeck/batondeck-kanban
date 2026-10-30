@@ -109,7 +109,7 @@ func agentSessions(t *testing.T, newStore Factory) {
 				_, err := s.UpsertAgentSession(ctx, in)
 				noErr(t, err)
 			}
-			n, err := s.DeleteIdleAgentSessions(ctx, 300, 10)
+			n, err := s.DeleteIdleAgentSessions(ctx, 300, 10, nil)
 			noErr(t, err)
 			if n != 1 {
 				t.Fatalf("deleted %d idle before 300, want 1", n)
@@ -127,7 +127,7 @@ func agentSessions(t *testing.T, newStore Factory) {
 				_, err := s.UpsertAgentSession(ctx, in)
 				noErr(t, err)
 			}
-			n, err := s.DeleteIdleAgentSessions(ctx, 900, 2)
+			n, err := s.DeleteIdleAgentSessions(ctx, 900, 2, nil)
 			noErr(t, err)
 			rows, err := s.ListAgentSessions(ctx, "", 0)
 			noErr(t, err)
@@ -139,8 +139,47 @@ func agentSessions(t *testing.T, newStore Factory) {
 			if n != 2 || !slices.Equal(left, []string{"a3", "a4"}) {
 				t.Fatalf("a delete limited to 2 deleted %d and left %v, want 2 and [a3 a4]", n, left)
 			}
-			_, err = s.DeleteIdleAgentSessions(ctx, 900, 0)
+			_, err = s.DeleteIdleAgentSessions(ctx, 900, 0, nil)
 			wantErr(t, err, domain.CodeValidation, "")
+		})
+
+		// P-279: a key in keep (an agent with a live MCP session) is not idle, whatever its LastSeenAt;
+		// the limit counts only the rows deleted.
+		t.Run("DeleteIdleKeepsTheKeptKeys", func(t *testing.T) {
+			s := migrated(t, newStore)
+			for _, in := range []store.AgentSessionStart{start("alice", "a1", 100), start("bob", "a1", 200), start("alice", "a2", 300)} {
+				_, err := s.UpsertAgentSession(ctx, in)
+				noErr(t, err)
+			}
+			left := func() []string {
+				rows, err := s.ListAgentSessions(ctx, "", 0)
+				noErr(t, err)
+				var out []string
+				for _, r := range rows {
+					out = append(out, r.IdentityID+"/"+r.AgentID)
+				}
+				slices.Sort(out)
+				return out
+			}
+			n, err := s.DeleteIdleAgentSessions(ctx, 900, 10, []store.AgentSessionKey{{IdentityID: "carol", AgentID: "a1"}, {IdentityID: "alice", AgentID: "a9"}})
+			noErr(t, err)
+			if n != 3 || len(left()) != 0 {
+				t.Fatalf("kept keys with no row: deleted %d and left %v, want 3 and none", n, left())
+			}
+			for _, in := range []store.AgentSessionStart{start("alice", "a1", 100), start("bob", "a1", 200), start("alice", "a2", 300)} {
+				_, err := s.UpsertAgentSession(ctx, in)
+				noErr(t, err)
+			}
+			n, err = s.DeleteIdleAgentSessions(ctx, 900, 1, []store.AgentSessionKey{{IdentityID: "alice", AgentID: "a1"}, {IdentityID: "alice", AgentID: "a2"}})
+			noErr(t, err)
+			if got := left(); n != 1 || !slices.Equal(got, []string{"alice/a1", "alice/a2"}) {
+				t.Fatalf("keep [alice/a1 alice/a2], limit 1: deleted %d and left %v, want 1 and [alice/a1 alice/a2]", n, got)
+			}
+			n, err = s.DeleteIdleAgentSessions(ctx, 900, 10, []store.AgentSessionKey{})
+			noErr(t, err)
+			if got := left(); n != 2 || len(got) != 0 {
+				t.Fatalf("an empty keep deleted %d and left %v, want 2 and none", n, got)
+			}
 		})
 
 		t.Run("ATouchedSessionOutlivesAnIdleSweepOfTwoSeconds", func(t *testing.T) {
@@ -150,7 +189,7 @@ func agentSessions(t *testing.T, newStore Factory) {
 				noErr(t, err)
 			}
 			noErr(t, s.TouchAgentSession(ctx, store.AgentSessionTouch{IdentityID: "alice", AgentID: "busy", AgentName: "busy-name", Kind: "agent", Tool: "claim_next", At: 5_000}))
-			n, err := s.DeleteIdleAgentSessions(ctx, 5_000-2_000, 10)
+			n, err := s.DeleteIdleAgentSessions(ctx, 5_000-2_000, 10, nil)
 			noErr(t, err)
 			rows, err := s.ListAgentSessions(ctx, "alice", 0)
 			noErr(t, err)

@@ -34,6 +34,7 @@ type oncallQueries interface {
 	GetDeliveryRawBody(ctx context.Context, arg sqlitedb.GetDeliveryRawBodyParams) (sqlitedb.DeliveryRawBody, error)
 	DeleteExpiredDeliveries(ctx context.Context, arg sqlitedb.DeleteExpiredDeliveriesParams) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, arg sqlitedb.DeleteExpiredDeliveryRawBodiesParams) (int64, error)
+	DeleteExpiredAlertStates(ctx context.Context, arg sqlitedb.DeleteExpiredAlertStatesParams) (int64, error)
 }
 
 // DeliveryKey is a delivery's row key: the hex sha256 of its delivery id, so an id of any length
@@ -168,6 +169,14 @@ func (s *SQLite) DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, 
 
 func (s *Postgres) DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error) {
 	return deleteExpired(ctx, s, "raw bodies", now, limit)
+}
+
+func (s *SQLite) DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error) {
+	return deleteExpired(ctx, s, "alert states", now, limit)
+}
+
+func (s *Postgres) DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error) {
+	return deleteExpired(ctx, s, "alert states", now, limit)
 }
 
 func integrationFrom(r sqlitedb.Integration) Integration {
@@ -475,9 +484,12 @@ func deleteExpired(ctx context.Context, e engine, what string, now int64, limit 
 	q := e.queries(true)
 	var n int64
 	var err error
-	if what == "deliveries" {
+	switch what {
+	case "deliveries":
 		n, err = q.DeleteExpiredDeliveries(ctx, sqlitedb.DeleteExpiredDeliveriesParams{Now: now, PageLimit: int64(limit)})
-	} else {
+	case "alert states":
+		n, err = q.DeleteExpiredAlertStates(ctx, sqlitedb.DeleteExpiredAlertStatesParams{Now: now, PageLimit: int64(limit)})
+	default:
 		n, err = q.DeleteExpiredDeliveryRawBodies(ctx, sqlitedb.DeleteExpiredDeliveryRawBodiesParams{Now: now, PageLimit: int64(limit)})
 	}
 	if err != nil {
@@ -550,4 +562,8 @@ func (p pgQueries) DeleteExpiredDeliveries(ctx context.Context, arg sqlitedb.Del
 
 func (p pgQueries) DeleteExpiredDeliveryRawBodies(ctx context.Context, arg sqlitedb.DeleteExpiredDeliveryRawBodiesParams) (int64, error) {
 	return p.q.DeleteExpiredDeliveryRawBodies(ctx, pgdb.DeleteExpiredDeliveryRawBodiesParams(arg))
+}
+
+func (p pgQueries) DeleteExpiredAlertStates(ctx context.Context, arg sqlitedb.DeleteExpiredAlertStatesParams) (int64, error) {
+	return p.q.DeleteExpiredAlertStates(ctx, pgdb.DeleteExpiredAlertStatesParams(arg))
 }

@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,9 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/core"
+	"github.com/batondeck/batondeck-kanban/internal/service"
+	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
 	"github.com/batondeck/batondeck-kanban/migrations"
 )
 
@@ -60,8 +65,9 @@ func TestHealthzNamesBinaryAndVersion(t *testing.T) {
 	if resp.StatusCode != 200 || string(body) != "batondeck-kanban 1.2.3-test ok\n" {
 		t.Fatalf("healthz: %d %q", resp.StatusCode, body)
 	}
-	// The SPA answers every other GET, and an unmatched /api path fails like an API.
-	for path, want := range map[string]int{"/": 200, "/board/anything": 200, "/api/nothing": 404} {
+	// The SPA answers its own routes, any other GET is 404, and an unmatched /api path fails like an
+	// API (P-303).
+	for path, want := range map[string]int{"/": 200, "/projects/P-1/boards/B-1": 200, "/board/anything": 404, "/api/nothing": 404} {
 		r, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -372,5 +378,54 @@ func TestAServeBesideAnotherDoesNotMigrate(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("serve did not stop on SIGINT")
+	}
+}
+
+// TestSPAAnswers404 (P-303): through compose's handler, on each engine, every client route is the
+// shell (200 text/html, no-store) and every path the audit's G25 named, or that no route answers,
+// is 404 and not a page.
+func TestSPAAnswers404(t *testing.T) {
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(eng.name, func(t *testing.T) {
+			a, err := compose(eng.open(t), "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.core.Close(context.Background())
+			defer a.bus.Close()
+			srv := httptest.NewServer(a.handler("x"))
+			defer srv.Close()
+			get := func(path string) (int, string, string) {
+				t.Helper()
+				resp, err := http.Get(srv.URL + path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer resp.Body.Close()
+				return resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control")
+			}
+			for _, p := range []string{"/", "/projects", "/projects/P-1/boards/B-1", "/projects/P-1/boards/B-1/tasks/T-1", "/agents",
+				"/chronicle", "/chronicle/new", "/chronicle/CP-1", "/chronicle/CP-1/history", "/analytics", "/reports", "/activity",
+				"/notifications", "/settings", "/oncall", "/Settings/", "/projects/P-1/boards/B-1?task=T-1"} {
+				if code, ct, cc := get(p); code != 200 || !strings.HasPrefix(ct, "text/html") || cc != "no-store" {
+					t.Errorf("%s: %d %q %q, want the shell", p, code, ct, cc)
+				}
+			}
+			for _, p := range []string{"/docs", "/favicon-nope.png", "/api", "/mcp/", "/healthz/", "/blobs/", "/hooks/I-none", "/wake/x",
+				"/login", "/authorize", "/projects/P-1", "/.well-known/oauth-authorization-server"} {
+				if code, ct, _ := get(p); code != 404 || strings.HasPrefix(ct, "text/html") {
+					t.Errorf("%s: %d %q, want 404 and not a page", p, code, ct)
+				}
+			}
+			if code, ct, _ := get("/brand/favicon.svg"); code != 200 || ct != "image/svg+xml" {
+				t.Errorf("/brand/favicon.svg: %d %q", code, ct)
+			}
+		})
 	}
 }

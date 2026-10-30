@@ -46,6 +46,9 @@ type Service struct {
 	// OAuthResource is the resource (RFC 8707) this service's bearers are presented at: an OAuth
 	// access token issued for any other is refused.
 	OAuthResource string
+	// Proxies are the trusted reverse proxies: a sign-in through one counts against the client its
+	// X-Forwarded-For names (TrustedProxies.ClientAddr); nil reads no header.
+	Proxies TrustedProxies
 
 	mu          sync.Mutex
 	cache       map[string]accountEntry
@@ -135,6 +138,11 @@ func (s *Service) ResolveCaller(ctx context.Context, bearer string) (domain.Call
 	}
 	c := callerFor(row.IdentityID, e)
 	c.Via, c.Agent = domain.ViaAPIToken, domain.TokenAgent(row.Label) // audit B1
+	if strings.HasPrefix(c.Agent, "id:") {
+		// A label minted before Create refused "id:" (P-352) names no agent, as the default label
+		// does: "id:<identity>" is the id AgentID derives, never a name a token carries.
+		c.Agent = ""
+	}
 	c.Labelled = c.Agent != ""
 	return c, nil
 }

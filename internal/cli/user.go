@@ -61,6 +61,8 @@ func userUsage(w io.Writer) {
 
   add [--admin] [--name NAME] LOGIN   create a user; the password is read from stdin
   disable LOGIN                       disable a user: their sessions and tokens stop within 60 s
+  enable LOGIN                        enable a disabled user: their unexpired sessions and tokens
+                                      resolve again within 60 s
   passwd LOGIN                        set a user's password, read from stdin; ends their browser
                                       sessions (API tokens stay: token revoke)
   list                                list the users
@@ -69,11 +71,15 @@ every subcommand takes -config PATH.
 `)
 }
 
-// user is `batondeck-kanban user add|disable|passwd|list`.
+// user is `batondeck-kanban user add|disable|enable|passwd|list`.
 func user(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		userUsage(stderr)
 		return 2
+	}
+	if isHelp(args[0]) {
+		userUsage(stdout)
+		return 0
 	}
 	sub, rest := args[0], args[1:]
 	var cfgPath, name string
@@ -83,14 +89,14 @@ func user(args []string, stdout, stderr io.Writer) int {
 	case "add":
 		fs.StringVar(&name, "name", "", "display name (default: the login before any @)")
 		fs.BoolVar(&admin, "admin", false, "make the user a workspace admin")
-	case "disable", "passwd", "list":
+	case "disable", "enable", "passwd", "list":
 	default:
 		fmt.Fprintf(stderr, "user: unknown subcommand %q\n", sub)
 		userUsage(stderr)
 		return 2
 	}
-	if err := fs.Parse(rest); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, rest, stdout); !ok {
+		return code
 	}
 	wantArgs := 1
 	if sub == "list" {
@@ -133,6 +139,16 @@ func user(args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		fmt.Fprintf(stdout, "user disable: %s %s disabled at %s\n", u.ID, u.Email, time.UnixMilli(u.DisabledAt).UTC().Format(time.RFC3339))
+	case "enable":
+		u, was, err := acc.Enable(ctx, fs.Arg(0))
+		if err != nil {
+			return fail(err)
+		}
+		if !was {
+			fmt.Fprintf(stdout, "user enable: %s was not disabled\n", u.Email)
+			break
+		}
+		fmt.Fprintf(stdout, "user enable: %s %s enabled; their unexpired browser sessions and tokens resolve again within 60 s\n", u.ID, u.Email)
 	case "passwd":
 		pw, err := readPassword()
 		if err != nil {

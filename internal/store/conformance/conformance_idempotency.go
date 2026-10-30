@@ -47,6 +47,9 @@ func idempotency(t *testing.T, newStore Factory) {
 
 	t.Run("CreateProjectAfterTheWindowCreatesASecond", func(t *testing.T) {
 		s := migrated(t, newStore)
+		// The first key's window is short, and the sleep after its call returns outlasts it by
+		// 50 ms: the sleep alone bounds that expiry, however loaded the machine (a late wake only
+		// widens the margin).
 		const window = 100 * time.Millisecond
 		opts := store.WriteOptions{Identity: "alice", IdempotencyKey: "k1", IdempotencyTTL: window}
 		first, err := s.CreateProject(ctx, in, opts)
@@ -54,7 +57,12 @@ func idempotency(t *testing.T, newStore Factory) {
 			t.Fatal(err)
 		}
 		time.Sleep(window + 50*time.Millisecond)
-		second, err := s.CreateProject(ctx, in, opts)
+		// The renewal takes an hour's window, so the third call's replay does not depend on how
+		// soon it follows the second: under gate load a 100 ms window lapsed between the two and
+		// the third created a project (P-94, P-157).
+		renewed := opts
+		renewed.IdempotencyTTL = time.Hour
+		second, err := s.CreateProject(ctx, in, renewed)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +72,7 @@ func idempotency(t *testing.T, newStore Factory) {
 		if n := owned(t, s, "alice"); n != 2 {
 			t.Fatalf("%d projects after the window, want 2", n)
 		}
-		third, err := s.CreateProject(ctx, in, opts)
+		third, err := s.CreateProject(ctx, in, renewed)
 		if err != nil || third.ID != second.ID {
 			t.Fatalf("the renewed key replayed %+v, %v: want %s", third, err, second.ID)
 		}

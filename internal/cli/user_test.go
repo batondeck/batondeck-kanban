@@ -11,6 +11,7 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
 )
 
 // withStdin feeds the commands' password reader from a pipe holding input.
@@ -68,6 +69,52 @@ func TestUserCommandsAddListPasswdDisable(t *testing.T) {
 	}
 	if strings.Contains(out, "argon2") || strings.Contains(out, "s3cret-s3cret") {
 		t.Fatal("user list prints the hash or the password")
+	}
+}
+
+// user enable is the way back from user disable (P-46), on each SQL engine: list shows DISABLED
+// "-" again, enabling an enabled user says so and succeeds, and an unknown login is NOT_FOUND.
+func TestUserEnableUndoesDisable(t *testing.T) {
+	for _, e := range []struct {
+		name string
+		db   func(t *testing.T)
+	}{
+		{"sqlite", func(t *testing.T) { migratedDB(t) }},
+		{"postgres", func(t *testing.T) {
+			_, dsn := storetest.PostgresDSN(t)
+			t.Setenv("BATONDECK_DATABASE_URL", dsn)
+		}},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			e.db(t)
+			withStdin(t, "s3cret-s3cret\n")
+			code, out, errs := run("user", "add", "alice@example.test")
+			if code != 0 {
+				t.Fatalf("add: %d %q", code, errs)
+			}
+			id := strings.Fields(out)[2]
+			if code, out, errs := run("user", "enable", "alice@example.test"); code != 0 || out != "user enable: alice@example.test was not disabled\n" {
+				t.Fatalf("enable of an enabled user: %d %q %q", code, out, errs)
+			}
+			if code, _, errs := run("user", "disable", "alice@example.test"); code != 0 {
+				t.Fatalf("disable: %d %q", code, errs)
+			}
+			if _, out, _ := run("user", "list"); !strings.HasSuffix(strings.TrimSpace(out), "Z") {
+				t.Fatalf("list after disable shows no time: %q", out)
+			}
+			want := "user enable: " + id + " alice@example.test enabled; their unexpired browser sessions and tokens resolve again within 60 s\n"
+			if code, out, errs := run("user", "enable", "Alice@Example.test"); code != 0 || out != want {
+				t.Fatalf("enable: %d %q %q, want %q", code, out, errs, want)
+			}
+			code, out, _ = run("user", "list")
+			lines := strings.Split(strings.TrimSpace(out), "\n")
+			if code != 0 || len(lines) != 2 || !strings.HasSuffix(lines[1], " -") {
+				t.Fatalf("list after enable: %d %q", code, out)
+			}
+			if code, out, errs := run("user", "enable", "nobody"); code != 1 || out != "" || !strings.HasPrefix(errs, "user enable: ") || !strings.Contains(errs, "NOT_FOUND") {
+				t.Fatalf("enable nobody: %d %q %q", code, out, errs)
+			}
+		})
 	}
 }
 

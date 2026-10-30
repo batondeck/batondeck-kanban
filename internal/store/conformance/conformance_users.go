@@ -108,6 +108,39 @@ func users(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("UsersEnableClearsDisabledAt", func(t *testing.T) {
+		s := migrated(t, newStore)
+		for _, u := range []store.User{testUser("U-1", "a@x.test", 1), testUser("U-2", "b@x.test", 2)} {
+			if err := s.CreateUser(ctx, u); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.DisableUser(ctx, "U-1", 100); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.EnableUser(ctx, "U-1"); err != nil {
+			t.Fatalf("enabling a disabled user: %v", err)
+		}
+		if u, _ := s.GetUser(ctx, "U-1"); u.DisabledAt != 0 {
+			t.Fatalf("disabled_at %d after EnableUser, want 0", u.DisabledAt)
+		}
+		// An enabled user is no error and stays enabled.
+		if err := s.EnableUser(ctx, "U-2"); err != nil {
+			t.Fatalf("enabling an enabled user: %v", err)
+		}
+		if u, _ := s.GetUser(ctx, "U-2"); u.DisabledAt != 0 {
+			t.Fatalf("disabled_at %d for a user never disabled, want 0", u.DisabledAt)
+		}
+		// Disabled again after the enable, the new time is stamped: the first time stands only
+		// while the user stays disabled.
+		if err := s.DisableUser(ctx, "U-1", 300); err != nil {
+			t.Fatal(err)
+		}
+		if u, _ := s.GetUser(ctx, "U-1"); u.DisabledAt != 300 {
+			t.Fatalf("disabled_at %d after a second disable, want 300", u.DisabledAt)
+		}
+	})
+
 	t.Run("UsersSetPassword", func(t *testing.T) {
 		s := migrated(t, newStore)
 		if err := s.CreateUser(ctx, testUser("U-1", "a@x.test", 1)); err != nil {
@@ -131,6 +164,9 @@ func users(t *testing.T, newStore Factory) {
 		}
 		if err := s.DisableUser(ctx, "U-none", 1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("DisableUser: %v", err)
+		}
+		if err := s.EnableUser(ctx, "U-none"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("EnableUser: %v", err)
 		}
 		if err := s.SetUserPassword(ctx, "U-none", "h"); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("SetUserPassword: %v", err)

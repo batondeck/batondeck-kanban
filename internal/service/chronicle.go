@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"regexp"
 	"slices"
 
@@ -96,6 +97,8 @@ func checkTitle(title string) error {
 	return maxChars("title", title, maxTitleChars)
 }
 
+// toBlocks is the blocks a write stores; each write then puts their signed blob URLs in the stored
+// form where it may (liveBlobURLs, then heldBlobURLs once the page is read, P-244).
 func toBlocks(in []ChronicleBlockInput, keepOrigin bool) []domain.ChronicleBlock {
 	out := make([]domain.ChronicleBlock, len(in))
 	for i, b := range in {
@@ -152,7 +155,11 @@ func (s chronicleSvc) CreatePage(ctx context.Context, caller domain.Caller, req 
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return CreateChroniclePageResp{}, err
 	}
-	blocks := toBlocks(req.Blocks, false)
+	blocks, sent := s.c.liveBlobURLs(toBlocks(req.Blocks, false))
+	blocks, err = s.c.heldBlobURLs(blocks, sent, nil)
+	if err != nil {
+		return CreateChroniclePageResp{}, err
+	}
 	if err := s.checkBody(blocks); err != nil {
 		return CreateChroniclePageResp{}, err
 	}
@@ -211,9 +218,14 @@ func (s chronicleSvc) IngestPage(ctx context.Context, caller domain.Caller, req 
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return IngestChroniclePageResp{}, err
 	}
-	theirs := toBlocks(req.Blocks, true)
+	theirs, sent := s.c.liveBlobURLs(toBlocks(req.Blocks, true))
 	if err := s.checkBody(theirs); err != nil {
 		return IngestChroniclePageResp{}, err
+	}
+	// First sight has no page to have held a blob; a re-ingest sees the head and base below.
+	firstSight, firstErr := s.c.heldBlobURLs(theirs, sent, nil)
+	if firstErr != nil {
+		firstSight = theirs
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "ingest_chronicle_page", Args: map[string]any{"projectId": req.ProjectID, "slug": req.Slug},
@@ -221,7 +233,7 @@ func (s chronicleSvc) IngestPage(ctx context.Context, caller domain.Caller, req 
 	}, func(t *txn) (IngestChroniclePageResp, error) {
 		up, err := t.Tx.UpsertChroniclePage(ctx, store.UpsertChroniclePageInput{
 			ProjectID: req.ProjectID, Kind: req.Kind, Slug: req.Slug, Title: req.Title, SourcePath: req.SourcePath,
-			Blocks: theirs, Source: domain.SourceSweep, Author: caller.Identity, Agent: agentOf(caller),
+			Blocks: firstSight, Source: domain.SourceSweep, Author: caller.Identity, Agent: agentOf(caller),
 			Record: domain.ChronicleRecordFieldsInput{
 				Topics: req.Topics, SupersededBy: req.SupersededBy, CoverageSet: req.Coverage.Set, Coverage: req.Coverage.Ptr(),
 			},
@@ -232,6 +244,9 @@ func (s chronicleSvc) IngestPage(ctx context.Context, caller domain.Caller, req 
 		page := up.Page
 		resp := IngestChroniclePageResp{PageID: page.ID, VersionID: page.HeadVersionID, Created: up.Created, Conflicts: []string{}}
 		if up.Created {
+			if firstErr != nil {
+				return IngestChroniclePageResp{}, firstErr
+			}
 			return resp, nil
 		}
 		head, err := t.Tx.GetChronicleVersion(ctx, req.ProjectID, page.ID, page.HeadVersionID)
@@ -244,6 +259,13 @@ func (s chronicleSvc) IngestPage(ctx context.Context, caller domain.Caller, req 
 		}
 		if !ok {
 			base = head.Blocks
+		}
+		held := map[string]bool{}
+		s.c.heldBlobIDs(held, head.Blocks, head.Ts)
+		s.c.heldBlobIDs(held, base, math.MaxInt64) // the base has no ts of its own: its stored forms only
+		theirs, err := s.c.heldBlobURLs(theirs, sent, held)
+		if err != nil {
+			return IngestChroniclePageResp{}, err
 		}
 		merged := domain.MergeVersions(base, head.Blocks, theirs)
 		next := domain.MergedBlocks(merged)
@@ -307,7 +329,7 @@ func (s chronicleSvc) EditPage(ctx context.Context, caller domain.Caller, req Ed
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return EditChroniclePageResp{}, err
 	}
-	blocks := toBlocks(req.Blocks, false)
+	blocks, sent := s.c.liveBlobURLs(toBlocks(req.Blocks, false))
 	if err := s.checkBody(blocks); err != nil {
 		return EditChroniclePageResp{}, err
 	}
@@ -322,6 +344,14 @@ func (s chronicleSvc) EditPage(ctx context.Context, caller domain.Caller, req Ed
 			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeNotFound {
 				return EditChroniclePageResp{}, err
 			}
+		}
+		held := map[string]bool{}
+		if hasParent {
+			s.c.heldBlobIDs(held, parent.Blocks, parent.Ts)
+		}
+		blocks, err := s.c.heldBlobURLs(blocks, sent, held)
+		if err != nil {
+			return EditChroniclePageResp{}, err
 		}
 		if hasParent {
 			for _, b := range parent.Blocks {
@@ -446,7 +476,7 @@ func (s chronicleSvc) ListPages(ctx context.Context, caller domain.Caller, req L
 }
 
 // GetPage is the chronicle-page resource: the page and its head (two reads), and the conflicting
-// derivation only while a conflict stands.
+// derivation only while a conflict stands. Each blob URL in a block is signed afresh (P-244).
 func (s chronicleSvc) GetPage(ctx context.Context, caller domain.Caller, req GetChroniclePageReq) (ChroniclePageView, error) {
 	if err := s.authorizeRead(ctx, caller, req.ProjectID); err != nil {
 		return ChroniclePageView{}, err
@@ -463,6 +493,7 @@ func (s chronicleSvc) GetPage(ctx context.Context, caller domain.Caller, req Get
 		return ChroniclePageView{}, s.c.mapErr("chronicle-page", err)
 	}
 	page, hv := chroniclePageOf(p), chronicleVersionOf(head)
+	hv.Blocks = s.c.freshBlobURLs(ctx, hv.Blocks, head.Ts)
 	view := ChroniclePageView{Page: &page, Head: &hv, Drifted: []string{}}
 	for _, b := range head.Blocks {
 		if b.State == domain.BlockDerivedThenEdited {
@@ -474,6 +505,7 @@ func (s chronicleSvc) GetPage(ctx context.Context, caller domain.Caller, req Get
 		if err != nil {
 			return ChroniclePageView{}, s.c.mapErr("chronicle-page", err)
 		}
+		theirs = s.c.freshBlobURLs(ctx, theirs, p.Conflict.Ts)
 		cv := &ChronicleConflictsView{VersionID: p.Conflict.VersionID, Ts: isoMs(p.Conflict.Ts), Items: []ChronicleConflictView{}}
 		for _, it := range p.Conflict.Items {
 			item := ChronicleConflictView{BlockID: it.BlockID, Kind: it.Kind}
@@ -507,7 +539,7 @@ func (s chronicleSvc) ListVersions(ctx context.Context, caller domain.Caller, re
 	return out, nil
 }
 
-// GetVersion is the chronicle-version resource.
+// GetVersion is the chronicle-version resource, each blob URL in a block signed afresh (P-244).
 func (s chronicleSvc) GetVersion(ctx context.Context, caller domain.Caller, req GetChronicleVersionReq) (ChronicleVersionView, error) {
 	if err := s.authorizeRead(ctx, caller, req.ProjectID); err != nil {
 		return ChronicleVersionView{}, err
@@ -520,5 +552,6 @@ func (s chronicleSvc) GetVersion(ctx context.Context, caller domain.Caller, req 
 		return ChronicleVersionView{}, s.c.mapErr("chronicle-version", err)
 	}
 	cv := chronicleVersionOf(v)
+	cv.Blocks = s.c.freshBlobURLs(ctx, cv.Blocks, v.Ts)
 	return ChronicleVersionView{Version: &cv}, nil
 }
