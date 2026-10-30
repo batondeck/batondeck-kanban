@@ -849,7 +849,7 @@ func hold(t *testing.T, s store.Store, in store.ChangeInput) (int64, func(), cha
 
 // R0.11 review B2 on Postgres: A (id 2) is in flight when the tail starts and commits ~0.6 s later;
 // C (id 4) is taken before A commits and held 0.8 s, under a 1 s GapTimeout. C is delivered: its
-// hole is not judged by the clock A's hole started.
+// hole is not judged by the clock A's hole started. A and D (id 5) may come in either order.
 func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 	b := postgresBackend(t)
 	rep := &reporter{}
@@ -870,10 +870,12 @@ func TestPostgresDeliversAnInFlightIDAfterAnEarlierHoleFills(t *testing.T) {
 		t.Fatal(err)
 	}
 	taken := time.Now()
-	for _, want := range []int64{idA, idD} {
-		if c := next(t, sub, 2*time.Second); c.ID != want {
-			t.Fatalf("delivered %d, want %d", c.ID, want)
-		}
+	// A and D in the order the tail reads them (bus.go: a lower id can follow a higher one on
+	// Postgres; D commits before A, so either comes first, P-298), both before C.
+	got := []int64{next(t, sub, 2*time.Second).ID, next(t, sub, 2*time.Second).ID}
+	slices.Sort(got)
+	if want := []int64{idA, idD}; !slices.Equal(got, want) {
+		t.Fatalf("delivered %v, want A and D %v in either order, once each", got, want)
 	}
 	time.Sleep(gap - 200*time.Millisecond - time.Since(taken))
 	relC()
