@@ -232,7 +232,7 @@ func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agen
 		}
 		return nil
 	}
-	refused, err := s.c.labelRefused(ctx, caller, agent)
+	refused, err := s.c.labelRefused(ctx, s.c.store, caller, agent)
 	if err != nil {
 		return s.c.mapErr("register_wake_session", err)
 	}

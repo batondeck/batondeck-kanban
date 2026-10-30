@@ -196,3 +196,65 @@ func isValidation(err error) bool {
 	e, ok := domain.AsBatonDeckError(err)
 	return ok && e.Code == domain.CodeValidation && e.Details["label"] == "agent-a"
 }
+
+// P-352: "id:<identity>" is the agent id the server derives for a caller that names no agent, so no
+// token label may take that form: a mint of one is VALIDATION for any identity, its own id
+// included, after the label's normalisation (trimmed, control characters dropped), and writes no
+// row. Other labels, "ID:" among them, mint as before.
+func TestAnIDLabelIsNeverMinted(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	bob, carol := f.addUser(t, "bob", "pw"), f.addUser(t, "carol", "pw")
+	before, err := f.st.ListTokens(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []string{"id:" + carol.ID, "id:" + bob.ID, " id:x\t", "id:x\x00", "\x01id:x"} {
+		_, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, label, 0)
+		e, ok := domain.AsBatonDeckError(err)
+		if !ok || e.Code != domain.CodeValidation || e.Details["field"] != "label" || !strings.HasPrefix(e.Details["label"].(string), "id:") {
+			t.Fatalf("bob mints %q: %v, want VALIDATION on the label", label, err)
+		}
+	}
+	after, err := f.st.ListTokens(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("a refused mint wrote a token: %d rows, had %d", len(after), len(before))
+	}
+	for _, label := range []string{"ID:" + carol.ID, "idx", "agent-b", "x id:y"} {
+		if _, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, label, 0); err != nil {
+			t.Fatalf("bob mints %q: %v", label, err)
+		}
+	}
+}
+
+// P-352: a token labelled "id:<x>" written before Create refused that form resolves as naming no
+// agent, as the default label does, so its caller is not presented as x's agentless self; a fresh
+// labelled token still names its agent.
+func TestAStoredIDLabelNamesNoAgent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	bob, carol := f.addUser(t, "bob", "pw"), f.addUser(t, "carol", "pw")
+	const id, secret = "0123456789abcdef", "a-secret-long-enough-for-parse"
+	now := f.clk.now()
+	if err := f.st.CreateToken(ctx, store.Token{ID: id, IdentityID: bob.ID, Subject: bob.Email, SecretHash: hashSecret(secret),
+		Label: "id:" + carol.ID, Permissions: "[]", CreatedAt: now.UnixMilli(), ExpiresAt: now.Add(time.Hour).UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.ResolveCaller(ctx, TokenPrefix+id+"_"+secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Identity != bob.ID || got.Agent != "" || got.Labelled || got.Via != domain.ViaAPIToken {
+		t.Fatalf("bob's stored id:%s token resolves to %+v, want bob with no agent, not labelled", carol.ID, got)
+	}
+	tok, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, "agent-b", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.ResolveCaller(ctx, tok); err != nil || got.Agent != "agent-b" || !got.Labelled {
+		t.Fatalf("bob's agent-b token: %+v %v", got, err)
+	}
+}

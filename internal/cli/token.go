@@ -20,10 +20,11 @@ func tokenUsage(w io.Writer) {
 
 --label names the agent that works on the token: its tool calls, claims and events record it. A
 label is one user's: create refuses a label another user's token has ever carried, revoked or
-expired included. Below master, naming as claim_next's or next_task's assignee, or as
+expired included, and any label starting "id:", the id the server derives for a caller that names
+no agent. Below master, naming as claim_next's or next_task's assignee, or as
 handoff_task's toAgent, a label a live token carries, or one another user's token has ever
 carried, is refused unless the caller is on a token carrying it and no other user's token has ever
-carried it (claim_task by task id does not check the assignee). It defaults to
+carried it. It defaults to
 "cli", which names no agent (each MCP client is then told apart by its own name). --ttl is a Go duration (720h is 30 days, the default;
 at most 8760h).
 every subcommand takes -config PATH.

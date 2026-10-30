@@ -31,6 +31,34 @@ Notable changes to batondeck-kanban. The format follows
   `list_agent_sessions` keep an agent after it disconnects and across a serve restart, with its
   connection and request counts; its next connection updates the same row. A row goes when
   `disconnect_agent` deletes it or 30 minutes after its last request (plan Clarification 7).
+- A token label of the form `id:<x>` is refused at mint (P-352). `token create` and
+  `POST /api/me/cli-tokens` answer `VALIDATION` for any label whose agent (trimmed, control
+  characters dropped) starts with `id:`, the caller's own id included. That form is the agent id the
+  server derives for a caller that names no agent, so such a token presented its caller's MCP agent,
+  claims and events as that identity's agentless self. A token minted with such a label before this
+  release now names no agent, as the default label `cli` does. `ID:x` and other labels mint as
+  before, under the first-minter rule.
+- An agent name equal to another identity's id no longer reaches that identity's agentless profile
+  or stats (P-351). `register_agent_profile` and `rank_tasks {useProfile}` answer `FORBIDDEN`
+  (`details.agentKey`) for a key that is another account's id or another project member's id, and
+  the outcomes `complete_task` and `block_task` record go under the caller's own identity instead.
+  A caller naming its own id, or naming no agent, keeps its own profile as before.
+- `claim_task {taskId}` applies `claim_next`'s assignee rule (P-334, P-297). Below master, a task
+  assigned to another account's id or login (email, any case), to another project member's id, to
+  a label another identity's token has ever carried (live, revoked or expired), or to a live label
+  the caller is not on that label's own token for, answers `FORBIDDEN` and is not claimed, from
+  MCP, REST and the task drawer's "Claim to work" alike; a re-claim of a task reassigned to another
+  is refused the same way. An unassigned task, the caller's own id or login, its own label on that
+  label's token, and a string naming no identity and no token's label are claimed as before, and a
+  master or admin claims any task. A browser session names no agent, so its claim of a task
+  assigned to the member's own agent label is refused, as `claim_next` is.
+- A lease that recorded an agent is that agent's for every lease-guarded outcome (P-320).
+  `heartbeat_task`, `release_task`, `complete_task`, `block_task`, `fail_task`, `handoff_task` and
+  `orchestrate_subtasks` answer `LEASE_EXPIRED` when the claim named an agent and the caller is not
+  that agent: another agent of the same identity holding the lease id, or that identity with no
+  agent named, as a second `claim_task` already was. A lease that recorded no agent (a browser's
+  claim, or one from before agents were recorded) is acted on by any caller of its identity, as
+  before.
 
 ### Fixed
 
