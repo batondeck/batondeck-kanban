@@ -25,6 +25,17 @@ function mockProject(role: string) {
   }));
 }
 
+/**
+ * The session half of the integrations gate (P-248): `list_integrations` is workspace-admin only
+ * before it is master-tier (`internal/service/authz.go`). Only `useAuth` is replaced.
+ */
+function mockSession(isAdmin: boolean) {
+  vi.doMock('../auth.js', async () => {
+    const actual = await vi.importActual<typeof import('../auth.js')>('../auth.js');
+    return { ...actual, useAuth: () => ({ ...actual.useAuth(), identity: ADMIN, isAdmin }) };
+  });
+}
+
 function stub(): string[] {
   const calls: string[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -46,7 +57,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   </QueryClientProvider>
 );
 
-afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); vi.doUnmock('../projectContext.js'); });
+afterEach(() => { vi.unstubAllGlobals(); vi.resetModules(); vi.doUnmock('../projectContext.js'); vi.doUnmock('../auth.js'); });
 
 describe('useDisplayNames builds a real map', () => {
   it('resolves an account id from memberDisplay', async () => {
@@ -59,6 +70,7 @@ describe('useDisplayNames builds a real map', () => {
 
   it('resolves an integration id by its BARE id, the shape eventActor looks up', async () => {
     mockProject('admin');
+    mockSession(true);
     stub();
     const { useDisplayNames: hook } = await import('../displayNames.js');
     const { result } = renderHook(() => hook('p1'), { wrapper });
@@ -81,8 +93,9 @@ describe('useDisplayNames builds a real map', () => {
       'a sub-master role must not call a master-tier tool').toEqual([]);
   });
 
-  it('POSITIVE CONTROL: a master DOES request them, so the gate is not refusing everyone', async () => {
+  it('POSITIVE CONTROL: a master who is a workspace admin DOES request them, so the gate is not refusing everyone', async () => {
     mockProject('master');
+    mockSession(true);
     const calls = stub();
     const { useDisplayNames: hook } = await import('../displayNames.js');
     const { result } = renderHook(() => hook('p1'), { wrapper });

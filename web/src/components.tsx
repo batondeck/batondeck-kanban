@@ -309,6 +309,24 @@ export function eventActor(e: { actor: string; agent?: string | null }, names?: 
   return e.actor;
 }
 
+/**
+ * A PERSON'S LABEL: an id that may be an account id, a login or an agent label → what a reader sees
+ * (P-314). The surfaces that name one person rather than an event (a comment's author, a follow-up's
+ * target, a notification's actor, a ticket's creator, a handoff's ends, the identity chip) use this,
+ * so none of them prints a raw `U-<uuid>`.
+ *
+ *   - named by `names` (`memberDisplay`: the account's display name, else its login) → that name;
+ *   - an account id nothing names → shortened, as `eventActor` shortens it (never the full id);
+ *   - anything else (an agent label, a login stored as given) → itself.
+ *
+ * An email-shaped label renders as its local part, matching `eventActor` and the provenance line;
+ * `full` keeps the whole address, for a tooltip or the chip.
+ */
+export function personName(id: string, names?: DisplayNames, opts?: { full?: boolean }): string {
+  const label = lookup(names, id) ?? (ACCOUNT_ID.test(id) ? `${id.slice(0, 10)}…` : id);
+  return !opts?.full && label.includes('@') ? label.split('@')[0]! : label;
+}
+
 /** The one topbar pattern: title + muted subtitle, spacer, right-aligned actions. */
 export function PageHeader({ title, subtitle, actions }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode }) {
   return (

@@ -35,11 +35,17 @@ const label = {
 };
 
 export function TicketActions({ d }: { d: LoadedTaskDetail }) {
-  const { task, projectId, taskId, run, move, myLease, heldByOther, setLease, colFor, moveTargets, agentList } = d;
+  const { task, projectId, taskId, run, move, myLease, heldByOther, setLease, colFor, moveTargets, agentList, myRole, canMove, canClaim } = d;
   const [handoff, setHandoff] = useState<{ to: string; note: string } | null>(null);
   const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
   const readyName = colFor('TODO')?.name ?? 'To do';
   const stuck = moveTargets.length === 0;
+  // `move_task` is master tier (P-209): below it the select is closed and says why. Disabled, not
+  // hidden, for the same reason as `stuck` below. While the role is loading it is closed too (fail
+  // closed), but no reason is shown yet: the reader may well be a master.
+  const roleKnown = myRole !== undefined;
+  const locked = stuck || !canMove;
+  const lockedWhy = !canMove ? (roleKnown ? 'Only a master can change the status' : 'Checking your role') : 'No moves available from here';
 
   return (
     <Panel title="Actions" pad footnote="Claiming locks the ticket to you, so two tools never collide.">
@@ -53,10 +59,11 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
             <select
               className="pill"
               aria-label="Status"
-              title={stuck ? 'No moves available from here' : 'Change status'}
+              title={locked ? lockedWhy : 'Change status'}
               value={task.status}
-              disabled={stuck}
+              disabled={locked}
               onChange={(e) => {
+                if (locked) return;
                 const to = e.target.value as Status;
                 if (to !== task.status) move.mutate({ vars: to, task });
               }}
@@ -75,9 +82,9 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
                 backgroundRepeat: 'no-repeat',
                 backgroundPosition: 'right 8px center',
                 paddingRight: 24,
-                cursor: stuck ? 'default' : 'pointer',
+                cursor: locked ? 'default' : 'pointer',
                 fontFamily: 'inherit',
-                opacity: stuck ? 0.6 : 1,
+                opacity: locked ? 0.6 : 1,
               }}
             >
               <option value={task.status}>{task.status.replace('_', ' ')}</option>
@@ -87,7 +94,11 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
                 </option>
               ))}
             </select>
-            {stuck && (
+            {!canMove ? roleKnown && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                {lockedWhy}.
+              </span>
+            ) : stuck && (
               <span className="muted" style={{ fontSize: 12 }}>
                 No moves available from {colFor(task.status)?.name ?? pretty(task.status)}.
               </span>
@@ -97,7 +108,11 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
 
         <div>
           <span style={{ ...label, display: 'block', marginBottom: 7 }}>Work the task</span>
-          {task.status === 'TODO' && !task.claim && (
+          {task.status === 'TODO' && !task.claim && roleKnown && !canClaim && (
+            // `claim_task` is tier write (P-209): a viewer is told, not offered a refusal.
+            <span className="muted" style={{ fontSize: 12 }}>A viewer cannot claim tasks.</span>
+          )}
+          {task.status === 'TODO' && !task.claim && canClaim && (
             <Cluster gap={8} wrap>
               <Button
                 variant="primary"
@@ -128,7 +143,11 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
           )}
           {task.status !== 'TODO' && !task.claim && (
             <span className="muted" style={{ fontSize: 12 }}>
-              Move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong> to claim it.
+              {canMove || !roleKnown ? (
+                <>Move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong> to claim it.</>
+              ) : (
+                <>A master can move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong>; then it can be claimed.</>
+              )}
             </span>
           )}
         </div>

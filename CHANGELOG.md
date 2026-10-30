@@ -30,6 +30,8 @@ Notable changes to batondeck-kanban. The format follows
 - **Backup and restore**, in the README, for the binary on SQLite and for `compose.yaml` on Postgres:
   what to copy (the database, the blobs and the master key), the commands, and what a restore under
   another key loses.
+- `GET /api/session` answers `displayName`: the signed-in account's display name, else its login,
+  absent when the identity has no account row. The web UI's identity chip reads it (P-314).
 
 ### Changed
 
@@ -227,6 +229,24 @@ Notable changes to batondeck-kanban. The format follows
   instead of `capabilities`, falls back to `capabilities` when you have no profile, and is
   `FORBIDDEN` under another agent's label or another identity's id, as on `rank_tasks`. Both paths
   judge the frontier's first 200 tasks (P-258).
+- The web UI names people instead of printing their `U-<hex>` account id: comment authors and
+  "Replying to", the comment composer's @mention suggestions (found and shown by name, with the
+  login or a shortened id beside two people who share one; a picked person is posted by their
+  account id, so the mention reaches exactly them, while a pick the author then edits is posted as
+  typed) and the @mentions in a comment's body (shown by name as plain text, with code left as
+  written), follow-up authors and targets,
+  notification lines ("Alice handed you T-2"), the ticket's "created by" on the drawer and the page,
+  the Agents "Recent Handoffs" list and the sidebar identity chip. Names come from the
+  `memberDisplay` the project reads already return; an id nothing names is shortened (P-314).
+- The On-call page's subtitle no longer says incidents are "worked to a PR": it says webhooks
+  become incident tickets, assigned by the integration's routing or broadcast to the project's
+  agents (P-342).
+- A ticket's Status control is disabled, with the reason, for anyone below master, the tier
+  `move_task` requires, instead of sending a move the server refuses; the claim hint no longer
+  tells a worker to make that move, and a viewer is not offered "Claim to work" (P-209).
+- The web UI asks for a project's integrations only as a workspace admin who is master or above
+  there, as the service requires, so a project master who is not a workspace admin no longer
+  draws a FORBIDDEN on the board, Activity and Analytics screens or on a ticket (P-248).
 
 ## [0.1.0]
 
