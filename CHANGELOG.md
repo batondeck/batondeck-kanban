@@ -14,8 +14,10 @@ Notable changes to batondeck-kanban. The format follows
 ### Fixed
 
 - The web UI names people instead of printing their `U-<hex>` account id: comment authors and
-  "Replying to", the comment composer's @mention suggestions (found by name; a picked name posts a
-  mention the server resolves) and the @mentions in a comment's body, follow-up authors and targets,
+  "Replying to", the comment composer's @mention suggestions (found and shown by name, with the
+  login or a shortened id beside two people who share one; a picked person is posted by their
+  account id, so the mention reaches exactly them) and the @mentions in a comment's body (shown by
+  name as plain text, with code left as written), follow-up authors and targets,
   notification lines ("Alice handed you T-2"), the ticket's "created by" on the drawer and the page,
   the Agents "Recent Handoffs" list and the sidebar identity chip. Names come from the
   `memberDisplay` the project reads already return; an id nothing names is shortened (P-314).
