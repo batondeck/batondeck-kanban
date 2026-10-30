@@ -404,11 +404,11 @@ func hookEngines() []struct {
 // and the events that landed ahead of it, through the composed serve stack, over the
 // Alertmanager and PagerDuty fixtures on both engines: STALE (on Postgres a real lost race, three
 // times over, since an unversioned ingest is retried on STALE; on SQLite an injected one) and
-// INTERNAL (a plain store error). Alertmanager and PagerDuty retry a 5xx and drop a 4xx other than
-// 429, so a 400 here dropped the alert. The sender's retry, once the fault clears, lands the event
-// once: the landed ones replayed, one ticket, its occurrences counted once. RATE_LIMITED is 503 too,
-// with its own code and Retry-After (P-353: Alertmanager drops a 429 as well); a non-retryable
-// refusal (VALIDATION, CONFLICT_LOCKED) stays 400 VALIDATION.
+// INTERNAL (a plain store error). Alertmanager retries only a 5xx and PagerDuty a 5xx or a 429;
+// both drop any other 4xx, so a 400 here dropped the alert. The sender's retry, once the fault
+// clears, lands the event once: the landed ones replayed, one ticket, its occurrences counted
+// once. RATE_LIMITED is 503 too, with its own code and Retry-After (P-353: Alertmanager drops a
+// 429 as well); a non-retryable refusal (VALIDATION, CONFLICT_LOCKED) stays 400 VALIDATION.
 func TestHookAnswersARetryableIngestFailureWith503(t *testing.T) {
 	for _, eng := range hookEngines() {
 		for _, fx := range hookFixtures() {

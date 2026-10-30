@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,17 +13,16 @@ import (
 
 // TestClientRoutesMatchAppTsx: clientRoutes is exactly the <Route path="…"> patterns of
 // web/src/App.tsx (the "*" fallback aside), so a client route cannot ship without its deep link,
-// and a route the SPA dropped cannot keep answering the shell.
+// and a route the SPA dropped cannot keep answering the shell. appRoutes refuses any <Route> it
+// cannot read a literal path from, so the pin cannot be passed by spelling a route another way.
 func TestClientRoutesMatchAppTsx(t *testing.T) {
 	src, err := os.ReadFile("../../web/src/App.tsx")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var app []string
-	for _, m := range regexp.MustCompile(`<Route\s[^>]*?path="([^"]+)"`).FindAllStringSubmatch(string(src), -1) {
-		if m[1] != "*" {
-			app = append(app, m[1])
-		}
+	app, err := appRoutes(string(src))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(app) < 10 {
 		t.Fatalf("read only %d routes from App.tsx: %v", len(app), app)
@@ -32,6 +32,103 @@ func TestClientRoutesMatchAppTsx(t *testing.T) {
 	if !slices.Equal(app, ours) {
 		t.Fatalf("App.tsx routes %v\nclientRoutes   %v", app, ours)
 	}
+}
+
+// TestAppRoutesReadsEverySpelling: appRoutes reads a literal path in any attribute position and
+// across lines, and refuses what it cannot pin: a <Route> with no literal path (a computed one, an
+// index route) other than the <Shell /> layout route, a tag that never closes, and a pattern
+// matchRoute does not implement (optional or splat).
+func TestAppRoutesReadsEverySpelling(t *testing.T) {
+	layout := "<Route element={<Shell />}>"
+	for _, c := range []struct {
+		src  string
+		want []string
+	}{
+		{layout + `<Route path="/a" element={<A />} /></Route>`, []string{"/a"}},
+		{`<Route element={<Agents />} path="/teams" />`, []string{"/teams"}},
+		{`<Route element={<X a="}>" b={{ c: '>' }} />} path='/q' />`, []string{"/q"}},
+		{"<Route\n  path=\"/oncall\"\n  element={\n    <Gate><Oncall /></Gate>\n  }\n/>", []string{"/oncall"}},
+		{`<Routes><Route path="*" element={<Navigate to="/projects" replace />} /></Routes>`, nil},
+	} {
+		got, err := appRoutes(c.src)
+		if err != nil || !slices.Equal(got, c.want) {
+			t.Errorf("appRoutes(%q) = %v, %v; want %v", c.src, got, err, c.want)
+		}
+	}
+	for _, src := range []string{
+		`<Route path={"/teams"} element={<Agents />} />`,
+		`<Route element={<Agents />} path={teamsPath} />`,
+		`<Route element={<Agents />} />`,
+		`<Route index element={<Home />} />`,
+		`<Route path="/chronicle/:pageId?" element={<C />} />`,
+		`<Route path="/files/*" element={<F />} />`,
+		`<Route path="/a" element={<A />}`,
+	} {
+		if got, err := appRoutes(src); err == nil {
+			t.Errorf("appRoutes(%q) = %v, want an error", src, got)
+		}
+	}
+}
+
+// appRoutes is every <Route>'s literal path in src, the "*" fallback aside. It walks each opening
+// tag to its closing ">" outside braces and quotes, so an attribute's JSX or string cannot end it.
+func appRoutes(src string) ([]string, error) {
+	var out []string
+	for _, loc := range regexp.MustCompile(`<Route[\s/>]`).FindAllStringIndex(src, -1) {
+		start, depth, end := loc[0], 0, -1
+		var top strings.Builder // the tag with everything inside braces dropped
+		for i := start + len("<Route"); i < len(src) && end < 0; i++ {
+			switch ch := src[i]; {
+			case ch == '"' || ch == '\'' || ch == '`':
+				j := i + 1
+				for j < len(src) && src[j] != ch {
+					if src[j] == '\\' {
+						j++
+					}
+					j++
+				}
+				if depth == 0 {
+					top.WriteString(src[i:min(j+1, len(src))])
+				}
+				i = j
+			case ch == '{':
+				if depth == 0 {
+					top.WriteByte('{')
+				}
+				depth++
+			case ch == '}':
+				depth--
+				if depth == 0 {
+					top.WriteByte('}')
+				}
+			case ch == '>' && depth == 0:
+				end = i
+			case depth == 0:
+				top.WriteByte(ch)
+			}
+		}
+		tag := src[start:max(end+1, start)]
+		if end < 0 {
+			return nil, fmt.Errorf("a <Route> tag at byte %d never closes", start)
+		}
+		attrs := top.String()
+		m := regexp.MustCompile(`(?:^|\s)path\s*=\s*(?:"([^"]*)"|'([^']*)')`).FindStringSubmatch(attrs)
+		switch {
+		case m == nil && tag == "<Route element={<Shell />}>":
+			continue
+		case m == nil:
+			return nil, fmt.Errorf("%s: a <Route> other than the <Shell /> layout route without a literal path (a computed path={…} cannot be pinned)", tag)
+		}
+		path := m[1] + m[2]
+		if path == "*" {
+			continue
+		}
+		if strings.ContainsAny(path, "?*") {
+			return nil, fmt.Errorf("%s: matchRoute has no optional or splat segments", tag)
+		}
+		out = append(out, path)
+	}
+	return out, nil
 }
 
 // TestClientRoutes: each route and a concrete deep link of each is a client route, as react-router

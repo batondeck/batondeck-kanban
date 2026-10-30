@@ -55,9 +55,10 @@ func MountSPA(mux *http.ServeMux) {
 }
 
 // clientRoutes are the paths web/src/App.tsx routes, in react-router's syntax: a ":name" segment is
-// one non-empty segment ("/" is matched by isClientRoute itself). spa_test.go reads App.tsx and
-// fails when the two lists differ, so a route added to the SPA without this list (its deep link a
-// 404) does not ship.
+// one non-empty segment ("/" is matched by isClientRoute itself). spa_test.go reads every <Route>
+// tag of App.tsx and fails when the two lists differ, when a route other than the <Shell /> layout
+// has no literal path, or when a path has an optional or splat segment matchRoute cannot match, so
+// a route added to the SPA without this list (its deep link a 404) does not ship.
 var clientRoutes = []string{
 	"/",
 	"/projects",

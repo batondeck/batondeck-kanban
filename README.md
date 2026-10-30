@@ -120,10 +120,11 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
 client reached the server at, so behind a proxy that rewrites the Host header, set it.
 
-Behind a proxy every request arrives from the proxy's address, so the sign-in limit (10 failed
-attempts a minute per address) and the registration limit (20 an hour per address) would count all
-your users as one: ten mistyped passwords lock everyone out for a minute. Name the proxy and the
-server counts each client by the address the proxy appends to `X-Forwarded-For` instead:
+Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
+failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
+address) would count all your users as one: ten mistyped passwords lock everyone out until the
+budget refills, and a steady trickle of wrong ones keeps them out. Name the proxy and the server
+counts each client by the address the proxy appends to `X-Forwarded-For` instead:
 
 ```bash
 export BATONDECK_TRUSTED_PROXIES=127.0.0.1,::1   # or trusted_proxies in the config file; CIDRs work
