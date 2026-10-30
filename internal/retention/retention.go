@@ -47,7 +47,7 @@ type Store interface {
 	DeleteExpiredMemory(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
-	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []store.AgentSessionKey) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error)
@@ -80,13 +80,16 @@ type Swept struct {
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
 // drops it), and the sweep goes on to the next step. CollectBlobs deletes the unreferenced blobs a
-// sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob.
+// sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob. Live is the agent
+// sessions with a live MCP session in this process (mcp.Server.LiveAgentSessions), read once per
+// sweep: their rows are not idle however long ago their last request was (P-279); nil keeps none.
 type Sweeper struct {
 	Store        Store
 	Windows      Windows
 	Now          func() time.Time
 	Report       func(step string, err error)
 	CollectBlobs func(ctx context.Context, sha256s []string)
+	Live         func() []store.AgentSessionKey
 }
 
 // Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
@@ -126,8 +129,12 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.ToolCalls = step("tool calls", func(limit int) (int64, error) {
 		return s.Store.DeleteToolCallsOlderThan(ctx, ms-s.Windows.ToolCalls.Milliseconds(), limit)
 	})
+	var live []store.AgentSessionKey
+	if s.Live != nil {
+		live = s.Live()
+	}
 	out.AgentSessions = step("agent sessions", func(limit int) (int64, error) {
-		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit)
+		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit, live)
 	})
 	lapsed := ms - LapsedGrace.Milliseconds()
 	out.Sessions = step("sessions", func(limit int) (int64, error) { return s.Store.DeleteExpiredSessions(ctx, lapsed, limit) })

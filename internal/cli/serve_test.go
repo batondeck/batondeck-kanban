@@ -163,7 +163,8 @@ func TestServeRecordsToolCallsAndAgentSessions(t *testing.T) {
 }
 
 // A stop with a client attached (initialised, its GET stream open) returns nil well inside the
-// shutdown budget, and the session's agent row is removed on the way out.
+// shutdown budget, and the session's agent row outlives the stop (P-324, plan Clarification 7: the
+// retention sweep GCs it 30 min after its last request).
 func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -212,8 +213,8 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 		t.Fatalf("runServer still stopping after 5s (the budget is %s)", shutdownBudget)
 	}
 	t.Logf("stopped in %s", time.Since(start))
-	if rows, err := st.ListAgentSessions(ctx, user.ID, 10); err != nil || len(rows) != 0 {
-		t.Errorf("agent sessions after the stop = %+v, %v; want none", rows, err)
+	if rows, err := st.ListAgentSessions(ctx, user.ID, 10); err != nil || len(rows) != 1 || rows[0].AgentID != "test" || rows[0].SessionCount != 1 {
+		t.Errorf("agent sessions after the stop = %+v, %v; want the attached one, kept", rows, err)
 	}
 }
 

@@ -65,8 +65,15 @@ type AgentSessions interface {
 	// (<= 0 is 100, above 1000 is 1000).
 	ListAgentSessions(ctx context.Context, identityID string, limit int) ([]AgentSession, error)
 	// DeleteIdleAgentSessions deletes at most limit rows whose LastSeenAt is before before, the
-	// longest idle first, and returns how many it deleted.
-	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
+	// longest idle first, except the rows keep names (an agent with a live MCP session is not idle
+	// however long since its last request, P-279), and returns how many it deleted. One statement.
+	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []AgentSessionKey) (int64, error)
+}
+
+// AgentSessionKey names one agent_sessions row.
+type AgentSessionKey struct {
+	IdentityID string
+	AgentID    string
 }
 
 var (

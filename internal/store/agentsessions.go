@@ -54,12 +54,12 @@ func (s *Postgres) ListAgentSessions(ctx context.Context, identityID string, lim
 	return listAgentSessions(ctx, s, identityID, limit)
 }
 
-func (s *SQLite) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
-	return deleteIdleAgentSessions(ctx, s, before, limit)
+func (s *SQLite) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []AgentSessionKey) (int64, error) {
+	return deleteIdleAgentSessions(ctx, s, before, limit, keep)
 }
 
-func (s *Postgres) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error) {
-	return deleteIdleAgentSessions(ctx, s, before, limit)
+func (s *Postgres) DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []AgentSessionKey) (int64, error) {
+	return deleteIdleAgentSessions(ctx, s, before, limit, keep)
 }
 
 func validAgent(identityID, agentID, agentName, kind string) error {
@@ -127,11 +127,19 @@ func listAgentSessions(ctx context.Context, e engine, identityID string, limit i
 	return out, nil
 }
 
-func deleteIdleAgentSessions(ctx context.Context, e engine, before int64, limit int) (int64, error) {
+func deleteIdleAgentSessions(ctx context.Context, e engine, before int64, limit int, keep []AgentSessionKey) (int64, error) {
 	if limit <= 0 {
 		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
 	}
-	n, err := e.queries(true).DeleteIdleAgentSessions(ctx, sqlitedb.DeleteIdleAgentSessionsParams{Before: before, PageLimit: int64(limit)})
+	pairs := make([][2]string, len(keep)) // the queries read keep as [[identity_id, agent_id], ...]
+	for i, k := range keep {
+		pairs[i] = [2]string{k.IdentityID, k.AgentID}
+	}
+	kept, err := json.Marshal(pairs)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete idle agent sessions: %w", err)
+	}
+	n, err := e.queries(true).DeleteIdleAgentSessions(ctx, sqlitedb.DeleteIdleAgentSessionsParams{Keep: string(kept), Before: before, PageLimit: int64(limit)})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete idle agent sessions: %w", err)
 	}

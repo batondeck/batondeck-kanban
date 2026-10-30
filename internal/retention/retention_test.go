@@ -370,6 +370,7 @@ func TestASweepRemovesTheExpiredAlertStatesOfClosedTickets(t *testing.T) {
 type fake struct {
 	calls map[string]int
 	fail  string
+	keeps [][]store.AgentSessionKey // each DeleteIdleAgentSessions call's keep
 }
 
 func (f *fake) del(step string, limit int) (int64, error) {
@@ -392,7 +393,8 @@ func (f *fake) DeleteToolCallsOlderThan(_ context.Context, _ int64, limit int) (
 	return f.del("tool calls", limit)
 }
 
-func (f *fake) DeleteIdleAgentSessions(_ context.Context, _ int64, limit int) (int64, error) {
+func (f *fake) DeleteIdleAgentSessions(_ context.Context, _ int64, limit int, keep []store.AgentSessionKey) (int64, error) {
+	f.keeps = append(f.keeps, keep)
 	return f.del("agent sessions", limit)
 }
 
@@ -439,6 +441,49 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
 		t.Fatalf("the failed step: swept %d in %d calls, reported %v", got.ChangeLog, f.calls["change log"], reported)
+	}
+}
+
+// P-279: every agent-session statement of a sweep keeps what Live returned, read once per sweep; a
+// nil Live keeps none.
+func TestASweepKeepsTheLiveAgentSessions(t *testing.T) {
+	live := []store.AgentSessionKey{{IdentityID: "alice", AgentID: "claude"}}
+	reads := 0
+	f := &fake{calls: map[string]int{}}
+	(&Sweeper{Store: f, Live: func() []store.AgentSessionKey { reads++; return live }}).Sweep(context.Background())
+	if reads != 1 || len(f.keeps) != MaxPerTick/Batch {
+		t.Fatalf("Live read %d times for %d statements, want once for %d", reads, len(f.keeps), MaxPerTick/Batch)
+	}
+	for i, k := range f.keeps {
+		if !slices.Equal(k, live) {
+			t.Fatalf("statement %d kept %v, want %v", i, k, live)
+		}
+	}
+	f = &fake{calls: map[string]int{}}
+	(&Sweeper{Store: f}).Sweep(context.Background())
+	if len(f.keeps) == 0 || f.keeps[0] != nil {
+		t.Fatalf("a nil Live kept %v, want nil", f.keeps)
+	}
+
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			for _, agent := range []string{"claude", "gone"} {
+				if _, err := s.UpsertAgentSession(ctx, store.AgentSessionStart{IdentityID: "alice", AgentID: agent, AgentName: agent, Kind: "agent", At: now.Add(-31 * time.Minute).UnixMilli()}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }, Live: func() []store.AgentSessionKey { return live }}
+			if got := sw.Sweep(ctx); got.AgentSessions != 1 {
+				t.Fatalf("swept %+v, want the one agent session not live", got)
+			}
+			if rows, err := s.ListAgentSessions(ctx, "alice", 0); err != nil || len(rows) != 1 || rows[0].AgentID != "claude" {
+				t.Fatalf("agent sessions after the sweep: %+v, %v; want only the live claude", rows, err)
+			}
+		})
 	}
 }
 

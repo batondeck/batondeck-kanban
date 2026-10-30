@@ -27,6 +27,10 @@ Notable changes to batondeck-kanban. The format follows
   webhook retries only a 5xx, so a 429 dropped the alert that tripped the limit; PagerDuty retries
   both. `Retry-After` is unchanged: `ceil(60/ratePerMin)` seconds, 1 for the pre-check. The
   integration form's hint says so instead of promising a retry of a 429.
+- **An agent session outlives its MCP connection (P-264, P-324).** The Agents screen and
+  `list_agent_sessions` keep an agent after it disconnects and across a serve restart, with its
+  connection and request counts; its next connection updates the same row. A row goes when
+  `disconnect_agent` deletes it or 30 minutes after its last request (plan Clarification 7).
 
 ### Fixed
 
@@ -88,6 +92,18 @@ Notable changes to batondeck-kanban. The format follows
   The Postgres bus test that fills an earlier hole took A before D, an order the bus does not
   promise; it now takes both in either order and still judges C's hole (P-157, which delivers
   P-94).
+- **An open agent connection keeps its row past 30 idle minutes (P-279).** The retention sweep no
+  longer deletes the agent session of a client still connected to this serve process (one that only
+  pings, or waits on a long task); its row goes 30 minutes after its last request once it
+  disconnects.
+- **A device session hears a project from the moment it joins (P-229, P-331).** A registered
+  Claude Code session added to a project, or whose user creates one, gets that project's broadcast
+  and changed doorbells at once instead of after the next 60 s directory sweep; removed or deleted,
+  it stops hearing them at once. The re-read runs only on a membership change: an idle directory
+  still makes no statements between sweeps.
+- **serve stops the device session directory before it closes the store (P-205).** serve waits for
+  the directory's dispatcher to finish a doorbell in flight before it closes the store (at most the
+  10 s shutdown budget), so no directory write follows serve's return.
 
 ## [0.1.0]
 

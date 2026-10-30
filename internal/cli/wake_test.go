@@ -39,10 +39,12 @@ import (
 // listener. A client is a `sleep` this test starts (the process the directory watches), a fake
 // Claude Code registry entry naming it, and a fake inbox socket that records every byte written.
 
-// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects.
+// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects. listed, when set,
+// runs after each ListProjects read with its identity, before the result is returned.
 type countedSQLite struct {
 	*store.SQLite
 	rechecks atomic.Int64
+	listed   atomic.Pointer[func(identityID string)]
 }
 
 func (c *countedSQLite) GetToken(ctx context.Context, id string) (store.Token, error) {
@@ -57,7 +59,11 @@ func (c *countedSQLite) GetUser(ctx context.Context, id string) (store.User, err
 
 func (c *countedSQLite) ListProjects(ctx context.Context, identityID string) ([]store.ProjectMembership, error) {
 	c.rechecks.Add(1)
-	return c.SQLite.ListProjects(ctx, identityID)
+	out, err := c.SQLite.ListProjects(ctx, identityID)
+	if h := c.listed.Load(); h != nil {
+		(*h)(identityID)
+	}
+	return out, err
 }
 
 // person is a user with an API token.
@@ -75,9 +81,10 @@ type dirServer struct {
 	reg        string
 	keys       *core.Keyring
 	logs       *lockedLog
-	stop       func()
-	alice, bob person // alice is P's admin; bob a master of P
-	carol      person // a member of nothing until a test adds her
+	stop       func()       // halt, then the P-205 check that the dispatcher has returned
+	halt       func() error // stops serve and waits for serveUntil, once; its result is kept
+	alice, bob person       // alice is P's admin; bob a master of P
+	carol      person       // a member of nothing until a test adds her
 	project    string
 	board      string
 	columns    map[domain.Status]string
@@ -224,12 +231,21 @@ func startDirectoryWith(t *testing.T, from *dirServer, o dirOpts) *dirServer {
 	if code, _ := httpDo(t, &http.Client{Timeout: 5 * time.Second}, http.MethodGet, "http://"+s.tcp+"/healthz", "", ""); code != http.StatusOK {
 		t.Fatalf("healthz %d", code)
 	}
-	var once sync.Once
+	var once, halted sync.Once
+	var served error
+	s.halt = func() error {
+		halted.Do(func() { cancel(); served = <-done })
+		return served
+	}
 	s.stop = func() {
 		once.Do(func() {
-			cancel()
-			if err := <-done; err != nil {
+			if err := s.halt(); err != nil {
 				t.Errorf("serveUntil: %v", err)
+			}
+			select { // P-205: no directory write may follow serve's return (the store closes next)
+			case <-a.dir.Done():
+			default:
+				t.Errorf("serveUntil returned with the session directory's dispatcher still running")
 			}
 		})
 	}
@@ -767,9 +783,11 @@ func TestDirectoryDropsOnADeadSocket(t *testing.T) {
 	for len(s.pids()) != 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if len(s.pids()) != 0 || !strings.Contains(s.logs.String(), "its socket is gone") {
+	if len(s.pids()) != 0 {
 		t.Fatalf("pids %v after a delivery to a closed socket; log:\n%s", s.pids(), s.logs.String())
 	}
+	// drop removes the entry, then logs why (P-339): wait for the line, not read it once.
+	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its socket is gone", c.pid, s.alice.id), 1)
 }
 
 // The start-up rebuild: a restarted server restores a live entry from its row, drops a dead one's,
@@ -1053,5 +1071,45 @@ func TestDirectoryDropsAnOAuthEntryAfterRefreshReuse(t *testing.T) {
 	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its bearer no longer resolves", c.pid, s.alice.id), 1)
 	if len(s.pids()) != 0 {
 		t.Fatalf("pids %v after the family was revoked", s.pids())
+	}
+}
+
+// P-205 requirement 2 (tested; review B4): serve's wait for the session directory's dispatcher is
+// bounded by the shutdown budget. With the dispatcher held in a recheck (the create_project row's
+// re-read of carol's entry), serveUntil still returns within the budget and says it stopped
+// without it; released, the dispatcher returns.
+func TestServeStopsWithinTheBudgetBehindAHeldDispatcher(t *testing.T) {
+	// Serial: it shrinks the package's shutdownBudget.
+	shrink(t, &shutdownBudget, 300*time.Millisecond)
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-carol", "")
+	s.register(t, s.carol, c, "worker")
+	held, release := holdRecheck(t, s, s.carol.id)
+	if _, err := s.a.core.Projects().Create(context.Background(), s.alice.caller(), service.CreateProjectReq{Name: "Q"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the create_project row's re-read never reached carol's entry")
+	}
+	start := time.Now()
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.halt() }()
+	select {
+	case <-stopped:
+		if took := time.Since(start); took > shutdownBudget+2*time.Second {
+			t.Errorf("serveUntil took %s behind a held dispatcher, budget %s", took, shutdownBudget)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatalf("serveUntil still stopping 5s after the stop, budget %s, behind a held dispatcher", shutdownBudget)
+	}
+	s.waitLog(t, "the session directory's dispatcher was still delivering at the shutdown budget", 1)
+	release()
+	select {
+	case <-s.a.dir.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dispatcher did not return once released")
 	}
 }
