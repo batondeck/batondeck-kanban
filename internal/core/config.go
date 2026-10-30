@@ -279,11 +279,12 @@ func (c *Config) validate() error {
 // publicOrigin checks public_url the way the OAuth server does (internal/auth/oauth issuerOf), where
 // the config is loaded, so every subcommand refuses a bad one before it touches the store or binds a
 // listener: an http or https URL with a host and no path, query, fragment or userinfo. A trailing
-// slash is dropped, so the issuer and the attachment links start with the same base.
+// slash is dropped, so the issuer and the attachment links start with the same base. An opaque URL
+// (`https:x.example`) has no host, so the Hostname check refuses it.
 func publicOrigin(publicURL string) (string, error) {
 	u, err := url.Parse(strings.TrimRight(publicURL, "/"))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.Path != "" ||
-		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil || u.Opaque != "" {
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
 		return "", fmt.Errorf("%s: public_url %q is not scheme://host[:port] (http or https, no path, query, fragment or userinfo)", RulePublicURL, publicURL)
 	}
 	return u.Scheme + "://" + u.Host, nil

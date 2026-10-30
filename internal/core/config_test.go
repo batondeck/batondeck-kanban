@@ -135,17 +135,20 @@ func TestRefusals(t *testing.T) {
 		"empty listen":         {env: map[string]string{"BATONDECK_LISTEN": " , "}, rule: RuleListen},
 		"empty listen in file": {file: `{"listen":[]}`, rule: RuleListen},
 		// public_url is an origin, refused where the config is loaded (P-22), not first in serve's OAuth setup.
-		"public_url without a scheme":  {env: map[string]string{"BATONDECK_PUBLIC_URL": "board.example.com"}, rule: RulePublicURL},
-		"public_url other scheme":      {env: map[string]string{"BATONDECK_PUBLIC_URL": "ftp://x.example"}, rule: RulePublicURL},
-		"public_url with a path":       {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example/base"}, rule: RulePublicURL},
-		"public_url with a query":      {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example?q=1"}, rule: RulePublicURL},
-		"public_url with a fragment":   {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example#f"}, rule: RulePublicURL},
-		"public_url with userinfo":     {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://u:p@x.example"}, rule: RulePublicURL},
-		"public_url port without host": {env: map[string]string{"BATONDECK_PUBLIC_URL": "http://:8080"}, rule: RulePublicURL},
-		"public_url in file":           {file: `{"public_url":"x.example:8080"}`, rule: RulePublicURL},
+		"public_url without a scheme":    {env: map[string]string{"BATONDECK_PUBLIC_URL": "board.example.com"}, rule: RulePublicURL},
+		"public_url other scheme":        {env: map[string]string{"BATONDECK_PUBLIC_URL": "ftp://x.example"}, rule: RulePublicURL},
+		"public_url with a path":         {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example/base"}, rule: RulePublicURL},
+		"public_url with a query":        {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example?q=1"}, rule: RulePublicURL},
+		"public_url with an empty query": {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example?"}, rule: RulePublicURL},
+		"public_url opaque":              {env: map[string]string{"BATONDECK_PUBLIC_URL": "https:x.example"}, rule: RulePublicURL},
+		"public_url with a fragment":     {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example#f"}, rule: RulePublicURL},
+		"public_url with userinfo":       {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://u:p@x.example"}, rule: RulePublicURL},
+		"public_url port without host":   {env: map[string]string{"BATONDECK_PUBLIC_URL": "http://:8080"}, rule: RulePublicURL},
+		"public_url in file":             {file: `{"public_url":"x.example:8080"}`, rule: RulePublicURL},
 		// One JSON value and nothing after it but whitespace (P-22).
 		"trailing garbage": {file: `{"listen":["tcp://127.0.0.1:9001"]} garbage`, rule: "trailing data"},
 		"trailing brace":   {file: `{"listen":["tcp://127.0.0.1:9001"]}}`, rule: "trailing data"},
+		"trailing comment": {file: "{\"listen\":[\"tcp://127.0.0.1:9001\"]}\n// a comment\n", rule: "trailing data"},
 		"two objects":      {file: `{"listen":["tcp://127.0.0.1:9001"]}{"public_url":"https://x.example"}`, rule: "trailing data"},
 	}
 	for name, tc := range cases {

@@ -11,7 +11,9 @@ Notable changes to batondeck-kanban. The format follows
 - **CI for pull requests.** `.github/workflows/ci.yml` runs `make check` on every pull request and
   every push to main, with a Postgres 16 service, so the store conformance suite runs on both
   engines. `make check` gains `web-check`, the SPA's `tsc --noEmit` and its vitest suite, which
-  `vite build` never ran; `make web-check` runs them alone.
+  `vite build` never ran; `make web-check` runs them alone. The suite's per-test timeout is 20 s and
+  Testing Library's `findBy`/`waitFor` wait 5 s (vitest's and its defaults are 5 s and 1 s), so a
+  loaded host does not fail a correct tree.
 - **The plugin follows `BATONDECK_URL`.** `plugin/.mcp.json` connects to
   `${BATONDECK_URL:-http://localhost:8080}/mcp`, the base `scripts/mcp.sh` already read, so a board on
   another port or host needs no edit to the plugin.
@@ -22,10 +24,11 @@ Notable changes to batondeck-kanban. The format follows
 ### Fixed
 
 - **The config refuses more of what it cannot use.** `public_url` (`BATONDECK_PUBLIC_URL`) must be an
-  http or https origin, `scheme://host[:port]`: a bare host, a path, a query, a fragment or userinfo is
-  refused naming `public_url_is_an_http_origin`, and a trailing `/` is dropped (with one, serve's log
-  line printed `…//blobs/`). A config file with anything after its JSON object is refused, where the
-  first object loaded before. A `.dockerignore` keeps `.env`, `master.key`, SQLite files, `dist/`,
+  http or https origin, `scheme://host[:port]`: a bare host, a path, a query, a non-empty fragment or
+  userinfo is refused naming `public_url_is_an_http_origin`, and a trailing `/` is dropped (with one,
+  serve's log line printed `…//blobs/`). A config file with anything after its JSON object but
+  whitespace is refused, a trailing `//` comment included, where 0.1.0 loaded the first object and
+  ignored the rest. A `.dockerignore` keeps `.env`, `master.key`, SQLite files, `dist/`,
   `web/node_modules` and `.git` out of the image's build context; the binary it builds is unchanged.
 
 ## [0.1.0]

@@ -15,6 +15,11 @@ export default defineConfig({
     // Vitest stubs CSS imports to '' by default, which makes `index.css?raw` come back EMPTY, and a
     // token guard reading an empty stylesheet passes vacuously; tokens.test.ts asserts a non-empty read.
     css: true,
+    // `make check` (the pre-push hook, CI) runs this suite on loaded hosts. Measured 2026-10-30 on 4
+    // vCPUs: the slowest test took 3.0 s idle (load 2.3) and 10.3 s under six busy loops (load 12), past
+    // vitest's default 5 s. 20 s is twice the loaded worst. test-setup.ts raises the findBy*/waitFor
+    // wait the same way.
+    testTimeout: 20_000,
   },
   server: {
     proxy: Object.fromEntries(

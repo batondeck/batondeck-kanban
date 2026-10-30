@@ -39,7 +39,7 @@ server's device directory, so the server can start a turn in it when there is wo
    | Variable | Read by | Value |
    |---|---|---|
    | `BATONDECK_TOKEN` | `.mcp.json` (the `Authorization` header) and both hooks | the token from `token create` |
-   | `BATONDECK_URL` | `.mcp.json` (the server URL) and `scripts/mcp.sh` | optional: the server's base URL, default `http://localhost:8080`; set it when the board listens on another port or host, or sits behind `BATONDECK_PUBLIC_URL` |
+   | `BATONDECK_URL` | `.mcp.json` (the server URL) and `scripts/mcp.sh` | optional: the server's base URL, default `http://localhost:8080`; set it when the board listens on another port or host, or sits behind `BATONDECK_PUBLIC_URL`. Unset it rather than export it empty: Claude Code reads an empty one as set, so the url becomes `/mcp` and does not connect (`scripts/mcp.sh` takes the default either way) |
    | `BATONDECK_LISTEN` or `BATONDECK_CONFIG` | both hooks | the same listen list or config file the server runs with; the hooks use its first `unix://` entry |
    | `BATONDECK_ROLE` | SessionStart | `worker` (the default) or `master` |
    | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token carries; the server refuses another agent's label, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |

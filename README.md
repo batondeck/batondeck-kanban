@@ -188,14 +188,15 @@ batondeck-kanban serve
 **The image, on Postgres (`compose.yaml`).** The database is in the `pgdata` volume, the blobs on the
 `data` volume, and the key and the database password in `.env`. In the directory that holds
 `compose.yaml`, dump the database, archive `/data` with a throwaway container (the image has no
-shell), and keep a copy of `.env`:
+shell; the archive comes out on stdout, so this shell creates it under the umask), and keep a copy
+of `.env`:
 
 ```bash
-umask 077    # the dump and batondeck.env are secrets
+umask 077    # the dump, the attachments and batondeck.env are private
 docker compose stop batondeck-kanban
 docker compose exec -T postgres pg_dump -U batondeck -d batondeck --clean --if-exists > batondeck.sql
-docker run --rm --volumes-from "$(docker compose ps -aq batondeck-kanban)" -v "$PWD:/backup" \
-  postgres:16 tar -C /data -czf /backup/batondeck-data.tgz .
+docker run --rm --volumes-from "$(docker compose ps -aq batondeck-kanban)" \
+  postgres:16 tar -C /data -czf - . > batondeck-data.tgz
 cp .env batondeck.env
 docker compose start batondeck-kanban
 ```
@@ -208,8 +209,8 @@ cp batondeck.env .env
 docker compose up -d --wait postgres
 docker compose exec -T postgres psql -U batondeck -d batondeck -q -v ON_ERROR_STOP=1 < batondeck.sql
 docker compose create batondeck-kanban
-docker run --rm --volumes-from "$(docker compose ps -aq batondeck-kanban)" -v "$PWD:/backup" \
-  postgres:16 tar -C /data -xzpf /backup/batondeck-data.tgz
+docker run --rm -i --volumes-from "$(docker compose ps -aq batondeck-kanban)" \
+  postgres:16 tar -C /data -xzpf - < batondeck-data.tgz
 docker compose up -d
 ```
 
