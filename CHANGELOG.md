@@ -18,6 +18,18 @@ Notable changes to batondeck-kanban. The format follows
   user's disabled mark, and their unexpired browser sessions and tokens resolve again within the
   account cache's 60 s. Enabling a user who is not disabled says so and changes nothing; an unknown
   login exits 1 (P-46).
+- **CI for pull requests.** `.github/workflows/ci.yml` runs `make check` on every pull request and
+  every push to main, with a Postgres 16 service, so the store conformance suite runs on both
+  engines. `make check` gains `web-check`, the SPA's `tsc --noEmit` and its vitest suite, which
+  `vite build` never ran; `make web-check` runs them alone. The suite's per-test timeout is 20 s and
+  Testing Library's `findBy`/`waitFor` wait 5 s (vitest's and its defaults are 5 s and 1 s), so a
+  loaded host does not fail a correct tree.
+- **The plugin follows `BATONDECK_URL`.** `plugin/.mcp.json` connects to
+  `${BATONDECK_URL:-http://localhost:8080}/mcp`, the base `scripts/mcp.sh` already read, so a board on
+  another port or host needs no edit to the plugin.
+- **Backup and restore**, in the README, for the binary on SQLite and for `compose.yaml` on Postgres:
+  what to copy (the database, the blobs and the master key), the commands, and what a restore under
+  another key loses.
 
 ### Changed
 
@@ -132,6 +144,13 @@ Notable changes to batondeck-kanban. The format follows
 - **serve stops the device session directory before it closes the store (P-205).** serve waits for
   the directory's dispatcher to finish a doorbell in flight before it closes the store (at most the
   10 s shutdown budget), so no directory write follows serve's return.
+- **The config refuses more of what it cannot use.** `public_url` (`BATONDECK_PUBLIC_URL`) must be an
+  http or https origin, `scheme://host[:port]`: a bare host, a path, a query, a non-empty fragment or
+  userinfo is refused naming `public_url_is_an_http_origin`, and a trailing `/` is dropped (with one,
+  serve's log line printed `…//blobs/`). A config file with anything after its JSON object but
+  whitespace is refused, a trailing `//` comment included, where 0.1.0 loaded the first object and
+  ignored the rest. A `.dockerignore` keeps `.env`, `master.key`, SQLite files, `dist/`,
+  `web/node_modules` and `.git` out of the image's build context; the binary it builds is unchanged.
 
 ## [0.1.0]
 
