@@ -30,7 +30,9 @@ var placeholder = regexp.MustCompile(`\$\{[^}]*\}|^\$[A-Za-z_][A-Za-z0-9_]*$|^\{
 // minted from it. The key is the agent name alone, so a name the client chose (an OAuth
 // client_name, a clientInfo.name) can equal another identity's label: ownProfileKey refuses that
 // key to register_agent_profile and rank_tasks {useProfile}, and rollUpSkill records such a
-// caller's outcome under its identity instead (P-340; the label rule is labelRefused, R2-Q1).
+// caller's outcome under its identity instead (P-340; the label rule is labelRefused, R2-Q1). An
+// agentless caller's key is its identity id, so a name equal to another identity's id would be that
+// identity's agentless key: the same three guards treat it so (P-351, namesAnotherIdentity).
 func agentKey(caller domain.Caller) (string, error) {
 	name := strings.TrimSpace(caller.Agent)
 	if name == "" {
@@ -43,11 +45,12 @@ func agentKey(caller domain.Caller) (string, error) {
 	return name, nil
 }
 
-// ownProfileKey is the caller's agentKey, FORBIDDEN when it is another agent's label for the caller
-// by labelRefused, with no master pass, as at a wake register: a profile is its agent's, and a label
-// has no admin override (P-340; REVIEW-257 R2-Q2). A caller with no agent (its key is its
-// identity) reads no token row.
-func (c *Core) ownProfileKey(ctx context.Context, caller domain.Caller, tool string) (string, error) {
+// ownProfileKey is the caller's agentKey in projectID, FORBIDDEN when it is another agent's label
+// for the caller by labelRefused, or another identity's id by namesAnotherIdentity (an account's,
+// or a member's of the project: that identity's agentless key, P-351), with no master pass, as at a
+// wake register: a profile is its agent's, and a label has no admin override (P-340; REVIEW-257
+// R2-Q2). A caller with no agent (its key is its identity) reads nothing.
+func (c *Core) ownProfileKey(ctx context.Context, caller domain.Caller, projectID, tool string) (string, error) {
 	key, err := agentKey(caller)
 	if err != nil || strings.TrimSpace(caller.Agent) == "" {
 		return key, err
@@ -59,6 +62,14 @@ func (c *Core) ownProfileKey(ctx context.Context, caller domain.Caller, tool str
 	if refused {
 		return "", forbidden("agentKey is another agent's label: a profile is written and used only on that label's own token",
 			map[string]any{"field": "agentKey", "label": key})
+	}
+	named, err := namesAnotherIdentity(ctx, c.store, c.cachedMember, projectID, caller, key)
+	if err != nil {
+		return "", c.mapErr(tool, err)
+	}
+	if named {
+		return "", forbidden("agentKey is another identity's id: that key is that identity's own agentless profile",
+			map[string]any{"field": "agentKey", "agentKey": key})
 	}
 	return key, nil
 }
@@ -90,7 +101,7 @@ func (s profilesSvc) Register(ctx context.Context, caller domain.Caller, req Reg
 	if req.MaxEffort != "" && !slices.Contains(EffortValues, req.MaxEffort) {
 		return RegisterAgentProfileResp{}, domain.Validation("unknown maxEffort: "+string(req.MaxEffort), map[string]any{"field": "maxEffort"})
 	}
-	key, err := s.c.ownProfileKey(ctx, caller, "register_agent_profile")
+	key, err := s.c.ownProfileKey(ctx, caller, req.ProjectID, "register_agent_profile")
 	if err != nil {
 		return RegisterAgentProfileResp{}, err
 	}
@@ -184,8 +195,9 @@ func listOrEmpty(ss []string) []string {
 // transition's transaction (conductor wrote it after the commit, best-effort; its TODO(spec) wanted
 // it inside). Handle time is approximated from cur's updatedAt, the claim time absent later edits.
 // No capability writes nothing. A key that is another agent's label for the caller (labelRefused's
-// rule over the token rows this transaction reads) is not the caller's to write: the outcome goes
-// under its identity, as for an unusable name, and the transition stands (P-340).
+// rule over the token rows this transaction reads), or another identity's id (namesAnotherIdentity
+// through this transaction, P-351), is not the caller's to write: the outcome goes under its
+// identity, as for an unusable name, and the transition stands (P-340).
 func (t *txn) rollUpSkill(cur store.Task, completed bool) error {
 	if len(cur.RequiredCapabilities) == 0 {
 		return nil
@@ -199,7 +211,11 @@ func (t *txn) rollUpSkill(cur store.Task, completed bool) error {
 		if err != nil {
 			return err
 		}
-		if labelRefusedIn(tokens, t.Caller, key, now) {
+		named, err := namesAnotherIdentity(t.ctx, t.Tx, txMember(t.Tx), t.ProjectID, t.Caller, key)
+		if err != nil {
+			return err
+		}
+		if named || labelRefusedIn(tokens, t.Caller, key, now) {
 			key = t.Caller.Identity
 		}
 	}

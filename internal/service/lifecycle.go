@@ -472,20 +472,53 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 	case !errors.Is(err, store.ErrNotFound):
 		return l.c.mapErr("assignee", err)
 	}
-	switch _, err := l.c.store.GetUser(ctx, assignee); {
-	case err == nil:
-		return other
-	case !errors.Is(err, store.ErrNotFound):
+	switch named, err := namesAnotherIdentity(ctx, l.c.store, l.c.cachedMember, projectID, caller, assignee); {
+	case err != nil:
 		return l.c.mapErr("assignee", err)
-	}
-	e, err := l.c.accessEntry(ctx, projectID, assignee)
-	if err != nil {
-		return err
-	}
-	if e.member {
+	case named:
 		return other
 	}
 	return l.ownLabel(ctx, caller, a, "assignee", assignee)
+}
+
+// namesAnotherIdentity reports whether name is the id of an identity other than caller's: an
+// account's (a user row) or a member's of projectID. It is ownAssignee's identity test by id, and
+// the profile key's (P-351): an agent name equal to another identity's id would key that
+// identity's agentless profile and stats. st is the store its reads go through, and member answers
+// the membership: c.store and accessEntry's cache (Core.cachedMember) outside a transaction, the
+// transaction's own store and txMember inside one (memstore's transaction holds the store's one
+// mutex, so a read through c.store there would wait on itself). The caller's own id reads nothing.
+func namesAnotherIdentity(ctx context.Context, st store.Store, member memberFunc, projectID string, caller domain.Caller, name string) (bool, error) {
+	if name == caller.Identity {
+		return false, nil
+	}
+	switch _, err := st.GetUser(ctx, name); {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, store.ErrNotFound):
+		return false, err
+	}
+	return member(ctx, projectID, name)
+}
+
+// memberFunc reports whether identityID is a member of projectID.
+type memberFunc func(ctx context.Context, projectID, identityID string) (bool, error)
+
+// cachedMember is accessEntry's membership, for a call outside a transaction.
+func (c *Core) cachedMember(ctx context.Context, projectID, identityID string) (bool, error) {
+	e, err := c.accessEntry(ctx, projectID, identityID)
+	return e.member, err
+}
+
+// txMember is the membership read through tx, for a call inside that transaction.
+func txMember(tx store.Store) memberFunc {
+	return func(ctx context.Context, projectID, identityID string) (bool, error) {
+		_, err := tx.GetMember(ctx, projectID, identityID)
+		if be, ok := domain.AsBatonDeckError(err); ok && be.Code == domain.CodeNotFound {
+			return false, nil
+		}
+		return err == nil, err
+	}
 }
 
 // ownLabel refuses, below master, a label another agent holds (P-277, audit A2): a live API token's

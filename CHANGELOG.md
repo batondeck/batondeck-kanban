@@ -15,6 +15,11 @@ Notable changes to batondeck-kanban. The format follows
   claims and events as that identity's agentless self. A token minted with such a label before this
   release now names no agent, as the default label `cli` does. `ID:x` and other labels mint as
   before, under the first-minter rule.
+- An agent name equal to another identity's id no longer reaches that identity's agentless profile
+  or stats (P-351). `register_agent_profile` and `rank_tasks {useProfile}` answer `FORBIDDEN`
+  (`details.agentKey`) for a key that is another account's id or another project member's id, and
+  the outcomes `complete_task` and `block_task` record go under the caller's own identity instead.
+  A caller naming its own id, or naming no agent, keeps its own profile as before.
 
 ## [0.1.0]
 
