@@ -68,7 +68,8 @@ type Retention struct {
 	// DeliveriesDays is an on-call delivery's window: 30 days by default. It is stamped on the row
 	// (and its alert state) when written, so a change applies to deliveries written after it. An
 	// alert state is swept on that window once its ticket is DONE or deleted; an open ticket's
-	// stays, so a late firing still appends to it.
+	// stays, so a late firing still appends to it. A DONE ticket reopened after its state was swept
+	// is no longer correlated: its alert's next firing files a new ticket.
 	DeliveriesDays int `json:"deliveries_days"`
 	// RawBodiesDays is a refused delivery's raw body window: 7 days by default, stamped likewise.
 	RawBodiesDays int `json:"raw_bodies_days"`

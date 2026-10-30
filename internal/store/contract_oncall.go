@@ -189,7 +189,8 @@ type Oncall interface {
 	// DeleteExpiredAlertStates deletes at most limit alert states expired at or before now whose
 	// ticket is gone or DONE, oldest expiry first, and returns how many (the retention sweep's). An
 	// expired row of an open ticket stays, since the next firing appends to that ticket through it,
-	// and so does a row with no expiry.
+	// and so does a row with no expiry. A DONE ticket reopened after its row went is no longer
+	// correlated: the next firing files a new ticket, and a resolved event is recorded.
 	DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error)
 }
 

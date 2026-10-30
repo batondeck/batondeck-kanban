@@ -478,11 +478,13 @@ func TestAutocloseSparesEveryTaskWrite(t *testing.T) {
 	}
 }
 
-// P-226: the retention sweep of alert states changes no ingest outcome, on memstore, SQLite and
-// Postgres. An open ticket's state, expired and passed by a sweep, still correlates the next firing,
-// which appends to that ticket; once the ticket is DONE, its expired state is swept and the next
-// firing files a new ticket, as it does with the row in place (the control).
-func TestASweptAlertStateChangesNoIngest(t *testing.T) {
+// P-226: the retention sweep keeps an open ticket's alert state and sweeps a DONE one's, on
+// memstore, SQLite and Postgres. An open ticket's state, expired and passed by a sweep, still
+// correlates the next firing, which appends to that ticket; once the ticket is DONE, its expired
+// state is swept and the next firing files a new ticket, as it does with the row in place (the
+// control). A DONE ticket reopened after the sweep is the outcome the sweep does change:
+// TestATicketReopenedAfterItsAlertStateWasSweptIsNoLongerCorrelated.
+func TestTheAlertStateSweepKeepsOpenTicketsAndSweepsDoneOnes(t *testing.T) {
 	const day = 24 * time.Hour
 	for _, eng := range []struct {
 		name string
@@ -547,6 +549,79 @@ func TestASweptAlertStateChangesNoIngest(t *testing.T) {
 			}
 			if again := e.deliver("control", "firing"); again.Result != "created" || *again.TaskID == *control.TaskID {
 				t.Fatalf("a firing over a DONE ticket with its row in place: %+v, want a new ticket", again)
+			}
+		})
+	}
+}
+
+// P-226, review B1 (the owner's ruling (a)): a DONE ticket reopened after the sweep took its expired
+// alert state is no longer correlated, on memstore, SQLite and Postgres. With the row in place (the
+// control: no sweep ran) the reopened ticket's alert appends to it on the next firing and a resolved
+// event acts on it; after the sweep a resolved event is recorded against no ticket and the next
+// firing files a new ticket, leaving the reopened one as it was.
+func TestATicketReopenedAfterItsAlertStateWasSweptIsNoLongerCorrelated(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"memstore", func(t *testing.T) store.Store {
+			s := memstore.New()
+			t.Cleanup(func() { s.Close() })
+			if _, err := s.Migrate(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}},
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(eng.name, func(t *testing.T) {
+			e := newAutocloseEnv(t, eng.open(t))
+			move := func(id string, to ...domain.Status) {
+				t.Helper()
+				for _, s := range to {
+					if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: id, Version: e.version(id), ToStatus: s}); err != nil {
+						t.Fatalf("move %s to %s: %v", id, s, err)
+					}
+				}
+			}
+			sweep := func() retention.Swept {
+				return (&retention.Sweeper{Store: e.st, Windows: retention.WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: e.clock.now,
+					Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(e.ctx)
+			}
+			// The control: DONE, expired, reopened, with no sweep in between.
+			c := e.deliver("control", "firing")
+			move(*c.TaskID, domain.InProgress, domain.Review, domain.Done)
+			e.clock.advance(DeliveryRetention + day)
+			move(*c.TaskID, domain.InProgress)
+			if got := e.deliver("control", "firing"); got.Result != string(store.ResultAppended) || got.TaskID == nil || *got.TaskID != *c.TaskID {
+				t.Fatalf("the control's firing over its reopened ticket: %+v, want appended to %s", got, *c.TaskID)
+			}
+			if got := e.deliver("control", "resolved"); got.Result == string(store.ResultRecorded) || got.TaskID == nil || *got.TaskID != *c.TaskID {
+				t.Fatalf("the control's resolved event over its reopened ticket: %+v, want it to act on %s", got, *c.TaskID)
+			}
+
+			// Swept: the same path, but the sweep runs while the ticket is DONE and its state expired.
+			s := e.deliver("swept", "firing")
+			move(*s.TaskID, domain.InProgress, domain.Review, domain.Done)
+			e.clock.advance(DeliveryRetention + day)
+			if got := sweep(); got.AlertStates != 1 {
+				t.Fatalf("the sweep over the DONE ticket's expired state: %+v, want it alone deleted", got)
+			}
+			move(*s.TaskID, domain.InProgress)
+			if got := e.deliver("swept", "resolved"); got.Result != string(store.ResultRecorded) || got.TaskID != nil {
+				t.Fatalf("a resolved event over the reopened ticket after the sweep: %+v, want recorded against no ticket", got)
+			}
+			next := e.deliver("swept", "firing")
+			if next.Result != string(store.ResultCreated) || next.TaskID == nil || *next.TaskID == *s.TaskID {
+				t.Fatalf("a firing over the reopened ticket after the sweep: %+v, want a new ticket, not %s", next, *s.TaskID)
+			}
+			if task, err := e.st.GetTask(e.ctx, e.project, *s.TaskID); err != nil || task.Status != domain.InProgress {
+				t.Fatalf("the reopened ticket after the new one was filed: %+v, %v, want it IN_PROGRESS as it was", task, err)
+			}
+			if st, err := e.st.GetAlertState(e.ctx, e.project, e.iid, "swept"); err != nil || st.TaskID != *next.TaskID {
+				t.Fatalf("the fingerprint's state after the new ticket: %+v, %v, want it on %s", st, err, *next.TaskID)
 			}
 		})
 	}

@@ -27,12 +27,14 @@ Notable changes to batondeck-kanban. The format follows
   connector authorization and every hourly refresh added rows for good. Inside the week of grace a
   rotated refresh token or a spent code presented again still finds its row and revokes its grant.
   The client and the grant itself stay (P-125).
-- **The retention sweep deletes the alert states of closed on-call tickets.** A fingerprint's
-  correlation row, stamped with the delivery window (`retention.deliveries_days`, 30 days by
-  default), is deleted once it has expired and its ticket is DONE or deleted; before, an integration
-  that sees a new fingerprint per incident added a row per incident for good. An open ticket's row
-  stays whatever its expiry, so a late firing still appends to that ticket, and no ingest outcome
-  changes (P-226).
+- **The retention sweep deletes the alert states of DONE or deleted on-call tickets.** A
+  fingerprint's correlation row, stamped with the delivery window (`retention.deliveries_days`, 30
+  days by default), is deleted once it has expired and its ticket is DONE or deleted; before, an
+  integration that sees a new fingerprint per incident added a row per incident for good. An open
+  ticket's row stays whatever its expiry, so a late firing still appends to that ticket. A DONE
+  ticket reopened after its expired row was swept is no longer correlated: its alert's next firing
+  files a new ticket, and a resolved event is recorded without annotating or closing the reopened
+  one (P-226).
 - **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and
   `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
   usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr
