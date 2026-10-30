@@ -16,34 +16,81 @@ import { InlineLoader } from '../brand.js';
 const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' };
 
 /**
- * MENTIONS NAME PEOPLE, NOT ACCOUNT IDS (P-314). A member is a `U-<hex>` account id, and the server
- * resolves an @token to a member by that id or by an alias, the account's login or display name, or
- * the local part of either (`internal/service/comments.go` mentionsOf, `internal/domain/mentions.go`).
- * A token is one word (MENTION_TOKEN is the server's handle pattern), so the composer inserts the
- * person's name: as is when it is one token, which the server reads as their alias; and when it is
- * not ("Mara Master"), the draft remembers whose name it is and the post sends that person's id,
- * which the body then renders back as the name. A body's `@U-<hex>`, posted so or written by hand
- * or by an agent, renders through `personName`: the name, else the shortened id.
+ * MENTIONS NAME PEOPLE, NOT ACCOUNT IDS (P-314). A member is a `U-<hex>` account id. The server
+ * resolves an @token by that id, which names exactly one member, or by an alias (a login, a display
+ * name, the local part of either), which every member sharing it answers to
+ * (`internal/service/comments.go` mentionsOf, `internal/domain/mentions.go`). So a picked person is
+ * posted by their id, always: the textarea shows `@<their name>`, the draft remembers where each
+ * pick sits and whose it is (one entry per occurrence, so two people with one name stay two), and
+ * the post replaces each still-intact pick with `@<id>`. A body's `@U-<hex>` then renders as the
+ * name, else the shortened id, as text: a name is never read as markdown, and code is left as written.
  */
-const MENTION_TOKEN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]{0,62}[a-zA-Z0-9])?$/;
 const ACCOUNT_ID = /^U-[0-9a-f-]{8,}$/i;
-const ACCOUNT_MENTION = /(^|[^a-zA-Z0-9._%+@-])@(U-[0-9a-f-]{8,})/gi;
+/**
+ * What extends a handle on the server (`mentionRE`): more handle characters that end in a letter or
+ * digit, or an `@domain`. Text starting with this, right after an id, makes the server read another
+ * handle, so the id is not the mention there.
+ */
+const HANDLE_TAIL = /^(?:[a-zA-Z0-9._%+-]*[a-zA-Z0-9]|@[a-zA-Z0-9.-]{1,251}\.[a-zA-Z]{2,24})/;
+/** A character before an `@` that makes it part of a word, not a mention (the server's left boundary). */
+const HANDLE_CHAR = /[a-zA-Z0-9._%+@-]/;
+/** An `@<account id>` the server reads as that id: a boundary before it, no handle tail after it. */
+const ACCOUNT_MENTION = /(^|[^a-zA-Z0-9._%+@-])@(U-[0-9a-f-]{7,}[0-9a-f])(?![a-zA-Z0-9._%+-]*[a-zA-Z0-9]|@[a-zA-Z0-9.-]{1,251}\.[a-zA-Z]{2,24})/gi;
 
-/** The body as a reader sees it: every `@<account id>` named. */
-function namedBody(body: string, names: DisplayNames): string {
-  return body.replace(ACCOUNT_MENTION, (_m, pre: string, id: string) => `${pre}@${personName(id, names)}`);
+/** A pick in the draft: `@<name>` starting at `at`, for the account `id`. */
+export interface Pick { at: number; name: string; id: string }
+
+/**
+ * The picks after the draft changed from `prev` to `next`: a pick before the edit stays, one after it
+ * moves with it, and one the edit touched is dropped (its text is no longer what was picked).
+ */
+export function movePicks(picks: Pick[], prev: string, next: string): Pick[] {
+  let head = 0;
+  while (head < prev.length && head < next.length && prev[head] === next[head]) head++;
+  let tail = 0;
+  while (tail < prev.length - head && tail < next.length - head && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail++;
+  const editEnd = prev.length - tail;
+  const shift = next.length - prev.length;
+  return picks.flatMap((k) => {
+    const end = k.at + 1 + k.name.length;
+    if (end <= head) return [k];
+    if (k.at >= editEnd) return [{ ...k, at: k.at + shift }];
+    return [];
+  });
 }
 
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** The body as posted: each picked multi-word `@Name` becomes `@<its account id>`, longest first. */
-function wireBody(body: string, picked: Record<string, string>): string {
+/**
+ * The body as posted: each pick whose `@<name>` is still intact where it was put (a mention boundary
+ * before it, nothing after it the server would read as more handle) becomes `@<its id>`. Picks are applied from the end
+ * so an earlier one's offset still holds.
+ */
+export function wireBody(body: string, picks: Pick[]): string {
   let out = body;
-  for (const name of Object.keys(picked).sort((a, b) => b.length - a.length)) {
-    const re = new RegExp(`(^|[^a-zA-Z0-9._%+@-])@${escapeRe(name)}(?![a-zA-Z0-9_%+-])`, 'g');
-    out = out.replace(re, (_m, pre: string) => `${pre}@${picked[name]}`);
+  for (const k of [...picks].sort((a, b) => b.at - a.at)) {
+    const end = k.at + 1 + k.name.length;
+    const intact = out.startsWith(`@${k.name}`, k.at)
+      && (k.at === 0 || !HANDLE_CHAR.test(out[k.at - 1]!))
+      && !HANDLE_TAIL.test(out.slice(end));
+    if (intact) out = `${out.slice(0, k.at)}@${k.id}${out.slice(end)}`;
   }
   return out;
+}
+
+interface MdNode { type: string; value?: string; children?: MdNode[] }
+
+/**
+ * A remark step naming a body's `@<account id>` mentions in its text nodes only. The name lands in a
+ * text node's value, so it renders as written (no markdown in it is read); `inlineCode` and `code`
+ * nodes are not text nodes, so an id the author quoted as code stays as they wrote it.
+ */
+function nameMentions(names: DisplayNames) {
+  const walk = (n: MdNode): void => {
+    if (n.type === 'text' && n.value) {
+      n.value = n.value.replace(ACCOUNT_MENTION, (_m, pre: string, id: string) => `${pre}@${personName(id, names)}`);
+    }
+    n.children?.forEach(walk);
+  };
+  return () => (tree: MdNode) => walk(tree);
 }
 
 interface TreeNode {
@@ -80,6 +127,7 @@ function CommentNode({
 }) {
   const c = node.comment;
   const author = personName(c.author, names);
+  const plugins = useMemo(() => [...(mdPlugins ?? []), nameMentions(names)], [names]);
   return (
     <div style={{ marginLeft: depth > 0 ? 16 : 0, borderLeft: depth > 0 ? '1px solid var(--border)' : undefined, paddingLeft: depth > 0 ? 12 : 0 }}>
       <div className="card" style={{ padding: 10 }}>
@@ -99,7 +147,7 @@ function CommentNode({
           </button>
         </Cluster>
         <div className="md" style={{ marginTop: 6, fontSize: 14 }}>
-          <ReactMarkdown components={mdComponents} remarkPlugins={mdPlugins}>{namedBody(c.body, names)}</ReactMarkdown>
+          <ReactMarkdown components={mdComponents} remarkPlugins={plugins}>{c.body}</ReactMarkdown>
         </div>
       </div>
       {node.children.length > 0 && (
@@ -137,12 +185,20 @@ export function Comments({
   // @mention autocomplete: when the caret follows an "@partial", suggest the candidates whose name
   // matches it. A candidate is an account id or an agent label; it is shown and matched by its name.
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  // Name → account id for the names this draft inserted that the server cannot read as one token.
-  const [picked, setPicked] = useState<Record<string, string>>({});
-  const candidates = useMemo(
-    () => mentionCandidates.map((id) => ({ id, name: personName(id, names) })),
-    [mentionCandidates, names],
-  );
+  // Each person this draft picked, where their name sits (one entry per occurrence).
+  const [picks, setPicks] = useState<Pick[]>([]);
+  // Two people can share a name: those get a hint, the full login when the web holds it (a member
+  // with no display name), else the shortened id.
+  const candidates = useMemo(() => {
+    const named = mentionCandidates.map((id) => ({ id, name: personName(id, names) }));
+    const count = new Map<string, number>();
+    for (const c of named) count.set(c.name, (count.get(c.name) ?? 0) + 1);
+    return named.map((c) => {
+      if ((count.get(c.name) ?? 0) < 2) return { ...c, hint: null };
+      const full = personName(c.id, names, { full: true });
+      return { ...c, hint: full !== c.name ? full : ACCOUNT_ID.test(c.id) ? `${c.id.slice(0, 10)}…` : null };
+    });
+  }, [mentionCandidates, names]);
   const suggestions = useMemo(() => {
     if (mentionQuery == null) return [];
     const q = mentionQuery.toLowerCase();
@@ -150,6 +206,7 @@ export function Comments({
   }, [mentionQuery, candidates]);
 
   const onBodyChange = (text: string, caret: number): void => {
+    setPicks((ks) => movePicks(ks, body, text));
     setBody(text);
     const before = text.slice(0, caret);
     const m = /(?:^|\s)@([\w.@%+-]*)$/.exec(before);
@@ -159,25 +216,27 @@ export function Comments({
   const insertMention = ({ id, name }: { id: string; name: string }): void => {
     const account = ACCOUNT_ID.test(id);
     const handle = account ? name : id; // an agent label is its own handle
-    if (account && !MENTION_TOKEN.test(name)) setPicked((p) => ({ ...p, [name]: id }));
     const ta = taRef.current;
     const caret = ta ? ta.selectionStart : body.length;
-    const before = body.slice(0, caret).replace(/@([\w.@%+-]*)$/, `@${handle} `);
+    // A function replacement: a name is text, and `$1` or `$&` in it must not be expanded.
+    const before = body.slice(0, caret).replace(/@([\w.@%+-]*)$/, () => `@${handle} `);
     const next = before + body.slice(caret);
+    const at = before.length - handle.length - 2;
+    setPicks((ks) => [...movePicks(ks, body, next), ...(account ? [{ at, name, id }] : [])]);
     setBody(next);
     setMentionQuery(null);
     queueMicrotask(() => ta?.focus());
   };
 
   const post = async (): Promise<void> => {
-    const text = wireBody(body.trim(), picked);
+    const text = wireBody(body, picks).trim();
     if (!text || busy) return;
     setBusy(true);
     setErr(null);
     try {
       await commentsApi.addComment(projectId, taskId, text, replyTo?.id);
       setBody('');
-      setPicked({});
+      setPicks([]);
       setReplyTo(null);
       await qc.invalidateQueries({ queryKey: ['comments', projectId, taskId] });
       void qc.invalidateQueries({ queryKey: ['hist', projectId] });
@@ -231,7 +290,8 @@ export function Comments({
           <div className="assign-menu" style={{ position: 'absolute', left: 8, bottom: 44, zIndex: 20 }}>
             {suggestions.map((s) => (
               <button key={s.id} className="assign-item" onClick={() => insertMention(s)}>
-                <Avatar id={s.id} label={s.name} nameOnly /> <span style={{ fontSize: 12 }}>{s.name}</span>
+                <Avatar id={s.id} label={s.name} nameOnly /> <span className="mention-name" style={{ fontSize: 12 }}>{s.name}</span>
+                {s.hint && <span className="muted" style={{ fontSize: 11 }}> {s.hint}</span>}
               </button>
             ))}
           </div>

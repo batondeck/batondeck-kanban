@@ -95,22 +95,58 @@ describe('comments', () => {
 
 describe('the comment composer and comment bodies', () => {
   /** Posts recorded from the routed fetch: [path, the JSON body]. */
-  function routed(comments: unknown[]): Array<[string, Record<string, unknown>]> {
+  function routed(comments: unknown[], proj: unknown = project): Array<[string, Record<string, unknown>]> {
     const posts: Array<[string, Record<string, unknown>]> = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const p = String(input).split('?')[0]!;
         if (init?.method === 'POST') posts.push([p, JSON.parse(String(init.body)) as Record<string, unknown>]);
-        const routes: Record<string, unknown> = { '/api/projects/p1': project, '/api/projects/p1/tasks/T-1/comments': { comments } };
+        const routes: Record<string, unknown> = { '/api/projects/p1': proj, '/api/projects/p1/tasks/T-1/comments': { comments } };
         return { ok: true, status: 200, json: async () => routes[p] ?? {} } as Response;
       }),
     );
     return posts;
   }
-  const type = (ta: HTMLTextAreaElement, text: string): void => {
-    fireEvent.change(ta, { target: { value: text, selectionStart: text.length } });
+  /** The draft becomes `text`, the caret at `caret` (its end by default), as one keystroke would leave it. */
+  const type = (ta: HTMLTextAreaElement, text: string, caret = text.length): void => {
+    fireEvent.change(ta, { target: { value: text, selectionStart: caret } });
   };
+  /** Type `text` at the end of the draft. */
+  const append = (ta: HTMLTextAreaElement, text: string): void => type(ta, ta.value + text);
+  /** Type `text` at `pos` in the draft, the caret after it. */
+  const insertAt = (ta: HTMLTextAreaElement, pos: number, text: string): void =>
+    type(ta, ta.value.slice(0, pos) + text + ta.value.slice(pos), pos + text.length);
+  /** The menu's entries as [name, hint]. */
+  const menu = (): Array<[string, string | null]> =>
+    [...document.querySelectorAll('.assign-menu .assign-item')].map((b) => [
+      b.querySelector('.mention-name')!.textContent!,
+      b.querySelector('.mention-name + .muted')?.textContent?.trim() ?? null,
+    ]);
+  /** Open the menu with `@<query>` typed at the end, and pick the entry whose name and hint match. */
+  const pick = async (ta: HTMLTextAreaElement, query: string, name: string, hint: string | null = null): Promise<void> => {
+    append(ta, `@${query}`);
+    await waitFor(() => expect(menu().some(([n, h]) => n === name && h === hint)).toBe(true));
+    const i = menu().findIndex(([n, h]) => n === name && h === hint);
+    fireEvent.click(document.querySelectorAll('.assign-menu .assign-item')[i]!);
+  };
+  const draft = async (proj: unknown, candidates: string[]) => {
+    const posts = routed([], proj);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={candidates} />);
+    const ta = (await screen.findByPlaceholderText(/@mention a teammate/)) as HTMLTextAreaElement;
+    await waitFor(() => expect(screen.queryByText('No comments yet.')).toBeInTheDocument());
+    const send = async (): Promise<unknown> => {
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+      await waitFor(() => expect(posts.length).toBe(1));
+      return posts[0]![1].body;
+    };
+    return { ta, send };
+  };
+  /** A project whose members are `display` (id → memberDisplay), all workers. */
+  const team = (display: Record<string, string>) => ({
+    project: { ...project.project, members: Object.fromEntries(Object.keys(display).map((id) => [id, 'worker'])) },
+    memberDisplay: display,
+  });
 
   it('suggests people by name, and a picked name posts a mention the server resolves', async () => {
     const posts = routed([]);
@@ -128,17 +164,112 @@ describe('the comment composer and comment bodies', () => {
     expect(ta.value).toBe('see @Alice Doe ');
     type(ta, `${ta.value}and @bo`);
     fireEvent.click(await screen.findByRole('button', { name: /bob/ }));
-    // "bob" is one token, which the server resolves as his alias: it is posted as is.
+    // "bob" is one word, but another member can answer to it too: a pick posts the id, always.
     expect(ta.value).toBe('see @Alice Doe and @bob ');
     // A member nothing names is offered by its shortened id, and posted by the whole one.
     type(ta, `${ta.value}and @U-9f`);
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(GHOST_SHORT) }));
     expect(ta.value).toBe(`see @Alice Doe and @bob and @${GHOST_SHORT} `);
-    type(ta, `see @Alice Doe and @bob, and @${GHOST_SHORT} please.`);
+    insertAt(ta, 'see @Alice Doe and @bob'.length, ',');
+    append(ta, 'please.');
+    expect(ta.value).toBe(`see @Alice Doe and @bob, and @${GHOST_SHORT} please.`);
     noRawIds(document.body);
     fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
     await waitFor(() => expect(posts.length).toBe(1));
-    expect(posts[0]).toEqual(['/api/projects/p1/tasks/T-1/comments', { body: `see @${ALICE} and @bob, and @${GHOST} please.` }]);
+    expect(posts[0]).toEqual(['/api/projects/p1/tasks/T-1/comments', { body: `see @${ALICE} and @${BOB}, and @${GHOST} please.` }]);
+  });
+
+  // Two people with one name: the menu tells them apart, and each pick posts that person's id.
+  const SAM1 = 'U-5a5a5a5a5a5a5a5a';
+  const SAM2 = 'U-5b5b5b5b5b5b5b5b';
+  it('posts two different ids for two "Sam Lee" members picked one after the other', async () => {
+    const { ta, send } = await draft(team({ [SAM1]: 'Sam Lee', [SAM2]: 'Sam Lee' }), [SAM1, SAM2]);
+    append(ta, 'cc ');
+    await pick(ta, 'sam', 'Sam Lee', 'U-5a5a5a5a…');
+    // A display name is all the web holds for these two, so the shortened id tells them apart.
+    expect(menu()).toEqual([]);
+    append(ta, 'and ');
+    await pick(ta, 'sam', 'Sam Lee', 'U-5b5b5b5b…');
+    expect(ta.value).toBe('cc @Sam Lee and @Sam Lee ');
+    expect(await send()).toBe(`cc @${SAM1} and @${SAM2}`);
+  });
+
+  it('posts only the picked id when two members are both "sam"', async () => {
+    const SAMA = 'U-5c5c5c5c5c5c5c5c';
+    const SAMB = 'U-5d5d5d5d5d5d5d5d';
+    // No display name: the server sends each login, and the web shows its local part.
+    const { ta, send } = await draft(team({ [SAMA]: 'sam@a.example', [SAMB]: 'sam@b.example' }), [SAMA, SAMB]);
+    append(ta, '@sam');
+    await waitFor(() => expect(menu()).toEqual([['sam', 'sam@a.example'], ['sam', 'sam@b.example']]));
+    type(ta, '');
+    await pick(ta, 'sam', 'sam', 'sam@a.example');
+    append(ta, 'over to you');
+    expect(ta.value).toBe('@sam over to you');
+    expect(await send()).toBe(`@${SAMA} over to you`);
+  });
+
+  it('keeps a name with $1, $& and regex characters as written, and posts its id', async () => {
+    const REX = 'U-7e7e7e7e7e7e7e7e';
+    const name = 'Rex (ops) $1.* $& [x]+?';
+    const { ta, send } = await draft(team({ [REX]: name }), [REX]);
+    append(ta, 'cc ');
+    await pick(ta, 'rex', name);
+    expect(ta.value).toBe(`cc @${name} `);
+    append(ta, 'thanks');
+    expect(await send()).toBe(`cc @${REX} thanks`);
+  });
+
+  // A name that begins another: each pick is its own, where it was put.
+  const ANN = 'U-a1a1a1a1a1a1a1a1';
+  const ANNLEE = 'U-a2a2a2a2a2a2a2a2';
+  const anns = team({ [ANN]: 'Ann', [ANNLEE]: 'Ann Lee' });
+  it('posts "Ann Lee" and "Ann" as two people when one name begins the other', async () => {
+    const { ta, send } = await draft(anns, [ANN, ANNLEE]);
+    await pick(ta, 'ann', 'Ann Lee');
+    append(ta, 'and ');
+    await pick(ta, 'ann', 'Ann');
+    expect(ta.value).toBe('@Ann Lee and @Ann ');
+    // Text typed before both picks moves them; it does not lose them.
+    insertAt(ta, 0, 'cc ');
+    expect(ta.value).toBe('cc @Ann Lee and @Ann ');
+    expect(await send()).toBe(`cc @${ANNLEE} and @${ANN}`);
+  });
+
+  it('posts a picked name the author then ran into a longer word as the text they typed', async () => {
+    const { ta, send } = await draft(anns, [ANN, ANNLEE]);
+    append(ta, 'hi ');
+    await pick(ta, 'ann', 'Ann Lee');
+    // "@Ann Lee" became "@Ann Leeds": that is not who was picked, and no id is posted for it.
+    insertAt(ta, 'hi @Ann Lee'.length, 'ds');
+    expect(ta.value).toBe('hi @Ann Leeds ');
+    expect(await send()).toBe('hi @Ann Leeds');
+  });
+
+  it('posts no id for a pick whose name the author changed', async () => {
+    const { ta, send } = await draft(anns, [ANN, ANNLEE]);
+    await pick(ta, 'ann', 'Ann Lee');
+    // Deleting " Lee" leaves "@Ann": the edit touched the pick, so it is dropped, not posted as Ann Lee.
+    type(ta, '@Ann ', 4);
+    append(ta, 'ok');
+    expect(await send()).toBe('@Ann ok');
+  });
+
+  it('posts no id for a pick changed and changed back: an edited pick is no longer a pick', async () => {
+    const { ta, send } = await draft(anns, [ANN, ANNLEE]);
+    await pick(ta, 'ann', 'Ann Lee');
+    type(ta, '@Ann Lex ', 8);
+    type(ta, '@Ann Lee ', 8);
+    append(ta, 'ok');
+    expect(await send()).toBe('@Ann Lee ok');
+  });
+
+  it('posts no id for a pick the author joined onto the word before it', async () => {
+    const { ta, send } = await draft(anns, [ANN, ANNLEE]);
+    append(ta, 'hi ');
+    await pick(ta, 'ann', 'Ann Lee');
+    // "hi@Ann Lee" is not a mention to the server, so no id is posted into it.
+    type(ta, 'hi@Ann Lee ', 2);
+    expect(await send()).toBe('hi@Ann Lee');
   });
 
   it("render a body's account-id mentions by name, and shorten an unnamed one", async () => {
@@ -147,6 +278,43 @@ describe('the comment composer and comment bodies', () => {
     await screen.findByText(/please look/);
     await waitFor(() => expect(screen.getByText(/please look/).textContent).toBe(`@Alice Doe please look, and @${GHOST_SHORT} too`));
     noRawIds(document.body);
+  });
+
+  it('render a name as text: markdown and HTML in it are not read', async () => {
+    const MO = 'U-3c3c3c3c3c3c3c3c';
+    const HAL = 'U-4d4d4d4d4d4d4d4d';
+    const display = { ...memberDisplay, [MO]: 'Mo *ops* [link](http://evil.example)', [HAL]: '<i>Hal</i> <script>x</script>' };
+    routed([{ id: 'c1', taskId: 'T-1', author: BOB, body: `ping @${MO} and @${HAL} now`, parentCommentId: null, mentions: [MO, HAL], ts: TS }],
+      { ...project, memberDisplay: display });
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    const md = await waitFor(() => {
+      const el = document.querySelector('.md')!;
+      expect(el.textContent).toBe('ping @Mo *ops* [link](http://evil.example) and @<i>Hal</i> <script>x</script> now');
+      return el;
+    });
+    for (const tag of ['em', 'a', 'i', 'script']) expect(md.querySelector(tag), `<${tag}> rendered`).toBeNull();
+  });
+
+  it("leave an id the author wrote as code, and one the server does not read as that id, as written", async () => {
+    const body = [
+      `Use \`@${ALICE}\` here, and @${ALICE}x, @${ALICE}_y, @${ALICE}.z and @${ALICE}@ex.example stay, as does mail@${ALICE}; @${ALICE}. ends.`,
+      '',
+      '```',
+      `@${ALICE}`,
+      '```',
+    ].join('\n');
+    routed([{ id: 'c1', taskId: 'T-1', author: BOB, body, parentCommentId: null, mentions: [ALICE], ts: TS }]);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    const md = await waitFor(() => {
+      const el = document.querySelector('.md')!;
+      expect(el.querySelector('pre')).not.toBeNull();
+      return el;
+    });
+    expect(md.querySelector('p')!.textContent).toBe(
+      `Use @${ALICE} here, and @${ALICE}x, @${ALICE}_y, @${ALICE}.z and @${ALICE}@ex.example stay, as does mail@${ALICE}; @Alice Doe. ends.`,
+    );
+    expect(md.querySelector('p code')!.textContent).toBe(`@${ALICE}`);
+    expect(md.querySelector('pre')!.textContent!.trim()).toBe(`@${ALICE}`);
   });
 });
 
