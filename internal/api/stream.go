@@ -345,10 +345,12 @@ func (s *stream) compose(ctx context.Context, caller domain.Caller, projectID, b
 }
 
 // replay is the project's changes after since, reading at most replayCap rows of the change log
-// (one ReplayAll per replayPage, so at most replayCap/replayPage+1 statements): resync when more
-// rows than that follow the cursor, or when the cursor is below the change log's horizon (P-281).
-// The retention sweep deletes the oldest rows first (DeleteChangesOlderThan), so the cursor's own
-// row still in the log proves that no row after it was swept: the first read starts one below the
+// after the cursor (one ReplayAll per replayPage, the first one also reading the cursor's own row):
+// resync when more rows than that follow the cursor, or when the cursor is below the change log's
+// horizon (P-281). The retention sweep deletes the rows older than its cut (DeleteChangesOlderThan),
+// and ts follows id order, so the cursor's own row still in the log shows that no row after it was
+// swept (on Postgres ts is each serve process's own clock, so a skew between processes could break
+// that order for rows written at the cut): the first read starts one below the
 // cursor to see that row, which is not replayed or counted again. A cursor whose row is gone may
 // have missed swept rows that ReadChanges' id > since would skip in silence, so it gets resync; if
 // nothing after it was swept, that costs the client one refetch. Cursor 0 has no row of its own and

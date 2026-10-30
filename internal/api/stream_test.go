@@ -400,8 +400,10 @@ func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
 // P-281: a reconnect whose cursor row the retention sweep deleted gets resync and no board frame, by
 // Last-Event-ID and by ?cursor=: when a later row of the board survived the sweep, and when only
 // another board's row did (ReadChanges' id > since found nothing of this board, so the stream used to
-// stay silent). The controls: the same cursor before any sweep, and after a sweep of only the rows
-// older than it, replays one board frame.
+// stay silent), and when nothing at all survived (the first page is empty). A cursor above the newest
+// id (a restored or replaced store) gets resync too. Cursor 0 replays from id 1 while the log still
+// starts there, and gets resync once id 1 is swept. The controls: the same cursor before any sweep,
+// and after a sweep of only the rows older than it, replays one board frame.
 func TestStreamResyncsACursorBelowTheSweptHorizon(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		l := newLive(t, s, Options{Ping: time.Minute})
@@ -460,10 +462,13 @@ func TestStreamResyncsACursorBelowTheSweptHorizon(t *testing.T) {
 		l.addTask(t, l.caller(), pid, bid, "after")
 
 		expect(seen.id, "board", "before any sweep")
+		expect("0", "board", "cursor 0 while the log still starts at id 1")
+		expect(strconv.FormatInt(atoi(t, seen.id)+1000, 10), "resync", "a cursor above the newest id")
 		if n := sweep(older); n == 0 {
 			t.Fatal("the sweep of the rows older than the cursor deleted none")
 		}
 		expect(seen.id, "board", "the rows older than the cursor swept, its own kept")
+		expect("0", "resync", "cursor 0 once id 1 is swept")
 
 		if n := sweep(cut); n == 0 {
 			t.Fatal("the sweep up to the cursor deleted none")
@@ -476,6 +481,12 @@ func TestStreamResyncsACursorBelowTheSweptHorizon(t *testing.T) {
 			t.Fatal("the sweep of the board's rows deleted none")
 		}
 		expect(seen.id, "resync", "every row of the board swept, another project's kept")
+
+		if n := sweep(tick()); n == 0 { // every row of the log, so the first page comes back empty
+			t.Fatal("the sweep of every row deleted none")
+		}
+		expect(seen.id, "resync", "every row of the log swept")
+		expect("0", "resync", "cursor 0 with every row of the log swept")
 	})
 }
 
