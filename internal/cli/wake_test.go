@@ -272,7 +272,9 @@ type client struct {
 
 func (s *dirServer) client(t *testing.T, session, peerTok string) *client {
 	t.Helper()
-	cmd := exec.Command("sleep", "120")
+	// The process outlives any test (the cleanup kills it): one that exited mid-test is, rightly, a
+	// dead pid the directory drops, and a -race test on a 2-vCPU runner can run past 120 s.
+	cmd := exec.Command("sleep", "3600")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
