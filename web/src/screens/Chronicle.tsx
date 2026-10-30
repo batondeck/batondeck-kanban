@@ -26,7 +26,7 @@ import * as projectsApi from '../api/projects.js';
 import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
 import { displayAgentName } from '../agentStatus.js';
 import { Button, Chip, Chips, Cluster, Empty, Note, Panel, Section, Stack, Tag } from '../ui.js';
-import { ChronicleBlockView } from '../chronicleBlocks.js';
+import { ChronicleBlockView, sameBlockText } from '../chronicleBlocks.js';
 import { useProject } from '../projectContext.js';
 import { clearPalette, publishPalette } from '../palette.js';
 import { railsOf, sortByDate, type SortField } from '../chronicleSearch.js';
@@ -988,7 +988,7 @@ export function ChroniclePageView() {
             </span>
             {theirs?.blocks.map((b) => {
               const mine = draft.find((d) => d.id === b.id);
-              const changed = (mine?.text ?? '').trim() !== b.text.trim();
+              const changed = !sameBlockText(mine?.text, b.text);
               return (
                 <div key={b.id} className={changed ? 'chr-diff-row is-changed' : 'chr-diff-row'}>
                   <pre aria-label={`Theirs ${b.id}`}>{b.text}</pre>
@@ -1218,7 +1218,7 @@ export function ChronicleHistory() {
     return ids.map((id) => {
       const lb = l.blocks.find((x) => x.id === id);
       const rb = r.blocks.find((x) => x.id === id);
-      return { id, lb, rb, changed: (lb?.text ?? '').trim() !== (rb?.text ?? '').trim() };
+      return { id, lb, rb, changed: !sameBlockText(lb?.text, rb?.text) };
     });
   }, [pair.data]);
 

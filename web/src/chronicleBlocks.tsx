@@ -10,6 +10,23 @@ import { Cluster, Tag, type TagKind } from './ui.js';
 import type { ChronicleBlock } from './types.js';
 
 /**
+ * A signed download URL as the server writes one into a block's text on every read (P-244):
+ * `/blobs/<id>?exp=<unix seconds>&sig=<hex>`, valid 15 minutes from THAT read.
+ */
+const SIGNED_BLOB_QUERY = /(\/blobs\/[0-9a-f]{64})\?exp=[0-9]{1,19}&sig=[0-9a-f]{64}/g;
+
+/**
+ * Whether two reads of a block say the same thing, for the conflict panel and the history diff.
+ * Each read signs an embedded attachment URL afresh, so an image nobody touched differs between
+ * two reads in its `exp` and `sig` alone; both are masked here. A different blob, host or any other
+ * character still differs. Outer whitespace never counted.
+ */
+export function sameBlockText(a: string | undefined, b: string | undefined): boolean {
+  const norm = (t: string | undefined) => (t ?? '').replace(SIGNED_BLOB_QUERY, '$1').trim();
+  return norm(a) === norm(b);
+}
+
+/**
  * The mapping the file header explains. Kept as data so a new state cannot be added silently.
  * `derived` maps to NO chip (T-491): it is ~95% of every generated record, so a per-block tag was
  * pure noise — a derived block's provenance IS its citation, rendered as the small grey reference

@@ -14,7 +14,6 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
-	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // chronicleBlobSHA is the blob the records embed; no file is needed, only its signed URL.
@@ -39,12 +38,14 @@ func wantFreshBlobURL(t *testing.T, core *service.Core, where, text string) {
 	}
 }
 
-// TestChronicleBlobURLs (P-244), on each engine: a record that embeds an attachment's download URL
-// keeps showing it after the URL's BlobURLTTL. The write stores the URL in its stable form
-// (path-only, exp=0); every read (the page, a version, a conflict's theirs) signs it afresh; a
-// round trip of the read text stores the same bytes and drifts no derived block; a row the store
-// holds in the pre-fix shape is re-signed on read; a forged signature and a foreign URL are left
-// byte for byte, on write and on read.
+// TestChronicleBlobURLs (P-244), on each engine, over REST: a record that embeds an attachment's
+// live download URL keeps showing it after the URL's BlobURLTTL. The write stores the URL in its
+// stable form (path-only, exp=0); every read (the page, a version, a conflict's theirs) signs it
+// afresh; a round trip of the read text stores the same bytes and drifts no derived block; a
+// re-ingest's expired URL for a blob the page held is stored stable too, while an expired URL the
+// page never held is stored and read as written; a forged signature and a foreign URL are left byte
+// for byte, on write and on read. The binding rules on every engine, and rows stored before the
+// fix, are TestChronicleBlobURLsStayBound in internal/service.
 func TestChronicleBlobURLs(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		ctx := context.Background()
@@ -62,11 +63,12 @@ func TestChronicleBlobURLs(t *testing.T) {
 			}
 			return out
 		}
+		live := s.Core.SignBlobURL(ctx, chronicleBlobSHA, blob.Download, time.Now().Add(10*time.Minute).Truncate(time.Second))
 		expired := s.Core.SignBlobURL(ctx, chronicleBlobSHA, blob.Download, time.Now().Add(-time.Hour).Truncate(time.Second))
 		stable := strings.TrimPrefix(s.Core.SignBlobURL(ctx, chronicleBlobSHA, blob.Download, time.Unix(0, 0)), s.Core.BlobBase(ctx))
 		forged := "http://servicetest.invalid/blobs/" + strings.Repeat("b", 64) + "?exp=" + strconv.FormatInt(time.Now().Unix()-60, 10) + "&sig=" + strings.Repeat("0", 64)
 		foreign := "https://example.com/shot.png"
-		text := "The screenshot:\n\n![shot](" + expired + ")\n\n![forged](" + forged + ") ![foreign](" + foreign + ")"
+		text := "The screenshot:\n\n![shot](" + live + ")\n\n![forged](" + forged + ") ![foreign](" + foreign + ")"
 		blockJSON := func(id, text string) string {
 			b, _ := json.Marshal(map[string]any{"id": id, "text": text, "citations": []any{}, "origin": nil})
 			return string(b)
@@ -137,16 +139,15 @@ func TestChronicleBlobURLs(t *testing.T) {
 		items := cview["conflicts"].(map[string]any)["items"].([]any)
 		wantFreshBlobURL(t, s.Core, "GET page conflict theirs", items[0].(map[string]any)["theirs"].(map[string]any)["text"].(string))
 
-		// A record stored before the fix: the expired URL as written, re-signed on read.
-		legacy, err := s.Store.UpsertChroniclePage(ctx, store.UpsertChroniclePageInput{ProjectID: pid, Kind: "adr", Slug: "adr/legacy", Title: "Legacy",
-			Blocks: []domain.ChronicleBlock{{ID: "a-1", Text: "Before: ![shot](" + expired + ")"}}, Source: domain.SourceHuman, Author: h.userID, RefuseExisting: true})
-		if err != nil {
-			t.Fatal(err)
+		// An expired URL on a page that never held the blob: stored and read as written, dead.
+		lone := "Pasted late: ![shot](" + expired + ")"
+		late := ok(h.do("POST", pc, `{"kind":"adr","slug":"adr/late","title":"Late","blocks":[`+blockJSON("a-1", lone)+`]}`, nil))
+		if got := stored(late["pageId"].(string), late["versionId"].(string))[0].Text; got != lone {
+			t.Fatalf("an unheld expired URL stored %q, want it as written %q", got, lone)
 		}
-		if got := stored(legacy.Page.ID, legacy.Page.HeadVersionID)[0].Text; !strings.Contains(got, expired) {
-			t.Fatalf("the legacy row %q does not hold the expired URL", got)
+		if got := headText(ok(h.do("GET", pc+"/"+late["pageId"].(string), "", nil)), 0); got != lone {
+			t.Fatalf("an unheld expired URL read %q, want it as written %q", got, lone)
 		}
-		wantFreshBlobURL(t, s.Core, "GET legacy page", headText(ok(h.do("GET", pc+"/"+legacy.Page.ID, "", nil)), 0))
 		t.Logf("%s: stored %q; read %q", s.Engine, want, read)
 	})
 }

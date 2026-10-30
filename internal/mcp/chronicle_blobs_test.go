@@ -16,8 +16,9 @@ import (
 )
 
 // TestChronicleBlobURLs (P-244): over MCP on each engine, a record created with an attachment's
-// download URL past its expiry reads back, on the chronicle-page and chronicle-version resources,
-// with that blob's URL signed afresh by the server, valid BlobURLTTL from the read.
+// live download URL, ten minutes from expiry, reads back on the chronicle-page and
+// chronicle-version resources with that blob's URL signed afresh by the server, valid BlobURLTTL
+// from the read. (An expired URL the page never held stays dead: TestChronicleBlobURLsStayBound.)
 func TestChronicleBlobURLs(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		ctx := context.Background()
@@ -25,9 +26,9 @@ func TestChronicleBlobURLs(t *testing.T) {
 		ada := &caller{t: t, cs: h.Connect(t, stackOwner), called: map[string]int{}}
 		p := str(ada.call("create_project", map[string]any{"name": "Ada's"})["projectId"])
 		sha := "a116e65f9c020dc5c38664593e74e1a5eda18119e716763789af34739f8ffe44"
-		expired := s.Core.SignBlobURL(ctx, sha, blob.Download, time.Now().Add(-time.Hour).Truncate(time.Second))
+		live := s.Core.SignBlobURL(ctx, sha, blob.Download, time.Now().Add(10*time.Minute).Truncate(time.Second))
 		created := ada.call("create_chronicle_page", map[string]any{"projectId": p, "kind": "adr", "slug": "adr/shot", "title": "Shot",
-			"blocks": cblocks("a-1", "![shot]("+expired+")")})
+			"blocks": cblocks("a-1", "![shot]("+live+")")})
 		page, version := str(created["pageId"]), str(created["versionId"])
 		re := regexp.MustCompile(`\(([^)]*/blobs/` + sha + `\?exp=([0-9]+)&sig=[0-9a-f]+)\)`)
 		fresh := func(uri string, text func(map[string]any) string) {
