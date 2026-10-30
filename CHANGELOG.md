@@ -446,7 +446,9 @@ this section's headings in CHANGELOG.md, are all part of it.
   publish creates the tag (owner 2026-10-29).
 - The `release-draft` workflow (`.github/workflows/release-draft.yml`): RELEASING.md's steps 1, 4, 5 and 6
   on demand, with step 3's tag made locally and no gate run, ending in a draft release a maintainer
-  publishes (Z-03 from the cloud, owner 2026-10-29).
+  publishes (Z-03 from the cloud, owner 2026-10-29). Its `replace` input first deletes an existing
+  release of that version and its tag, so a version is re-cut from a later commit by CI alone (owner
+  2026-10-30).
 
 - `docs/adr/`: the five decision records the tree cites, ADR-0001 to ADR-0005, copied unchanged
   from the planning workspace, until now their only home (P-309, audit D4), and a README.

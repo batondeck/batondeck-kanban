@@ -15,7 +15,9 @@
 # gate (step 3's pre-push `make check` on both engines: the candidate must be a commit whose tree
 # the gate has passed, which every commit on main is, since main lands through gated pushes), step
 # 5's `docker run … version` smoke, and the publish itself. Run it with the candidate's full SHA;
-# it refuses a candidate that is not on main.
+# it refuses a candidate that is not on main. With `replace`, an existing v<version> release and its
+# tag are deleted just before the draft is created, so a published version can be re-cut from a later
+# commit; release-publish then creates the tag again at the new candidate.
 name: release-draft
 
 on:
@@ -32,6 +34,10 @@ on:
         description: Push ghcr.io/batondeck/batondeck-kanban:<version> (and :latest)
         type: boolean
         default: true
+      replace:
+        description: Delete an existing v<version> release and its tag first, so this draft replaces it
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -120,6 +126,21 @@ jobs:
             printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` for linux/amd64 and linux/arm64, built from this tag with `make image VERSION=%s`.\n' "$VERSION" "$VERSION" >> notes.md
           fi
           cat notes.md
+
+      # replace (owner 2026-10-30: v0.1.0 re-cut from a later main, by CI only). It runs only after the
+      # build, the second build and the image have succeeded, so a failed run leaves the old release.
+      - name: Replace, when asked, the existing release and its tag
+        if: ${{ inputs.replace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,targetCommitish; then
+            gh release delete "v$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          fi
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then
+            git push origin ":refs/tags/v$VERSION"
+          fi
+          if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then echo "tag v$VERSION still exists"; exit 1; fi
 
       - name: Step 6, the DRAFT release with its assets
         env:
