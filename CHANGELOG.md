@@ -6,6 +6,35 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `trusted_proxies` (`BATONDECK_TRUSTED_PROXIES`): the reverse proxies, as IP addresses or CIDRs,
+  whose `X-Forwarded-For` the server reads (P-291). A request from one counts against the rightmost
+  address in that header that is not itself a trusted proxy, so behind a proxy the sign-in limit
+  (`/api/login` and the OAuth sign-in page) and `/register`'s limit count each client, not every
+  user as the proxy. Unset, the header is never read and the peer counts, as before; a malformed
+  entry stops `serve` at start. The README's step 6 and `compose.yaml` say how to set it.
+
+### Changed
+
+- `POST /hooks/{id}` over its rate budget, or over the pre-check's burst, answers
+  `503 Service Unavailable` with `Retry-After` and `{"code":"RATE_LIMITED","retryable":true,…}`,
+  not 429 (P-353; owner call 2026-10-30, a change to R2.9's "the 11th is 429"). Alertmanager's
+  webhook retries only a 5xx, so a 429 dropped the alert that tripped the limit; PagerDuty retries
+  both. `Retry-After` is unchanged: `ceil(60/ratePerMin)` seconds, 1 for the pre-check. The
+  integration form's hint says so instead of promising a retry of a 429.
+
+### Fixed
+
+- A path the board does not have answers 404, not the web UI's page with 200 (P-303): the
+  catch-all serves the UI only for the paths it routes (`/projects`, a board or task link,
+  `/chronicle/…`, `/agents`, `/settings`, `/oncall` and the rest of `web/src/App.tsx`'s routes), and
+  any other GET, such as `/docs`, `/mcp/`, `/healthz/`, `/blobs/` or bare `/api`, is 404. With OAuth
+  off (no `public_url`), `/.well-known/oauth-authorization-server` and
+  `/.well-known/oauth-protected-resource[/mcp]` are therefore 404, so an MCP client probing
+  discovery after `/mcp`'s 401 reads "no OAuth" instead of failing to parse a web page (P-302). A
+  mistyped address in the browser now shows the 404 instead of redirecting to `/projects`.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

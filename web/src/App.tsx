@@ -136,7 +136,7 @@ function Foot() {
               </button>
             ))}
           </div>
-          <a href="/docs" target="_blank" rel="noreferrer" role="menuitem">Docs</a>
+          <a href="https://github.com/batondeck/batondeck-kanban#readme" target="_blank" rel="noreferrer" role="menuitem">Docs</a>
           <a href="https://github.com/batondeck/batondeck-kanban/issues" target="_blank" rel="noreferrer" role="menuitem">Help</a>
           <button role="menuitem" onClick={() => fire(logout())}>Sign out</button>
         </div>

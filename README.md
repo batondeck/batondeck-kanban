@@ -120,6 +120,21 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
 client reached the server at, so behind a proxy that rewrites the Host header, set it.
 
+Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
+failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
+address) would count all your users as one: ten mistyped passwords lock everyone out until the
+budget refills, and a steady trickle of wrong ones keeps them out. Name the proxy and the server
+counts each client by the address the proxy appends to `X-Forwarded-For` instead:
+
+```bash
+export BATONDECK_TRUSTED_PROXIES=127.0.0.1,::1   # or trusted_proxies in the config file; CIDRs work
+```
+
+The value is the address the proxy's connections come from as the server sees them (with
+`compose.yaml`'s published port, usually the compose network's gateway, which
+`docker network inspect` shows), comma-separated. `serve` logs the list it trusts. Unset, the header
+is never read, so a client cannot choose its own address by sending one.
+
 With `public_url` set, `serve` also runs the OAuth 2.1 authorization server: `/mcp` answers a client
 with no token 401 and the RFC 9728 metadata that leads it to dynamic client registration, the
 board's sign-in page, a consent page (worker preselected) and a token. In claude.ai, add a custom

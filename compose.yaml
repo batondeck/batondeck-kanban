@@ -32,6 +32,11 @@ services:
       # The OAuth issuer, for the claude.ai connector; empty runs with API tokens only. Set, it is also
       # the attachment links' base; empty, each link takes the host the client reached the board at.
       BATONDECK_PUBLIC_URL: ${BATONDECK_PUBLIC_URL:-}
+      # The reverse proxy's address as the board sees it (comma-separated IPs or CIDRs), so the
+      # sign-in and registration limits count each client by X-Forwarded-For, not everyone as the
+      # proxy. Empty, the header is never read. Behind the published port below that address is
+      # usually this network's gateway (docker network inspect).
+      BATONDECK_TRUSTED_PROXIES: ${BATONDECK_TRUSTED_PROXIES:-}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

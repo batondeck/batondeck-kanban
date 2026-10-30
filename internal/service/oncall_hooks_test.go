@@ -561,7 +561,7 @@ func TestHookStampsTheConfiguredWindows(t *testing.T) {
 // failure), 2 rate_limited before verification, 10 rejected rows. (b) At 1 a minute one junk bearer
 // fetches once; at +31 s (the failure forgotten, the bucket at 0.52) the next is rate_limited
 // unverified, so still one fetch. Controls: an hmac integration's 10 bad signatures are 10 rejected
-// rows and the 11th is 429 (a rejection is charged once); a valid bearer on …/good is accepted.
+// rows and the 11th is rate_limited (503 over HTTP; a rejection is charged once); a valid bearer on …/good is accepted.
 func TestHookChargesBeforeVerifying(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

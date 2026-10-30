@@ -38,6 +38,7 @@ import (
 type app struct {
 	mcp  *mcp.Server
 	as   *oauth.Server // nil while public_url is unset
+	auth *auth.Service // resolves every bearer and session; runServer sets its trusted proxies
 	core *service.Core
 	bus  *bus.Bus
 	// dir is the device session directory (R0.25); serveUntil starts it.
@@ -124,7 +125,7 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
 	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger, OAuth: as != nil}
-	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
+	return &app{mcp: srv, as: as, auth: resolver, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
 			if as != nil {
@@ -304,13 +305,30 @@ func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) 
 	}
 }
 
-// runServer serves the app over st on every listener until ctx ends or one fails.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention) error {
+// runServer serves the app over st on every listener until ctx ends or one fails. proxies are the
+// trusted reverse proxies (trusted_proxies), whose X-Forwarded-For names the client the sign-in and
+// registration limits count.
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies) error {
 	a, err := compose(st, version, publicURL, logger, sealer, media, ret)
 	if err != nil {
 		return err
 	}
+	a.trust(proxies, logger)
 	return serveUntil(ctx, lns, a, version, logger)
+}
+
+// trust makes the sign-in and registration limits count a request from one of proxies against the
+// client its X-Forwarded-For names, and logs the list; none leaves the header unread.
+func (a *app) trust(proxies auth.TrustedProxies, logger *log.Logger) {
+	if len(proxies) == 0 {
+		return
+	}
+	a.auth.Proxies = proxies
+	names := make([]string, len(proxies))
+	for i, p := range proxies {
+		names[i] = p.String()
+	}
+	logger.Printf("serve: trusted proxies %s: a request from one counts against the client its X-Forwarded-For names", strings.Join(names, ", "))
 }
 
 // serveUntil serves one handler on every listener, with the retention sweep running beside it, until

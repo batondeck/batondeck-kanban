@@ -31,7 +31,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 // WithoutCSP drops the policy from a route that answers JSON, SSE or an attachment, never a page
 // (/mcp, /hooks, /blobs). It wraps the route, not a path prefix, so an unmounted path under one of
-// them still falls through to the SPA shell with the policy.
+// them still falls through to the catch-all (its 404) with the policy.
 func WithoutCSP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Del("Content-Security-Policy")
