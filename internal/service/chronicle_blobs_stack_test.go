@@ -128,6 +128,16 @@ func TestChronicleBlobURLsStayBound(t *testing.T) {
 		ingest("adr/w", other)
 		re := ingest("adr/w", text)
 		dead("re-ingest", pb.ProjectID, re.PageID, re.VersionID, text)
+		// Re-ingests of adr/z, whose head and sweep base both hold the dead URL as written: a raw URL
+		// that was already expired when its version was written holds nothing (review B5).
+		for _, w := range []struct{ name, text string }{
+			{"re-ingest unchanged over a dead head and base", text},
+			{"re-ingest edited over a dead head and base", "again " + text},
+			{"re-ingest unchanged over the edited dead head", "again " + text},
+		} {
+			r := ingest("adr/z", w.text)
+			dead(w.name, pb.ProjectID, r.PageID, r.VersionID, w.text)
+		}
 
 		// The stored form, which no read returns, is refused where the page did not hold its blob.
 		for _, w := range []struct {
