@@ -28,7 +28,9 @@ Notable changes to batondeck-kanban. The format follows
   not and whatever its grant's state, a page at a time like the other steps; before, every
   connector authorization and every hourly refresh added rows for good. Inside the week of grace a
   rotated refresh token or a spent code presented again still finds its row and revokes its grant.
-  The client and the grant itself stay (P-125).
+  After the week such a replay is refused as an unknown grant (`invalid_grant`) and no longer
+  revokes the grant: in 0.1.0 reuse detection had no end. The client and the grant itself stay
+  (P-125).
 - **The retention sweep deletes the alert states of DONE or deleted on-call tickets.** A
   fingerprint's correlation row, stamped with the delivery window (`retention.deliveries_days`, 30
   days by default), is deleted once it has expired and its ticket is DONE or deleted; before, an
