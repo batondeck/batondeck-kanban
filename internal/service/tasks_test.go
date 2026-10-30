@@ -427,7 +427,7 @@ func TestCreateTask(t *testing.T) {
 			"model hint":       {CreateTaskReq{Title: "x", ModelHint: ModelHintInput{Model: "m", Effort: "max"}}, domain.CodeValidation},
 			"unknown column":   {CreateTaskReq{Title: "x", ColumnID: "C-404"}, domain.CodeValidation},
 			"missing parent":   {CreateTaskReq{Title: "x", ParentTaskID: &parent}, domain.CodeNotFound},
-			"no sprint store":  {CreateTaskReq{Title: "x", SprintID: "S-1"}, domain.CodeNotFound},
+			"unknown sprint":   {CreateTaskReq{Title: "x", SprintID: "S-1"}, domain.CodeNotFound},
 			"unknown board":    {CreateTaskReq{Title: "x", BoardID: "B-404"}, domain.CodeNotFound},
 			"other project":    {CreateTaskReq{Title: "x", ProjectID: "P-other"}, domain.CodeForbidden},
 			"long idempotency": {CreateTaskReq{Title: "x", IdempotencyKey: strings.Repeat("k", 129)}, domain.CodeValidation},

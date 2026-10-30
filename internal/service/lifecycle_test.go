@@ -769,10 +769,6 @@ func TestLifecycleRefusals(t *testing.T) {
 				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, Shard: Shard{Index: 2, Count: 2}})
 				return err
 			},
-			"sprintId": func() error {
-				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, SprintID: "S-1"})
-				return err
-			},
 			"maxConcurrency": func() error {
 				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, MaxConcurrency: 2})
 				return err
@@ -797,6 +793,8 @@ func TestLifecycleRefusals(t *testing.T) {
 			}
 		}
 		_, err = lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: "B-nope"})
+		wantCode(t, err, domain.CodeNotFound)
+		_, err = lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, SprintID: "S-1"}) // P-239: no longer refused
 		wantCode(t, err, domain.CodeNotFound)
 	})
 }

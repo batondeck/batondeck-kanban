@@ -93,6 +93,9 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 		if len(q.Capabilities) > 0 && !allIn(t.RequiredCapabilities, q.Capabilities) {
 			continue
 		}
+		if q.SprintID != "" && !slices.Contains(t.SprintIDs, q.SprintID) {
+			continue
+		}
 		out = append(out, t)
 	}
 	slices.SortFunc(out, func(a, b store.Task) int {

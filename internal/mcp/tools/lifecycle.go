@@ -14,7 +14,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Claim a TODO task with an exclusive lease; it moves to IN_PROGRESS. Another live lease is CONFLICT_LOCKED. A retry with the same idempotencyKey replays the original lease.",
 		l.Claim)
 	mcp.Tool(s, "lifecycle", "claim_next",
-		"Claim the board's best claimable TODO task: unleased, unblocked, past its backoff, unassigned or yours (no assignee needed); null when none is. sprintId, maxConcurrency, shard.count > 1 refused.",
+		"Claim the board's best claimable TODO task: unleased, unblocked, past its backoff, unassigned or yours, in sprintId if given; null when none is. maxConcurrency, shard.count > 1 refused.",
 		l.ClaimNext)
 	mcp.Tool(s, "lifecycle", "heartbeat_task",
 		"Extend your live lease to now plus leaseSeconds without bumping the task version. A lease that has expired or is not yours is LEASE_EXPIRED.",

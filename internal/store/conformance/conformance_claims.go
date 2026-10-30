@@ -404,6 +404,49 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// P-239: SprintID narrows the frontier to the sprint's members (its id in SprintIDs, matched
+	// whole, not as a prefix), on the preview and on the claim statement alike, past a better
+	// non-member; "" filters nothing.
+	t.Run("FrontierNarrowsToASprint", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "urgent, no sprint", func(in *store.CreateTaskInput) { in.Priority = domain.PriorityUrgent; in.OrderKey = "a1" })
+		f.add(t, "in S-a", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-a"}; in.OrderKey = "a2" })
+		f.add(t, "in S-ab", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-ab"}; in.OrderKey = "a3" })
+		f.add(t, "in S-x and S-a", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-x", "S-a"}; in.OrderKey = "a4" })
+		for sprint, want := range map[string][]string{
+			"":     {"T-1", "T-2", "T-3", "T-4"},
+			"S-a":  {"T-2", "T-4"},
+			"S-ab": {"T-3"},
+			"S-no": {},
+		} {
+			q := f.frontier()
+			q.SprintID = sprint
+			got, err := f.s.PreviewFrontier(ctx, q, 50)
+			mustOK(t, err)
+			if ids := taskIDs(got); !reflect.DeepEqual(ids, want) {
+				t.Fatalf("sprint %q: %v, want %v", sprint, ids, want)
+			}
+		}
+		q := f.frontier()
+		q.SprintID = "S-a"
+		var won []string
+		for i := range 3 {
+			got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("bob", "a", fmt.Sprintf("L-%d", i)))
+			mustOK(t, err)
+			if ok {
+				won = append(won, got.ID)
+			}
+		}
+		if !reflect.DeepEqual(won, []string{"T-2", "T-4"}) {
+			t.Fatalf("claimed %v in S-a, want [T-2 T-4] and never the urgent non-member T-1", won)
+		}
+		first, err := f.s.GetTask(ctx, f.project, "T-1")
+		mustOK(t, err)
+		if first.Status != domain.Todo || first.Claim != nil {
+			t.Fatalf("the non-member T-1 is %s claimed by %+v, want TODO and unclaimed", first.Status, first.Claim)
+		}
+	})
+
 	t.Run("ClaimNextTakesTheFrontierInOrderThenReportsItEmpty", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "second", func(in *store.CreateTaskInput) { in.OrderKey = "a2" })

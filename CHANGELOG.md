@@ -19,6 +19,14 @@ Notable changes to batondeck-kanban. The format follows
   not in done and does not read a cancelled proposal as approved, and subtask progress on the card and
   in the drawer counts a cancelled subtask in the total only. Status displays still show it under DONE
   (P-208).
+- **`sprintId` works on `create_task`, `next_task` and `claim_next`.** `create_task` answered
+  `NOT_FOUND` for every sprint, existing or not; it now creates the task a member of the sprint in the
+  same write, under the rules `set_sprint` applies (the sprint on the task's board, PROPOSED or ACTIVE,
+  below its size limit), and the task gets `sprint.task_added`. `next_task` and `claim_next` refused
+  `sprintId`; they now choose among the sprint's members only, answer null when none is claimable,
+  `NOT_FOUND` for an unknown sprint and `VALIDATION` for another board's. A claim of a sprint member,
+  by `claim_task` or `claim_next`, now answers `sprint` {id, name, goal, status} instead of null
+  (P-239).
 
 ## [0.1.0]
 

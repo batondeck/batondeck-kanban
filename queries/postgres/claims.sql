@@ -2,7 +2,8 @@
 -- blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
 -- with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 -- the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
--- tasks whose required capabilities are all among caps. caps is read once, as the derived table p
+-- tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
+-- of that sprint (its id in sprint_ids). caps and sprint_id are read once, as the derived table p
 -- (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 -- valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
 -- high, normal, low), then order key and id COLLATE "C", as bytes.
@@ -20,7 +21,7 @@ UPDATE tasks AS t SET status = 'IN_PROGRESS',
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
 WHERE t.id = (
-  SELECT f.id FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps) p
+  SELECT f.id FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps, sqlc.arg(sprint_id)::text AS sprint) p
   WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
     AND json_array_length(f.blocked_by::json) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
@@ -32,6 +33,7 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
   ORDER BY f.score DESC,
@@ -52,7 +54,7 @@ UPDATE tasks AS t SET status = 'IN_PROGRESS',
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
 WHERE t.id = (
-  SELECT f.id FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps) p
+  SELECT f.id FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps, sqlc.arg(sprint_id)::text AS sprint) p
   WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
     AND json_array_length(f.blocked_by::json) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
@@ -64,6 +66,7 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
   ORDER BY f.score DESC,
@@ -75,7 +78,7 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 
 -- name: PreviewFrontier :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
-FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps) p
+FROM tasks f, (SELECT sqlc.arg(caps)::text AS caps, sqlc.arg(sprint_id)::text AS sprint) p
 WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AND f.status = 'TODO'
   AND json_array_length(f.blocked_by::json) = 0
   AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
@@ -87,6 +90,7 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
           OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
         ELSE f.assignee = sqlc.narg(assignee)::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key COLLATE "C", f.id COLLATE "C"

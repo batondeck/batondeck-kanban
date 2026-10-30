@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	mrand "math/rand/v2"
 	"regexp"
 	"slices"
@@ -276,7 +277,11 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 				if err != nil {
 					return ClaimTaskResp{}, err
 				}
-				return ClaimTaskResp{LeaseID: cur.Claim.LeaseID, Task: out}, nil
+				sprint, err := sprintBrief(ctx, t.Tx, held)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				return ClaimTaskResp{LeaseID: cur.Claim.LeaseID, Sprint: sprint, Task: out}, nil
 			}
 			board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 			if err != nil {
@@ -300,8 +305,12 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if err != nil {
 				return ClaimTaskResp{}, err
 			}
-			// TODO(spec): resume is conductor's resumeState, unported (P-117); sprint is F6's.
-			return ClaimTaskResp{LeaseID: leaseID, Task: out}, nil
+			sprint, err := sprintBrief(ctx, t.Tx, task)
+			if err != nil {
+				return ClaimTaskResp{}, err
+			}
+			// TODO(spec): resume is conductor's resumeState, unported (P-117).
+			return ClaimTaskResp{LeaseID: leaseID, Sprint: sprint, Task: out}, nil
 		})
 	})
 	if err != nil {
@@ -320,7 +329,9 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 // inside mutate. An empty frontier writes nothing; it reaps the board's expired leases (lazy
 // recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
-// claim (1) and the summary (1). It rings nobody, as Claim. shard lanes, sprintId and maxConcurrency are refused, not ignored.
+// claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
+// Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); shard lanes and
+// maxConcurrency are refused, not ignored.
 func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_next", domain.GrantSubject{BoardID: req.BoardID}, false)
 	if err != nil {
@@ -400,8 +411,12 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 		if err != nil {
 			return ClaimNextResp{}, err
 		}
+		sprint, err := sprintBrief(ctx, t.Tx, task)
+		if err != nil {
+			return ClaimNextResp{}, err
+		}
 		id := leaseID
-		return ClaimNextResp{Attempts: 1, LeaseID: &id, Task: &out}, nil
+		return ClaimNextResp{Attempts: 1, LeaseID: &id, Sprint: sprint, Task: &out}, nil
 	})
 	if err != nil {
 		return ClaimNextResp{}, err
@@ -448,9 +463,34 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 		return q, err
 	}
 	if sprintID != "" {
-		return q, unsupported("sprintId", "the frontier has no sprint filter")
+		// P-239: the sprint must exist (NOT_FOUND) and be this board's (VALIDATION, as set_sprint
+		// refuses a member on another board); the store's one frontier statement then holds its members
+		// alone. Read only on this path, so the default path's statement pins do not move.
+		sprint, err := l.c.store.GetSprint(ctx, projectID, sprintID)
+		if err != nil {
+			return q, l.c.mapErr("frontier", err)
+		}
+		if sprint.BoardID != boardID {
+			return q, domain.Validation(fmt.Sprintf("Sprint %s is on board %s, not %s", sprint.ID, sprint.BoardID, boardID),
+				map[string]any{"field": "sprintId", "sprintBoardId": sprint.BoardID, "boardId": boardID})
+		}
+		q.SprintID = sprint.ID
 	}
 	return q, nil
+}
+
+// sprintBrief is a claim's sprint {id, name, goal, status}: the sprint the claimed task belongs to
+// (one at most, sprints being exclusive), or nil. It reads the sprint only for a task that has one,
+// so a claim outside a sprint makes no extra statement (P-239).
+func sprintBrief(ctx context.Context, tx store.Store, task store.Task) (*Sprint, error) {
+	if len(task.SprintIDs) == 0 {
+		return nil, nil
+	}
+	sp, err := tx.GetSprint(ctx, task.ProjectID, task.SprintIDs[0])
+	if err != nil {
+		return nil, err
+	}
+	return &Sprint{ID: sp.ID, Name: sp.Name, Goal: sp.Goal, Status: SprintStatus(sp.Status)}, nil
 }
 
 // ownAssignee refuses, below master, an assignee naming another identity: another account (by
