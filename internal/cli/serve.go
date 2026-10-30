@@ -322,13 +322,25 @@ func runServer(ctx context.Context, lns []net.Listener, st store.Store, version,
 	return serveUntil(ctx, lns, a, version, logger)
 }
 
+// awaitDirectory waits until the session directory's dispatcher has returned (the bus is closed, so
+// it is returning), or ctx ends: one socket write is bounded by its WriteTimeout, but a run of them
+// is not, and serve does not wait past its budget for them.
+func awaitDirectory(ctx context.Context, a *app, logger *log.Logger) {
+	select {
+	case <-a.dir.Done():
+	case <-ctx.Done():
+		logger.Printf("serve: the session directory's dispatcher was still delivering at the shutdown budget; stopping without it")
+	}
+}
+
 // serveUntil serves one handler on every listener, with the retention sweep running beside it, until
 // ctx ends or one fails, then stops in order: the sweep (it returns before the store can close), the
 // MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
 // deadline; a handler still running at the deadline is cancelled), the bus (which stops the
-// session directory's dispatcher and the board snapshot cache's feed), the HTTP server, and the
-// tool-call flush. The cache's feed is the bus's second tap, so it adds no statement. It returns the first
-// failure, naming the step.
+// session directory's dispatcher and the board snapshot cache's feed), the wait for that dispatcher
+// to return (no directory write may run once the store closes, P-205; bounded by shutdownBudget),
+// the HTTP server, and the tool-call flush. The cache's feed is the bus's second tap, so it adds no
+// statement. It returns the first failure, naming the step.
 func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string, logger *log.Logger) error {
 	if err := a.dir.Start(ctx); err != nil {
 		return fmt.Errorf("starting the session directory: %w", err)
@@ -336,6 +348,9 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	snaps, err := a.bus.Tap(ctx, snapshotTapBuffer)
 	if err != nil {
 		a.bus.Close()
+		stopped, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+		defer cancel()
+		awaitDirectory(stopped, a, logger)
 		return fmt.Errorf("subscribing the board snapshot cache to the bus: %w", err)
 	}
 	a.core.ResetSnapshots(true)
@@ -365,6 +380,7 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 		failed = fmt.Errorf("closing the MCP sessions: %w", err)
 	}
 	a.bus.Close()
+	awaitDirectory(shutdown, a, logger)
 	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
 		failed = fmt.Errorf("http shutdown: %w", err)
 	}

@@ -237,6 +237,11 @@ func startDirectoryWith(t *testing.T, from *dirServer, o dirOpts) *dirServer {
 			if err := <-done; err != nil {
 				t.Errorf("serveUntil: %v", err)
 			}
+			select { // P-205: no directory write may follow serve's return (the store closes next)
+			case <-a.dir.Done():
+			default:
+				t.Errorf("serveUntil returned with the session directory's dispatcher still running")
+			}
 		})
 	}
 	t.Cleanup(s.stop)

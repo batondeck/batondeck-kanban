@@ -19,6 +19,9 @@ Notable changes to batondeck-kanban. The format follows
   and changed doorbells at once instead of after the next 60 s directory sweep; removed or deleted,
   it stops hearing them at once. The re-read runs only on a membership change: an idle directory
   still makes no statements between sweeps.
+- **serve stops the device session directory before it closes the store (P-205).** serve waits for
+  the directory's dispatcher to finish a doorbell in flight before it closes the store (at most the
+  10 s shutdown budget), so no directory write follows serve's return.
 
 ## [0.1.0]
 
