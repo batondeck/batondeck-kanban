@@ -6,6 +6,14 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Chronicle record that shows an attachment keeps showing it** (P-244). A block that embeds a
+  download URL from `list_attachments` used to store it as written, and the image broke once the
+  URL's 15 minutes ran out. A write now stores each URL this server signed in one stable form, and
+  every read of the page, a version or a conflict, over REST and MCP, signs it afresh. Records written
+  before the fix are re-signed on read too. A forged or foreign URL is left as it is.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
