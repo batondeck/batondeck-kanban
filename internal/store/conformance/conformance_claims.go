@@ -447,6 +447,53 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("FrontierNarrowsToTaskIDs", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "urgent, not named", func(in *store.CreateTaskInput) { in.Priority = domain.PriorityUrgent; in.OrderKey = "a1" })
+		f.add(t, "named", func(in *store.CreateTaskInput) { in.OrderKey = "a2" })
+		f.add(t, "named, not claimable", func(in *store.CreateTaskInput) { in.Status = domain.Review; in.OrderKey = "a3" })
+		f.add(t, "named too", func(in *store.CreateTaskInput) { in.OrderKey = "a4" })
+		for _, c := range []struct {
+			ids  []string
+			want []string
+		}{
+			{nil, []string{"T-1", "T-2", "T-4"}},
+			{[]string{"T-4", "T-2", "T-3"}, []string{"T-2", "T-4"}},
+			{[]string{"T-9"}, []string{}},
+			{[]string{}, []string{}},
+		} {
+			q := f.frontier()
+			q.TaskIDs = c.ids
+			got, err := f.s.PreviewFrontier(ctx, q, 50)
+			mustOK(t, err)
+			if ids := taskIDs(got); !reflect.DeepEqual(ids, c.want) {
+				t.Fatalf("taskIds %v: %v, want %v", c.ids, ids, c.want)
+			}
+		}
+		q := f.frontier()
+		q.TaskIDs = []string{"T-4", "T-2", "T-3"}
+		var won []string
+		for i := range 3 {
+			got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("bob", "a", fmt.Sprintf("L-%d", i)))
+			mustOK(t, err)
+			if ok {
+				won = append(won, got.ID)
+			}
+		}
+		if !reflect.DeepEqual(won, []string{"T-2", "T-4"}) {
+			t.Fatalf("claimed %v among [T-4 T-2 T-3], want [T-2 T-4], never the urgent T-1 nor the REVIEW T-3", won)
+		}
+		q.TaskIDs = []string{}
+		if got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("bob", "a", "L-e")); err != nil || ok {
+			t.Fatalf("an empty TaskIDs claimed %+v (%v)", got, err)
+		}
+		first, err := f.s.GetTask(ctx, f.project, "T-1")
+		mustOK(t, err)
+		if first.Status != domain.Todo || first.Claim != nil {
+			t.Fatalf("the unnamed T-1 is %s claimed by %+v, want TODO and unclaimed", first.Status, first.Claim)
+		}
+	})
+
 	t.Run("ClaimNextTakesTheFrontierInOrderThenReportsItEmpty", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "second", func(in *store.CreateTaskInput) { in.OrderKey = "a2" })

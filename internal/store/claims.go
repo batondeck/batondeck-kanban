@@ -97,6 +97,16 @@ func capsParam(caps []string) string {
 	return string(b)
 }
 
+// idsParam is FrontierQuery.TaskIDs as the statements' only_ids: JSON null for nil (no filter),
+// else the JSON array, "[]" for an empty one (no task).
+func idsParam(ids []string) string {
+	if ids == nil {
+		return "null"
+	}
+	b, _ := json.Marshal(ids)
+	return string(b)
+}
+
 func live(c *TaskClaim, now int64) bool { return c != nil && c.ExpiresAt > now }
 
 func sameAgent(a, b *string) bool {
@@ -121,7 +131,7 @@ func claimNext(ctx context.Context, e engine, fq FrontierQuery, in ClaimInput) (
 	arg := sqlitedb.ClaimNextParams{
 		ColumnID: in.ColumnID, Owner: in.Owner, Agent: nullStr(in.Agent), AgentID: nullStr(in.AgentID),
 		LeaseID: in.LeaseID, ExpiresAt: in.ExpiresAt, Now: in.Now, ProjectID: fq.ProjectID, BoardID: fq.BoardID,
-		Assignee: nullStr(fq.Assignee), Caller: fq.Caller, Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID,
+		Assignee: nullStr(fq.Assignee), Caller: fq.Caller, Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID, OnlyIds: idsParam(fq.TaskIDs),
 	}
 	row, err := q.ClaimNext(ctx, arg)
 	if w, ok := e.(waitingClaimer); ok && isNoRows(err) {
@@ -258,7 +268,7 @@ func previewFrontier(ctx context.Context, e engine, fq FrontierQuery, limit int)
 	}
 	rows, err := e.queries(false).PreviewFrontier(ctx, sqlitedb.PreviewFrontierParams{
 		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee), Caller: fq.Caller,
-		Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID, PageLimit: int64(clamp(limit, 50, 200)),
+		Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID, OnlyIds: idsParam(fq.TaskIDs), PageLimit: int64(clamp(limit, 50, 200)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: frontier: %w", err)

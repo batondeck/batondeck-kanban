@@ -93,74 +93,14 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 			pool = append(pool, t)
 		}
 	}
-	w := domain.SelectionWeights{Priority: settings.SelectionWeights.Priority, Readiness: settings.SelectionWeights.Readiness,
-		Deadline: settings.SelectionWeights.Deadline, Aging: settings.SelectionWeights.Aging, Capability: settings.SelectionWeights.Capability}
-	ceiling := time.Duration(settings.AgingCeilingMs) * time.Millisecond
-
-	var out []ranked
-	profiled := false
+	rk := newScorer(settings)
 	if req.UseProfile {
-		key, err := s.c.ownProfileKey(ctx, caller, "rank_tasks")
-		if err != nil {
+		if err := s.c.withProfile(ctx, caller, "rank_tasks", req.ProjectID, &rk); err != nil {
 			return RankTasksResp{}, err
 		}
-		p, err := s.c.store.GetAgentProfile(ctx, req.ProjectID, key)
-		switch {
-		case err == nil:
-			profiled = true
-			stats, err := s.c.store.ListSkillStats(ctx, req.ProjectID, key)
-			if err != nil {
-				return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
-			}
-			byCap := map[string]store.SkillStat{}
-			for _, st := range stats {
-				byCap[st.Capability] = st
-			}
-			for _, t := range pool {
-				m := domain.MatchCapabilities(t.RequiredCapabilities, p.Capabilities, p.Tags, settings.CapabilityAliases)
-				if !m.Eligible {
-					continue
-				}
-				sc := domain.ScoreTask(scoreInput(t), now, w, ceiling)
-				sc.Score = math.Max(0, sc.Score-m.Penalty)
-				rel := domain.TaskReliability(t.RequiredCapabilities, func(c string) (int64, int64) { return byCap[c].Completed, byCap[c].Blocked })
-				out = append(out, ranked{task: t, score: sc, tier: m.Tier, reliability: rel})
-			}
-			slices.SortStableFunc(out, func(a, b ranked) int {
-				if math.Abs(b.score.Score-a.score.Score) > nearTie {
-					return domain.ByScoreDesc(a.score.Score, "", b.score.Score, "")
-				}
-				if ta, tb := domain.TierRank(a.tier), domain.TierRank(b.tier); ta != tb {
-					return ta - tb
-				}
-				if a.reliability != b.reliability {
-					return domain.ByScoreDesc(a.reliability, "", b.reliability, "")
-				}
-				return domain.ByScoreDesc(0, a.task.OrderKey, 0, b.task.OrderKey)
-			})
-		case isNotFound(err):
-			// no profile: conductor falls back to the capabilities argument
-		default:
-			return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
-		}
 	}
-	if !profiled {
-		for _, t := range pool {
-			covered := true
-			for _, c := range t.RequiredCapabilities {
-				if len(req.Capabilities) > 0 && !slices.Contains(req.Capabilities, c) {
-					covered = false
-					break
-				}
-			}
-			if covered {
-				out = append(out, ranked{task: t, score: domain.ScoreTask(scoreInput(t), now, w, ceiling)})
-			}
-		}
-		slices.SortStableFunc(out, func(a, b ranked) int {
-			return domain.ByScoreDesc(a.score.Score, a.task.OrderKey, b.score.Score, b.task.OrderKey)
-		})
-	}
+	profiled := rk.profile != nil
+	out := rk.rank(pool, now, req.Capabilities)
 	resp := RankTasksResp{Ranked: []RankedTask{}}
 	for _, r := range out[:min(len(out), limit)] {
 		task, err := taskOut(r.task, "")
@@ -168,15 +108,131 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 			return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
 		}
 		sc := r.score
-		rt := RankedTask{AgedOut: sc.AgedOut, Reason: sc.Reason, Score: sc.Score, Task: task, Factors: ScoreFactors{
-			Aging: factorOut(sc.Aging), Capability: factorOut(sc.Capability), Deadline: factorOut(sc.Deadline),
-			Priority: factorOut(sc.Priority), Readiness: factorOut(sc.Readiness)}}
+		rt := RankedTask{AgedOut: sc.AgedOut, Reason: sc.Reason, Score: sc.Score, Task: task, Factors: factorsOut(sc)}
 		if profiled {
 			rt.Tier, rt.Reliability = CapabilityMatchTier(r.tier), r.reliability
 		}
 		resp.Ranked = append(resp.Ranked, rt)
 	}
 	return resp, nil
+}
+
+// scorer is the one ranking rank_tasks and next_task {strategy: "score"} share (P-258): the
+// project's selectionWeights, agingCeilingMs and capabilityAliases and, on the profile path, the
+// caller's registered profile and its skill stats.
+type scorer struct {
+	weights domain.SelectionWeights
+	ceiling time.Duration
+	aliases map[string]string
+	profile *store.AgentProfile
+	byCap   map[string]store.SkillStat
+}
+
+func newScorer(settings Settings) scorer {
+	w := settings.SelectionWeights
+	return scorer{
+		weights: domain.SelectionWeights{Priority: w.Priority, Readiness: w.Readiness, Deadline: w.Deadline, Aging: w.Aging, Capability: w.Capability},
+		ceiling: time.Duration(settings.AgingCeilingMs) * time.Millisecond,
+		aliases: settings.CapabilityAliases,
+	}
+}
+
+// projectScorer is the project's scorer, without a profile: one statement (GetProject).
+func (c *Core) projectScorer(ctx context.Context, projectID, tool string) (scorer, error) {
+	proj, err := c.store.GetProject(ctx, projectID)
+	if err != nil {
+		return scorer{}, c.mapErr(tool, err)
+	}
+	settings, err := settingsOut(proj.Settings)
+	if err != nil {
+		return scorer{}, c.mapErr(tool, err)
+	}
+	return newScorer(settings), nil
+}
+
+// withProfile loads the caller's own profile and its skill stats into sc (FORBIDDEN under another
+// agent's label, ownProfileKey); with no profile registered sc is unchanged, and the caller falls
+// back to the capabilities argument, as conductor does.
+func (c *Core) withProfile(ctx context.Context, caller domain.Caller, tool, projectID string, sc *scorer) error {
+	key, err := c.ownProfileKey(ctx, caller, tool)
+	if err != nil {
+		return err
+	}
+	p, err := c.store.GetAgentProfile(ctx, projectID, key)
+	switch {
+	case isNotFound(err):
+		return nil
+	case err != nil:
+		return c.mapErr(tool, err)
+	}
+	stats, err := c.store.ListSkillStats(ctx, projectID, key)
+	if err != nil {
+		return c.mapErr(tool, err)
+	}
+	sc.profile, sc.byCap = &p, map[string]store.SkillStat{}
+	for _, st := range stats {
+		sc.byCap[st.Capability] = st
+	}
+	return nil
+}
+
+// covers is the profile path's eligibility: domain.MatchCapabilities over the profile's
+// capabilities and tags with the project's aliases. Without a profile it is every task.
+func (sc scorer) covers(t store.Task) bool {
+	return sc.profile == nil || domain.MatchCapabilities(t.RequiredCapabilities, sc.profile.Capabilities, sc.profile.Tags, sc.aliases).Eligible
+}
+
+// rank scores pool, best first. With a profile: the tasks it covers, the tag penalty subtracted,
+// near-ties broken by tier, then reliability, then order key. Without one: the tasks whose
+// required capabilities are all in caps (every task when caps is empty), by score then order key.
+func (sc scorer) rank(pool []store.Task, now time.Time, caps []string) []ranked {
+	var out []ranked
+	if p := sc.profile; p != nil {
+		for _, t := range pool {
+			m := domain.MatchCapabilities(t.RequiredCapabilities, p.Capabilities, p.Tags, sc.aliases)
+			if !m.Eligible {
+				continue
+			}
+			s := domain.ScoreTask(scoreInput(t), now, sc.weights, sc.ceiling)
+			s.Score = math.Max(0, s.Score-m.Penalty)
+			rel := domain.TaskReliability(t.RequiredCapabilities, func(c string) (int64, int64) { return sc.byCap[c].Completed, sc.byCap[c].Blocked })
+			out = append(out, ranked{task: t, score: s, tier: m.Tier, reliability: rel})
+		}
+		slices.SortStableFunc(out, func(a, b ranked) int {
+			if math.Abs(b.score.Score-a.score.Score) > nearTie {
+				return domain.ByScoreDesc(a.score.Score, "", b.score.Score, "")
+			}
+			if ta, tb := domain.TierRank(a.tier), domain.TierRank(b.tier); ta != tb {
+				return ta - tb
+			}
+			if a.reliability != b.reliability {
+				return domain.ByScoreDesc(a.reliability, "", b.reliability, "")
+			}
+			return domain.ByScoreDesc(0, a.task.OrderKey, 0, b.task.OrderKey)
+		})
+		return out
+	}
+	for _, t := range pool {
+		covered := true
+		for _, c := range t.RequiredCapabilities {
+			if len(caps) > 0 && !slices.Contains(caps, c) {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			out = append(out, ranked{task: t, score: domain.ScoreTask(scoreInput(t), now, sc.weights, sc.ceiling)})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b ranked) int {
+		return domain.ByScoreDesc(a.score.Score, a.task.OrderKey, b.score.Score, b.task.OrderKey)
+	})
+	return out
+}
+
+func factorsOut(sc domain.TaskScore) ScoreFactors {
+	return ScoreFactors{Aging: factorOut(sc.Aging), Capability: factorOut(sc.Capability), Deadline: factorOut(sc.Deadline),
+		Priority: factorOut(sc.Priority), Readiness: factorOut(sc.Readiness)}
 }
 
 // Orchestrate is orchestrate_subtasks.

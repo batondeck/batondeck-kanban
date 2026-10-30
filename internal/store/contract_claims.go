@@ -26,7 +26,8 @@ type ClaimInput struct {
 // to Caller's id, or to its account's email in any case), so nobody takes work routed to another
 // (Caller "" is the unassigned ones alone), and with Capabilities not empty only those whose
 // RequiredCapabilities are all among them, and with SprintID set only the members of that sprint
-// (SprintIDs holds it; P-239). The frontier is best first: Score descending, then
+// (SprintIDs holds it; P-239), and with TaskIDs not nil only the tasks it names (an empty TaskIDs
+// matches none; P-258). The frontier is best first: Score descending, then
 // priority (urgent, high, normal, low), then order key, then id, the two keys compared as bytes
 // (Postgres: COLLATE "C"), so T-10 comes before T-9.
 type FrontierQuery struct {
@@ -36,6 +37,7 @@ type FrontierQuery struct {
 	Caller       string
 	Capabilities []string
 	SprintID     string
+	TaskIDs      []string
 	Now          int64
 }
 

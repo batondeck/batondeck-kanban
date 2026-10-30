@@ -330,8 +330,10 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 // recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
 // claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
-// Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); shard lanes and
-// maxConcurrency are refused, not ignored.
+// Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); useProfile to the
+// tasks the caller's own registered profile covers (claimNext; the project, the profile and its
+// stats are three more reads, plus the frontier page each attempt; no profile falls back to
+// capabilities); shard lanes and maxConcurrency are refused, not ignored.
 func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_next", domain.GrantSubject{BoardID: req.BoardID}, false)
 	if err != nil {
@@ -355,8 +357,6 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	if req.MaxConcurrency != 0 {
 		return ClaimNextResp{}, unsupported("maxConcurrency", "no per-agent claim ceiling is built")
 	}
-	// useProfile: no agent profile can be registered yet (R2.3), and conductor falls back to the
-	// capabilities argument when the caller has none.
 	secs, err := leaseSeconds(req.LeaseSeconds)
 	if err != nil {
 		return ClaimNextResp{}, err
@@ -369,7 +369,19 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 		return ClaimNextResp{}, err
 	}
 	board := storeBoard(snap.Board)
-	resp, err := l.claimNext(ctx, caller, a, req, q, board, secs)
+	var sc scorer
+	if req.UseProfile {
+		if sc, err = l.c.projectScorer(ctx, req.ProjectID, "claim_next"); err != nil {
+			return ClaimNextResp{}, err
+		}
+		if err := l.c.withProfile(ctx, caller, "claim_next", req.ProjectID, &sc); err != nil {
+			return ClaimNextResp{}, err
+		}
+		if sc.profile != nil {
+			q.Capabilities = nil
+		}
+	}
+	resp, err := l.claimNext(ctx, caller, a, req, q, sc, board, secs)
 	if errors.Is(err, errEmptyFrontier) {
 		var sum reapSummary
 		if sum, err = l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID); err != nil {
@@ -378,14 +390,30 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 		if sum.reaped() == 0 {
 			return ClaimNextResp{}, nil
 		}
-		if resp, err = l.claimNext(ctx, caller, a, req, q, board, secs); errors.Is(err, errEmptyFrontier) {
+		if resp, err = l.claimNext(ctx, caller, a, req, q, sc, board, secs); errors.Is(err, errEmptyFrontier) {
 			return ClaimNextResp{}, nil
 		}
 	}
 	return resp, err
 }
 
-func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access, req ClaimNextReq, q store.FrontierQuery, board store.Board, secs int64) (ClaimNextResp, error) {
+// claimNext is one claim attempt. With a profile, the frontier's first frontierPage tasks that it
+// covers become q.TaskIDs, so the store's one claim statement takes the best of them and re-checks
+// every frontier condition at the claim; none covered is an empty frontier.
+func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access, req ClaimNextReq, q store.FrontierQuery, sc scorer, board store.Board, secs int64) (ClaimNextResp, error) {
+	if sc.profile != nil {
+		q.Now = l.c.nowMs()
+		pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+		if err != nil {
+			return ClaimNextResp{}, l.c.mapErr("claim_next", err)
+		}
+		q.TaskIDs = []string{}
+		for _, t := range pool {
+			if sc.covers(t) {
+				q.TaskIDs = append(q.TaskIDs, t.ID)
+			}
+		}
+	}
 	leaseID := newLeaseID()
 	resp, err := mutate(ctx, l.c, caller, mutation{
 		Tool: "claim_next", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
@@ -685,8 +713,12 @@ func (l lifecycle) leaseArgs(ctx context.Context, caller domain.Caller, tool, pr
 // Next is next_task: the frontier's best task, claiming nothing (store PreviewFrontier, limit 1),
 // and its summary: two statements, three when the frontier is empty (the lazy reap's
 // ListExpiredLeases). includeInbox adds two (REVIEW, then BLOCKED split into blocked and poisoned).
-// strategy "score" and explain are refused: conductor's scorer is not ported, and the frontier's
-// order is the store's (score, priority, order key).
+// strategy "score" ranks the frontier's first frontierPage tasks with the scorer rank_tasks uses
+// (scorer.rank: the project's selectionWeights and agingCeilingMs) and previews the best; explain,
+// which needs it, adds the top task's factors and the runner-up. useProfile judges eligibility by
+// the caller's own registered profile instead of capabilities (FORBIDDEN under another agent's
+// label; no profile falls back to capabilities). Either reads the project (one statement), and
+// useProfile the profile and its stats (two more), so the fifo path's count does not move (P-258).
 func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskReq) (NextTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "next_task", domain.GrantSubject{BoardID: req.BoardID}, false)
 	if err != nil {
@@ -699,15 +731,16 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	if err != nil {
 		return NextTaskResp{}, err
 	}
+	score := false
 	switch req.Strategy {
 	case "", "fifo":
 	case "score":
-		return NextTaskResp{}, unsupported("strategy", "the cost-aware scorer is not ported")
+		score = true
 	default:
 		return NextTaskResp{}, domain.Validation("unknown strategy: "+string(req.Strategy), map[string]any{"field": "strategy"})
 	}
-	if req.Explain {
-		return NextTaskResp{}, unsupported("explain", "the cost-aware scorer is not ported")
+	if req.Explain && !score {
+		return NextTaskResp{}, domain.Validation("explain needs strategy score: the fifo frontier has no factors to explain", map[string]any{"field": "explain"})
 	}
 	limit := int(req.InboxLimit)
 	switch {
@@ -716,11 +749,23 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	case limit < 0 || limit > inboxMaxLimit:
 		return NextTaskResp{}, domain.Validation("inboxLimit must be 1 to 100", map[string]any{"field": "inboxLimit"})
 	}
-	st := l.c.store
-	q.Now = l.c.nowMs()
-	head, err := st.PreviewFrontier(ctx, q, 1)
+	var sc scorer
+	if score || req.UseProfile {
+		if sc, err = l.c.projectScorer(ctx, req.ProjectID, "next_task"); err != nil {
+			return NextTaskResp{}, err
+		}
+	}
+	if req.UseProfile {
+		if err := l.c.withProfile(ctx, caller, "next_task", req.ProjectID, &sc); err != nil {
+			return NextTaskResp{}, err
+		}
+		if sc.profile != nil {
+			q.Capabilities = nil
+		}
+	}
+	head, err := l.nextHead(ctx, q, sc, score)
 	if err != nil {
-		return NextTaskResp{}, l.c.mapErr("next_task", err)
+		return NextTaskResp{}, err
 	}
 	if len(head) == 0 {
 		sum, err := l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID)
@@ -728,19 +773,29 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 			return NextTaskResp{}, err
 		}
 		if sum.reaped() > 0 {
-			q.Now = l.c.nowMs()
-			if head, err = st.PreviewFrontier(ctx, q, 1); err != nil {
-				return NextTaskResp{}, l.c.mapErr("next_task", err)
+			if head, err = l.nextHead(ctx, q, sc, score); err != nil {
+				return NextTaskResp{}, err
 			}
 		}
 	}
 	var resp NextTaskResp
 	if len(head) > 0 {
-		out, err := withSummary(ctx, st, head[0])
+		out, err := withSummary(ctx, l.c.store, head[0].task)
 		if err != nil {
 			return NextTaskResp{}, l.c.mapErr("next_task", err)
 		}
 		resp.Task = &out
+		if req.Explain {
+			top := head[0].score
+			resp.Explanation = NextExplanation{AgedOut: top.AgedOut, Factors: factorsOut(top), Reason: top.Reason, Score: top.Score}
+			if sc.profile != nil {
+				resp.Explanation.Tier, resp.Explanation.Reliability = CapabilityMatchTier(head[0].tier), head[0].reliability
+			}
+			if len(head) > 1 {
+				ru := head[1]
+				resp.Explanation.RunnerUp = &RunnerUp{TaskID: ru.task.ID, Score: ru.score.Score, Reason: ru.score.Reason}
+			}
+		}
 	}
 	if req.IncludeInbox {
 		if resp.Inbox, err = l.inbox(ctx, req, q.Assignee, limit); err != nil {
@@ -748,6 +803,39 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 		}
 	}
 	return resp, nil
+}
+
+// frontierPage is how much of the frontier the score and profile paths judge: PreviewFrontier's
+// largest page.
+const frontierPage = 200
+
+// nextHead is next_task's choice, best first: the fifo frontier's head (one row), or with score
+// the first frontierPage tasks ranked by sc, or with a profile and no score the first of them in
+// frontier order that the profile covers.
+func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc scorer, score bool) ([]ranked, error) {
+	now := l.c.now()
+	q.Now = now.UnixMilli()
+	if !score && sc.profile == nil {
+		head, err := l.c.store.PreviewFrontier(ctx, q, 1)
+		if err != nil || len(head) == 0 {
+			return nil, l.c.mapErr("next_task", err)
+		}
+		return []ranked{{task: head[0]}}, nil
+	}
+	pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+	if err != nil {
+		return nil, l.c.mapErr("next_task", err)
+	}
+	if score {
+		// The frontier already holds capabilities' tasks only; the profile, when there is one, filters.
+		return sc.rank(pool, now, nil), nil
+	}
+	for _, t := range pool {
+		if sc.covers(t) {
+			return []ranked{{task: t}}, nil
+		}
+	}
+	return nil, nil
 }
 
 // inbox is next_task's inbox: the board's REVIEW and BLOCKED tasks (of assignee, when given), the

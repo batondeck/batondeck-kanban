@@ -27,6 +27,15 @@ Notable changes to batondeck-kanban. The format follows
   `NOT_FOUND` for an unknown sprint and `VALIDATION` for another board's. A claim of a sprint member,
   by `claim_task` or `claim_next`, now answers `sprint` {id, name, goal, status} instead of null
   (P-239).
+- **`next_task {strategy: "score"}`, `explain` and `useProfile` work.** `strategy: "score"` and
+  `explain` answered `VALIDATION` ("not ported"), and `useProfile` on `next_task` and `claim_next` was
+  accepted and did nothing. `strategy: "score"` now ranks the frontier with the scorer `rank_tasks`
+  uses (the project's `selectionWeights` and `agingCeilingMs`); `explain` adds the chosen task's
+  factors, reason and runner-up, and needs `strategy: "score"` (`VALIDATION` without it).
+  `useProfile` judges eligibility by your own registered agent profile (exact, alias or tag match)
+  instead of `capabilities`, falls back to `capabilities` when you have no profile, and is
+  `FORBIDDEN` under another agent's label, as on `rank_tasks`. Both paths judge the frontier's first
+  200 tasks (P-258).
 
 ## [0.1.0]
 

@@ -773,11 +773,7 @@ func TestLifecycleRefusals(t *testing.T) {
 				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, MaxConcurrency: 2})
 				return err
 			},
-			"strategy score": func() error {
-				_, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: p, BoardID: e.board.ID, Strategy: "score"})
-				return err
-			},
-			"explain": func() error {
+			"explain without strategy score": func() error {
 				_, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: p, BoardID: e.board.ID, Explain: true})
 				return err
 			},
