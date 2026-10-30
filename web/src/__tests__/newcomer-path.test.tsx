@@ -151,24 +151,31 @@ describe('Sign-in', () => {
   });
 });
 
+// P-305: the two tests below mount the whole App, so their first screen waits on /api/session and the
+// screen's own queries through the stubbed fetch. Under load that took longer than testing-library's 1s
+// default (1 failure in 13, rev76), so the first wait has an explicit FIRST_SCREEN timeout and the test a
+// ceiling above it. Nothing they assert is changed.
+const FIRST_SCREEN = { timeout: 10_000 };
+const FULL_APP_TEST_MS = 20_000;
+
 describe('Projects: the empty workspace', () => {
   it('lists the three next steps, the last opening the dialog', async () => {
     await mountApp('/projects', false);
-    const steps = await screen.findByRole('region', { name: 'Get started' });
+    const steps = await screen.findByRole('region', { name: 'Get started' }, FIRST_SCREEN);
     const items = within(steps).getAllByRole('listitem').map((li) => li.textContent ?? '');
     expect(items).toHaveLength(3);
     expect(items[0]).toMatch(/Create a project/);
     expect(within(steps).getByRole('link', { name: 'Create a token' })).toHaveAttribute('href', '/settings#cli-tokens');
     fireEvent.click(within(steps).getByRole('button', { name: 'Connect an agent' }));
     expect(screen.getByRole('dialog', { name: 'Connect an MCP client' })).toBeInTheDocument();
-  });
+  }, FULL_APP_TEST_MS);
 });
 
 describe('Settings order', () => {
   it('Columns, Members and CLI tokens come before every other section, and none is gone', async () => {
     await mountApp('/settings', true);
-    await screen.findByRole('heading', { name: 'Your settings' });
-    await waitFor(() => expect(document.getElementById('users')).not.toBeNull());
+    await screen.findByRole('heading', { name: 'Your settings' }, FIRST_SCREEN);
+    await waitFor(() => expect(document.getElementById('users')).not.toBeNull(), FIRST_SCREEN);
     const order = [
       screen.getByRole('heading', { name: 'Columns' }),
       screen.getByRole('heading', { name: 'Members' }),
@@ -181,5 +188,5 @@ describe('Settings order', () => {
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `section ${i}`).toBeTruthy();
     }
-  });
+  }, FULL_APP_TEST_MS);
 });
