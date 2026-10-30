@@ -257,7 +257,12 @@ func serve(args []string, version string, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media, cfg.Retention); err != nil {
+	proxies, err := core.ParseTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		fmt.Fprintln(stderr, "serve:", err)
+		return 1
+	}
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media, cfg.Retention, proxies); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}

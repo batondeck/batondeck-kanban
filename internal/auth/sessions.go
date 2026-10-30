@@ -113,7 +113,7 @@ func (s *Service) LoginHandler() http.Handler {
 			http.Error(w, "next is not a path on this server", http.StatusBadRequest)
 			return
 		}
-		secret, sess, err := s.Login(r.Context(), clientAddr(r), r.PostForm.Get("login"), r.PostForm.Get("password"))
+		secret, sess, err := s.Login(r.Context(), s.Proxies.ClientAddr(r), r.PostForm.Get("login"), r.PostForm.Get("password"))
 		if err != nil {
 			e, ok := domain.AsBatonDeckError(err)
 			if ok && e.Code == domain.CodeRateLimited {

@@ -6,6 +6,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `trusted_proxies` (`BATONDECK_TRUSTED_PROXIES`): the reverse proxies, as IP addresses or CIDRs,
+  whose `X-Forwarded-For` the server reads (P-291). A request from one counts against the rightmost
+  address in that header that is not itself a trusted proxy, so behind a proxy the sign-in limit
+  (`/api/login` and the OAuth sign-in page) and `/register`'s limit count each client, not every
+  user as the proxy. Unset, the header is never read and the peer counts, as before; a malformed
+  entry stops `serve` at start. The README's step 6 and `compose.yaml` say how to set it.
+
 ### Changed
 
 - `POST /hooks/{id}` over its rate budget, or over the pre-check's burst, answers

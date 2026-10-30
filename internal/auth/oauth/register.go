@@ -43,7 +43,7 @@ type registration struct {
 // token_endpoint_auth_method it asks for, it is registered "none", and the answer says so.
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
-	if ok, retry := s.limiter.allow(clientAddr(r), now); !ok {
+	if ok, retry := s.limiter.allow(s.o.Auth.Proxies.ClientAddr(r), now); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
 		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable",
 			fmt.Sprintf("too many registrations from this address; retry after %d s", int(math.Ceil(retry.Seconds()))))
@@ -172,17 +172,6 @@ func clientID() (string, error) {
 		return "", err
 	}
 	return "bdc_" + hex.EncodeToString(b), nil
-}
-
-// clientAddr is the address a registration is counted against: the peer's IP. X-Forwarded-For is
-// not read, so it cannot be forged to dodge the limit; behind a proxy every client shares the
-// proxy's budget.
-func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // limiter is a fixed window per address: max calls per window. It holds at most maxTracked

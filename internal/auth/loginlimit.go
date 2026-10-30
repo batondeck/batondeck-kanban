@@ -3,8 +3,6 @@ package auth
 import (
 	"context"
 	"math"
-	"net"
-	"net/http"
 	"net/netip"
 	"sync"
 	"time"
@@ -158,14 +156,4 @@ func (b *buckets) refund(key string) {
 	if k, ok := b.m[key]; ok {
 		k.tokens = math.Min(b.burst, k.tokens+1)
 	}
-}
-
-// clientAddr is the address a sign-in is counted against: the peer's IP. X-Forwarded-For is not
-// read, so it cannot be forged; behind a proxy every client shares the proxy's budget.
-func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

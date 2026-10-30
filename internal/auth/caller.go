@@ -46,6 +46,9 @@ type Service struct {
 	// OAuthResource is the resource (RFC 8707) this service's bearers are presented at: an OAuth
 	// access token issued for any other is refused.
 	OAuthResource string
+	// Proxies are the trusted reverse proxies: a sign-in through one counts against the client its
+	// X-Forwarded-For names (TrustedProxies.ClientAddr); nil reads no header.
+	Proxies TrustedProxies
 
 	mu          sync.Mutex
 	cache       map[string]accountEntry
