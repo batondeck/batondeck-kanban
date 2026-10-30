@@ -12,6 +12,13 @@ Notable changes to batondeck-kanban. The format follows
   not relabelled out of every done figure, and **refuses a racing parent** with `CONFLICT_LOCKED`
   (reason `race`) as `move_task` does, until `pick_run` or `cancel_runs` resolves the race. Neither
   refusal writes anything (ADR-0001, P-150).
+- **A cancelled task no longer counts as delivered** (ADR-0001: DONE with the label `cancelled`).
+  `pick_run` refuses a cancelled run with `INVALID_TRANSITION` even when it had a deliverable,
+  activating a sprint refuses a cancelled proposal task, and in the web UI the task drawer's Runs
+  section offers no Pick on a cancelled run, the sprint rail counts a cancelled member in its total but
+  not in done and does not read a cancelled proposal as approved, and subtask progress on the card and
+  in the drawer counts a cancelled subtask in the total only. Status displays still show it under DONE
+  (P-208).
 
 ## [0.1.0]
 

@@ -264,7 +264,7 @@ func (t *txn) proposalOf(taskID string) (*domain.SprintProposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, UpdatedBy: task.UpdatedBy}
+	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, Cancelled: slices.Contains(task.Labels, domain.LabelCancelled), UpdatedBy: task.UpdatedBy}
 	var fields map[string]any
 	if len(task.CustomFields) > 0 {
 		if err := json.Unmarshal(task.CustomFields, &fields); err != nil {

@@ -422,3 +422,38 @@ describe('labels and capabilities are chips', () => {
     });
   });
 });
+
+/**
+ * P-208: a cancelled task is DONE with the cancelled label but was not delivered. The drawer's subtask
+ * progress counts a cancelled subtask in the total and not in done, and the Runs section reads the
+ * cancelled label from the board's task list (list_runs carries none), so a cancelled run that had
+ * delivered offers no Pick.
+ */
+describe('TaskDrawer — a cancelled task is not done (P-208)', () => {
+  const sub = (id: string, over: Partial<Task>): Task => ({ ...task, id, title: `sub ${id}`, parentTaskId: 'T-1', blockedBy: [], dueAt: null, ...over });
+
+  it('subtask progress counts a cancelled subtask in the total only', async () => {
+    vi.stubGlobal('fetch', routeFetch({
+      '/tasks/T-1/subtasks$': { json: { tasks: [sub('T-2', { status: 'DONE' }), sub('T-3', { status: 'DONE', labels: ['cancelled'] }), sub('T-4', { status: 'TODO' })] } },
+    }));
+    renderDrawer();
+    expect(await screen.findByText('1 of 3 complete')).toBeInTheDocument();
+  });
+
+  it('REFUSAL: a cancelled run that had delivered offers no Pick; the delivered one does', async () => {
+    const racing: Task = { ...task, racing: true };
+    const cancelledRun = sub('T-5', { status: 'DONE', labels: ['cancelled'], parentTaskId: null });
+    vi.stubGlobal('fetch', routeFetch({
+      '/tasks/T-1$': { json: { task: racing } },
+      '/tasks/T-1/runs$': { json: { runs: [
+        { taskId: 'T-5', status: 'DONE', assignee: 'a1', leaseHolder: null, hasDeliverable: true, deliverable: 'wrong approach', version: 4 },
+        { taskId: 'T-6', status: 'REVIEW', assignee: 'a2', leaseHolder: null, hasDeliverable: true, deliverable: 'the fix', version: 3 },
+      ] } },
+      '/boards/b1/tasks\\?': { json: { tasks: [racing, cancelledRun] } },
+    }));
+    renderDrawer();
+    expect(await screen.findByText('wrong approach')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/^\s*Pick\s*$/)).toHaveLength(1));
+    expect(screen.getAllByText('Submitted')).toHaveLength(1);
+  });
+});
