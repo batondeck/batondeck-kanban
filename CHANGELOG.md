@@ -6,6 +6,11 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+- **An agent session outlives its MCP connection (P-264, P-324).** The Agents screen and
+  `list_agent_sessions` keep an agent after it disconnects and across a serve restart, with its
+  connection and request counts; its next connection updates the same row. A row goes when
+  `disconnect_agent` deletes it or 30 minutes after its last request (plan Clarification 7).
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

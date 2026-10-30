@@ -6,17 +6,16 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
 
-// Sessions is the agent and wake session bookkeeping. The MCP transport touches the caller's agent
-// session on every request and drops it when the session ends; the device session directory
+// Sessions is the agent and wake session bookkeeping. The MCP transport writes the caller's agent
+// session at initialize and touches it on every tool call; the row outlives the MCP session and is
+// deleted by disconnect_agent or by the retention sweep 30 min after its last request (plan
+// Clarification 7, internal/retention AgentSessionIdle); the device session directory
 // (internal/wake, R0.25) persists its entries here. None of these writes an event, an audit row or
 // a doorbell.
 type Sessions interface {
 	// TouchAgentSession records one request from the caller's agent session (identity and agent from
 	// the caller): first seen, last seen, the request and per-tool counts, the client.
 	TouchAgentSession(ctx context.Context, caller domain.Caller, req TouchAgentSessionReq) (TouchAgentSessionResp, error)
-
-	// RemoveAgentSession drops the caller's agent session when its MCP session ends or is collected.
-	RemoveAgentSession(ctx context.Context, caller domain.Caller, req RemoveAgentSessionReq) (RemoveAgentSessionResp, error)
 
 	// ListAgentSessions is list_agent_sessions.
 	// Not tenant-scoped; workspace admin for every identity, else the caller's own. Writes nothing.
@@ -80,14 +79,6 @@ type TouchAgentSessionReq struct {
 
 // TouchAgentSessionResp is empty.
 type TouchAgentSessionResp struct{}
-
-// RemoveAgentSessionReq names the session that ended.
-type RemoveAgentSessionReq struct {
-	SessionKey string `json:"sessionKey"`
-}
-
-// RemoveAgentSessionResp is empty.
-type RemoveAgentSessionResp struct{}
 
 // RegisterWakeSessionReq is one directory entry: the client process (PID, Role), its agent label
 // ("" for the caller's own AgentID), the socket the doorbell is delivered on ("" for a client with

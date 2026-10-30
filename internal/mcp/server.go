@@ -114,8 +114,8 @@ func New(o Options) *Server {
 	return s
 }
 
-// Close refuses new sessions, ends every live one, each as any other end does (its agent session
-// removed with the last of its agent's), and waits for that bookkeeping or ctx. A session's end
+// Close refuses new sessions, ends every live one, each as any other end does (its agent session's
+// row kept for the retention sweep, P-264), and waits for that bookkeeping or ctx. A session's end
 // waits for its in-flight handlers, so at ctx's end Close cancels their contexts and returns
 // ctx.Err(). Call it before the HTTP server's Shutdown: a session's open GET stream would
 // otherwise hold Shutdown until its deadline.

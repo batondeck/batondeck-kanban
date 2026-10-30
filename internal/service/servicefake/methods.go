@@ -207,10 +207,6 @@ func (x sessionsFake) TouchAgentSession(ctx context.Context, caller domain.Calle
 	return call[service.TouchAgentSessionResp](x.f, "Sessions.TouchAgentSession", caller, req)
 }
 
-func (x sessionsFake) RemoveAgentSession(ctx context.Context, caller domain.Caller, req service.RemoveAgentSessionReq) (service.RemoveAgentSessionResp, error) {
-	return call[service.RemoveAgentSessionResp](x.f, "Sessions.RemoveAgentSession", caller, req)
-}
-
 func (x sessionsFake) ListAgentSessions(ctx context.Context, caller domain.Caller, req service.ListAgentSessionsReq) (service.ListAgentSessionsResp, error) {
 	return call[service.ListAgentSessionsResp](x.f, "Sessions.ListAgentSessions", caller, req)
 }

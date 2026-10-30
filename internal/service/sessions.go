@@ -84,19 +84,10 @@ func (s sessions) TouchAgentSession(ctx context.Context, caller domain.Caller, r
 	return resp, s.c.mapErr("touch_agent_session", err)
 }
 
-func (s sessions) RemoveAgentSession(ctx context.Context, caller domain.Caller, req RemoveAgentSessionReq) (resp RemoveAgentSessionResp, err error) {
-	defer s.c.recovered("remove_agent_session", &err)
-	agent, err := ownKey(caller, req.SessionKey)
-	if err != nil {
-		return resp, err
-	}
-	return resp, s.c.mapErr("remove_agent_session", s.c.store.DeleteAgentSession(ctx, caller.Identity, agent))
-}
-
 // DisconnectAgent ends the live sessions before it deletes the row, so a tool call racing it cannot
-// touch the row back into being on a session that is still open; the end of the last session
-// deletes the row too (RemoveAgentSession), and whichever runs second finds it gone (NOT_FOUND,
-// which the transport's end ignores).
+// touch the row back into being on a session that is still open. The end of a session leaves the
+// row (P-264), so the delete here is the one that removes it; a row already gone (the retention
+// sweep's, or a concurrent disconnect's) is NOT_FOUND only when no live session was ended either.
 func (s sessions) DisconnectAgent(ctx context.Context, caller domain.Caller, req DisconnectAgentReq) (resp DisconnectAgentResp, err error) {
 	defer s.c.recovered("disconnect_agent", &err)
 	if _, err := s.c.authorize(ctx, caller, "", "disconnect_agent", domain.GrantSubject{}, false); err != nil {

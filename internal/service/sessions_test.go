@@ -39,14 +39,15 @@ func TestSessionsTouchUpsertsThenCounts(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, a.LastSeenAt); err != nil {
 		t.Fatalf("lastSeenAt %q: %v", a.LastSeenAt, err)
 	}
-	if _, err := s.RemoveAgentSession(f.ctx, f.alice, RemoveAgentSessionReq{SessionKey: key}); err != nil {
+	disconnect := DisconnectAgentReq{IdentityID: f.alice.Identity, AgentID: "claude"}
+	if _, err := s.DisconnectAgent(f.ctx, f.alice, disconnect); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.ListAgentSessions(f.ctx, f.alice, ListAgentSessionsReq{})
 	if got.Sessions == nil || len(got.Sessions) != 0 {
-		t.Fatalf("after remove: %#v, want an empty non-nil list", got.Sessions)
+		t.Fatalf("after disconnect: %#v, want an empty non-nil list", got.Sessions)
 	}
-	_, err = s.RemoveAgentSession(f.ctx, f.alice, RemoveAgentSessionReq{SessionKey: key})
+	_, err = s.DisconnectAgent(f.ctx, f.alice, disconnect)
 	wantCode(t, err, domain.CodeNotFound)
 }
 
@@ -61,7 +62,7 @@ func TestSessionsRefusals(t *testing.T) {
 	wantCode(t, err, domain.CodeValidation)
 	_, err = s.TouchAgentSession(f.ctx, f.alice, TouchAgentSessionReq{SessionKey: SessionKey("alice", "x"), Kind: "dev"})
 	wantCode(t, err, domain.CodeValidation)
-	_, err = s.RemoveAgentSession(f.ctx, f.alice, RemoveAgentSessionReq{SessionKey: SessionKey("bob", "x")})
+	_, err = s.DisconnectAgent(f.ctx, f.alice, DisconnectAgentReq{IdentityID: "bob", AgentID: "x"})
 	wantCode(t, err, domain.CodeForbidden)
 	_, err = s.ListAgentSessions(f.ctx, f.alice, ListAgentSessionsReq{All: true})
 	wantCode(t, err, domain.CodeForbidden)
