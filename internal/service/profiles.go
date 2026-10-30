@@ -29,10 +29,11 @@ var placeholder = regexp.MustCompile(`\$\{[^}]*\}|^\$[A-Za-z_][A-Za-z0-9_]*$|^\{
 // identity. An agent name that is an unexpanded placeholder is VALIDATION: a durable row must not be
 // minted from it. The key is the agent name alone, so a name the client chose (an OAuth
 // client_name, a clientInfo.name) can equal another identity's label: ownProfileKey refuses that
-// key to register_agent_profile and rank_tasks {useProfile}, and rollUpSkill records such a
-// caller's outcome under its identity instead (P-340; the label rule is labelRefused, R2-Q1). An
-// agentless caller's key is its identity id, so a name equal to another identity's id would be that
-// identity's agentless key: the same three guards treat it so (P-351, namesAnotherIdentity).
+// key to register_agent_profile and to useProfile on rank_tasks, next_task and claim_next
+// (withProfile, P-258), and rollUpSkill records such a caller's outcome under its identity instead
+// (P-340; the label rule is labelRefused, R2-Q1). An agentless caller's key is its identity id, so
+// a name equal to another identity's id would be that identity's agentless key: the same guards
+// treat it so (P-351, namesAnotherIdentity).
 func agentKey(caller domain.Caller) (string, error) {
 	name := strings.TrimSpace(caller.Agent)
 	if name == "" {

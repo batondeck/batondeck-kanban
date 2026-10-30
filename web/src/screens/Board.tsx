@@ -36,6 +36,7 @@ import { StatusDot } from '../AgentSelect.js';
 import type { ActivityEvent, AgentSession, Board as BoardT, Sprint, SprintStatus, Status, Task } from '../types.js';
 import { STATUSES } from '../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../presenceMerge.js';
+import { isCancelled, subtaskProgress } from '../reports.js';
 
 const SPRINT_STATUS_COLOR: Record<SprintStatus, string> = {
   PROPOSED: 'var(--review)',
@@ -408,11 +409,16 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
         {error && <div className="error" style={{ fontSize: 12 }}>Couldn’t load sprints.</div>}
         {sprints.map((s) => {
           const members = tasks.filter((t) => t.sprintIds?.includes(s.id));
-          const done = members.filter((t) => t.status === 'DONE').length;
-          // Approval IS the proposal task reaching DONE (spec §5.4) — there is no separate flag, so the
-          // rail derives it exactly as the core's activation gate does. `find` over the loaded board is
-          // enough because the proposal task lives on the sprint's own board by construction.
-          const approvedAlready = !!s.proposalTaskId && tasks.find((t) => t.id === s.proposalTaskId)?.status === 'DONE';
+          // A cancelled member is DONE but not delivered, so it is not done here, as get_sprint counts it (P-208).
+          const done = members.filter((t) => t.status === 'DONE' && !isCancelled(t)).length;
+          // Close's warning is the server's: it lists members whose status is not DONE, and a cancelled
+          // member is DONE, so this counts by status alone, not by `done` (P-208).
+          const notDone = members.filter((t) => t.status !== 'DONE').length;
+          // Approval IS the proposal task reaching DONE (spec §5.4) and not cancelled (P-208) — there is no
+          // separate flag, so the rail derives it exactly as the core's activation gate does. `find` over the
+          // loaded board is enough because the proposal task lives on the sprint's own board by construction.
+          const proposal = s.proposalTaskId ? tasks.find((t) => t.id === s.proposalTaskId) : undefined;
+          const approvedAlready = !!proposal && proposal.status === 'DONE' && !isCancelled(proposal);
           const busy = busySprintId === s.id;
           const active = filterSprint === s.id;
           const c = SPRINT_STATUS_COLOR[s.status];
@@ -429,7 +435,7 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
               >
                 <Marquee className="title" style={{ flex: 1 }}>{s.name}</Marquee>
                 <span className="pill" style={{ color: c, background: `color-mix(in srgb, ${c} 18%, transparent)` }}>{s.status}</span>
-                <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={`${done} of ${members.length} loaded members DONE`}>
+                <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={`${done} of ${members.length} loaded members delivered (a cancelled one counts in the total only)`}>
                   <Icon name="checkSquare" size={11} /> {done}/{members.length}
                 </span>
               </div>
@@ -465,7 +471,9 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
                         ? 'This sprint has no proposal task bound, so there is nothing to approve yet.'
                         : approvedAlready
                           ? 'Start the sprint — its members become claimable'
-                          : `Approve ${s.proposalTaskId} first (move it to Done); activation is gated on that.`
+                          : proposal && isCancelled(proposal)
+                            ? `${s.proposalTaskId} was cancelled, so it approves nothing; bind a delivered proposal task.`
+                            : `Approve ${s.proposalTaskId} first (move it to Done); activation is gated on that.`
                     }
                     onClick={() => onLifecycle(s, 'ACTIVE')}
                   >
@@ -491,9 +499,9 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
                     style={{ fontSize: 11, padding: '1px 9px' }}
                     disabled={busy}
                     title={
-                      done === members.length
+                      notDone === 0
                         ? 'Close the sprint — every loaded member is DONE'
-                        : `Close the sprint. ${members.length - done} loaded member(s) are not terminal — the server returns a warning, it does not refuse.`
+                        : `Close the sprint. ${notDone} loaded member(s) are not terminal — the server returns a warning, it does not refuse.`
                     }
                     onClick={() => onLifecycle(s, 'CLOSED')}
                   >
@@ -932,17 +940,8 @@ export function Board() {
     (to, task) => tasksApi.updateTask(projectId, task.id, task.version, { priority: to }),
   );
 
-  const childStats = useMemo(() => {
-    const m = new Map<string, { done: number; total: number }>();
-    for (const t of allTasks) {
-      if (!t.parentTaskId) continue;
-      const s = m.get(t.parentTaskId) ?? { done: 0, total: 0 };
-      s.total += 1;
-      if (t.status === 'DONE') s.done += 1;
-      m.set(t.parentTaskId, s);
-    }
-    return m;
-  }, [allTasks]);
+  // A cancelled subtask is DONE but not delivered: in the total, not in done (P-208).
+  const childStats = useMemo(() => subtaskProgress(allTasks), [allTasks]);
 
   // The faceted filter (status/assignee/label/unblocked), shared by the board view AND the project-wide
   // search results (T-37) so "keyword + status:review + assignee:alice" narrows both consistently.

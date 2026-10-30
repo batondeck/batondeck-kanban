@@ -51,9 +51,10 @@ Notable changes to batondeck-kanban. The format follows
   release now names no agent, as the default label `cli` does. `ID:x` and other labels mint as
   before, under the first-minter rule.
 - An agent name equal to another identity's id no longer reaches that identity's agentless profile
-  or stats (P-351). `register_agent_profile` and `rank_tasks {useProfile}` answer `FORBIDDEN`
-  (`details.agentKey`) for a key that is another account's id or another project member's id, and
-  the outcomes `complete_task` and `block_task` record go under the caller's own identity instead.
+  or stats (P-351). `register_agent_profile` and `useProfile` on `rank_tasks`, `next_task` and
+  `claim_next` answer `FORBIDDEN` (`details.agentKey`) for a key that is another account's id or
+  another project member's id, and the outcomes `complete_task` and `block_task` record go under
+  the caller's own identity instead.
   A caller naming its own id, or naming no agent, keeps its own profile as before.
 - `claim_task {taskId}` applies `claim_next`'s assignee rule (P-334, P-297). Below master, a task
   assigned to another account's id or login (email, any case), to another project member's id, to
@@ -198,6 +199,34 @@ Notable changes to batondeck-kanban. The format follows
   `deploy-bot`) no longer takes that label's mentions: `@ops-bot` and `@deploy-bot` mention, ring
   and notify the first minter alone, and `@deploy-bot@evil.example` still reaches the variant's
   own worker (P-348).
+- **`cancel_task` refuses a task already DONE** with `INVALID_TRANSITION`, so a delivered task is
+  not relabelled out of every done figure, and **refuses a racing parent** with `CONFLICT_LOCKED`
+  (reason `race`) as `move_task` does, until `pick_run` or `cancel_runs` resolves the race. Neither
+  refusal writes anything (ADR-0001, P-150).
+- **A cancelled task no longer counts as delivered** (ADR-0001: DONE with the label `cancelled`).
+  `pick_run` refuses a cancelled run with `INVALID_TRANSITION` even when it had a deliverable,
+  activating a sprint refuses a cancelled proposal task, and in the web UI the task drawer's Runs
+  section offers no Pick on a cancelled run, the sprint rail counts a cancelled member in its total but
+  not in done and does not read a cancelled proposal as approved, and subtask progress on the card and
+  in the drawer counts a cancelled subtask in the total only. Status displays still show it under DONE
+  (P-208).
+- **`sprintId` works on `create_task`, `next_task` and `claim_next`.** `create_task` answered
+  `NOT_FOUND` for every sprint, existing or not; it now creates the task a member of the sprint in the
+  same write, under the rules `set_sprint` applies (the sprint on the task's board, PROPOSED or ACTIVE,
+  below its size limit), and the task gets `sprint.task_added`. `next_task` and `claim_next` refused
+  `sprintId`; they now choose among the sprint's members only, answer null when none is claimable,
+  `NOT_FOUND` for an unknown sprint and `VALIDATION` for another board's. A claim of a sprint member,
+  by `claim_task` or `claim_next`, now answers `sprint` {id, name, goal, status} instead of null
+  (P-239).
+- **`next_task {strategy: "score"}`, `explain` and `useProfile` work.** `strategy: "score"` and
+  `explain` answered `VALIDATION` ("not ported"), and `useProfile` on `next_task` and `claim_next` was
+  accepted and did nothing. `strategy: "score"` now ranks the frontier with the scorer `rank_tasks`
+  uses (the project's `selectionWeights` and `agingCeilingMs`); `explain` adds the chosen task's
+  factors, reason and runner-up, and needs `strategy: "score"` (`VALIDATION` without it).
+  `useProfile` judges eligibility by your own registered agent profile (exact, alias or tag match)
+  instead of `capabilities`, falls back to `capabilities` when you have no profile, and is
+  `FORBIDDEN` under another agent's label or another identity's id, as on `rank_tasks`. Both paths
+  judge the frontier's first 200 tasks (P-258).
 
 ## [0.1.0]
 

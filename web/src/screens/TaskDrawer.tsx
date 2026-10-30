@@ -14,6 +14,7 @@ import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, time
 import { LIMITS } from '../types.js';
 import { Cluster } from '../ui.js';
 import { Icon } from '../icons.js';
+import { isCancelled } from '../reports.js';
 import { Runs } from './Runs.js';
 import { useTaskDetail, type LoadedTaskDetail } from './task/useTaskDetail.js';
 import {
@@ -305,7 +306,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
             {/* Runs — race section (renders only when this task is/was raced). Drawer-only: it
                 always renders a section and fires its own `list_runs` read, so promoting it to the
                 page is scope this commit does not take. */}
-            <Runs projectId={projectId} task={task} />
+            <Runs projectId={projectId} task={task} cancelled={new Set([...taskById.values()].filter(isCancelled).map((t) => t.id))} />
           </div>
 
           <div ref={refs.files}>

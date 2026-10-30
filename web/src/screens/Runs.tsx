@@ -15,10 +15,13 @@ import * as runsApi from '../api/runs.js';
 import { Avatar, timeAgo } from '../components.js';
 import type { RunView, Task } from '../types.js';
 
-// A run is "submitted" (pickable) when it carries a deliverable in REVIEW/DONE — the core's own rule
-// for pick_run, so a run cancel_task closed (DONE, no deliverable) is not offered for a pick the core
-// would refuse. Running = every other run.
-function runState(r: RunView): 'submitted' | 'running' {
+// A run is "submitted" (pickable) when it carries a deliverable in REVIEW/DONE and was not cancelled —
+// the core's own rule for pick_run, so a run cancel_task closed (DONE with the cancelled label, even one
+// that had delivered) is not offered for a pick the core would refuse (P-208). list_runs carries no
+// labels, so the drawer passes the cancelled run ids it reads from the board's task list. Running =
+// every other run.
+function runState(r: RunView, cancelled?: ReadonlySet<string>): 'submitted' | 'running' {
+  if (cancelled?.has(r.taskId)) return 'running';
   if (r.hasDeliverable && (r.status === 'REVIEW' || r.status === 'DONE')) return 'submitted';
   return 'running';
 }
@@ -43,8 +46,8 @@ function StatePill({ state }: { state: 'submitted' | 'running' }) {
   );
 }
 
-function RunCard({ run, racing, won, onPick }: { run: RunView; racing: boolean; won: boolean; onPick: () => void }) {
-  const state = runState(run);
+function RunCard({ run, racing, won, cancelled, onPick }: { run: RunView; racing: boolean; won: boolean; cancelled?: ReadonlySet<string>; onPick: () => void }) {
+  const state = runState(run, cancelled);
   const agent = run.leaseHolder || run.assignee || run.taskId;
   return (
     <div
@@ -93,7 +96,12 @@ function RunCard({ run, racing, won, onPick }: { run: RunView; racing: boolean; 
   );
 }
 
-export function Runs({ projectId, task }: { projectId: string; task: Task }) {
+export function Runs({ projectId, task, cancelled }: {
+  projectId: string;
+  task: Task;
+  /** The ids of the board's tasks that carry the cancelled label: a cancelled run is never submitted. */
+  cancelled?: ReadonlySet<string>;
+}) {
   const taskId = task.id;
   const qc = useQueryClient();
   const racing = !!task.racing;
@@ -148,7 +156,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
   };
 
   // After a pick the parent is no longer racing and the winner is the run left with its deliverable.
-  const winnerId = !racing ? runs.find((r) => runState(r) === 'submitted')?.taskId : undefined;
+  const winnerId = !racing ? runs.find((r) => runState(r, cancelled) === 'submitted')?.taskId : undefined;
 
   return (
     <section>
@@ -239,6 +247,7 @@ export function Runs({ projectId, task }: { projectId: string; task: Task }) {
             run={r}
             racing={racing}
             won={r.taskId === winnerId}
+            cancelled={cancelled}
             onPick={() => void guard(() => runsApi.pickRun(projectId, taskId, r.taskId, task.version))}
           />
         ))}

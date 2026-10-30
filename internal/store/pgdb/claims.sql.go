@@ -18,25 +18,27 @@ UPDATE tasks AS t SET status = 'IN_PROGRESS',
   lease_id = $5::text, lease_expires_at = $6::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = $2::text, updated_at = $7::bigint
 WHERE t.id = (
-  SELECT f.id FROM tasks f, (SELECT $8::text AS caps) p
-  WHERE f.project_id = $9 AND f.board_id = $10 AND f.status = 'TODO'
+  SELECT f.id FROM tasks f, (SELECT $8::text AS caps, $9::text AS sprint, $10::text AS only_ids) p
+  WHERE f.project_id = $11 AND f.board_id = $12 AND f.status = 'TODO'
     AND json_array_length(f.blocked_by::json) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $7::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $7::bigint)
-    AND (CASE WHEN $11::text IS NULL
-          THEN f.assignee IS NULL OR f.assignee = $12::text
-            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $12::text)
-          ELSE f.assignee = $11::text END)
+    AND (CASE WHEN $13::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = $14::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $14::text)
+          ELSE f.assignee = $13::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND ($1::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
   LIMIT 1
-  FOR NO KEY UPDATE OF f SKIP LOCKED) AND t.project_id = $9 AND t.status = 'TODO'
+  FOR NO KEY UPDATE OF f SKIP LOCKED) AND t.project_id = $11 AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -49,6 +51,8 @@ type ClaimNextParams struct {
 	ExpiresAt int64
 	Now       int64
 	Caps      string
+	SprintID  string
+	OnlyIds   string
 	ProjectID string
 	BoardID   string
 	Assignee  sql.NullString
@@ -105,7 +109,9 @@ type ClaimNextRow struct {
 // blocked_by, not poisoned, not racing, no live lease (one expiring after now), past its backoff;
 // with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 // the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
-// tasks whose required capabilities are all among caps. caps is read once, as the derived table p
+// tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
+// of that sprint (its id in sprint_ids), with only_ids (a JSON array; JSON null for no filter) only
+// the tasks it names. caps, sprint_id and only_ids are read once, as the derived table p
 // (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 // valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
 // high, normal, low), then order key and id COLLATE "C", as bytes.
@@ -125,6 +131,8 @@ func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNext
 		arg.ExpiresAt,
 		arg.Now,
 		arg.Caps,
+		arg.SprintID,
+		arg.OnlyIds,
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Assignee,
@@ -186,25 +194,27 @@ UPDATE tasks AS t SET status = 'IN_PROGRESS',
   lease_id = $5::text, lease_expires_at = $6::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = $2::text, updated_at = $7::bigint
 WHERE t.id = (
-  SELECT f.id FROM tasks f, (SELECT $8::text AS caps) p
-  WHERE f.project_id = $9 AND f.board_id = $10 AND f.status = 'TODO'
+  SELECT f.id FROM tasks f, (SELECT $8::text AS caps, $9::text AS sprint, $10::text AS only_ids) p
+  WHERE f.project_id = $11 AND f.board_id = $12 AND f.status = 'TODO'
     AND json_array_length(f.blocked_by::json) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
     AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $7::bigint)
     AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $7::bigint)
-    AND (CASE WHEN $11::text IS NULL
-          THEN f.assignee IS NULL OR f.assignee = $12::text
-            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $12::text)
-          ELSE f.assignee = $11::text END)
+    AND (CASE WHEN $13::text IS NULL
+          THEN f.assignee IS NULL OR f.assignee = $14::text
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $14::text)
+          ELSE f.assignee = $13::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND ($1::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
   LIMIT 1
-  FOR NO KEY UPDATE OF f) AND t.project_id = $9 AND t.status = 'TODO'
+  FOR NO KEY UPDATE OF f) AND t.project_id = $11 AND t.status = 'TODO'
 RETURNING project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 `
 
@@ -217,6 +227,8 @@ type ClaimNextWaitingParams struct {
 	ExpiresAt int64
 	Now       int64
 	Caps      string
+	SprintID  string
+	OnlyIds   string
 	ProjectID string
 	BoardID   string
 	Assignee  sql.NullString
@@ -283,6 +295,8 @@ func (q *Queries) ClaimNextWaiting(ctx context.Context, arg ClaimNextWaitingPara
 		arg.ExpiresAt,
 		arg.Now,
 		arg.Caps,
+		arg.SprintID,
+		arg.OnlyIds,
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Assignee,
@@ -598,26 +612,30 @@ func (q *Queries) ListExpiredLeases(ctx context.Context, arg ListExpiredLeasesPa
 
 const previewFrontier = `-- name: PreviewFrontier :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
-FROM tasks f, (SELECT $1::text AS caps) p
-WHERE f.project_id = $2 AND f.board_id = $3 AND f.status = 'TODO'
+FROM tasks f, (SELECT $1::text AS caps, $2::text AS sprint, $3::text AS only_ids) p
+WHERE f.project_id = $4 AND f.board_id = $5 AND f.status = 'TODO'
   AND json_array_length(f.blocked_by::json) = 0
   AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
   AND f.racing = 0
-  AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $4::bigint)
-  AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $4::bigint)
-  AND (CASE WHEN $5::text IS NULL
-        THEN f.assignee IS NULL OR f.assignee = $6::text
-          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $6::text)
-        ELSE f.assignee = $5::text END)
+  AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= $6::bigint)
+  AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= $6::bigint)
+  AND (CASE WHEN $7::text IS NULL
+        THEN f.assignee IS NULL OR f.assignee = $8::text
+          OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = $8::text)
+        ELSE f.assignee = $7::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
+  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+  AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key COLLATE "C", f.id COLLATE "C"
-LIMIT $7::bigint
+LIMIT $9::bigint
 `
 
 type PreviewFrontierParams struct {
 	Caps      string
+	SprintID  string
+	OnlyIds   string
 	ProjectID string
 	BoardID   string
 	Now       int64
@@ -675,6 +693,8 @@ type PreviewFrontierRow struct {
 func (q *Queries) PreviewFrontier(ctx context.Context, arg PreviewFrontierParams) ([]PreviewFrontierRow, error) {
 	rows, err := q.db.Query(ctx, previewFrontier,
 		arg.Caps,
+		arg.SprintID,
+		arg.OnlyIds,
 		arg.ProjectID,
 		arg.BoardID,
 		arg.Now,

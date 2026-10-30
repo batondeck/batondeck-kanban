@@ -114,20 +114,21 @@ type SprintActivation struct {
 	SelfApproval   string
 }
 
-// SprintProposal is the proposal task as the activation gate reads it: its status, the
-// customFields.sprintProposalFor it carries ("" when absent), its review's reviewer ("" when none)
-// and its updatedBy.
+// SprintProposal is the proposal task as the activation gate reads it: its status, whether it
+// carries the cancelled label, the customFields.sprintProposalFor it carries ("" when absent), its
+// review's reviewer ("" when none) and its updatedBy.
 type SprintProposal struct {
 	ID                string
 	Status            Status
+	Cancelled         bool
 	SprintProposalFor string
 	Reviewer          string
 	UpdatedBy         string
 }
 
 // CheckSprintActivation is conductor's assertSprintActivation, the PROPOSED → ACTIVE gates in order:
-// the admin role (FORBIDDEN), a bound DONE proposal task whose customFields.sprintProposalFor is the
-// sprint (INVALID_TRANSITION), and self-approval under "enforce" (FORBIDDEN). It returns approvedBy
+// the admin role (FORBIDDEN), a bound DONE proposal task that was not cancelled (P-208) and whose
+// customFields.sprintProposalFor is the sprint (INVALID_TRANSITION), and self-approval under "enforce" (FORBIDDEN). It returns approvedBy
 // (the proposal's reviewer, else its updatedBy) and whether a sprint.self_approved event is due
 // (self-approval under "warn").
 func CheckSprintActivation(a SprintActivation) (approvedBy string, selfApproved bool, err error) {
@@ -149,6 +150,8 @@ func CheckSprintActivation(a SprintActivation) (approvedBy string, selfApproved 
 		return "", false, refuse("no DONE proposal task is bound (proposalTaskId)")
 	case p.Status != Done:
 		return "", false, refuse(fmt.Sprintf("proposal task %s is %s, not DONE", p.ID, p.Status))
+	case p.Cancelled:
+		return "", false, refuse(fmt.Sprintf("proposal task %s was cancelled, not delivered", p.ID))
 	case p.SprintProposalFor != a.SprintID:
 		return "", false, refuse(fmt.Sprintf("proposal task %s is not bound to this sprint (customFields.sprintProposalFor)", p.ID))
 	}

@@ -52,9 +52,11 @@ func raceKey(key, parentID string) string {
 }
 
 // isSubmitted is conductor's runs.ts:72: a run is pickable once it is REVIEW or DONE with a
-// deliverable.
+// deliverable. A cancelled run is DONE but was not delivered (ADR-0001), so it is never submitted
+// (P-208).
 func isSubmitted(r store.Task) bool {
-	return (r.Status == domain.Review || r.Status == domain.Done) && r.Deliverable != nil && *r.Deliverable != ""
+	return (r.Status == domain.Review || r.Status == domain.Done) && r.Deliverable != nil && *r.Deliverable != "" &&
+		!slices.Contains(r.Labels, domain.LabelCancelled)
 }
 
 // runCopyLabels is the parent's labels a run carries: the system labels stay with the parent

@@ -19,6 +19,7 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
+import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
 
@@ -184,7 +185,8 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
   const subs = subQ.data?.tasks ?? [];
-  const subsDone = subs.filter((s) => s.status === 'DONE').length;
+  // A cancelled subtask is DONE but not delivered: it counts in the total and not in done (P-208).
+  const subsDone = subs.filter((s) => s.status === 'DONE' && !isCancelled(s)).length;
   const subsPct = subs.length ? Math.round((subsDone / subs.length) * 100) : 0;
 
   // Dependency chips, split into blocked-by / blocks relative to this task.
