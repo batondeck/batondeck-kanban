@@ -18,26 +18,17 @@
  * show an error because a LABEL could not load. `retry: false`, and `eventActor` falls back to a
  * shortened id.
  *
- * *** `list_integrations` IS ROLE-GATED BEFORE IT IS CALLED, AND THAT IS NOT AN OPTIMISATION. ***
+ * *** `list_integrations` IS GATED BEFORE IT IS CALLED, AND THAT IS NOT AN OPTIMISATION. ***
  *
- * This docblock previously said the tool "is gated on the on-call permission and 403s for a member
- * without it", and treated the 403 as a harmless best-effort miss. Both halves were wrong, and the
- * combination was an alert-noise bug:
+ * `batondeck:oncall` gates the SPA PAGE, not this API. The API's guard is the tool's posture in
+ * `internal/domain/grants.go`: workspace admin required (`AdminOnly: "only"`), then project role
+ * master or above, both checked by `authorize` in `internal/service/authz.go`. A caller who fails
+ * either is answered 403 FORBIDDEN. This hook mounts on the four busiest screens (Board, Activity,
+ * Analytics, the ticket Activity panel), so an ungated call would put a refused request on every
+ * one of them for every reader who is not both. The fix is to not make the call.
  *
- *   - `batondeck:oncall` gates the SPA PAGE, *deliberately not* this API — stated verbatim in
- *     `gateway/ui-backend/test/permission-coverage.test.ts`. The real guard is the tool's tier floor:
- *     `requireMaster` at `src/tools/integrations.ts:670`.
- *   - A refusal is therefore NOT inert. `src/auth/index.ts` answers `Requires master … (have: worker)`,
- *     `src/security/signals.ts` matches `/^Requires /` and emits an escalation signal, and
- *     `infra/security-rules/alerts/escalation-deny.yaml` pages CRITICAL on >3 in 5 minutes.
- *
- * This hook mounts on the four busiest screens (Board, Activity, Analytics, the ticket Activity
- * panel), so four `viewer`/`worker` humans opening a board inside one window would have paged the
- * project owner — an alert firing on entirely honest traffic, which engineering rule 19 exists to
- * refuse. The fix is to not make the call, never to raise the threshold.
- *
- * A caller below `master` simply gets no integration names; `eventActor` elides the id instead. That
- * is the same degradation the 403 produced, without the signal.
+ * Such a caller simply gets no integration names; `eventActor` elides the id instead. That is the
+ * same degradation the 403 produced, without the refused request.
  *
  * ONE HOOK RATHER THAN FOUR COPIES: react-query dedupes by key, so four mounted consumers share two
  * requests, and a fix to the merge rule lands everywhere at once.
@@ -46,6 +37,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as oncallApi from './api/oncall.js';
 import * as projectsApi from './api/projects.js';
+import { useAuth } from './auth.js';
 import { useProject } from './projectContext.js';
 
 /**
@@ -60,22 +52,27 @@ const STALE_MS = 300_000;
 /**
  * May this caller call `list_integrations` WITHOUT being refused?
  *
- * `master` is the floor the tool enforces (`src/tools/integrations.ts` `requireMaster`), and a
- * refusal is not inert: the core answers `Requires master … (have: worker)`, `signals.ts` classifies
- * it as an escalation, and `escalation-deny.yaml` files on >3 in 5 minutes. So the call has to be
- * gated BEFORE it is made, at EVERY call site — a review found two more after the first fix
- * (`screens/Oncall.tsx`, which also refetches every 60s and so fires with no interaction at all, and
- * `screens/oncall/OncallSetup.tsx`'s deleted-integrations read).
+ * The server makes TWO checks, and this mirrors both (P-248). `list_integrations` is
+ * `AdminOnly: "only"` with tier master (`internal/domain/grants.go`), so `authorize`
+ * (`internal/service/authz.go`) first refuses anyone who is not a WORKSPACE admin ("Workspace admin
+ * required"), and only then checks the caller's role in the project against master. Gating on the
+ * project role alone sent every project master who is not a workspace admin a 403 on each screen
+ * this hook mounts on. `isAdmin` on `/api/session` is the same flag (`caller.WorkspaceAdmin`,
+ * `internal/api/session.go`).
  *
- * Exported as a hook rather than copied, because the first fix covered one of three sites and read
- * as complete.
+ * The call is gated BEFORE it is made, at EVERY call site: `useDisplayNames` below,
+ * `screens/Oncall.tsx` (which also refetches every 60s, so it fires with no interaction at all) and
+ * `screens/oncall/OncallSetup.tsx`'s deleted-integrations read. Exported as a hook rather than
+ * copied, because the first fix covered one of three sites and read as complete.
  *
- * Fails CLOSED: an unknown role string ranks -1 and is refused.
+ * Fails CLOSED: a non-admin session, an absent project row or an unknown role string (ranked -1) is
+ * refused.
  */
 export function useMayReadIntegrations(projectId: string | undefined): boolean {
+  const { isAdmin } = useAuth();
   const { projects } = useProject();
   const role = projects.find((p) => p.projectId === projectId)?.role;
-  return role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK.master;
+  return isAdmin && role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK.master;
 }
 
 export function useDisplayNames(projectId: string | undefined): Record<string, string> {

@@ -73,9 +73,9 @@ export default function Oncall() {
   const integrationsQ = useQuery({
     queryKey: ['oncall-integrations', activeProject],
     queryFn: () => oncallApi.listIntegrations(activeProject),
-    // Role-gated: `list_integrations` is master-tier and its refusal emits an escalation signal
-    // `escalation-deny.yaml` files on. With the 60s refetch below this fired without the reader
-    // touching anything, so four sub-master identities with this page open would file between them.
+    // Gated on workspace admin AND project master (useMayReadIntegrations), the two checks the
+    // service makes. With the 60s refetch below, an ungated read is refused once a minute without
+    // the reader touching anything.
     enabled: Boolean(activeProject) && mayReadIntegrations,
     refetchInterval: 60_000,
     retry: false,
