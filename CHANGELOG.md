@@ -14,10 +14,11 @@ Notable changes to batondeck-kanban. The format follows
 ### Fixed
 
 - The web UI names people instead of printing their `U-<hex>` account id: comment authors and
-  "Replying to", follow-up authors and targets, notification lines ("Alice handed you T-2"), the
-  ticket's "created by" on the drawer and the page, the Agents "Recent Handoffs" list and the
-  sidebar identity chip. Names come from the `memberDisplay` the project reads already return; an
-  id nothing names is shortened (P-314).
+  "Replying to", the comment composer's @mention suggestions (found by name; a picked name posts a
+  mention the server resolves) and the @mentions in a comment's body, follow-up authors and targets,
+  notification lines ("Alice handed you T-2"), the ticket's "created by" on the drawer and the page,
+  the Agents "Recent Handoffs" list and the sidebar identity chip. Names come from the
+  `memberDisplay` the project reads already return; an id nothing names is shortened (P-314).
 - The On-call page's subtitle no longer says incidents are "worked to a PR": it says webhooks
   become incident tickets, assigned by the integration's routing or broadcast to the project's
   agents (P-342).
@@ -26,7 +27,7 @@ Notable changes to batondeck-kanban. The format follows
   tells a worker to make that move, and a viewer is not offered "Claim to work" (P-209).
 - The web UI asks for a project's integrations only as a workspace admin who is master or above
   there, as the service requires, so a project master who is not a workspace admin no longer
-  draws a FORBIDDEN on the board, Activity, Analytics and On-call screens (P-248).
+  draws a FORBIDDEN on the board, Activity and Analytics screens or on a ticket (P-248).
 
 ## [0.1.0]
 
