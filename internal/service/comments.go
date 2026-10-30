@@ -57,19 +57,15 @@ func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, er
 	if len(domain.MentionTokens(body)) == 0 {
 		return []string{}, nil
 	}
-	workers, err := t.ownedLabels(body, workers)
-	if err != nil {
-		return nil, err
-	}
 	members, err := t.Tx.ListMembers(t.ctx, t.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(members))
-	aliases := map[string][]string{}
+	names := map[string][]string{} // each member's own names: its identity, email and display name
 	for _, m := range members {
 		ids = append(ids, m.IdentityID)
-		aliases[m.IdentityID] = workers[m.IdentityID]
+		names[m.IdentityID] = []string{m.IdentityID}
 		u, err := t.Tx.GetUser(t.ctx, m.IdentityID)
 		if errors.Is(err, store.ErrNotFound) {
 			continue // not an account: the member keeps matching on its identity and labels alone
@@ -77,18 +73,28 @@ func (t *txn) mentionsOf(body string, workers map[string][]string) ([]string, er
 		if err != nil {
 			return nil, err
 		}
-		aliases[m.IdentityID] = append(slices.Clone(aliases[m.IdentityID]), u.Email, u.DisplayName)
+		names[m.IdentityID] = append(names[m.IdentityID], u.Email, u.DisplayName)
+	}
+	workers, err = t.ownedLabels(body, workers, names)
+	if err != nil {
+		return nil, err
+	}
+	aliases := make(map[string][]string, len(ids))
+	for _, id := range ids {
+		aliases[id] = append(slices.Clone(workers[id]), names[id][1:]...)
 	}
 	return domain.ResolveMentions(body, ids, aliases), nil
 }
 
-// ownedLabels is workers with a worker's label dropped where a mention of another identity's token
-// label in body would resolve to it: a label is its first minter's, revoked or expired rows included
-// (P-257, REVIEW-257 R2-Q1), so "@<label>" names only the identity that owns it (P-343, Fable B1 on
-// #78). The match is domain.ResolveMentions' own (case, spaces, an email's local part), not the
-// exact string, since that is how the alias is read. A name no other identity's token carries keeps
-// aliasing its worker's identity, and every identity keeps its live worker (the ring by @login).
-func (t *txn) ownedLabels(body string, workers map[string][]string) (map[string][]string, error) {
+// ownedLabels is workers with only the labels that may alias their identity. A label is its first
+// minter's, revoked or expired rows included (P-257,
+// REVIEW-257 R2-Q1): one another identity's token row carries never aliases (P-343, Fable B1 on
+// #78), and one only its own identity's rows carry aliases as before. A name no token carries is
+// dropped when a body token that names it (domain.MentionNames, ResolveMentions' own match) also
+// names another identity's token label (P-348, Fable A1/A2) or another member's own name in names,
+// its identity, email or display name (P-349, Fable F1). Every identity keeps its live worker (the
+// ring by @login). The token rows are read only when a live worker has a label.
+func (t *txn) ownedLabels(body string, workers, names map[string][]string) (map[string][]string, error) {
 	labelled := false
 	for _, ls := range workers {
 		labelled = labelled || len(ls) > 0
@@ -100,38 +106,40 @@ func (t *txn) ownedLabels(body string, workers map[string][]string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	inBody := map[string]bool{}
-	for _, tok := range domain.MentionTokens(body) {
-		inBody[tok] = true
-	}
-	type held struct{ mention, identity string }
-	var named []held // the token labels this body mentions, each with its holder
+	holders := map[string][]string{} // each token label, with the identities whose rows carry it
 	for _, r := range tokens {
-		a := domain.TokenAgent(r.Label)
-		if a == "" {
-			continue
+		if a := domain.TokenAgent(r.Label); a != "" && !slices.Contains(holders[a], r.IdentityID) {
+			holders[a] = append(holders[a], r.IdentityID)
 		}
-		for _, tok := range domain.MentionTokens("@" + a) {
-			if inBody[tok] {
-				named = append(named, held{"@" + a, r.IdentityID})
-				break
+	}
+	inBody := domain.MentionTokens(body)
+	// namesOther is whether tk names a token label, or a member's own name, of another identity
+	// than id.
+	namesOther := func(tk, id string) bool {
+		for a, hs := range holders {
+			if domain.MentionNames(tk, a) && slices.ContainsFunc(hs, func(h string) bool { return h != id }) {
+				return true
 			}
 		}
-	}
-	if len(named) == 0 {
-		return workers, nil
+		for m, ns := range names {
+			if m != id && slices.ContainsFunc(ns, func(n string) bool { return domain.MentionNames(tk, n) }) {
+				return true
+			}
+		}
+		return false
 	}
 	out := make(map[string][]string, len(workers))
 	for id, ls := range workers {
 		kept := []string{}
 		for _, l := range ls {
-			other := false
-			for _, h := range named {
-				other = other || (h.identity != id && len(domain.ResolveMentions(h.mention, []string{"\x00"}, map[string][]string{"\x00": {l}})) > 0)
+			hs := holders[l]
+			if slices.ContainsFunc(hs, func(h string) bool { return h != id }) {
+				continue // another identity's label
 			}
-			if !other {
-				kept = append(kept, l)
+			if len(hs) == 0 && slices.ContainsFunc(inBody, func(tk string) bool { return domain.MentionNames(tk, l) && namesOther(tk, id) }) {
+				continue // a free name this body's token also reads as another identity's
 			}
+			kept = append(kept, l)
 		}
 		out[id] = kept
 	}

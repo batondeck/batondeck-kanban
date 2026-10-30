@@ -20,6 +20,14 @@ Notable changes to batondeck-kanban. The format follows
   identity mints that name: delivery re-reads the label's owner and drops the entry, logged as
   `its agent "<name>" is another agent's label`, instead of ringing it with the minter's work. A
   worker under its own token's label is rung with no extra read (P-344).
+- A mention reads a worker's label the way it resolves one. A body token names a label when it is
+  the label or the label's local part (`@pbob` names `pbob@x.example`), and never names a label it
+  only starts (`@pt` does not name `pt bob`). So a free name a mention of another identity's label
+  also names no longer rings that worker, and a free name that only begins another label still
+  does. A free name equal to another project member's login, email local part or display name no
+  longer aliases its registrant: `@will` rings will alone. The `session` usage, the plugin README
+  and the register refusal now say a live label of the bearer's own account, on a token that does
+  not carry it, is refused as well (P-348, P-349).
 
 ## [0.1.0]
 

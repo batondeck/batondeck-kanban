@@ -2,6 +2,7 @@ package domain
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -31,21 +32,26 @@ func MentionTokens(body string) []string {
 	return out
 }
 
+// MentionNames is whether token, one of MentionTokens' (lower-cased), names name: the name's
+// normalised value or its local part, the match ResolveMentions reads an alias by. A name is
+// compared whole: a label with a space or another non-handle character is never cut to its first
+// handle (P-348, Fable A2).
+func MentionNames(token, name string) bool {
+	n := normMention(name)
+	return n != "" && (token == n || token == localPart(n))
+}
+
 // ResolveMentions is conductor's resolveMentions: the members, in members' order, that a token of
 // the body names, by the member identity, an alias (an account's email or display name) or the
 // local part of either. Only a member can be selected, so text cannot invent one.
 func ResolveMentions(body string, members []string, aliases map[string][]string) []string {
-	tokens := map[string]bool{}
-	for _, t := range MentionTokens(body) {
-		tokens[t] = true
-	}
+	tokens := MentionTokens(body)
 	out := []string{}
 	if len(tokens) == 0 {
 		return out
 	}
 	named := func(s string) bool {
-		n := normMention(s)
-		return n != "" && (tokens[n] || tokens[localPart(n)])
+		return slices.ContainsFunc(tokens, func(tk string) bool { return MentionNames(tk, s) })
 	}
 	seen := map[string]bool{}
 	for _, id := range members {
