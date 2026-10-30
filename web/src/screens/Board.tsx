@@ -35,7 +35,7 @@ import { uiSettings } from '../settings.js';
 import { StatusDot } from '../AgentSelect.js';
 import type { ActivityEvent, AgentSession, Board as BoardT, Sprint, SprintStatus, Status, Task } from '../types.js';
 import { STATUSES } from '../types.js';
-import { replaceDevicePresence } from '../presenceMerge.js';
+import { keepCachedDevices, replaceDevicePresence } from '../presenceMerge.js';
 
 const SPRINT_STATUS_COLOR: Record<SprintStatus, string> = {
   PROPOSED: 'var(--review)',
@@ -727,8 +727,17 @@ export function Board() {
   // fetching for itself every 10s. Calling it a snapshot rather than "push" is deliberate: it is a poll
   // moved to the server, which is the honest description and still removes the client cost.
   //
-  // The initial fetch stays: a tab must render presence before the first tick arrives.
-  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit) });
+  // The initial fetch stays: a tab must render presence before the first tick arrives. It keeps the
+  // device rows a presence frame already put in the cache (P-197): the list never carries them, and a
+  // frame comes on open and then only on a directory change, so an answer landing after the open frame,
+  // or any refetch later, would show a live session as offline until the next change.
+  const agentsQ = useQuery({
+    queryKey: ['agentsessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(uiSettings().sessionsLimit);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions) };
+    },
+  });
 
   // `resync`, or a rebuilt socket: no board frame comes until the next change, so the board, its tasks
   // and its feed are refetched. Only then: the nudge below must not (card-pending.test.tsx).

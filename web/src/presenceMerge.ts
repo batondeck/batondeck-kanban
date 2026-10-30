@@ -18,3 +18,14 @@ export function mergePresence(prev: AgentSession[] | undefined, frame: AgentSess
 export function replaceDevicePresence(prev: AgentSession[] | undefined, frame: AgentSession[]): AgentSession[] {
   return mergePresence((prev ?? []).filter((s) => !s.sessionKey.startsWith('device:')), frame);
 }
+
+/**
+ * A REST answer for a key presence frames also write (`/api/agents/sessions` never lists `device:`
+ * rows): the list as answered, with the device rows the cache holds kept. A frame is sent on open and
+ * then only when the directory changes, so a list landing after one would otherwise drop a live
+ * session until the next change (P-197). Pass the cache as it is when the answer lands, not when the
+ * request left, so a frame that arrived meanwhile is kept too.
+ */
+export function keepCachedDevices(fresh: AgentSession[], cached: AgentSession[] | undefined): AgentSession[] {
+  return mergePresence(fresh, (cached ?? []).filter((s) => s.sessionKey.startsWith('device:')));
+}

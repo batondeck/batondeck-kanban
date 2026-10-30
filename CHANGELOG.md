@@ -151,6 +151,23 @@ Notable changes to batondeck-kanban. The format follows
   whitespace is refused, a trailing `//` comment included, where 0.1.0 loaded the first object and
   ignored the rest. A `.dockerignore` keeps `.env`, `master.key`, SQLite files, `dist/`,
   `web/node_modules` and `.git` out of the image's build context; the binary it builds is unchanged.
+- `/api/stream` answers `event: resync` to a cursor (`Last-Event-ID` or `?cursor=`) whose change-log
+  row the retention sweep has deleted (P-281). The replay read only rows after the cursor, so a tab
+  that came back after the sweep got the surviving rows as if nothing were missing and kept a board
+  without the changes swept in between; the SPA already refetches on `resync`.
+- The web UI goes to the sign-in form when its session ends while a tab is open (P-282). After a
+  logout in another tab, a `user passwd`, a `user disable` or an expiry, the server closes
+  `/api/stream` and the browser's reconnect meets 401, which EventSource reports only as a closed
+  stream; the tab kept reconnecting, backing off to every 30 s, on a screen that still looked
+  signed in. A closed stream now asks `/api/session`, and a 401 there ends the reconnects and shows
+  sign-in; any other answer reconnects as before.
+- The board's "agents online" pill and task detail keep showing a live, idle Claude Code session
+  (P-197). Their `/api/agents/sessions` answer, which never lists the device's own sessions, replaced
+  the rows the stream's presence frame had put in place, and a frame comes only when the device's
+  session directory changes, so an idle session read "no agents online" from the board's load, and
+  again after any refetch, until the next change. The answer now keeps those rows, as the Agents
+  screen already did, and task detail applies the presence frames itself, so on the full task page
+  too a session that leaves is gone with the next frame.
 
 ## [0.1.0]
 
