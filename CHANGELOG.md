@@ -6,6 +6,28 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/session` answers `displayName`: the signed-in account's display name, else its login,
+  absent when the identity has no account row. The web UI's identity chip reads it (P-314).
+
+### Fixed
+
+- The web UI names people instead of printing their `U-<hex>` account id: comment authors and
+  "Replying to", follow-up authors and targets, notification lines ("Alice handed you T-2"), the
+  ticket's "created by" on the drawer and the page, the Agents "Recent Handoffs" list and the
+  sidebar identity chip. Names come from the `memberDisplay` the project reads already return; an
+  id nothing names is shortened (P-314).
+- The On-call page's subtitle no longer says incidents are "worked to a PR": it says webhooks
+  become incident tickets, assigned by the integration's routing or broadcast to the project's
+  agents (P-342).
+- A ticket's Status control is disabled, with the reason, for anyone below master, the tier
+  `move_task` requires, instead of sending a move the server refuses; the claim hint no longer
+  tells a worker to make that move, and a viewer is not offered "Claim to work" (P-209).
+- The web UI asks for a project's integrations only as a workspace admin who is master or above
+  there, as the service requires, so a project master who is not a workspace admin no longer
+  draws a FORBIDDEN on the board, Activity, Analytics and On-call screens (P-248).
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
