@@ -222,17 +222,21 @@ func (s *Store) DeleteLapsedTokens(ctx context.Context, before int64, limit int)
 		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
 	}
 	return get(ctx, s, func(st *state) (int64, error) {
-		// The newest row of each (identity, label) stays, whatever its status.
-		newest := map[[2]string]store.Token{}
+		// The oldest and the newest row of each (identity, label) stay, whatever their status.
+		oldest, newest := map[[2]string]store.Token{}, map[[2]string]store.Token{}
 		for _, t := range st.tokens {
 			k := [2]string{t.IdentityID, t.Label}
+			if o, ok := oldest[k]; !ok || cmp.Or(cmp.Compare(t.CreatedAt, o.CreatedAt), cmp.Compare(t.ID, o.ID)) < 0 {
+				oldest[k] = t
+			}
 			if n, ok := newest[k]; !ok || cmp.Or(cmp.Compare(t.CreatedAt, n.CreatedAt), cmp.Compare(t.ID, n.ID)) > 0 {
 				newest[k] = t
 			}
 		}
 		var lapsed []store.Token
 		for _, t := range st.tokens {
-			if (t.RevokedAt != 0 && t.RevokedAt < before || t.ExpiresAt < before) && newest[[2]string{t.IdentityID, t.Label}].ID != t.ID {
+			k := [2]string{t.IdentityID, t.Label}
+			if (t.RevokedAt != 0 && t.RevokedAt < before || t.ExpiresAt < before) && oldest[k].ID != t.ID && newest[k].ID != t.ID {
 				lapsed = append(lapsed, t)
 			}
 		}

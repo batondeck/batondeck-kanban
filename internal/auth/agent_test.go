@@ -153,15 +153,15 @@ func TestALabelBelongsToOneIdentity(t *testing.T) {
 	}
 }
 
-// P-44: the retention sweep deletes lapsed token rows, and label ownership survives it. Alice's two
-// scout tokens lapse far past LapsedGrace; the sweep takes the older row and keeps the newest, so
-// bob's mint of scout is still VALIDATION and alice still mints it back.
+// P-44: the retention sweep deletes lapsed token rows, and label ownership survives it. Alice's three
+// scout tokens lapse far past LapsedGrace; the sweep takes the middle row and keeps the oldest and
+// the newest, so bob's mint of scout is still VALIDATION and alice still mints it back.
 func TestALapsedLabelStaysItsOwnersAfterTheSweep(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	alice, bob := f.addUser(t, "alice", "pw"), f.addUser(t, "bob", "pw")
 	var ids []string
-	for range 2 {
+	for range 3 {
 		_, info, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "scout", 0)
 		if err != nil {
 			t.Fatal(err)
@@ -169,19 +169,21 @@ func TestALapsedLabelStaysItsOwnersAfterTheSweep(t *testing.T) {
 		ids = append(ids, info.ID)
 		f.clk.add(time.Millisecond)
 	}
-	if err := f.st.RevokeToken(ctx, ids[1], f.clk.now().UnixMilli()); err != nil {
+	if err := f.st.RevokeToken(ctx, ids[2], f.clk.now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	f.clk.add(MaxTokenTTL + retention.LapsedGrace + time.Hour) // both lapsed more than the grace ago
+	f.clk.add(MaxTokenTTL + retention.LapsedGrace + time.Hour) // all three lapsed more than the grace ago
 	swept := (&retention.Sweeper{Store: f.st, Now: f.clk.now, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(ctx)
 	if swept.Tokens != 1 {
-		t.Fatalf("swept %d tokens, want 1 (the older scout row)", swept.Tokens)
+		t.Fatalf("swept %d tokens, want 1 (the middle scout row)", swept.Tokens)
 	}
-	if _, err := f.st.GetToken(ctx, ids[0]); err == nil {
-		t.Fatal("the older lapsed scout row outlived the sweep")
+	if _, err := f.st.GetToken(ctx, ids[1]); err == nil {
+		t.Fatal("the middle lapsed scout row outlived the sweep")
 	}
-	if _, err := f.st.GetToken(ctx, ids[1]); err != nil {
-		t.Fatalf("the newest scout row: %v, want it kept", err)
+	for i, which := range map[int]string{0: "oldest", 2: "newest"} {
+		if _, err := f.st.GetToken(ctx, ids[i]); err != nil {
+			t.Fatalf("the %s scout row: %v, want it kept", which, err)
+		}
 	}
 	_, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, "scout", 0)
 	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["label"] != "scout" {
