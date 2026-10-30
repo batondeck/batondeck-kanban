@@ -98,7 +98,7 @@ export default function Oncall() {
     <Stack gap={16} className="page">
       <PageHeader
         title="On-call"
-        subtitle="Telemetry webhooks become incident tickets, routed to an agent and worked to a PR."
+        subtitle="Telemetry webhooks become incident tickets, assigned by each integration's routing or broadcast to the project's agents."
         actions={
           <button className="btn secondary" onClick={() => setSetupOpen(true)} aria-label="On-call setup">
             <Icon name="settings" size={12} /> Setup
