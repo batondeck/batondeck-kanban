@@ -6,6 +6,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The config refuses more of what it cannot use.** `public_url` (`BATONDECK_PUBLIC_URL`) must be an
+  http or https origin, `scheme://host[:port]`: a bare host, a path, a query, a fragment or userinfo is
+  refused naming `public_url_is_an_http_origin`, and a trailing `/` is dropped (with one, serve's log
+  line printed `…//blobs/`). A config file with anything after its JSON object is refused, where the
+  first object loaded before. A `.dockerignore` keeps `.env`, `master.key`, SQLite files, `dist/`,
+  `web/node_modules` and `.git` out of the image's build context; the binary it builds is unchanged.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
