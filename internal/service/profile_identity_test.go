@@ -11,10 +11,11 @@ import (
 
 // P-351: an agentless caller's profile and stats are keyed by its identity id, so an agent name
 // equal to another identity's id (a member's, or any account's) would write that identity's
-// agentless profile and stats. On every engine: register_agent_profile and rank_tasks {useProfile}
-// refuse such a key FORBIDDEN (details.agentKey) and leave the owner's profile as it was;
-// complete_task and block_task still transition, and the outcome lands under the caller's own
-// identity. A caller with no agent, one named its own id and a free name are not refused.
+// agentless profile and stats. On every engine: register_agent_profile and useProfile on
+// rank_tasks, next_task and claim_next refuse such a key FORBIDDEN (details.agentKey) and leave the
+// owner's profile as it was; complete_task and block_task still transition, and the outcome lands
+// under the caller's own identity. A caller with no agent, one named its own id and a free name are
+// not refused.
 func TestAProfileKeyIsNeverAnotherIdentitysID(t *testing.T) {
 	onLC(t, func(t *testing.T, e *lcEnv) {
 		bob := e.member(t, e.project, "bob", domain.RoleWorker)
@@ -90,6 +91,31 @@ func TestAProfileKeyIsNeverAnotherIdentitysID(t *testing.T) {
 		r, err := rk.Rank(e.ctx, carol, RankTasksReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true})
 		if err != nil || len(r.Ranked) != 1 || r.Ranked[0].Task.ID != goTask.ID || r.Ranked[0].Tier == "" {
 			t.Fatalf("AC3 carol ranked by her profile (go only, rust %s excluded): %+v %v", rustTask.ID, r, err)
+		}
+
+		// AC3 on the scorer's other callers (P-258 through withProfile): next_task {useProfile}, fifo
+		// and score, and claim_next {useProfile} refuse the same keys, and the refused claim_next
+		// claims nothing. carol, with no agent, is judged by her own profile.
+		for _, c := range []struct {
+			name string
+			who  domain.Caller
+		}{{"bob OAuth carol", bobOAuth}, {"bob default token carol", bobDefault}, {"bob labelled carol", bobLabel}, {"bob OAuth U-dave", bobDave}} {
+			for _, strategy := range []NextStrategy{"", "score"} {
+				_, err := lc.Next(e.ctx, c.who, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true, Strategy: strategy})
+				t.Logf("AC3 next_task useProfile strategy %q as %s: %v", strategy, c.name, err)
+				forbiddenKey(t, "AC3 next_task "+string(strategy)+" "+c.name, err, c.who.Agent)
+			}
+			_, err := lc.ClaimNext(e.ctx, c.who, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true})
+			t.Logf("AC3 claim_next useProfile as %s: %v", c.name, err)
+			forbiddenKey(t, "AC3 claim_next "+c.name, err, c.who.Agent)
+		}
+		for _, id := range []string{goTask.ID, rustTask.ID} {
+			if got := e.get(t, id); got.Status != domain.Todo || got.Claim != nil {
+				t.Fatalf("AC3: a refused claim_next claimed %s: %s %+v", id, got.Status, got.Claim)
+			}
+		}
+		if n, err := lc.Next(e.ctx, carol, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true}); err != nil || taskID(n.Task) != goTask.ID {
+			t.Fatalf("AC3 carol next_task {useProfile}: %s %v, want %s", taskID(n.Task), err, goTask.ID)
 		}
 
 		// AC1 controls: bob with no agent, bob named his own id, a free name.

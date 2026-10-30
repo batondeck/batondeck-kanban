@@ -10,24 +10,31 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { NavLink } from 'react-router';
 import * as notificationsApi from '../api/notifications.js';
 import * as streamApi from '../api/stream.js';
-import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
+import { Avatar, EmptyState, PageHeader, personName, timeAgo, type DisplayNames } from '../components.js';
+import { useWorkspaceNames } from '../displayNames.js';
 import { fire } from '../toast.js';
 import type { Notification } from '../types.js';
 import { Stack } from '../ui.js';
 
 const NOTIF_KEY = ['notifications'];
 
-function message(n: Notification): string {
-  if (n.type === 'mention') return `${n.actor} mentioned you in a comment`;
-  if (n.type === 'follow_up') return `${n.actor} sent you a follow-up`;
-  if (n.type === 'review_request') return `${n.actor} asked you to review a ticket`;
-  if (n.type === 'handoff') return `${n.actor} handed you ${n.taskId ?? 'a ticket'}`;
-  return `${n.actor}: ${n.type}`;
+/**
+ * The actor is an account id: it is named from the `memberDisplay` of every project the caller is in
+ * (the feed spans projects), never printed raw (P-314).
+ */
+function message(n: Notification, names: DisplayNames): string {
+  const actor = personName(n.actor, names);
+  if (n.type === 'mention') return `${actor} mentioned you in a comment`;
+  if (n.type === 'follow_up') return `${actor} sent you a follow-up`;
+  if (n.type === 'review_request') return `${actor} asked you to review a ticket`;
+  if (n.type === 'handoff') return `${actor} handed you ${n.taskId ?? 'a ticket'}`;
+  return `${actor}: ${n.type}`;
 }
 
 export function Notifications() {
   const qc = useQueryClient();
   const nav = useNavigate();
+  const names = useWorkspaceNames();
   // NO POLL: `NotificationsNavLink` (mounted app-wide) opens the identity-keyed /api/stream and writes
   // snapshots into NOTIF_KEY, which this query shares — so this list stays live without its own stream
   // or its own poll. The initial fetch stays so it renders before the first snapshot arrives.
@@ -85,9 +92,9 @@ export function Notifications() {
                 background: n.read ? undefined : 'color-mix(in srgb, var(--accent) 8%, transparent)',
               }}
             >
-              <Avatar id={n.actor} />
+              <Avatar id={n.actor} label={personName(n.actor, names)} nameOnly />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14 }}>{message(n)}</div>
+                <div style={{ fontSize: 14 }}>{message(n, names)}</div>
                 <div className="muted" style={{ fontSize: 11 }}>
                   {n.taskId ? `${n.taskId} · ` : ''}
                   {timeAgo(n.ts)}

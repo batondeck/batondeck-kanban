@@ -1,0 +1,23 @@
+# The image's build context: what `docker build .` (and `make image`) sends to the builder. The build
+# stage runs `COPY . .` and `go build ./cmd/batondeck-kanban`, which needs the Go sources and what they
+# embed (web/dist above all, migrations/, the OAuth templates); nothing below is any of those.
+#
+# Never sent: secrets compose reads (.env holds BATONDECK_MASTER_KEY and the Postgres password) and
+# local state, at any depth (a pattern without **/ matches at the context root only).
+**/.env
+**/.env.*
+**/master.key
+/data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+# Build outputs and installed packages: the release binaries, the local binary, the SPA's
+# node_modules (web/dist, the built SPA, is committed and embedded, so it stays), make bench's runs.
+/dist/
+/batondeck-kanban
+/web/node_modules/
+/bench/out/
+/bench/results.json
+# The repository's history: the image's Go has no git, so the binary is not VCS-stamped either way.
+.git
+**/.DS_Store

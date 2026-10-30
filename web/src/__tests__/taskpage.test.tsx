@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { TaskPage } from '../screens/TaskPage.js';
 import { ProjectProvider } from '../projectContext.js';
+import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
 
 /** `panels.tsx` source, for the one assertion whose subject is a PROP rather than rendered output. */
@@ -30,13 +31,15 @@ function renderPage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/projects/p1/boards/b1/tasks/T-1']}>
-        <ProjectProvider>
-          <Routes>
-            <Route path="/projects/:projectId/boards/:boardId/tasks/:taskId" element={<TaskPage />} />
-          </Routes>
-        </ProjectProvider>
-      </MemoryRouter>
+      <AuthProvider>
+        <MemoryRouter initialEntries={['/projects/p1/boards/b1/tasks/T-1']}>
+          <ProjectProvider>
+            <Routes>
+              <Route path="/projects/:projectId/boards/:boardId/tasks/:taskId" element={<TaskPage />} />
+            </Routes>
+          </ProjectProvider>
+        </MemoryRouter>
+      </AuthProvider>
     </QueryClientProvider>,
   );
 }
@@ -90,6 +93,8 @@ describe('TaskPage', () => {
     );
     expect(within(sel).queryByRole('option', { name: 'BLOCKED' })).not.toBeInTheDocument();
     await within(sel).findByRole('option', { name: 'TODO' });
+    // The fixture's session is alice, the project's admin: the select opens once her role loads (P-209).
+    await waitFor(() => expect(sel).toBeEnabled());
 
     fireEvent.change(sel, { target: { value: 'TODO' } });
 

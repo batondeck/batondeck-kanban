@@ -101,8 +101,9 @@ type Tokens interface {
 	RevokeToken(ctx context.Context, id string, at int64) error
 	// DeleteLapsedTokens removes at most limit tokens revoked or expired before before, oldest first
 	// (created_at, then id), and returns how many; a limit <= 0 is VALIDATION. It never removes the
-	// newest row (created_at, then id) of an (IdentityID, Label): the table is also the label-ownership
-	// record, read over rows of every status, so each label an identity carried keeps a row.
+	// oldest or the newest row (created_at, then id) of an (IdentityID, Label): the table is also the
+	// label-ownership record, read over rows of every status, so each label an identity carried keeps
+	// a row and the earliest row of every label (its first minter's) stays.
 	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
 }
 

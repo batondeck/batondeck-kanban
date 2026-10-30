@@ -39,7 +39,7 @@ const ops = (days: number): OpsSummary => ({
   projectId: 'p1', days, total: 25, errors: 5, errorRate: 0.2, avgLatencyMs: 12.5,
   byTool: [{ tool: 'claim_next', calls: 25, avgMs: 12.5 }],
   byDay: [{ day: '2026-10-24', calls: 25 }],
-  byAgent: [{ agent: 'claude', calls: 25 }],
+  byAgent: [{ agent: 'claude', identityId: 'u-1', calls: 25 }],
   retention: { days: 45, oldestDay: '2026-09-09' },
 });
 

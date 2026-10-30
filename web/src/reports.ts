@@ -87,6 +87,22 @@ export function isCancelled(t: Pick<Task, 'status' | 'labels'>): boolean {
   return t.status === 'DONE' && (t.labels ?? []).includes('cancelled');
 }
 
+/**
+ * Subtask progress per parent, as the board card shows it: every subtask counts in the total, and only
+ * a delivered one in done, so a cancelled subtask (DONE with the cancelled label) is not done (P-208).
+ */
+export function subtaskProgress(tasks: ReadonlyArray<Pick<Task, 'parentTaskId' | 'status' | 'labels'>>): Map<string, { done: number; total: number }> {
+  const m = new Map<string, { done: number; total: number }>();
+  for (const t of tasks) {
+    if (!t.parentTaskId) continue;
+    const s = m.get(t.parentTaskId) ?? { done: 0, total: 0 };
+    s.total += 1;
+    if (t.status === 'DONE' && !isCancelled(t)) s.done += 1;
+    m.set(t.parentTaskId, s);
+  }
+  return m;
+}
+
 export interface CensusCounts {
   total: number;
   open: number;

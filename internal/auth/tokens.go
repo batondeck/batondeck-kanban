@@ -144,11 +144,11 @@ func (t *TokenService) Create(ctx context.Context, identityID, subject, label st
 // labelFree refuses a label whose agent (domain.TokenAgent) any token row of another identity
 // carries, whatever its status, so the first identity to mint a label owns it, and work handed to
 // the label is never claimable by whoever mints it after a lapse. The retention sweep deletes lapsed
-// token rows but keeps each identity's newest row of each label (retention.LapsedGrace), so every
-// label an identity carried still has a row here. The default label names no agent and is
-// everyone's. It is a read before the insert, not a unique index (no migration): two identities
-// minting one new label at the same instant can both land, and the service's label check
-// (lifecycle ownLabel) then refuses both below master, for good.
+// token rows but keeps each identity's oldest and newest row of each label (retention.LapsedGrace),
+// so every label an identity carried still has a row here, and so does its earliest. The default
+// label names no agent and is everyone's. It is a read before the insert, not a unique index (no
+// migration): two identities minting one new label at the same instant can both land, and the
+// service's label check (lifecycle ownLabel) then refuses both below master, for good.
 func (t *TokenService) labelFree(ctx context.Context, identityID, label string) error {
 	agent := domain.TokenAgent(label)
 	if agent == "" {

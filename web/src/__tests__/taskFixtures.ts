@@ -61,6 +61,9 @@ export function routeFetch(overrides: Record<string, unknown> = {}): typeof fetc
     [/\/boards\/b1$/, { board: { id: 'b1', projectId: 'p1', name: 'Board', columns: [{ id: 'c1', name: 'To do', order: 1, status: 'TODO', wipLimit: null }, { id: 'c2', name: 'Building', order: 2, status: 'IN_PROGRESS', wipLimit: null }] }, taskCounts: {} }],
     [/\/projects\/p1$/, { project: { id: 'p1', name: 'P1', members: { 'alice@example.com': 'admin' }, settings: { reviewEnabled: true, quotaEnabled: false, txnCap: null } } }],
     [/\/agents\/sessions/, { sessions: [] }],
+    // The session the project fixture's member row names, so a surface under an AuthProvider reads
+    // alice's role (admin) rather than failing closed on no identity (P-209).
+    [/\/api\/session$/, { identity: 'alice@example.com', csrfToken: null }],
   ];
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);

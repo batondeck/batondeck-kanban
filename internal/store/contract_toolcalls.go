@@ -37,7 +37,7 @@ type ToolCalls interface {
 	// and returns how many it deleted.
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	// SummarizeToolCalls is projectID's rows with TS >= since, one group per (tool, outcome, agent,
-	// UTC day), ordered by those four: one statement.
+	// identity, UTC day), ordered by those five: one statement.
 	SummarizeToolCalls(ctx context.Context, projectID string, since int64) ([]ToolCallGroup, error)
 }
 
@@ -47,6 +47,7 @@ type ToolCallGroup struct {
 	Tool       string
 	Outcome    ToolCallOutcome
 	Agent      string
+	Identity   string
 	Day        string
 	Calls      int64
 	LatencySum int64

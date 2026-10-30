@@ -421,7 +421,7 @@ export function OncallSetup({
   const deletedQ = useQuery({
     queryKey: ['oncall-integrations-all', projectId],
     queryFn: () => oncallApi.listIntegrations(projectId, true),
-    // Same master-tier gate as every other list_integrations read — see useMayReadIntegrations.
+    // Same gate (workspace admin and project master) as every other list_integrations read — see useMayReadIntegrations.
     enabled: showDeleted && mayReadIntegrations,
   });
   const tombstones = (deletedQ.data?.integrations ?? []).filter((i) => i.deletedAt);

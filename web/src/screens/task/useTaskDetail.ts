@@ -13,12 +13,16 @@ import * as contextApi from '../../api/context.js';
 import * as feedApi from '../../api/feed.js';
 import * as mediaApi from '../../api/media.js';
 import * as projectsApi from '../../api/projects.js';
+import * as streamApi from '../../api/stream.js';
 import * as tasksApi from '../../api/tasks.js';
 import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
-import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
-import type { ActivityEvent, Status, Task } from '../../types.js';
+import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
+import { roleAtLeast, useDisplayNames } from '../../displayNames.js';
+import { isCancelled } from '../../reports.js';
+import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
+import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -66,11 +70,35 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // is just a backstop for a dropped stream.
   const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => tasksApi.getTask(projectId, taskId), refetchInterval: 30000 });
   const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId) });
+  // Account id → display name, for the header's "created by" (P-314). The same cache entry the
+  // Activity panel reads, which both ticket screens mount, so this adds no request.
+  const names = useDisplayNames(projectId);
   // Known agent names (for the Assignee picker) — assigning a task to one of these routes it to that
   // agent's `wait_for_task { assignee }` loop. Best-effort; the field still accepts any string.
   // Same tunable as Board's fetch — these share the ['agentsessions'] cache key, so the queryFns must
-  // agree or the entry flaps between differently-sized lists.
-  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit), staleTime: 60_000 });
+  // agree or the entry flaps between differently-sized lists, and keep the device rows the same way.
+  const agentsQ = useQuery({
+    queryKey: ['agentsessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(uiSettings().sessionsLimit);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions) };
+    },
+    staleTime: 60_000,
+  });
+  // The kept device rows are retired only by a presence frame, so this hook writes the frames itself:
+  // on the full task page no Board is mounted to do it, and a session that left would otherwise stay
+  // listed through every refetch (P-197). In the drawer the Board writes the same rows the same way.
+  // Joining the shared socket opens no second one; a frame is the device's whole live list.
+  useEffect(
+    () =>
+      streamApi.userStream({
+        onPresence: (sessions) =>
+          qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
+            sessions: replaceDevicePresence(old?.sessions, sessions),
+          })),
+      }),
+    [qc],
+  );
   const task = taskQ.data?.task;
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [
@@ -92,18 +120,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // Board's key, so opening the drawer from the board is still free; once the board has loaded more,
   // the two get their own entries instead of fighting over one.
   const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => boardsApi.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
-  const busyNames = useMemo(() => busyAgentNames(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
+  const busyKeys = useMemo(() => busyAgentKeys(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
   const agentList = useMemo(
     () => buildAgentList(
       agentsQ.data?.sessions ?? [],
-      busyNames,
+      busyKeys,
       [
         ...((histQ.data?.events ?? []).map((e) => e.agent).filter(Boolean) as string[]),
         ...((boardTasksQ.data?.tasks ?? []).map((t) => t.assignee).filter(Boolean) as string[]),
       ],
       Date.now(),
     ),
-    [agentsQ.data, busyNames, histQ.data, boardTasksQ.data],
+    [agentsQ.data, busyKeys, histQ.data, boardTasksQ.data],
   );
   // @mention candidates for the comment composer: project member identities + known agent names. Only
   // member identities actually resolve to a notification server-side; agent names are offered for convenience.
@@ -161,7 +189,8 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
   const subs = subQ.data?.tasks ?? [];
-  const subsDone = subs.filter((s) => s.status === 'DONE').length;
+  // A cancelled subtask is DONE but not delivered: it counts in the total and not in done (P-208).
+  const subsDone = subs.filter((s) => s.status === 'DONE' && !isCancelled(s)).length;
   const subsPct = subs.length ? Math.round((subsDone / subs.length) * 100) : 0;
 
   // Dependency chips, split into blocked-by / blocks relative to this task.
@@ -183,10 +212,16 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
-  // Requeueing a poisoned task (BLOCKED → TODO) is a master's move (plan §Fold 1): master and the two
-  // roles above it. The server decides; this only keeps a worker from being offered a refusal.
+  // What the caller's role lets them do here (P-209). The server decides; these only keep a caller
+  // from being offered a refusal. Both fail closed while the session or the project is loading.
+  //  - `move_task` is tier master (`internal/domain/grants.go`), so changing the status, and the
+  //    requeue of a poisoned task (BLOCKED → TODO, plan §Fold 1), which is the same call, need master
+  //    or one of the two roles above it.
+  //  - `claim_task` is tier write: a worker or above.
   const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
-  const canRequeue = myRole === 'master' || myRole === 'member' || myRole === 'admin';
+  const canMove = roleAtLeast(myRole, 'master');
+  const canRequeue = canMove;
+  const canClaim = roleAtLeast(myRole, 'worker');
 
   const startEdit = (): void => {
     if (!task) return;
@@ -200,7 +235,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, canRequeue,
+    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, names,
   };
 }
 

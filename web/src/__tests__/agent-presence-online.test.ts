@@ -9,9 +9,9 @@
  * meaningful next to "a stale MCP row does not".
  */
 import { describe, it, expect } from 'vitest';
-import { deriveAgentState, isSessionOnline, buildAgentList, isLiveEntry } from '../agentStatus';
+import { agentKey, busyAgentKeys, deriveAgentState, isSessionOnline, buildAgentList, isLiveEntry } from '../agentStatus';
 import { uiSettings } from '../settings';
-import type { AgentSession } from '../types';
+import type { AgentSession, Task } from '../types';
 
 const NOW = Date.parse('2026-09-08T12:00:00.000Z');
 const ago = (ms: number): string => new Date(NOW - ms).toISOString();
@@ -63,7 +63,7 @@ describe('deriveAgentState / isLiveEntry read the same rule', () => {
   });
 
   it('a live claim still outranks both signals', () => {
-    expect(deriveAgentState(row(), new Set(['worker-1']), NOW)).toBe('busy');
+    expect(deriveAgentState(row(), new Set([agentKey('U-1', 'worker-1')]), NOW)).toBe('busy');
   });
 
   it('isLiveEntry counts a device row as "around now" past the presenceWindow', () => {
@@ -116,8 +116,8 @@ describe('a revoked session is never present, however live its signals', () => {
   });
 
   it('revoked outranks BUSY: a disconnected agent holding a live claim is not "working"', () => {
-    expect(deriveAgentState(revoked(), new Set(['worker-1']), NOW)).toBe('offline');
-    expect(deriveAgentState(row(), new Set(['worker-1']), NOW)).toBe('busy'); // control
+    expect(deriveAgentState(revoked(), new Set([agentKey('U-1', 'worker-1')]), NOW)).toBe('offline');
+    expect(deriveAgentState(row(), new Set([agentKey('U-1', 'worker-1')]), NOW)).toBe('busy'); // control
   });
 
   it('THE ASSIGNMENT SURFACE: isLiveEntry refuses it — it does not consult state, so it needs its own check', () => {
@@ -134,5 +134,40 @@ describe('a revoked session is never present, however live its signals', () => {
     const [entry] = buildAgentList([dead, live], NONE, [], NOW);
     expect(entry!.revokedAt).toBeUndefined();
     expect(entry!.state).toBe('available');
+  });
+});
+
+/**
+ * P-335 — an agent is its identity plus its name. Every user's default-label session is called
+ * `claude-code`, so a name alone would let bob's claim mark alice's own idle session busy, and fold
+ * two users' agents into one entry.
+ */
+describe('the busy set and the agent list key an agent by identity plus name', () => {
+  const claimed = (owner: string, agent: string): Task =>
+    ({ id: `T-${owner}`, claim: { owner, agent, leaseId: 'L-1', expiresAt: new Date(Date.now() + 10 * MIN).toISOString() } }) as unknown as Task;
+  const alice = row({ sessionKey: 'U-alice::claude-code', agentId: 'aid-a', agentName: 'claude-code', identityId: 'U-alice', lastSeenAt: ago(5_000) });
+  const bob = row({ sessionKey: 'U-bob::claude-code', agentId: 'aid-b', agentName: 'claude-code', identityId: 'U-bob', lastSeenAt: ago(5_000) });
+
+  it("REFUSAL: bob's live claude-code claim does not mark alice's claude-code busy — CONTROL: bob's own session is busy", () => {
+    const busy = busyAgentKeys([claimed('U-bob', 'claude-code')]);
+    expect(deriveAgentState(alice, busy, NOW)).toBe('available');
+    expect(deriveAgentState(bob, busy, NOW)).toBe('busy');
+  });
+
+  it("two identities' same-named sessions are two entries, each with its own state", () => {
+    const list = buildAgentList([alice, bob], busyAgentKeys([claimed('U-bob', 'claude-code')]), [], NOW);
+    expect(list.map((e) => [e.identityId, e.name, e.state])).toEqual([
+      ['U-alice', 'claude-code', 'available'],
+      ['U-bob', 'claude-code', 'busy'],
+    ]);
+  });
+
+  it('a board name with no session is one entry, busy when any live claim names it — control: offline when none does', () => {
+    const named = buildAgentList([], busyAgentKeys([claimed('U-bob', 'reviewer')]), ['reviewer', 'reviewer'], NOW);
+    expect(named.map((e) => [e.name, e.state])).toEqual([['reviewer', 'busy']]);
+    const idle = buildAgentList([], busyAgentKeys([]), ['reviewer'], NOW);
+    expect(idle.map((e) => [e.name, e.state])).toEqual([['reviewer', 'offline']]);
+    const withSession = buildAgentList([alice], busyAgentKeys([]), ['claude-code'], NOW);
+    expect(withSession).toHaveLength(1); // a name a session already carries is not added again
   });
 });

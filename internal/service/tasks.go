@@ -142,7 +142,10 @@ func callerAgent(c domain.Caller) *string {
 // Create is create_task (conductor tasks.ts:102-160): the task lands TODO (ADR-0005), in columnId,
 // which must be a TODO column, or the board's first TODO column; its T-n is the project's next (the
 // store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
-// assignee).
+// assignee). With sprintId the task is created a member of that sprint in the same transaction, as
+// set_sprint add makes one (P-239): the sprint must exist (NOT_FOUND), be on the task's board
+// (VALIDATION) and pass domain.CheckSprintMembership; its memberCount moves by one and the task gets
+// sprint.task_added {sprintId, memberCount}. Without sprintId no statement is added.
 func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels}, false)
 	if err != nil {
@@ -191,9 +194,8 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 			return CreateTaskResp{}, err
 		}
 	}
-	if req.SprintID != "" {
-		// TODO(spec): sprints have no store yet (F6), so no sprintId names a sprint.
-		return CreateTaskResp{}, domain.NotFound("Sprint", req.SprintID)
+	if err := maxChars("sprintId", req.SprintID, 64); err != nil {
+		return CreateTaskResp{}, err
 	}
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return CreateTaskResp{}, err
@@ -225,6 +227,22 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 				return CreateTaskResp{}, err
 			}
 		}
+		var sprintIDs []string
+		if req.SprintID != "" {
+			sprint, err := t.Tx.GetSprint(ctx, req.ProjectID, req.SprintID)
+			if err != nil {
+				return CreateTaskResp{}, err
+			}
+			if sprint.BoardID != board.ID {
+				return CreateTaskResp{}, domain.Validation(fmt.Sprintf("Sprint %s is on board %s, not %s — sprint members must live on the sprint's own board",
+					sprint.ID, sprint.BoardID, board.ID), map[string]any{"taskBoardId": board.ID, "sprintBoardId": sprint.BoardID})
+			}
+			if err := domain.CheckSprintMembership(domain.SprintMembership{SprintID: sprint.ID, SprintStatus: sprint.Status,
+				MemberCount: sprint.MemberCount, Add: true, Exclusive: sprintExclusive}); err != nil {
+				return CreateTaskResp{}, err
+			}
+			sprintIDs = []string{sprint.ID}
+		}
 		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return CreateTaskResp{}, err
@@ -232,7 +250,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 		task, err := t.Tx.CreateTask(ctx, store.CreateTaskInput{
 			ProjectID: req.ProjectID, BoardID: board.ID, ColumnID: col.ID, Title: req.Title, Description: req.Description,
 			Status: col.Status, Priority: priority, Labels: req.Labels, RequiredCapabilities: req.RequiredCapabilities,
-			ParentTaskID: req.ParentTaskID, OrderKey: order, CustomFields: fields, ModelHint: hint,
+			ParentTaskID: req.ParentTaskID, OrderKey: order, CustomFields: fields, ModelHint: hint, SprintIDs: sprintIDs,
 			CreatedBy: caller.Identity, CreatedByAgent: callerAgent(caller), CreatedAt: t.Now.UnixMilli(),
 		})
 		if err != nil {
@@ -243,6 +261,15 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 			return CreateTaskResp{}, err
 		}
 		t.Event(store.EventInput{TaskID: task.ID, BoardID: task.BoardID, Type: domain.EventTaskCreated, Data: data})
+		if len(sprintIDs) > 0 {
+			moved, err := t.Tx.AddSprintMembers(ctx, req.ProjectID, sprintIDs[0], 1)
+			if err != nil {
+				return CreateTaskResp{}, err
+			}
+			if err := t.event(task, domain.EventSprintTaskAdded, map[string]any{"sprintId": sprintIDs[0], "memberCount": moved.MemberCount}); err != nil {
+				return CreateTaskResp{}, err
+			}
+		}
 		t.Wrote(task)
 		t.RingFor(nil, task, false)
 		out, err := taskOut(task, "")

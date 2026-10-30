@@ -91,6 +91,8 @@ func TestSprintActivation(t *testing.T) {
 	todo.Proposal = &SprintProposal{ID: id, Status: Todo, SprintProposalFor: "S-a"}
 	other := base
 	other.Proposal = &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-b"}
+	cancelled := base
+	cancelled.Proposal = &SprintProposal{ID: id, Status: Done, Cancelled: true, SprintProposalFor: "S-a"}
 	enforce := base
 	enforce.ActorIsCreator, enforce.SelfApproval = true, "enforce"
 	for name, c := range map[string]struct {
@@ -99,6 +101,7 @@ func TestSprintActivation(t *testing.T) {
 	}{
 		"master": {master, CodeForbidden}, "unbound": {unbound, CodeInvalidTransition}, "not DONE": {todo, CodeInvalidTransition},
 		"bound elsewhere": {other, CodeInvalidTransition}, "self under enforce": {enforce, CodeForbidden},
+		"cancelled (P-208)": {cancelled, CodeInvalidTransition},
 	} {
 		if got := code(c.a); got != c.want {
 			t.Errorf("%s: %q, want %q", name, got, c.want)

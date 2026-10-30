@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
+import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
 import type { Task } from '../types.js';
 
@@ -18,7 +19,9 @@ function renderDrawer(props: Partial<Parameters<typeof TaskDrawer>[0]> = {}) {
   const onOpenTask = vi.fn();
   const utils = render(
     <QueryClientProvider client={qc}>
-      <TaskDrawer projectId="p1" taskId="T-1" onClose={onClose} onOpenTask={onOpenTask} {...props} />
+      <AuthProvider>
+        <TaskDrawer projectId="p1" taskId="T-1" onClose={onClose} onOpenTask={onOpenTask} {...props} />
+      </AuthProvider>
     </QueryClientProvider>,
   );
   return { qc, onClose, onOpenTask, ...utils };
@@ -87,6 +90,8 @@ describe('TaskDrawer — ticket details', () => {
     await waitFor(() => expect(within(sel).queryByRole('option', { name: 'REVIEW' })).not.toBeInTheDocument());
     expect(within(sel).queryByRole('option', { name: 'BLOCKED' })).not.toBeInTheDocument();
     await within(sel).findByRole('option', { name: 'TODO' });
+    // The fixture's session is alice, the project's admin: the select opens once her role loads (P-209).
+    await waitFor(() => expect(sel).toBeEnabled());
     fireEvent.change(sel, { target: { value: 'TODO' } });
     await waitFor(() => {
       const call = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find(([u]) => String(u).endsWith('/tasks/T-1/move'));
@@ -193,9 +198,10 @@ describe('TaskDrawer — ticket details', () => {
     const ta = screen.getByPlaceholderText(/Write a comment/);
     ta.focus();
     fireEvent.change(ta, { target: { value: '@ali', selectionStart: 4 } });
-    expect(await screen.findByText('alice@example.com')).toBeInTheDocument(); // suggestion appears
+    // The suggestion is the member's name as the comments show it (P-314): a login's local part.
+    expect(await screen.findByRole('button', { name: /^human alice\s+alice$/ })).toBeInTheDocument(); // suggestion appears
     fireEvent.keyDown(ta, { key: 'Escape' });
-    expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument(); // popup gone…
+    expect(screen.queryByRole('button', { name: /^human alice\s+alice$/ })).not.toBeInTheDocument(); // popup gone…
     expect(document.activeElement).toBe(ta); // …composer keeps focus
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -420,5 +426,40 @@ describe('labels and capabilities are chips', () => {
       expect(patch, 'removing a chip should save').toBeTruthy();
       expect(JSON.parse(String((patch![1] as RequestInit).body)).patch).toMatchObject({ labels: [] });
     });
+  });
+});
+
+/**
+ * P-208: a cancelled task is DONE with the cancelled label but was not delivered. The drawer's subtask
+ * progress counts a cancelled subtask in the total and not in done, and the Runs section reads the
+ * cancelled label from the board's task list (list_runs carries none), so a cancelled run that had
+ * delivered offers no Pick.
+ */
+describe('TaskDrawer — a cancelled task is not done (P-208)', () => {
+  const sub = (id: string, over: Partial<Task>): Task => ({ ...task, id, title: `sub ${id}`, parentTaskId: 'T-1', blockedBy: [], dueAt: null, ...over });
+
+  it('subtask progress counts a cancelled subtask in the total only', async () => {
+    vi.stubGlobal('fetch', routeFetch({
+      '/tasks/T-1/subtasks$': { json: { tasks: [sub('T-2', { status: 'DONE' }), sub('T-3', { status: 'DONE', labels: ['cancelled'] }), sub('T-4', { status: 'TODO' })] } },
+    }));
+    renderDrawer();
+    expect(await screen.findByText('1 of 3 complete')).toBeInTheDocument();
+  });
+
+  it('REFUSAL: a cancelled run that had delivered offers no Pick; the delivered one does', async () => {
+    const racing: Task = { ...task, racing: true };
+    const cancelledRun = sub('T-5', { status: 'DONE', labels: ['cancelled'], parentTaskId: null });
+    vi.stubGlobal('fetch', routeFetch({
+      '/tasks/T-1$': { json: { task: racing } },
+      '/tasks/T-1/runs$': { json: { runs: [
+        { taskId: 'T-5', status: 'DONE', assignee: 'a1', leaseHolder: null, hasDeliverable: true, deliverable: 'wrong approach', version: 4 },
+        { taskId: 'T-6', status: 'REVIEW', assignee: 'a2', leaseHolder: null, hasDeliverable: true, deliverable: 'the fix', version: 3 },
+      ] } },
+      '/boards/b1/tasks\\?': { json: { tasks: [racing, cancelledRun] } },
+    }));
+    renderDrawer();
+    expect(await screen.findByText('wrong approach')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/^\s*Pick\s*$/)).toHaveLength(1));
+    expect(screen.getAllByText('Submitted')).toHaveLength(1);
   });
 });

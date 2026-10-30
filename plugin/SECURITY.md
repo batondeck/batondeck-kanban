@@ -51,7 +51,8 @@ from another session, and its own peer-message rules apply (`crossSessionInbound
 
 ## Network, credentials, data
 
-- `.mcp.json` sends `Authorization: Bearer ${BATONDECK_TOKEN}` to `http://localhost:8080/mcp`. The file
+- `.mcp.json` sends `Authorization: Bearer ${BATONDECK_TOKEN}` to `${BATONDECK_URL:-http://localhost:8080}/mcp`:
+  the bearer goes to whatever server `BATONDECK_URL` names in the shell `claude` starts from. The file
   holds no literal token. Revoking the token (`batondeck-kanban token revoke`) ends both the MCP access
   and the session's directory entry; the server re-reads every entry's bearer at least once a minute.
 - `scripts/mcp.sh` sends the same header to `${BATONDECK_URL:-http://localhost:8080}/mcp` and writes no

@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -96,14 +96,15 @@ image:
 		--build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest \
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
-# check is the gate the pre-push hook runs. Its steps, in order: gofmt, go vet, staticcheck,
-# THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated store code against its
-# sources, web/dist against a fresh web build, the layering guard, the tests under the race
-# detector, the store conformance suite once per engine, the MCP contract (files and live server),
-# the per-call statement pins, web/public against its allow-list, the vendored brand kit against its
-# lock, the plugin: its instructions against the contract (skill-lint) and its hooks' stdout
-# (hook-check), and the SPA's states against the five.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
+# check is the gate the pre-push hook runs, and CI (.github/workflows/ci.yml). Its steps, in order:
+# gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated
+# store code against its sources, web/dist against a fresh web build, the SPA's typecheck and tests
+# (web-check), the layering guard, the tests under the race detector, the store conformance suite
+# once per engine, the MCP contract (files and live server), the per-call statement pins, web/public
+# against its allow-list, the vendored brand kit against its lock, the plugin: its instructions
+# against the contract (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against
+# the five.
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -144,6 +145,14 @@ web-dist-check:
 		exit 1; \
 	fi
 
+# web-check runs the SPA's typecheck (`tsc --noEmit`) and its vitest suite: `vite build` strips the
+# types without checking them, so web-dist-check alone passes a type error. In check it runs right
+# after web-dist-check, whose `npm ci` leaves web/node_modules current; run alone, it installs them
+# first when they are absent.
+web-check:
+	@if [ ! -f web/package.json ]; then echo "web-check: no web/package.json yet"; exit 0; fi; \
+	cd web && { [ -d node_modules ] || npm ci; } && npm run typecheck && npm test
+
 # web-states-check refuses a retired state name or the dropped transition routes anywhere in web/src,
 # tests included (ADR-0005: five states; ADR-0001: CANCELLED and DEAD_LETTER are labels now). The
 # match is case-sensitive, so CSS tokens such as --ready pass.
@@ -181,8 +190,11 @@ arch:
 # Naming the module's real trees keeps the run to this repository's code: ./... would reach into
 # web/node_modules once the UI's packages are installed.
 # Under -race, internal/cli nears Go's 10m default on a loaded machine (P-289 shortens it).
+# TEST_TIMEOUT is 20m here and on the pre-push hook; CI's 2-vCPU runner passes 40m, where
+# internal/cli under -race alone ran 17 to 20+ minutes.
+TEST_TIMEOUT ?= 20m
 test:
-	go test -race -timeout 20m ./cmd/... ./internal/...
+	go test -race -timeout $(TEST_TIMEOUT) ./cmd/... ./internal/...
 
 # conformance judges each store engine by internal/store/conformance, one run per engine, by name.
 # The Postgres run needs BATONDECK_TEST_POSTGRES_DSN: unset, it skips and prints why; set and

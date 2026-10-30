@@ -14,7 +14,7 @@ func init() { register("toolcalls", toolCalls) }
 
 // toolCalls is the tool-call area: a batch lands whole, a bad row refuses the whole batch, the
 // retention delete is by age and bounded, and the summary groups one project's rows since a time by
-// tool, outcome, agent and UTC day.
+// tool, outcome, agent, identity and UTC day.
 func toolCalls(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error { return s.InsertToolCalls(ctx, nil) }
@@ -87,10 +87,10 @@ func toolCalls(t *testing.T, newStore Factory) {
 			got, err := s.SummarizeToolCalls(ctx, "P-1", late-3600_000)
 			noErr(t, err)
 			want := []store.ToolCallGroup{
-				{Tool: "claim_next", Outcome: store.ToolCallError, Agent: "claude", Day: "2026-10-02", Calls: 1, LatencySum: 7},
-				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Day: "2026-10-01", Calls: 2, LatencySum: 30},
-				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Day: "2026-10-02", Calls: 1, LatencySum: 5},
-				{Tool: "get_task", Outcome: store.ToolCallOK, Agent: "", Day: "2026-10-01", Calls: 1, LatencySum: 3},
+				{Tool: "claim_next", Outcome: store.ToolCallError, Agent: "claude", Identity: "alice", Day: "2026-10-02", Calls: 1, LatencySum: 7},
+				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Identity: "alice", Day: "2026-10-01", Calls: 2, LatencySum: 30},
+				{Tool: "claim_next", Outcome: store.ToolCallOK, Agent: "claude", Identity: "alice", Day: "2026-10-02", Calls: 1, LatencySum: 5},
+				{Tool: "get_task", Outcome: store.ToolCallOK, Agent: "", Identity: "alice", Day: "2026-10-01", Calls: 1, LatencySum: 3},
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("summary = %+v\nwant      %+v", got, want)
@@ -102,6 +102,25 @@ func toolCalls(t *testing.T, newStore Factory) {
 			}
 			_, err = s.SummarizeToolCalls(ctx, "", 0)
 			wantErr(t, err, domain.CodeValidation, "")
+		})
+
+		// P-335: one agent name under two identities is two groups, ordered by identity.
+		t.Run("TheSummaryGroupsTheSameAgentOfTwoIdentitiesApart", func(t *testing.T) {
+			s := migrated(t, newStore)
+			at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).UnixMilli()
+			row := func(identity string, ms int64) store.ToolCall {
+				return store.ToolCall{TS: at, Tool: "get_task", Identity: identity, Agent: "claude-code", Outcome: store.ToolCallOK, Code: "OK", LatencyMs: ms, ProjectID: "P-1"}
+			}
+			noErr(t, s.InsertToolCalls(ctx, []store.ToolCall{row("bob", 4), row("alice", 1), row("alice", 2)}))
+			got, err := s.SummarizeToolCalls(ctx, "P-1", 0)
+			noErr(t, err)
+			want := []store.ToolCallGroup{
+				{Tool: "get_task", Outcome: store.ToolCallOK, Agent: "claude-code", Identity: "alice", Day: "2026-10-01", Calls: 2, LatencySum: 3},
+				{Tool: "get_task", Outcome: store.ToolCallOK, Agent: "claude-code", Identity: "bob", Day: "2026-10-01", Calls: 1, LatencySum: 4},
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("summary = %+v\nwant      %+v", got, want)
+			}
 		})
 	})
 }

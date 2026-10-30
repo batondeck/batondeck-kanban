@@ -11,7 +11,8 @@ import { useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as followupsApi from '../api/followups.js';
-import { Avatar, timeAgo } from '../components.js';
+import { Avatar, personName, timeAgo, type DisplayNames } from '../components.js';
+import { useDisplayNames } from '../displayNames.js';
 import type { FollowUp, Status, Task } from '../types.js';
 import { Stack } from '../ui.js';
 
@@ -32,8 +33,11 @@ function MiniBadge({ tone, children }: { tone: 'open' | 'acked'; children: React
   );
 }
 
-function FollowUpItem({ fu, isHolder, onAck }: { fu: FollowUp; isHolder: boolean; onAck: () => void }) {
+function FollowUpItem({ fu, isHolder, onAck, names }: { fu: FollowUp; isHolder: boolean; onAck: () => void; names: DisplayNames }) {
   const open = fu.status === 'open';
+  // Both ends are account ids (or an agent label for the target): named, never printed raw (P-314).
+  const author = personName(fu.author, names);
+  const target = fu.target ? personName(fu.target, names) : null;
   return (
     <div
       style={{
@@ -44,16 +48,16 @@ function FollowUpItem({ fu, isHolder, onAck }: { fu: FollowUp; isHolder: boolean
         borderLeft: open ? '2px solid var(--progress)' : '1px solid var(--border)',
       }}
     >
-      <Avatar id={fu.author} />
+      <Avatar id={fu.author} label={author} nameOnly />
       <div style={{ flex: 1, minWidth: 0 }}>
         <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{fu.body}</p>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px 8px', marginTop: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)' }}>{fu.author}</span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)' }}>{author}</span>
           <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>{timeAgo(fu.ts)}</span>
-          {fu.target && (
-            <span className="chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title={`directed at ${fu.target}`}>
-              <Avatar id={fu.target} />
-              <span className="mono" style={{ fontSize: 11 }}>→ {fu.target}</span>
+          {fu.target && target && (
+            <span className="chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title={`directed at ${target}`}>
+              <Avatar id={fu.target} label={target} nameOnly />
+              <span className="mono" style={{ fontSize: 11 }}>→ {target}</span>
             </span>
           )}
           {fu.reopened && <span className="chip" title="this follow-up reopened the task">↩ reopened</span>}
@@ -72,6 +76,7 @@ function FollowUpItem({ fu, isHolder, onAck }: { fu: FollowUp; isHolder: boolean
 export function FollowUps({ projectId, task, identity }: { projectId: string; task: Task; identity: string | null }) {
   const taskId = task.id;
   const qc = useQueryClient();
+  const names = useDisplayNames(projectId);
   // Live updates arrive via the board's SSE stream, which invalidates ['followups', projectId, …] on
   // every board change (the ui-backend keeps a stateful MCP session even under STATELESS_MCP=true, so
   // resource subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
@@ -130,7 +135,9 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
     }
   };
 
-  const target = task.claim?.agent || task.claim?.owner || task.assignee || null;
+  // The holder is an agent label or an account id: the composer names them, never the raw id (P-314).
+  const holder = task.claim?.agent || task.claim?.owner || task.assignee || null;
+  const target = holder ? personName(holder, names) : null;
 
   return (
     <section>
@@ -147,7 +154,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No follow-ups yet.</p>
         )}
         {followUps.map((fu) => (
-          <FollowUpItem key={fu.id} fu={fu} isHolder={isHolder} onAck={() => void ack(fu.id)} />
+          <FollowUpItem key={fu.id} fu={fu} isHolder={isHolder} onAck={() => void ack(fu.id)} names={names} />
         ))}
       </Stack>
 

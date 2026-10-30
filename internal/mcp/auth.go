@@ -25,8 +25,9 @@ const requestBaseKey = "batondeck.requestBase"
 
 // requireBearer resolves every request's bearer through r. No bearer, or one the resolver refuses
 // as UNAUTHENTICATED, is 401 with `WWW-Authenticate: Bearer`, naming resourceMetadata (RFC 9728)
-// when it is set; any other resolver error is 500. The caller's identity is the TokenInfo's UserID,
-// so go-sdk refuses (403) a session presented with another identity's bearer.
+// when it is set; any other resolver error is 500. The TokenInfo's UserID is sessionBinding, so
+// go-sdk refuses (403) a session presented with another identity's bearer, or with a bearer of the
+// same identity that authenticated another way or carries another agent (P-323).
 func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger) func(http.Handler) http.Handler {
 	verify := func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
 		c, err := r.ResolveCaller(ctx, token)
@@ -41,7 +42,7 @@ func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger)
 		if base := service.RequestBase(req.Context()); base != "" {
 			extra[requestBaseKey] = base
 		}
-		return &sdkauth.TokenInfo{UserID: c.Identity, Extra: extra}, nil
+		return &sdkauth.TokenInfo{UserID: sessionBinding(c), Extra: extra}, nil
 	}
 	// Tokens are checked for expiry by the resolver, so the TokenInfo carries none.
 	bearer := sdkauth.RequireBearerToken(verify, &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true, ResourceMetadataURL: resourceMetadata})
@@ -51,6 +52,15 @@ func requireBearer(r auth.Resolver, resourceMetadata string, logger *log.Logger)
 			h.ServeHTTP(&challengeWriter{ResponseWriter: w}, req)
 		})
 	}
+}
+
+// sessionBinding is what a stateful session is bound to: the bearer's identity, how it
+// authenticated, and the agent it carries (its token's label, or its OAuth client's name; "" for a
+// default-label token, whose agent is the session's own clientInfo.name). The session's
+// agent_sessions row is keyed at initialize, so a later bearer that would act as another agent is
+// refused rather than working under that row (P-323).
+func sessionBinding(c domain.Caller) string {
+	return c.Identity + "\x00" + c.Via + "\x00" + c.Agent
 }
 
 // challengeWriter adds `WWW-Authenticate: Bearer` to a 401 that carries no challenge. go-sdk writes

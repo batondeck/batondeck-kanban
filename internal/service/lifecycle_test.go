@@ -769,19 +769,11 @@ func TestLifecycleRefusals(t *testing.T) {
 				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, Shard: Shard{Index: 2, Count: 2}})
 				return err
 			},
-			"sprintId": func() error {
-				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, SprintID: "S-1"})
-				return err
-			},
 			"maxConcurrency": func() error {
 				_, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, MaxConcurrency: 2})
 				return err
 			},
-			"strategy score": func() error {
-				_, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: p, BoardID: e.board.ID, Strategy: "score"})
-				return err
-			},
-			"explain": func() error {
+			"explain without strategy score": func() error {
 				_, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: p, BoardID: e.board.ID, Explain: true})
 				return err
 			},
@@ -797,6 +789,8 @@ func TestLifecycleRefusals(t *testing.T) {
 			}
 		}
 		_, err = lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: "B-nope"})
+		wantCode(t, err, domain.CodeNotFound)
+		_, err = lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: p, BoardID: e.board.ID, SprintID: "S-1"}) // P-239: no longer refused
 		wantCode(t, err, domain.CodeNotFound)
 	})
 }
@@ -1325,6 +1319,102 @@ func TestReopenedReworkReachesTheWorker(t *testing.T) {
 		}
 		if got, err := lc.ClaimNext(e.ctx, carl, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err != nil || got.Task == nil || got.Task.ID != done.ID {
 			t.Fatalf("carl's claim_next = %+v %v, want the reopened %s", got.Task, err, done.ID)
+		}
+	})
+}
+
+// P-150 AC1/AC2: cancel_task refuses a task already DONE (INVALID_TRANSITION) and a racing parent
+// (CONFLICT_LOCKED, reason race, as move_task does); neither refusal writes a row.
+func TestCancelRefusesDoneAndRacing(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		lc := e.c.Lifecycle()
+		done := e.task(t, domain.Done)
+		before, changes := e.get(t, done.ID), e.changeCount(t)
+		_, err := lc.Cancel(e.ctx, e.alice, CancelTaskReq{ProjectID: e.project, TaskID: done.ID, Version: before.Version, Reason: "late"})
+		be := wantCode(t, err, domain.CodeInvalidTransition)
+		after := e.get(t, done.ID)
+		t.Logf("cancel DONE: %s %q; labels %v version %d->%d; changes %d->%d", be.Code, be.Message, after.Labels, before.Version, after.Version, changes, e.changeCount(t))
+		if slices.Contains(after.Labels, domain.LabelCancelled) || after.Version != before.Version || e.changeCount(t) != changes || len(e.events(t, done.ID)) != 0 {
+			t.Fatalf("a refused cancel wrote: %+v", after)
+		}
+
+		parent := e.task(t, domain.Todo)
+		if _, err := e.c.Runs().Start(e.ctx, e.alice, StartRunsReq{ProjectID: e.project, TaskID: parent.ID, Version: e.get(t, parent.ID).Version, Count: 2}); err != nil {
+			t.Fatal(err)
+		}
+		racing, changes := e.get(t, parent.ID), e.changeCount(t)
+		_, err = lc.Cancel(e.ctx, e.alice, CancelTaskReq{ProjectID: e.project, TaskID: parent.ID, Version: racing.Version, Reason: "dup"})
+		re := wantCode(t, err, domain.CodeConflictLocked)
+		got := e.get(t, parent.ID)
+		t.Logf("cancel racing: %s %q details %v; racing %v status %s", re.Code, re.Message, re.Details, got.Racing, got.Status)
+		if re.Details["reason"] != "race" || !got.Racing || got.Status != racing.Status || got.Version != racing.Version || e.changeCount(t) != changes {
+			t.Fatalf("racing parent after a refused cancel: %+v", got)
+		}
+	})
+}
+
+// P-150 AC3 (mutation Y1): heartbeat_task finishes the pending grant check against the task, so a
+// grant narrowed after the claim refuses the next heartbeat and leaves the lease's expiry as it was.
+func TestHeartbeatFinishesThePendingGrant(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			st := ec.open(t)
+			e := newEnv(t, st)
+			var mu sync.Mutex
+			labels := []string{"frontend"}
+			_ = e.c.Close(context.Background())
+			e.c = New(st, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1,
+				Grants: func(_ context.Context, _, identity string) (domain.CapabilityGrant, bool, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					return domain.CapabilityGrant{Labels: slices.Clone(labels)}, identity == "bob", nil
+				}})
+			t.Cleanup(func() { _ = e.c.Close(context.Background()) })
+			bob := e.member(t, e.project, "bob", domain.RoleWorker)
+			task := e.task(t, domain.Todo)
+			if _, err := st.UpdateTask(e.ctx, e.project, task.ID, task.Version, store.TaskPatch{Labels: &[]string{"frontend"}, UpdatedBy: "alice", UpdatedAt: 1}); err != nil {
+				t.Fatal(err)
+			}
+			lc := e.c.Lifecycle()
+			c, err := lc.Claim(e.ctx, bob, ClaimTaskReq{ProjectID: e.project, TaskID: task.ID})
+			if err != nil {
+				t.Fatalf("claim under the frontend grant: %v", err)
+			}
+			if _, err := lc.Heartbeat(e.ctx, bob, HeartbeatTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID}); err != nil {
+				t.Fatalf("heartbeat under the frontend grant: %v", err)
+			}
+			held := e.get(t, task.ID).Claim.ExpiresAt
+			mu.Lock()
+			labels = []string{"backend"}
+			mu.Unlock()
+			e.c.InvalidateAccess(e.project, "bob")
+			_, err = lc.Heartbeat(e.ctx, bob, HeartbeatTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, LeaseSeconds: 3600})
+			be := wantCode(t, err, domain.CodeForbidden)
+			got := e.get(t, task.ID)
+			t.Logf("heartbeat after narrowing: %s details %v; expiry %d -> %d", be.Code, be.Details, held, got.Claim.ExpiresAt)
+			if got.Claim == nil || got.Claim.ExpiresAt != held {
+				t.Fatalf("a refused heartbeat moved the lease: %+v", got.Claim)
+			}
+		})
+	}
+}
+
+// P-150 AC4 (mutation Y8): block_task naming a blocker the task already has adds no second edge,
+// bumps the blocker's version not at all and appends no second dependency.added event.
+func TestBlockKeepsAnExistingBlocker(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		task, blocker := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		c := e.claim(t, e.alice, task.ID, 0)
+		e.dependOn(t, blocker.ID, task.ID)
+		was := e.get(t, blocker.ID).Version
+		if _, err := e.c.Lifecycle().Block(e.ctx, e.alice, BlockTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reason: "waits on the API", BlockedBy: []string{blocker.ID}}); err != nil {
+			t.Fatal(err)
+		}
+		added := ofType(e.events(t, task.ID), domain.EventDependencyAdded)
+		got := e.get(t, blocker.ID)
+		t.Logf("blocker version %d -> %d; dependency.added events %d; edges %d; task %s", was, got.Version, len(added), len(e.edges(t)), e.get(t, task.ID).Status)
+		if got.Version != was || len(added) != 1 || len(e.edges(t)) != 1 || e.get(t, task.ID).Status != domain.Blocked {
+			t.Fatalf("block re-counted an existing blocker: version %d -> %d, events %d", was, got.Version, len(added))
 		}
 	})
 }
