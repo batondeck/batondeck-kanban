@@ -18,7 +18,8 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
-import type { ActivityEvent, Status, Task } from '../../types.js';
+import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
+import { keepCachedDevices } from '../../presenceMerge.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -69,8 +70,15 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // Known agent names (for the Assignee picker) — assigning a task to one of these routes it to that
   // agent's `wait_for_task { assignee }` loop. Best-effort; the field still accepts any string.
   // Same tunable as Board's fetch — these share the ['agentsessions'] cache key, so the queryFns must
-  // agree or the entry flaps between differently-sized lists.
-  const agentsQ = useQuery({ queryKey: ['agentsessions'], queryFn: () => agentsApi.agentSessions(uiSettings().sessionsLimit), staleTime: 60_000 });
+  // agree or the entry flaps between differently-sized lists, and keep the device rows the same way.
+  const agentsQ = useQuery({
+    queryKey: ['agentsessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(uiSettings().sessionsLimit);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions) };
+    },
+    staleTime: 60_000,
+  });
   const task = taskQ.data?.task;
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [

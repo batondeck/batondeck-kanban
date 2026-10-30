@@ -18,6 +18,12 @@ Notable changes to batondeck-kanban. The format follows
   stream; the tab kept reconnecting, backing off to every 30 s, on a screen that still looked
   signed in. A closed stream now asks `/api/session`, and a 401 there ends the reconnects and shows
   sign-in; any other answer reconnects as before.
+- The board's "agents online" pill and task detail keep showing a live, idle Claude Code session
+  (P-197). Their `/api/agents/sessions` answer, which never lists the device's own sessions, replaced
+  the rows the stream's presence frame had put in place, and a frame comes only when the device's
+  session directory changes, so an idle session read "no agents online" from the board's load, and
+  again after any refetch, until the next change. The answer now keeps those rows, as the Agents
+  screen already did.
 
 ## [0.1.0]
 
