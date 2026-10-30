@@ -56,4 +56,5 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: make check, both engines
-        run: make check
+        # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.
+        run: make check TEST_TIMEOUT=40m
