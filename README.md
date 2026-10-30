@@ -97,9 +97,10 @@ claude --plugin-dir batondeck-kanban/plugin
 
 The plugin brings its own MCP entry for the same server (`plugin:batondeck-kanban:batondeck-kanban`,
 with the bearer from `BATONDECK_TOKEN`), so a session started with it does not need step 3's
-(`claude mcp remove batondeck-kanban` drops that one). `BATONDECK_ROLE=master` registers a master
-session, which is rung when a task in its projects changes. `plugin/README.md` has the rest: what
-holds a doorbell, and what the hooks may do.
+(`claude mcp remove batondeck-kanban` drops that one). It reaches the board at `http://localhost:8080`
+unless `BATONDECK_URL` names another base (`export BATONDECK_URL=http://127.0.0.1:9090`).
+`BATONDECK_ROLE=master` registers a master session, which is rung when a task in its projects
+changes. `plugin/README.md` has the rest: what holds a doorbell, and what the hooks may do.
 
 ### 5. Every other client pulls each turn
 

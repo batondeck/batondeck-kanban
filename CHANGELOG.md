@@ -12,6 +12,9 @@ Notable changes to batondeck-kanban. The format follows
   every push to main, with a Postgres 16 service, so the store conformance suite runs on both
   engines. `make check` gains `web-check`, the SPA's `tsc --noEmit` and its vitest suite, which
   `vite build` never ran; `make web-check` runs them alone.
+- **The plugin follows `BATONDECK_URL`.** `plugin/.mcp.json` connects to
+  `${BATONDECK_URL:-http://localhost:8080}/mcp`, the base `scripts/mcp.sh` already read, so a board on
+  another port or host needs no edit to the plugin.
 
 ### Fixed
 
