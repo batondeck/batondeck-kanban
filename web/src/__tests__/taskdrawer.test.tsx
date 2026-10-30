@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
+import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
 import type { Task } from '../types.js';
 
@@ -18,7 +19,9 @@ function renderDrawer(props: Partial<Parameters<typeof TaskDrawer>[0]> = {}) {
   const onOpenTask = vi.fn();
   const utils = render(
     <QueryClientProvider client={qc}>
-      <TaskDrawer projectId="p1" taskId="T-1" onClose={onClose} onOpenTask={onOpenTask} {...props} />
+      <AuthProvider>
+        <TaskDrawer projectId="p1" taskId="T-1" onClose={onClose} onOpenTask={onOpenTask} {...props} />
+      </AuthProvider>
     </QueryClientProvider>,
   );
   return { qc, onClose, onOpenTask, ...utils };
@@ -87,6 +90,8 @@ describe('TaskDrawer — ticket details', () => {
     await waitFor(() => expect(within(sel).queryByRole('option', { name: 'REVIEW' })).not.toBeInTheDocument());
     expect(within(sel).queryByRole('option', { name: 'BLOCKED' })).not.toBeInTheDocument();
     await within(sel).findByRole('option', { name: 'TODO' });
+    // The fixture's session is alice, the project's admin: the select opens once her role loads (P-209).
+    await waitFor(() => expect(sel).toBeEnabled());
     fireEvent.change(sel, { target: { value: 'TODO' } });
     await waitFor(() => {
       const call = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.find(([u]) => String(u).endsWith('/tasks/T-1/move'));

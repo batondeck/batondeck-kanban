@@ -41,10 +41,20 @@ import { useAuth } from './auth.js';
 import { useProject } from './projectContext.js';
 
 /**
- * Mirrors `ROLE_RANK` in `src/domain/types.ts`. Duplicated rather than imported because the SPA does
- * not depend on the core package; `role-rank-parity` in the web suite pins the two together.
+ * Mirrors `roleRank` in `internal/domain/roles.go`. Duplicated because the SPA cannot import Go;
+ * `ui-polish.test.tsx` pins the values.
  */
 const ROLE_RANK: Record<string, number> = { viewer: 0, worker: 1, master: 2, member: 3, admin: 4 };
+
+/**
+ * Does `role` rank at or above `floor`? The SPA's one reading of a tier floor (`TierMinRole` in
+ * `internal/domain/roles.go`: read = viewer, write = worker, master = master). Fails CLOSED: an
+ * absent or unknown role ranks -1 and passes no floor, the way `RoleRank` does on the server.
+ * Hiding a control is not enforcing it; the server still decides.
+ */
+export function roleAtLeast(role: string | undefined, floor: 'viewer' | 'worker' | 'master' | 'member' | 'admin'): boolean {
+  return role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK[floor];
+}
 
 /** Long: names change far more slowly than a feed does, and a stale label is harmless. */
 const STALE_MS = 300_000;

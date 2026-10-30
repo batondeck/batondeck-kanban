@@ -18,6 +18,7 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
+import { roleAtLeast } from '../../displayNames.js';
 import type { ActivityEvent, Status, Task } from '../../types.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
@@ -183,10 +184,16 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
-  // Requeueing a poisoned task (BLOCKED → TODO) is a master's move (plan §Fold 1): master and the two
-  // roles above it. The server decides; this only keeps a worker from being offered a refusal.
+  // What the caller's role lets them do here (P-209). The server decides; these only keep a caller
+  // from being offered a refusal. Both fail closed while the session or the project is loading.
+  //  - `move_task` is tier master (`internal/domain/grants.go`), so changing the status, and the
+  //    requeue of a poisoned task (BLOCKED → TODO, plan §Fold 1), which is the same call, need master
+  //    or one of the two roles above it.
+  //  - `claim_task` is tier write: a worker or above.
   const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
-  const canRequeue = myRole === 'master' || myRole === 'member' || myRole === 'admin';
+  const canMove = roleAtLeast(myRole, 'master');
+  const canRequeue = canMove;
+  const canClaim = roleAtLeast(myRole, 'worker');
 
   const startEdit = (): void => {
     if (!task) return;
@@ -200,7 +207,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, canRequeue,
+    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim,
   };
 }
 
