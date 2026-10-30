@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **CI for pull requests.** `.github/workflows/ci.yml` runs `make check` on every pull request and
+  every push to main, with a Postgres 16 service, so the store conformance suite runs on both
+  engines. `make check` gains `web-check`, the SPA's `tsc --noEmit` and its vitest suite, which
+  `vite build` never ran; `make web-check` runs them alone.
+
 ### Fixed
 
 - **The config refuses more of what it cannot use.** `public_url` (`BATONDECK_PUBLIC_URL`) must be an
