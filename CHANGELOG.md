@@ -37,6 +37,12 @@ Notable changes to batondeck-kanban. The format follows
   `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
   usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr
   (P-311). A usage error still exits 2 on stderr.
+- **Two tests no longer fail at random under load.** The idempotency-window conformance test
+  bounded the replay's expiry by sleeping past the first call's 100 ms window, then renewed the key
+  inside a second 100 ms window that a slow machine could outrun; the renewed key now has an hour.
+  The Postgres bus test that fills an earlier hole took A before D, an order the bus does not
+  promise; it now takes both in either order and still judges C's hole (P-157, which delivers
+  P-94).
 
 ## [0.1.0]
 
