@@ -153,6 +153,69 @@ checks the config and names the engine the connection itself reports (`the conne
 SQLite 3.x`, or the Postgres server version), the store's location and the blob dir, and exits non-zero
 on a failure.
 
+## Backup and restore
+
+A board's state is three things: the database, the attachment blobs, and the master key. The key
+seals the secrets the database holds (each on-call integration's signing secret, the device
+directory's inbox tokens) and signs the attachment links. Restored under another key, the board, its
+tasks and its attachments come back, but no sealed secret opens: every delivery to an HMAC-signed
+on-call integration is refused 401. Keep the key with the backup, and keep both where only you can read
+them. Stop the server first, so the database and the blobs are copied at the same moment: the binary
+has no online backup.
+
+**The binary, on SQLite.** By default everything is in one directory, `$XDG_DATA_HOME/batondeck-kanban`
+(else `~/.local/share/batondeck-kanban`): the SQLite file `batondeck-kanban.db` (with `-wal` and
+`-shm` files beside it while a server runs), `blobs/` and `master.key`. `batondeck-kanban doctor`
+names the store and the blob dir; when `BATONDECK_DATABASE_URL` or `BATONDECK_BLOB_DIR` put them
+elsewhere, copy each of them and the `master.key` beside the SQLite file (or the
+`BATONDECK_MASTER_KEY` you set) instead.
+
+```bash
+# serve stopped (Ctrl-C, or your service manager)
+umask 077    # the archive holds master.key
+dir=${XDG_DATA_HOME:-$HOME/.local/share}/batondeck-kanban
+tar -C "$dir" -czf "batondeck-kanban-$(date +%Y%m%d).tgz" .
+```
+
+To restore, into an empty directory (move the current one aside first), then start the server:
+
+```bash
+dir=${XDG_DATA_HOME:-$HOME/.local/share}/batondeck-kanban
+mkdir -p "$dir" && tar -C "$dir" -xzpf batondeck-kanban-YYYYMMDD.tgz
+batondeck-kanban serve
+```
+
+**The image, on Postgres (`compose.yaml`).** The database is in the `pgdata` volume, the blobs on the
+`data` volume, and the key and the database password in `.env`. In the directory that holds
+`compose.yaml`, dump the database, archive `/data` with a throwaway container (the image has no
+shell), and keep a copy of `.env`:
+
+```bash
+umask 077    # the dump and batondeck.env are secrets
+docker compose stop batondeck-kanban
+docker compose exec -T postgres pg_dump -U batondeck -d batondeck --clean --if-exists > batondeck.sql
+docker run --rm --volumes-from "$(docker compose ps -aq batondeck-kanban)" -v "$PWD:/backup" \
+  postgres:16 tar -C /data -czf /backup/batondeck-data.tgz .
+cp .env batondeck.env
+docker compose start batondeck-kanban
+```
+
+To restore, on a machine with `compose.yaml` and no volumes yet: put the same `.env` back, start
+Postgres alone, load the dump, unpack `/data` into the new volume, then start the board:
+
+```bash
+cp batondeck.env .env
+docker compose up -d --wait postgres
+docker compose exec -T postgres psql -U batondeck -d batondeck -q -v ON_ERROR_STOP=1 < batondeck.sql
+docker compose create batondeck-kanban
+docker run --rm --volumes-from "$(docker compose ps -aq batondeck-kanban)" -v "$PWD:/backup" \
+  postgres:16 tar -C /data -xzpf /backup/batondeck-data.tgz
+docker compose up -d
+```
+
+`curl -fsS http://127.0.0.1:8080/healthz` then answers, and the board has its tasks and their
+attachments back.
+
 ## Performance
 
 `make bench` measures the three numbers the plan pins (`docs/release/plan-2026-10-22.md`

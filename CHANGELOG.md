@@ -15,6 +15,9 @@ Notable changes to batondeck-kanban. The format follows
 - **The plugin follows `BATONDECK_URL`.** `plugin/.mcp.json` connects to
   `${BATONDECK_URL:-http://localhost:8080}/mcp`, the base `scripts/mcp.sh` already read, so a board on
   another port or host needs no edit to the plugin.
+- **Backup and restore**, in the README, for the binary on SQLite and for `compose.yaml` on Postgres:
+  what to copy (the database, the blobs and the master key), the commands, and what a restore under
+  another key loses.
 
 ### Fixed
 
