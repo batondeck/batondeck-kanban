@@ -23,6 +23,7 @@ import {
   denseSeries,
   priorityCounts,
   statusCounts,
+  subtaskProgress,
   topN,
 } from '../reports.js';
 import type { Status, Task } from '../types.js';
@@ -216,5 +217,18 @@ describe('topN and the rankings', () => {
     const tasks = [mk({ status: 'TODO', priority: 'high' }), mk({ status: 'TODO', priority: 'low' })];
     expect(statusCounts(tasks).get('TODO')).toBe(2);
     expect(priorityCounts(tasks).get('high')).toBe(1);
+  });
+});
+
+describe('subtaskProgress (P-208)', () => {
+  it('counts a cancelled subtask in the total and not in done', () => {
+    const m = subtaskProgress([
+      mk({ id: 'T-2', parentTaskId: 'T-1', status: 'DONE' }),
+      mk({ id: 'T-3', parentTaskId: 'T-1', status: 'DONE', labels: ['cancelled'] }),
+      mk({ id: 'T-4', parentTaskId: 'T-1', status: 'IN_PROGRESS' }),
+      mk({ id: 'T-5', parentTaskId: null, status: 'DONE' }),
+    ]);
+    expect(m.get('T-1')).toEqual({ done: 1, total: 3 });
+    expect(m.size).toBe(1);
   });
 });

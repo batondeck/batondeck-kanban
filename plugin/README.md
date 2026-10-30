@@ -3,7 +3,8 @@
 The plugin connects a Claude Code session to a batondeck-kanban server and puts the session in the
 server's device directory, so the server can start a turn in it when there is work.
 
-- **`.mcp.json`**: the board's MCP tools, at `http://localhost:8080/mcp`, with the bearer from
+- **`.mcp.json`**: the board's MCP tools, at `${BATONDECK_URL:-http://localhost:8080}/mcp` (Claude
+  Code expands the variable, so a board elsewhere needs no edit to the plugin), with the bearer from
   `BATONDECK_TOKEN`.
 - **`hooks/hooks.json`**: two hooks, both `hooks/session.sh`. SessionStart registers the session
   (`batondeck-kanban session register`); SessionEnd removes it (`batondeck-kanban session unregister`).
@@ -38,9 +39,10 @@ server's device directory, so the server can start a turn in it when there is wo
    | Variable | Read by | Value |
    |---|---|---|
    | `BATONDECK_TOKEN` | `.mcp.json` (the `Authorization` header) and both hooks | the token from `token create` |
+   | `BATONDECK_URL` | `.mcp.json` (the server URL) and `scripts/mcp.sh` | optional: the server's base URL, default `http://localhost:8080`; set it when the board listens on another port or host, or sits behind `BATONDECK_PUBLIC_URL`. Unset it rather than export it empty: Claude Code reads an empty one as set, so the url becomes `/mcp` and does not connect (`scripts/mcp.sh` takes the default either way) |
    | `BATONDECK_LISTEN` or `BATONDECK_CONFIG` | both hooks | the same listen list or config file the server runs with; the hooks use its first `unix://` entry |
    | `BATONDECK_ROLE` | SessionStart | `worker` (the default) or `master` |
-   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token carries; the server refuses another agent's label, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
+   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token and no live token of your own carries (your own revoked or expired label included); the server refuses another account's label (revoked or expired tokens included), a live label of your own account that this token does not carry, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
 
    `batondeck-kanban` must be on `PATH`.
 4. Start Claude Code with the plugin loaded for that session:

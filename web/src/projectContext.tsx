@@ -11,6 +11,8 @@ export interface ProjectInfo {
   projectId: string;
   name: string;
   role: string;
+  /** `list_projects` names the project's members on every row (account id → display name, else login). */
+  memberDisplay?: Record<string, string> | null;
 }
 
 interface ProjectCtx {

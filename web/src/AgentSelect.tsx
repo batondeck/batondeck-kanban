@@ -3,7 +3,7 @@
  *  and opens a fixed-positioned menu so it can't be clipped by a scroll container. */
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './icons.js';
-import { type AgentEntry, type AgentState, STATE_META, isLiveEntry } from './agentStatus.js';
+import { type AgentEntry, type AgentState, STATE_META, agentKey, isLiveEntry } from './agentStatus.js';
 import { Avatar } from './components.js';
 import { ToolLogo } from './ToolLogo.js';
 
@@ -76,7 +76,7 @@ export function AgentSelect({ agents, value, onChange, placeholder = 'agent', al
           <div className="assign-list">
             {menuAgents.length === 0 && <div className="assign-empty">No agents online — type a name to assign.</div>}
             {menuAgents.map((a) => (
-              <button key={a.name} type="button" className="assign-item" role="menuitem" onClick={() => choose(a.name)} title={STATE_META[a.state].label}>
+              <button key={agentKey(a.identityId, a.name)} type="button" className="assign-item" role="menuitem" onClick={() => choose(a.name)} title={STATE_META[a.state].label}>
                 <StatusDot state={a.state} size={7} />
                 <Avatar id={a.name} tool={a.tool} />
                 <span className="assign-name">{a.name.split('@')[0]}</span>

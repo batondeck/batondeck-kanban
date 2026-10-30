@@ -131,6 +131,32 @@ describe('Runs — race start', () => {
     expect(screen.getByText('deletes the others.', { exact: false })).toBeInTheDocument();
   });
 
+  it('REFUSAL (P-208): a cancelled run that had delivered is Running, not Submitted, and offers no Pick', async () => {
+    // cancel_task on a REVIEW run keeps its deliverable and lands it DONE with the cancelled label;
+    // pick_run refuses it, so the drawer must not offer it. list_runs carries no labels: the drawer
+    // passes the cancelled ids from the board's task list.
+    const listed = [
+      { taskId: 'T-2', status: 'DONE', assignee: 'a1', leaseHolder: null, hasDeliverable: true, deliverable: 'wrong approach', version: 4 },
+      { taskId: 'T-3', status: 'REVIEW', assignee: 'a2', leaseHolder: null, hasDeliverable: true, deliverable: 'the fix', version: 3 },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ runs: listed }) }) as Response));
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={qc}>
+        <Runs projectId="p1" task={{ ...task, racing: true }} cancelled={new Set(['T-2'])} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('wrong approach')).toBeInTheDocument();
+    expect(screen.getAllByText(/^\s*Pick\s*$/)).toHaveLength(1);
+    expect(screen.getAllByText('Submitted')).toHaveLength(1);
+    expect(screen.getAllByText('Running')).toHaveLength(1);
+    const cards = [...container.querySelectorAll('.mono')].filter((n) => /^T-[23]$/.test(n.textContent ?? ''));
+    const cardOf = (id: string): HTMLElement => cards.find((n) => n.textContent === id)!.closest('div')!.parentElement as HTMLElement;
+    expect(cardOf('T-2').textContent).toContain('Running');
+    expect(cardOf('T-2').textContent).not.toMatch(/Pick/);
+    expect(cardOf('T-3').textContent).toMatch(/Pick/);
+  });
+
   it('after a pick the one run left is the winner', async () => {
     const left = [{ taskId: 'T-3', status: 'REVIEW', assignee: null, leaseHolder: null, hasDeliverable: true, deliverable: 'draft', version: 3 }];
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ runs: left }) }) as Response));

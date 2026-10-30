@@ -134,6 +134,22 @@ func TestRefusals(t *testing.T) {
 		"tcp without a port":   {env: map[string]string{"BATONDECK_LISTEN": "tcp://localhost"}, rule: RuleListen},
 		"empty listen":         {env: map[string]string{"BATONDECK_LISTEN": " , "}, rule: RuleListen},
 		"empty listen in file": {file: `{"listen":[]}`, rule: RuleListen},
+		// public_url is an origin, refused where the config is loaded (P-22), not first in serve's OAuth setup.
+		"public_url without a scheme":    {env: map[string]string{"BATONDECK_PUBLIC_URL": "board.example.com"}, rule: RulePublicURL},
+		"public_url other scheme":        {env: map[string]string{"BATONDECK_PUBLIC_URL": "ftp://x.example"}, rule: RulePublicURL},
+		"public_url with a path":         {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example/base"}, rule: RulePublicURL},
+		"public_url with a query":        {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example?q=1"}, rule: RulePublicURL},
+		"public_url with an empty query": {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example?"}, rule: RulePublicURL},
+		"public_url opaque":              {env: map[string]string{"BATONDECK_PUBLIC_URL": "https:x.example"}, rule: RulePublicURL},
+		"public_url with a fragment":     {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://x.example#f"}, rule: RulePublicURL},
+		"public_url with userinfo":       {env: map[string]string{"BATONDECK_PUBLIC_URL": "https://u:p@x.example"}, rule: RulePublicURL},
+		"public_url port without host":   {env: map[string]string{"BATONDECK_PUBLIC_URL": "http://:8080"}, rule: RulePublicURL},
+		"public_url in file":             {file: `{"public_url":"x.example:8080"}`, rule: RulePublicURL},
+		// One JSON value and nothing after it but whitespace (P-22).
+		"trailing garbage": {file: `{"listen":["tcp://127.0.0.1:9001"]} garbage`, rule: "trailing data"},
+		"trailing brace":   {file: `{"listen":["tcp://127.0.0.1:9001"]}}`, rule: "trailing data"},
+		"trailing comment": {file: "{\"listen\":[\"tcp://127.0.0.1:9001\"]}\n// a comment\n", rule: "trailing data"},
+		"two objects":      {file: `{"listen":["tcp://127.0.0.1:9001"]}{"public_url":"https://x.example"}`, rule: "trailing data"},
 	}
 	for name, tc := range cases {
 		path := ""
@@ -256,5 +272,33 @@ func TestTrustedProxies(t *testing.T) {
 			!strings.Contains(err.Error(), RuleTrustedProxies) || !strings.Contains(err.Error(), strconv.Quote(bad)) {
 			t.Errorf("%q: %v, want %s naming it", bad, err, RuleTrustedProxies)
 		}
+	}
+}
+
+// public_url: unset stays unset (no OAuth server), an origin loads, and a trailing slash is dropped so
+// the issuer and the attachment links share one base; a config file of one object followed by
+// whitespace loads.
+func TestPublicURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                         "",
+		"https://board.example":    "https://board.example",
+		"https://board.example/":   "https://board.example",
+		"http://127.0.0.1:18089//": "http://127.0.0.1:18089",
+		"https://[::1]:8443":       "https://[::1]:8443",
+	} {
+		c, err := Load("", env(map[string]string{"BATONDECK_PUBLIC_URL": in, "XDG_DATA_HOME": "/xdg"}))
+		if err != nil {
+			t.Fatalf("public_url %q: %v", in, err)
+		}
+		if c.PublicURL != want {
+			t.Errorf("public_url %q loaded as %q, want %q", in, c.PublicURL, want)
+		}
+	}
+	c, err := Load(writeConfig(t, "{\"public_url\":\"https://file.example/\"}\n\t \n"), env(map[string]string{"XDG_DATA_HOME": "/xdg"}))
+	if err != nil {
+		t.Fatalf("file with trailing whitespace: %v; want it loaded", err)
+	}
+	if c.PublicURL != "https://file.example" {
+		t.Errorf("file's public_url loaded as %q, want https://file.example", c.PublicURL)
 	}
 }

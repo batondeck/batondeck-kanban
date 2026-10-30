@@ -50,10 +50,12 @@ type OpsDayRow struct {
 	Calls int64  `json:"calls"`
 }
 
-// OpsAgentRow is one agent's calls; a call with no agent is "(unknown)".
+// OpsAgentRow is one agent's calls, an agent being an (identity, agent name) pair; a call with no
+// agent is its identity's "(unknown)".
 type OpsAgentRow struct {
-	Agent string `json:"agent"`
-	Calls int64  `json:"calls"`
+	Agent      string `json:"agent"`
+	IdentityID string `json:"identityId"`
+	Calls      int64  `json:"calls"`
 }
 
 // OpsRetentionRow is how long a tool_calls row is kept and the oldest UTC day that window reaches:

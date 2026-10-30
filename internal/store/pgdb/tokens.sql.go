@@ -16,6 +16,8 @@ DELETE FROM tokens WHERE id IN (
   WHERE (t.revoked_at < $1::bigint OR t.expires_at < $1::bigint)
     AND EXISTS (SELECT 1 FROM tokens n WHERE n.identity_id = t.identity_id AND n.label = t.label
       AND (n.created_at > t.created_at OR (n.created_at = t.created_at AND n.id COLLATE "C" > t.id)))
+    AND EXISTS (SELECT 1 FROM tokens o WHERE o.identity_id = t.identity_id AND o.label = t.label
+      AND (o.created_at < t.created_at OR (o.created_at = t.created_at AND o.id COLLATE "C" < t.id)))
   ORDER BY t.created_at, t.id COLLATE "C" LIMIT $2::bigint)
 `
 
@@ -25,9 +27,10 @@ type DeleteLapsedTokensParams struct {
 }
 
 // The retention sweep: tokens revoked or expired before the cutoff, oldest first, a page at a time,
-// except the newest row (created_at, then id) of each (identity_id, label). The table is also the
-// label-ownership record, which reads every row of any status, so each label an identity carried
-// keeps one row. Ids compare COLLATE "C", as bytes, as SQLite's BINARY does.
+// except the oldest and the newest row (created_at, then id) of each (identity_id, label). The
+// table is also the label-ownership record, which reads every row of any status: each label an
+// identity carried keeps a row, and its earliest row stays, so who minted a label first does not
+// change (train clash T1). Ids compare COLLATE "C", as bytes, as SQLite's BINARY does.
 func (q *Queries) DeleteLapsedTokens(ctx context.Context, arg DeleteLapsedTokensParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteLapsedTokens, arg.Before, arg.PageLimit)
 	if err != nil {

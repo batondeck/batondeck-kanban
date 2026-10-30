@@ -38,9 +38,9 @@ A task is in one of five states: `TODO · IN_PROGRESS · BLOCKED · REVIEW · DO
 
 ## Connect
 
-The plugin's `.mcp.json` points the session at `http://localhost:8080/mcp` with
-`Authorization: Bearer ${BATONDECK_TOKEN}`. The token is a CLI token the user mints on the server's
-machine and exports before starting `claude`:
+The plugin's `.mcp.json` points the session at the server's `/mcp` (`http://localhost:8080/mcp`, or
+under the base `BATONDECK_URL` names) with `Authorization: Bearer ${BATONDECK_TOKEN}`. The token is
+a CLI token the user mints on the server's machine and exports before starting `claude`:
 
 ```bash
 batondeck-kanban token create --user you@example.com    # printed once

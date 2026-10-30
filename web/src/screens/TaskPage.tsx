@@ -12,7 +12,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import * as boardsApi from '../api/boards.js';
 import { Icon } from '../icons.js';
 import { pushToast } from '../toast.js';
-import { PageHeader, timeAgo } from '../components.js';
+import { PageHeader, personName, timeAgo } from '../components.js';
 import { RoleBadge, SideWide, Tabs, roleOf } from '../ui.js';
 import {
   ActivityPanel, ContextPanel, DeliveredPanel, DependenciesPanel, DescriptionPanel,
@@ -165,7 +165,7 @@ export function TaskPage() {
         <div className="task-sub task-head">
           <RoleBadge role={roleOf(task.status)} />
           <span>v{task.version}</span>
-          <span>· created by {task.createdByAgent ?? task.createdBy.split('@')[0]}</span>
+          <span>· created by {task.createdByAgent ?? personName(task.createdBy, d.names)}</span>
           <span>· updated {timeAgo(task.updatedAt)}</span>
         </div>
 

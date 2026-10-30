@@ -154,9 +154,10 @@ func TestASweepRemovesExpiredDeliveriesAndRawBodies(t *testing.T) {
 }
 
 // P-44: a sweep deletes the browser session expired more than LapsedGrace ago and the API token
-// expired more than LapsedGrace ago whose label has a newer row, and keeps a session and a token
-// lapsed less than LapsedGrace ago, a live session and token, and the newest row of a lapsed label
-// (label ownership reads it), on memstore and both engines; a second sweep deletes nothing.
+// expired more than LapsedGrace ago whose label has an older and a newer row, and keeps a session
+// and a token lapsed less than LapsedGrace ago, a live session and token, and the oldest and the
+// newest row of a lapsed label (label ownership reads them), on memstore and both engines; a second
+// sweep deletes nothing.
 func TestASweepRemovesLapsedSessionsAndTokens(t *testing.T) {
 	for _, b := range backends {
 		t.Run(b.name, func(t *testing.T) {
@@ -176,7 +177,8 @@ func TestASweepRemovesLapsedSessionsAndTokens(t *testing.T) {
 				id, label        string
 				created, expires time.Duration
 			}{
-				{"T-old", "scout", 40 * day, 8 * day},    // lapsed past the grace, a newer scout row: deleted
+				{"T-first", "scout", 50 * day, 9 * day},  // lapsed past the grace, scout's oldest row: kept
+				{"T-old", "scout", 40 * day, 8 * day},    // lapsed past the grace, an older and a newer scout row: deleted
 				{"T-recent", "scout", 30 * day, 6 * day}, // lapsed inside the grace: kept
 				{"T-live", "scout", 20 * day, -10 * day}, // live: kept
 				{"T-last", "probe", 40 * day, 8 * day},   // lapsed past the grace, probe's newest row: kept
@@ -200,9 +202,9 @@ func TestASweepRemovesLapsedSessionsAndTokens(t *testing.T) {
 				}
 			}
 			if _, err := s.GetToken(ctx, "T-old"); err == nil {
-				t.Fatal("the token expired 8 days ago with a newer row of its label outlived the grace")
+				t.Fatal("the token expired 8 days ago with an older and a newer row of its label outlived the grace")
 			}
-			for _, id := range []string{"T-recent", "T-live", "T-last"} {
+			for _, id := range []string{"T-first", "T-recent", "T-live", "T-last"} {
 				if _, err := s.GetToken(ctx, id); err != nil {
 					t.Fatalf("token %s: %v, want it kept", id, err)
 				}

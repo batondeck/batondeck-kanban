@@ -5,9 +5,9 @@
 // and the raw webhook bodies past the expiry stamped on each at write time (retention.deliveries_days
 // and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), the on-call alert states past
 // that same delivery window once their ticket is DONE or gone, the browser sessions expired and
-// the API tokens expired or revoked more than LapsedGrace ago (a token's newest row per label stays,
-// as the label-ownership record), the OAuth codes and tokens expired more than LapsedGrace ago, and
-// the blobs no attachment or memory entry references any more.
+// the API tokens expired or revoked more than LapsedGrace ago (a label's oldest and newest token rows
+// per identity stay, as the label-ownership record), the OAuth codes and tokens expired more than
+// LapsedGrace ago, and the blobs no attachment or memory entry references any more.
 // Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.

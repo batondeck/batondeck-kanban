@@ -163,6 +163,7 @@ func (s *Store) SummarizeToolCalls(ctx context.Context, projectID string, since 
 			tool    string
 			outcome store.ToolCallOutcome
 			agent   string
+			ident   string
 			day     string
 		}
 		groups := map[key]*store.ToolCallGroup{}
@@ -170,10 +171,10 @@ func (s *Store) SummarizeToolCalls(ctx context.Context, projectID string, since 
 			if c.ProjectID != projectID || c.TS < since {
 				continue
 			}
-			k := key{c.Tool, c.Outcome, c.Agent, time.UnixMilli(c.TS).UTC().Format(time.DateOnly)}
+			k := key{c.Tool, c.Outcome, c.Agent, c.Identity, time.UnixMilli(c.TS).UTC().Format(time.DateOnly)}
 			g := groups[k]
 			if g == nil {
-				g = &store.ToolCallGroup{Tool: k.tool, Outcome: k.outcome, Agent: k.agent, Day: k.day}
+				g = &store.ToolCallGroup{Tool: k.tool, Outcome: k.outcome, Agent: k.agent, Identity: k.ident, Day: k.day}
 				groups[k] = g
 			}
 			g.Calls++
@@ -184,7 +185,7 @@ func (s *Store) SummarizeToolCalls(ctx context.Context, projectID string, since 
 			out = append(out, *g)
 		}
 		slices.SortFunc(out, func(a, b store.ToolCallGroup) int {
-			return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.Outcome, b.Outcome), cmp.Compare(a.Agent, b.Agent), cmp.Compare(a.Day, b.Day))
+			return cmp.Or(cmp.Compare(a.Tool, b.Tool), cmp.Compare(a.Outcome, b.Outcome), cmp.Compare(a.Agent, b.Agent), cmp.Compare(a.Identity, b.Identity), cmp.Compare(a.Day, b.Day))
 		})
 		return out, nil
 	})

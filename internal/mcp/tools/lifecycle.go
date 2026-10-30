@@ -14,7 +14,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Claim a TODO task with an exclusive lease; it moves to IN_PROGRESS. Another live lease is CONFLICT_LOCKED. A retry with the same idempotencyKey replays the original lease.",
 		l.Claim)
 	mcp.Tool(s, "lifecycle", "claim_next",
-		"Claim the board's best claimable TODO task: unleased, unblocked, past its backoff, unassigned or yours (no assignee needed); null when none is. sprintId, maxConcurrency, shard.count > 1 refused.",
+		"Claim the best claimable TODO task: unleased, unblocked, past backoff, unassigned or yours, in sprintId if given, your profile's with useProfile; else null. maxConcurrency, shard.count > 1 refused.",
 		l.ClaimNext)
 	mcp.Tool(s, "lifecycle", "heartbeat_task",
 		"Extend your live lease to now plus leaseSeconds without bumping the task version. A lease that has expired or is not yours is LEASE_EXPIRED.",
@@ -23,7 +23,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Release your lease; the task returns to TODO with no backoff. A retry with the same idempotencyKey replays the original result.",
 		l.Release)
 	mcp.Tool(s, "lifecycle", "next_task",
-		"Preview the best claimable TODO task, unassigned or yours, without claiming it, or null. includeInbox adds REVIEW, blocked and poisoned tasks (assignee's, if given). strategy score, explain: refused.",
+		"Preview the best claimable TODO task, unassigned or yours, or null; claims nothing. strategy score ranks as rank_tasks; explain says why; useProfile: by your profile. includeInbox: REVIEW, BLOCKED.",
 		l.Next)
 	mcp.Tool(s, "lifecycle", "complete_task",
 		"Complete your leased task: REVIEW when the project reviews (the reviewer becomes the assignee), else DONE, which unblocks its dependents. artifacts are refused.",
@@ -41,6 +41,6 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Hand your leased task to another agent: the lease is dropped, the task returns to TODO assigned to toAgent, and memoryNote is kept as the task's handoff memory.",
 		l.Handoff)
 	mcp.Tool(s, "lifecycle", "cancel_task",
-		"Cancel a task: DONE with the label cancelled and the reason as a note, unblocking its dependents. Needs the master role or the task's live lease; version-checked.",
+		"Cancel a task: DONE with the label cancelled and the reason as a note, unblocking its dependents. Master or the live lease; version-checked. Refused on a DONE or racing task.",
 		l.Cancel)
 }

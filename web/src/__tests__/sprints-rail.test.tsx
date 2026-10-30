@@ -226,3 +226,76 @@ describe('SprintsRail: the sprint lifecycle (T-330)', () => {
     expect(screen.queryByRole('button', { name: /start sprint|^close$|abandon/i })).toBeNull();
   });
 });
+
+/**
+ * P-208: a cancelled task is DONE with the cancelled label but was not delivered. The rail counts a
+ * cancelled member in the total and not in done (as get_sprint does), and a cancelled proposal task
+ * approves nothing (the core's activation gate refuses it), while a delivered one still does.
+ */
+describe('SprintsRail: a cancelled task is not done (P-208)', () => {
+  const cancelled = (id: string, sprintIds?: string[]): Task =>
+    ({ id, status: 'DONE', sprintIds, labels: ['cancelled'], blockedBy: [], blocks: [] }) as unknown as Task;
+
+  it('counts a cancelled member in the total only', () => {
+    render(
+      <SprintsRail
+        sprints={[sprint({})]}
+        tasks={[task('T-1', 'DONE', ['S-1']), cancelled('T-2', ['S-1']), task('T-3', 'TODO', ['S-1'])]}
+        filterSprint=""
+        onFilter={() => {}}
+        onOpenTask={() => {}}
+      />,
+    );
+    expect(screen.getByText(/^\s*1\/3\s*$/)).toBeTruthy();
+  });
+
+  it('the count says delivered, and Close warns only of members not DONE, as the server does', () => {
+    render(
+      <SprintsRail
+        sprints={[sprint({ id: 'S-9', status: 'ACTIVE' })]}
+        tasks={[task('T-1', 'DONE', ['S-9']), cancelled('T-2', ['S-9'])]}
+        filterSprint=""
+        onFilter={() => {}}
+        onOpenTask={() => {}}
+        onLifecycle={() => {}}
+      />,
+    );
+    const count = screen.getByText(/^\s*1\/2\s*$/);
+    expect(count.getAttribute('title')).toBe('1 of 2 loaded members delivered (a cancelled one counts in the total only)');
+    // A cancelled member is DONE, so the server's close warning (members not DONE) is empty.
+    const close = screen.getByRole('button', { name: /^close$/i });
+    expect(close.getAttribute('title')).toBe('Close the sprint — every loaded member is DONE');
+  });
+
+  it('Close counts a TODO member as not terminal and a cancelled one as terminal', () => {
+    render(
+      <SprintsRail
+        sprints={[sprint({ id: 'S-9', status: 'ACTIVE' })]}
+        tasks={[cancelled('T-1', ['S-9']), task('T-2', 'TODO', ['S-9'])]}
+        filterSprint=""
+        onFilter={() => {}}
+        onOpenTask={() => {}}
+        onLifecycle={() => {}}
+      />,
+    );
+    const close = screen.getByRole('button', { name: /^close$/i });
+    expect(close.getAttribute('title')).toBe('Close the sprint. 1 loaded member(s) are not terminal — the server returns a warning, it does not refuse.');
+  });
+
+  it('REFUSAL: a cancelled proposal task is not read as approved, and Start says why', () => {
+    render(
+      <SprintsRail
+        sprints={[sprint({ id: 'S-9', status: 'PROPOSED', proposalTaskId: 'T-99' })]}
+        tasks={[cancelled('T-99')]}
+        filterSprint=""
+        onFilter={() => {}}
+        onOpenTask={() => {}}
+        onLifecycle={() => {}}
+      />,
+    );
+    expect(screen.getByText('awaiting approval: T-99')).toBeTruthy();
+    const start = screen.getByRole('button', { name: /start sprint/i });
+    expect(start).toBeDisabled();
+    expect(start.getAttribute('title')).toMatch(/T-99 was cancelled/);
+  });
+});

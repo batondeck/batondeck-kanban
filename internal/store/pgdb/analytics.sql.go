@@ -10,14 +10,14 @@ import (
 )
 
 const summarizeToolCalls = `-- name: SummarizeToolCalls :many
-SELECT tool, outcome, agent,
+SELECT tool, outcome, agent, identity,
     to_char(to_timestamp(ts / 1000) AT TIME ZONE 'UTC', 'YYYY-MM-DD')::text AS day,
     count(*)::bigint AS calls,
     sum(latency_ms)::bigint AS latency_sum
 FROM tool_calls
 WHERE project_id = $1::text AND ts >= $2::bigint
-GROUP BY tool, outcome, agent, day
-ORDER BY tool COLLATE "C", outcome, agent COLLATE "C", day
+GROUP BY tool, outcome, agent, identity, day
+ORDER BY tool COLLATE "C", outcome, agent COLLATE "C", identity COLLATE "C", day
 `
 
 type SummarizeToolCallsParams struct {
@@ -29,13 +29,15 @@ type SummarizeToolCallsRow struct {
 	Tool       string
 	Outcome    string
 	Agent      string
+	Identity   string
 	Day        string
 	Calls      int64
 	LatencySum int64
 }
 
 // The operations summary's one statement (conductor's opsQuery, bq.ts:112): a project's tool calls
-// since since_ms, grouped by tool, outcome, agent and UTC day, with each group's latency sum.
+// since since_ms, grouped by tool, outcome, agent, identity and UTC day, with each group's latency
+// sum: one agent name under two identities is two groups (P-335).
 func (q *Queries) SummarizeToolCalls(ctx context.Context, arg SummarizeToolCallsParams) ([]SummarizeToolCallsRow, error) {
 	rows, err := q.db.Query(ctx, summarizeToolCalls, arg.ProjectID, arg.SinceMs)
 	if err != nil {
@@ -49,6 +51,7 @@ func (q *Queries) SummarizeToolCalls(ctx context.Context, arg SummarizeToolCalls
 			&i.Tool,
 			&i.Outcome,
 			&i.Agent,
+			&i.Identity,
 			&i.Day,
 			&i.Calls,
 			&i.LatencySum,

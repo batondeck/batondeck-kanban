@@ -50,7 +50,8 @@ describe('Comments', () => {
     wrap(<Comments projectId="P-1" taskId="T-1" mentionCandidates={[]} />);
     expect(await screen.findByText('First pass is in')).toBeInTheDocument();
     expect(screen.getByText('Reply from will')).toBeInTheDocument();
-    expect(calls[0]).toBe(`GET ${base}/comments`);
+    // The first read of the thread (the names read, P-314, is `GET /api/projects/P-1`).
+    expect(calls.find((c) => c.startsWith(`GET ${base}/`))).toBe(`GET ${base}/comments`);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'New' } });
     fireEvent.click(screen.getByRole('button', { name: /comment/i }));
     await vi.waitFor(() => expect(calls.some((c) => c === `POST ${base}/comments {"body":"New"}`)).toBe(true));
@@ -74,6 +75,6 @@ describe('FollowUps', () => {
     expect(screen.getAllByText('→ u-will')).toHaveLength(2);
     expect(screen.getByText('↩ reopened')).toBeInTheDocument();
     expect(screen.getByText(/back to TODO/)).toBeInTheDocument();
-    expect(calls[0]).toBe(`GET ${base}/follow-ups`);
+    expect(calls.find((c) => c.startsWith(`GET ${base}/`))).toBe(`GET ${base}/follow-ups`);
   });
 });

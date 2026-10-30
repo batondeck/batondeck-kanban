@@ -1,0 +1,60 @@
+# ci: the gate on every pull request and on every push to main. It runs `make check`, the same target
+# the pre-push hook runs (githooks/pre-push), once, with a Postgres 16 service and
+# BATONDECK_TEST_POSTGRES_DSN pointing at it, so the Postgres halves of conformance, perf and the
+# live contract run rather than skip. The SPA's typecheck and vitest suite are part of `make check`
+# (its web-check step), so the hook and this workflow cannot run different gates.
+#
+# The service is the hook's: the postgres:16-alpine image, user and password batondeck, the
+# `postgres` database (each test makes its own). GOWORK=off as in the hook: the gate proves the
+# committed go.mod and go.sum.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: batondeck
+          POSTGRES_PASSWORD: batondeck
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U batondeck -h 127.0.0.1"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      GOWORK: "off"
+      BATONDECK_TEST_POSTGRES_DSN: postgres://batondeck:batondeck@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: make check, both engines
+        # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.
+        run: make check TEST_TIMEOUT=40m

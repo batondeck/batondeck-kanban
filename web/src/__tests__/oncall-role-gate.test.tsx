@@ -54,6 +54,24 @@ function mockProject(role: string) {
 }
 
 /**
+ * The session half of the gate (P-248): `list_integrations` is workspace-admin only BEFORE it is
+ * master-tier (`internal/service/authz.go`), so a fixture states both. Only `useAuth` is replaced;
+ * the rest of the module is the real one.
+ */
+function mockSession(isAdmin: boolean) {
+  vi.doMock('../auth.js', async () => {
+    const actual = await vi.importActual<typeof import('../auth.js')>('../auth.js');
+    return { ...actual, useAuth: () => ({ ...actual.useAuth(), identity: 'U-1', isAdmin }) };
+  });
+}
+
+/** A caller: their role in p1 and whether the session is a workspace admin. */
+function mockCaller(role: string, isAdmin: boolean) {
+  mockProject(role);
+  mockSession(isAdmin);
+}
+
+/**
  * Records every URL the screen asks for, and answers enough for it to finish rendering.
  *
  * `role` must match the one `mockProject` feeds. `Oncall.tsx` reads only `projectId` off this
@@ -98,24 +116,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules();
   vi.doUnmock('../projectContext.js');
+  vi.doUnmock('../auth.js');
 });
 
 const integrationCalls = (calls: string[]) => calls.filter((u) => /\/integrations/.test(u));
 
 describe('Oncall screen', () => {
-  it('a worker never REQUESTS integrations — the refusal is what pages', async () => {
-    mockProject('worker');
-    const calls = stub('worker');
+  async function renderOncall(role: string, isAdmin: boolean) {
+    mockCaller(role, isAdmin);
+    const calls = stub(role);
     const { default: Oncall } = await import('../screens/Oncall.js');
     render(<Oncall />, { wrapper });
     // Wait for the screen to settle, so "no call" means "did not call", not "has not called YET".
     await waitFor(() => expect(calls.some((u) => u.includes('/projects'))).toBe(true));
     await new Promise((r) => setTimeout(r, 50));
+    return calls;
+  }
+
+  it('a worker never REQUESTS integrations, even as a workspace admin', async () => {
+    const calls = await renderOncall('worker', true);
     expect(integrationCalls(calls), 'a sub-master role must not call a master-tier tool').toEqual([]);
   });
 
-  it('POSITIVE CONTROL: a master DOES request them, so the gate is not refusing everyone', async () => {
-    mockProject('master');
+  it('a project master who is not a workspace admin never requests them (P-248)', async () => {
+    const calls = await renderOncall('master', false);
+    expect(integrationCalls(calls), 'list_integrations is workspace-admin only before it is master-tier').toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a master who is a workspace admin DOES request them, so the gate is not refusing everyone', async () => {
+    mockCaller('master', true);
     const calls = stub('master');
     const { default: Oncall } = await import('../screens/Oncall.js');
     render(<Oncall />, { wrapper });
@@ -129,8 +158,8 @@ describe('OncallSetup deleted-integrations read', () => {
    * — otherwise the assertion passes because nothing ever asked, which is rule 18's vacuous zero. The
    * positive control below is what proves the press works.
    */
-  async function renderSetup(role: string) {
-    mockProject(role);
+  async function renderSetup(role: string, isAdmin: boolean) {
+    mockCaller(role, isAdmin);
     const calls = stub(role);
     const { OncallSetup } = await import('../screens/oncall/OncallSetup.js');
     render(<OncallSetup projectId="p1" integrations={[]} onClose={() => {}} />, { wrapper });
@@ -140,16 +169,53 @@ describe('OncallSetup deleted-integrations read', () => {
     return calls;
   }
 
-  it('a worker pressing Show deleted issues no request', async () => {
-    const calls = await renderSetup('worker');
+  it('a worker pressing Show deleted issues no request, even as a workspace admin', async () => {
+    const calls = await renderSetup('worker', true);
     expect(integrationCalls(calls), 'the deleted read is master-tier too').toEqual([]);
   });
 
-  it('POSITIVE CONTROL: a master pressing Show deleted does issue one', async () => {
-    const calls = await renderSetup('master');
+  it('a project master who is not a workspace admin pressing Show deleted issues no request (P-248)', async () => {
+    const calls = await renderSetup('master', false);
+    expect(integrationCalls(calls), 'the deleted read is workspace-admin only too').toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a master who is a workspace admin pressing Show deleted does issue one', async () => {
+    const calls = await renderSetup('master', true);
     expect(
       integrationCalls(calls).length,
-      'if this is 0 the worker assertion above proves nothing — the button did not fire',
+      'if this is 0 the assertions above prove nothing — the button did not fire',
     ).toBeGreaterThan(0);
+  });
+});
+
+describe('useDisplayNames (Board, Activity, Analytics, the ticket Activity panel)', () => {
+  /**
+   * The busiest call site: it mounts on four screens, so this is where a project master who is not a
+   * workspace admin met the 403 (P-248). The project read must still go out, so "no integrations
+   * request" cannot pass because the hook did nothing at all.
+   */
+  async function renderHook(role: string, isAdmin: boolean) {
+    mockCaller(role, isAdmin);
+    const calls = stub(role);
+    const { useDisplayNames } = await import('../displayNames.js');
+    function Probe() {
+      const names = useDisplayNames('p1');
+      return <span data-testid="names">{Object.values(names).join(',')}</span>;
+    }
+    render(<Probe />, { wrapper });
+    await waitFor(() => expect(calls.some((u) => /\/projects\/p1$/.test(u))).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    return calls;
+  }
+
+  it('a project master who is not a workspace admin issues no integrations request (P-248)', async () => {
+    const calls = await renderHook('master', false);
+    expect(integrationCalls(calls)).toEqual([]);
+  });
+
+  it('POSITIVE CONTROL: a master who is a workspace admin does, and the name resolves', async () => {
+    const calls = await renderHook('master', true);
+    await waitFor(() => expect(integrationCalls(calls).length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByTestId('names').textContent).toContain('prod-grafana'));
   });
 });

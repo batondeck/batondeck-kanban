@@ -10,10 +10,11 @@
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { pushToast } from '../toast.js';
-import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, timeAgo } from '../components.js';
+import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, personName, timeAgo } from '../components.js';
 import { LIMITS } from '../types.js';
 import { Cluster } from '../ui.js';
 import { Icon } from '../icons.js';
+import { isCancelled } from '../reports.js';
 import { Runs } from './Runs.js';
 import { useTaskDetail, type LoadedTaskDetail } from './task/useTaskDetail.js';
 import {
@@ -255,8 +256,9 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
                 Created by <Avatar id={task.createdByAgent} /> {task.createdByAgent}
               </span>
             ) : (
-              // Bare emails read noisy — show the local part; the tooltip keeps the full address.
-              <span title={task.createdBy}>Created by {task.createdBy.split('@')[0]}</span>
+              // Bare emails read noisy — show the local part; the tooltip keeps the full name. An account
+              // id is named, never printed raw (P-314).
+              <span title={personName(task.createdBy, d.names, { full: true })}>Created by {personName(task.createdBy, d.names)}</span>
             )}
             <span>· updated {timeAgo(task.updatedAt)}</span>
           </div>
@@ -305,7 +307,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
             {/* Runs — race section (renders only when this task is/was raced). Drawer-only: it
                 always renders a section and fires its own `list_runs` read, so promoting it to the
                 page is scope this commit does not take. */}
-            <Runs projectId={projectId} task={task} />
+            <Runs projectId={projectId} task={task} cancelled={new Set([...taskById.values()].filter(isCancelled).map((t) => t.id))} />
           </div>
 
           <div ref={refs.files}>

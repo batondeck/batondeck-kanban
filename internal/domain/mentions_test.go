@@ -27,3 +27,28 @@ func TestResolveMentions(t *testing.T) {
 		}
 	}
 }
+
+// TestMentionNames (P-348): a token names a name by the name's normalised value or its local part,
+// the match ResolveMentions reads an alias by, and a name is compared whole: a label with a
+// non-handle character is never cut to its first handle.
+func TestMentionNames(t *testing.T) {
+	for _, c := range []struct {
+		token, name string
+		want        bool
+	}{
+		{"pbob", "pbob", true},
+		{"pbob", " PBob ", true},
+		{"pbob", "pbob@x.example", true}, // the local part (Fable A1)
+		{"pbob@x.example", "pbob@x.example", true},
+		{"pbob@x.example", "pbob", false}, // a whole email does not name its local part's owner
+		{"pt", "pt bob", false},           // never truncated (Fable A2)
+		{"pt", "pt.bob", false},
+		{"pt", "pt", true},
+		{"", "", false},
+		{"x", "  ", false},
+	} {
+		if got := MentionNames(c.token, c.name); got != c.want {
+			t.Errorf("MentionNames(%q, %q) = %v, want %v", c.token, c.name, got, c.want)
+		}
+	}
+}

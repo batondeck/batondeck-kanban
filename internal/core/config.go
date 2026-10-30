@@ -5,8 +5,11 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +24,7 @@ const (
 	RuleListen         = "listen_entries_are_tcp_or_unix_urls"
 	RuleBlob           = "blob_max_bytes_is_a_positive_integer"
 	RuleTrustedProxies = "trusted_proxies_are_ip_addresses_or_cidrs"
+	RulePublicURL      = "public_url_is_an_http_origin"
 )
 
 // The engines database.url selects between.
@@ -176,6 +180,11 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 		if err := dec.Decode(&c); err != nil {
 			return nil, fmt.Errorf("config file %s: %w", path, err)
 		}
+		// Decode reads one JSON value and stops: anything after it but whitespace (a second object,
+		// a stray brace) would otherwise be dropped without a word.
+		if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("config file %s: trailing data after the JSON object", path)
+		}
 	}
 
 	// env layer (BATONDECK_*)
@@ -276,6 +285,13 @@ func (c *Config) validate() error {
 	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
 		return err
 	}
+	if c.PublicURL != "" {
+		origin, err := publicOrigin(c.PublicURL)
+		if err != nil {
+			return err
+		}
+		c.PublicURL = origin
+	}
 	if strings.Contains(c.Database.URL, "://") && c.Engine() != EnginePostgres {
 		return fmt.Errorf("%s: database.url %q is neither a file path nor a postgres:// URL", RuleDatabaseURL, c.Database.URL)
 	}
@@ -310,6 +326,20 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// publicOrigin checks public_url the way the OAuth server does (internal/auth/oauth issuerOf), where
+// the config is loaded, so every subcommand refuses a bad one before it touches the store or binds a
+// listener: an http or https URL with a host and no path, query, fragment or userinfo. A trailing
+// slash is dropped, so the issuer and the attachment links start with the same base. An opaque URL
+// (`https:x.example`) has no host, so the Hostname check refuses it.
+func publicOrigin(publicURL string) (string, error) {
+	u, err := url.Parse(strings.TrimRight(publicURL, "/"))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.Path != "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+		return "", fmt.Errorf("%s: public_url %q is not scheme://host[:port] (http or https, no path, query, fragment or userinfo)", RulePublicURL, publicURL)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // Engine is the store engine database.url selects: postgres for a postgres:// or postgresql://

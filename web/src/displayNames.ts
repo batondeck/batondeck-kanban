@@ -18,26 +18,17 @@
  * show an error because a LABEL could not load. `retry: false`, and `eventActor` falls back to a
  * shortened id.
  *
- * *** `list_integrations` IS ROLE-GATED BEFORE IT IS CALLED, AND THAT IS NOT AN OPTIMISATION. ***
+ * *** `list_integrations` IS GATED BEFORE IT IS CALLED, AND THAT IS NOT AN OPTIMISATION. ***
  *
- * This docblock previously said the tool "is gated on the on-call permission and 403s for a member
- * without it", and treated the 403 as a harmless best-effort miss. Both halves were wrong, and the
- * combination was an alert-noise bug:
+ * `batondeck:oncall` gates the SPA PAGE, not this API. The API's guard is the tool's posture in
+ * `internal/domain/grants.go`: workspace admin required (`AdminOnly: "only"`), then project role
+ * master or above, both checked by `authorize` in `internal/service/authz.go`. A caller who fails
+ * either is answered 403 FORBIDDEN. This hook mounts on the four busiest screens (Board, Activity,
+ * Analytics, the ticket Activity panel), so an ungated call would put a refused request on every
+ * one of them for every reader who is not both. The fix is to not make the call.
  *
- *   - `batondeck:oncall` gates the SPA PAGE, *deliberately not* this API — stated verbatim in
- *     `gateway/ui-backend/test/permission-coverage.test.ts`. The real guard is the tool's tier floor:
- *     `requireMaster` at `src/tools/integrations.ts:670`.
- *   - A refusal is therefore NOT inert. `src/auth/index.ts` answers `Requires master … (have: worker)`,
- *     `src/security/signals.ts` matches `/^Requires /` and emits an escalation signal, and
- *     `infra/security-rules/alerts/escalation-deny.yaml` pages CRITICAL on >3 in 5 minutes.
- *
- * This hook mounts on the four busiest screens (Board, Activity, Analytics, the ticket Activity
- * panel), so four `viewer`/`worker` humans opening a board inside one window would have paged the
- * project owner — an alert firing on entirely honest traffic, which engineering rule 19 exists to
- * refuse. The fix is to not make the call, never to raise the threshold.
- *
- * A caller below `master` simply gets no integration names; `eventActor` elides the id instead. That
- * is the same degradation the 403 produced, without the signal.
+ * Such a caller simply gets no integration names; `eventActor` elides the id instead. That is the
+ * same degradation the 403 produced, without the refused request.
  *
  * ONE HOOK RATHER THAN FOUR COPIES: react-query dedupes by key, so four mounted consumers share two
  * requests, and a fix to the merge rule lands everywhere at once.
@@ -46,13 +37,24 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as oncallApi from './api/oncall.js';
 import * as projectsApi from './api/projects.js';
+import { useAuth } from './auth.js';
 import { useProject } from './projectContext.js';
 
 /**
- * Mirrors `ROLE_RANK` in `src/domain/types.ts`. Duplicated rather than imported because the SPA does
- * not depend on the core package; `role-rank-parity` in the web suite pins the two together.
+ * Mirrors `roleRank` in `internal/domain/roles.go`. Duplicated because the SPA cannot import Go;
+ * `ui-polish.test.tsx` pins the values.
  */
 const ROLE_RANK: Record<string, number> = { viewer: 0, worker: 1, master: 2, member: 3, admin: 4 };
+
+/**
+ * Does `role` rank at or above `floor`? The SPA's one reading of a tier floor (`TierMinRole` in
+ * `internal/domain/roles.go`: read = viewer, write = worker, master = master). Fails CLOSED: an
+ * absent or unknown role ranks -1 and passes no floor, the way `RoleRank` does on the server.
+ * Hiding a control is not enforcing it; the server still decides.
+ */
+export function roleAtLeast(role: string | undefined, floor: 'viewer' | 'worker' | 'master' | 'member' | 'admin'): boolean {
+  return role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK[floor];
+}
 
 /** Long: names change far more slowly than a feed does, and a stale label is harmless. */
 const STALE_MS = 300_000;
@@ -60,22 +62,46 @@ const STALE_MS = 300_000;
 /**
  * May this caller call `list_integrations` WITHOUT being refused?
  *
- * `master` is the floor the tool enforces (`src/tools/integrations.ts` `requireMaster`), and a
- * refusal is not inert: the core answers `Requires master … (have: worker)`, `signals.ts` classifies
- * it as an escalation, and `escalation-deny.yaml` files on >3 in 5 minutes. So the call has to be
- * gated BEFORE it is made, at EVERY call site — a review found two more after the first fix
- * (`screens/Oncall.tsx`, which also refetches every 60s and so fires with no interaction at all, and
- * `screens/oncall/OncallSetup.tsx`'s deleted-integrations read).
+ * The server makes TWO checks, and this mirrors both (P-248). `list_integrations` is
+ * `AdminOnly: "only"` with tier master (`internal/domain/grants.go`), so `authorize`
+ * (`internal/service/authz.go`) first refuses anyone who is not a WORKSPACE admin ("Workspace admin
+ * required"), and only then checks the caller's role in the project against master. Gating on the
+ * project role alone sent every project master who is not a workspace admin a 403 on each screen
+ * this hook mounts on. `isAdmin` on `/api/session` is the same flag (`caller.WorkspaceAdmin`,
+ * `internal/api/session.go`).
  *
- * Exported as a hook rather than copied, because the first fix covered one of three sites and read
- * as complete.
+ * The call is gated BEFORE it is made, at EVERY call site: `useDisplayNames` below,
+ * `screens/Oncall.tsx` (which also refetches every 60s, so it fires with no interaction at all) and
+ * `screens/oncall/OncallSetup.tsx`'s deleted-integrations read. Exported as a hook rather than
+ * copied, because the first fix covered one of three sites and read as complete.
  *
- * Fails CLOSED: an unknown role string ranks -1 and is refused.
+ * Fails CLOSED: a non-admin session, an absent project row or an unknown role string (ranked -1) is
+ * refused.
  */
 export function useMayReadIntegrations(projectId: string | undefined): boolean {
+  const { isAdmin } = useAuth();
   const { projects } = useProject();
   const role = projects.find((p) => p.projectId === projectId)?.role;
-  return role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK.master;
+  return isAdmin && role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK.master;
+}
+
+/**
+ * Every name the caller's project list already carries (P-314): `list_projects` returns
+ * `memberDisplay` on each row, and `ProjectProvider` holds that list app-wide under `['projects']`,
+ * so this costs no request. It is the map for a surface that is not inside one project (the
+ * notifications list, the identity chip), and the floor under `useDisplayNames`: it names a person
+ * the caller shares ANY project with, which is no wider than what `list_projects` already shows them.
+ * A later row never overwrites an earlier one's name; they are the same account's label.
+ */
+export function useWorkspaceNames(): Record<string, string> {
+  const { projects } = useProject();
+  return useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const p of projects) {
+      for (const [id, name] of Object.entries(p.memberDisplay ?? {})) if (name && !(id in names)) names[id] = name;
+    }
+    return names;
+  }, [projects]);
 }
 
 export function useDisplayNames(projectId: string | undefined): Record<string, string> {
@@ -97,13 +123,16 @@ export function useDisplayNames(projectId: string | undefined): Record<string, s
     retry: false,
   });
 
+  const workspace = useWorkspaceNames();
+
   return useMemo(() => {
-    const names: Record<string, string> = { ...(projectQ.data?.memberDisplay ?? {}) };
+    // The project's own read wins over the workspace floor: it is per read, so it is the freshest.
+    const names: Record<string, string> = { ...workspace, ...(projectQ.data?.memberDisplay ?? {}) };
     for (const i of integrationsQ.data?.integrations ?? []) {
       // Keyed by the BARE integration id: `eventActor` strips the `ingest:` prefix before looking up,
       // so the same map serves both id shapes without the caller knowing which is which.
       if (i.name) names[i.id] = i.name;
     }
     return names;
-  }, [projectQ.data, integrationsQ.data]);
+  }, [workspace, projectQ.data, integrationsQ.data]);
 }
