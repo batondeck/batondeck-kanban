@@ -411,6 +411,9 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
           const members = tasks.filter((t) => t.sprintIds?.includes(s.id));
           // A cancelled member is DONE but not delivered, so it is not done here, as get_sprint counts it (P-208).
           const done = members.filter((t) => t.status === 'DONE' && !isCancelled(t)).length;
+          // Close's warning is the server's: it lists members whose status is not DONE, and a cancelled
+          // member is DONE, so this counts by status alone, not by `done` (P-208).
+          const notDone = members.filter((t) => t.status !== 'DONE').length;
           // Approval IS the proposal task reaching DONE (spec §5.4) and not cancelled (P-208) — there is no
           // separate flag, so the rail derives it exactly as the core's activation gate does. `find` over the
           // loaded board is enough because the proposal task lives on the sprint's own board by construction.
@@ -432,7 +435,7 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
               >
                 <Marquee className="title" style={{ flex: 1 }}>{s.name}</Marquee>
                 <span className="pill" style={{ color: c, background: `color-mix(in srgb, ${c} 18%, transparent)` }}>{s.status}</span>
-                <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={`${done} of ${members.length} loaded members DONE`}>
+                <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={`${done} of ${members.length} loaded members delivered (a cancelled one counts in the total only)`}>
                   <Icon name="checkSquare" size={11} /> {done}/{members.length}
                 </span>
               </div>
@@ -496,9 +499,9 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
                     style={{ fontSize: 11, padding: '1px 9px' }}
                     disabled={busy}
                     title={
-                      done === members.length
+                      notDone === 0
                         ? 'Close the sprint — every loaded member is DONE'
-                        : `Close the sprint. ${members.length - done} loaded member(s) are not terminal — the server returns a warning, it does not refuse.`
+                        : `Close the sprint. ${notDone} loaded member(s) are not terminal — the server returns a warning, it does not refuse.`
                     }
                     onClick={() => onLifecycle(s, 'CLOSED')}
                   >
