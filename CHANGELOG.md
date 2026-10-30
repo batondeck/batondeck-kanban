@@ -10,6 +10,10 @@ Notable changes to batondeck-kanban. The format follows
   `list_agent_sessions` keep an agent after it disconnects and across a serve restart, with its
   connection and request counts; its next connection updates the same row. A row goes when
   `disconnect_agent` deletes it or 30 minutes after its last request (plan Clarification 7).
+- **An open agent connection keeps its row past 30 idle minutes (P-279).** The retention sweep no
+  longer deletes the agent session of a client still connected to this serve process (one that only
+  pings, or waits on a long task); its row goes 30 minutes after its last request once it
+  disconnects.
 
 ## [0.1.0]
 

@@ -8,8 +8,9 @@ import (
 
 // Sessions is the agent and wake session bookkeeping. The MCP transport writes the caller's agent
 // session at initialize and touches it on every tool call; the row outlives the MCP session and is
-// deleted by disconnect_agent or by the retention sweep 30 min after its last request (plan
-// Clarification 7, internal/retention AgentSessionIdle); the device session directory
+// deleted by disconnect_agent or by the retention sweep 30 min after its last request once no MCP
+// session of the agent is live in this process (plan Clarification 7, internal/retention
+// AgentSessionIdle, P-279); the device session directory
 // (internal/wake, R0.25) persists its entries here. None of these writes an event, an audit row or
 // a doorbell.
 type Sessions interface {

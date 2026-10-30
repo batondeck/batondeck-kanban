@@ -121,6 +121,15 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 	sc.SetDeviceSessions(dir)
 	srv := mcp.New(opts)
 	sc.SetAgentSessionEnder(srv)
+	// The sweep keeps the row of every agent with a live MCP session here, however idle (P-279).
+	sweep.Live = func() []store.AgentSessionKey {
+		live := srv.LiveAgentSessions()
+		keys := make([]store.AgentSessionKey, len(live))
+		for i, k := range live {
+			keys[i] = store.AgentSessionKey{IdentityID: k[0], AgentID: k[1]}
+		}
+		return keys
+	}
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
 	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger, OAuth: as != nil}

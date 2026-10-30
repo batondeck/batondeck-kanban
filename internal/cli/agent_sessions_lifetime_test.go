@@ -96,7 +96,8 @@ func agentRows(t *testing.T, st store.Store, identity string) []store.AgentSessi
 // P-264, P-324 (tested on both engines): plan Clarification 7 GCs an agent_sessions row 30 min after
 // its last request. The end of its MCP session (DELETE) and a serve stop leave it, a second
 // initialise after the restart updates the same row (one more connection, the counts kept), and the
-// retention sweep deletes it once it is idle past 30 min with no live session.
+// retention sweep deletes it once it is idle past 30 min with no live session, and not while one is
+// open (P-279).
 func TestAgentSessionOutlivesItsMCPSessionAndARestart(t *testing.T) {
 	for _, e := range []struct {
 		name string
@@ -132,6 +133,11 @@ func TestAgentSessionOutlivesItsMCPSessionAndARestart(t *testing.T) {
 			rows := agentRows(t, st, user.ID)
 			if len(rows) != 1 || rows[0].SessionCount != 2 || rows[0].RequestCount != 2 || rows[0].ToolCounts["list_projects"] != 2 {
 				t.Fatalf("after the restart and a second initialise: %+v, want the same row with 2 connections and 2 list_projects", rows)
+			}
+			// P-279: a sweep 31 min after the last request keeps the row while its MCP session is open.
+			second.sweepAt(31 * time.Minute)
+			if rows := agentRows(t, st, user.ID); len(rows) != 1 {
+				t.Fatalf("a sweep 31 min after the last request with the session open: %+v, want the row kept", rows)
 			}
 			_ = cs.Close()
 			second.gone(t)

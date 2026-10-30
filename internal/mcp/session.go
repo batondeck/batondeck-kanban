@@ -113,7 +113,7 @@ func (t *sessionTable) leave(key string) {
 }
 
 // LiveAgentSessions is the (identity, agent) pair of every agent session holding at least one live
-// MCP session in this process, unordered.
+// MCP session in this process, unordered: the rows the retention sweep keeps however idle (P-279).
 func (s *Server) LiveAgentSessions() [][2]string {
 	s.sessions.mu.Lock()
 	defer s.sessions.mu.Unlock()
@@ -139,8 +139,8 @@ func sessionKind(c domain.Caller) service.SessionKind {
 // session over the bound is refused there, and go-sdk drops a session whose initialize failed) and
 // touched by every tool call. The end of a session (idle collection, DELETE, Close, a restart)
 // leaves the row: plan Clarification 7 GCs it 30 min after its last request, which the retention
-// sweep does (AgentSessionIdle); disconnect_agent deletes it at once. A bookkeeping failure is
-// logged and never fails the request.
+// sweep does (AgentSessionIdle), skipping an agent LiveAgentSessions still names (P-279);
+// disconnect_agent deletes it at once. A bookkeeping failure is logged and never fails the request.
 //
 // The row is keyed by (identity, agent), not by MCP session: the agent is Caller.Agent (the token's
 // label, the OAuth client's name, else the session's clientInfo.name), so two clients on one token
