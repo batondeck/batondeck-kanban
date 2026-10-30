@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`cancel_task` refuses a task already DONE** with `INVALID_TRANSITION`, so a delivered task is
+  not relabelled out of every done figure, and **refuses a racing parent** with `CONFLICT_LOCKED`
+  (reason `race`) as `move_task` does, until `pick_run` or `cancel_runs` resolves the race. Neither
+  refusal writes anything (ADR-0001, P-150).
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

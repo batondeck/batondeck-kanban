@@ -41,6 +41,6 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Hand your leased task to another agent: the lease is dropped, the task returns to TODO assigned to toAgent, and memoryNote is kept as the task's handoff memory.",
 		l.Handoff)
 	mcp.Tool(s, "lifecycle", "cancel_task",
-		"Cancel a task: DONE with the label cancelled and the reason as a note, unblocking its dependents. Needs the master role or the task's live lease; version-checked.",
+		"Cancel a task: DONE with the label cancelled and the reason as a note, unblocking its dependents. Master or the live lease; version-checked. Refused on a DONE or racing task.",
 		l.Cancel)
 }

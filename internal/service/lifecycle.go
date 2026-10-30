@@ -1302,8 +1302,10 @@ func (t *txn) handoffTarget(to string) (*string, error) {
 // context item, from any status (a server action, like auto-unblock, not a move through the fixed
 // table). The master role, or the holder of the task's live lease; a master is CONFLICT_LOCKED by
 // another identity's live lease. Version-checked by mutate (STALE before any other judgement). As a
-// landing on DONE it runs the poison-aware unblock under the project lock.
-// TODO(spec): ADR-0001 says nothing of cancelling a task already DONE; it is labelled like any other.
+// landing on DONE it runs the poison-aware unblock under the project lock. A task already DONE is
+// INVALID_TRANSITION (it was delivered: relabelling it would take it out of every done figure), and
+// a racing parent is CONFLICT_LOCKED as move_task refuses it, so no race is left open under a DONE
+// parent (ADR-0001 Decision 1, P-150). Both refusals write nothing.
 func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelTaskReq) (CancelTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "cancel_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -1326,6 +1328,13 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 		if !owner && !domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 			return CancelTaskResp{}, forbidden("cancel_task needs the master role or the task's live lease",
 				map[string]any{"tool": "cancel_task", "role": a.Role, "requiredRole": domain.TierMinRole(domain.TierMaster)})
+		}
+		if cur.Status == domain.Done {
+			return CancelTaskResp{}, domain.InvalidTransition(cur.Status, "cancelled", nil, nil)
+		}
+		if cur.Racing {
+			return CancelTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
+				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
 		if !owner && liveLease(cur, now) {
 			return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
