@@ -135,6 +135,11 @@ func (s *Service) ResolveCaller(ctx context.Context, bearer string) (domain.Call
 	}
 	c := callerFor(row.IdentityID, e)
 	c.Via, c.Agent = domain.ViaAPIToken, domain.TokenAgent(row.Label) // audit B1
+	if strings.HasPrefix(c.Agent, "id:") {
+		// A label minted before Create refused "id:" (P-352) names no agent, as the default label
+		// does: "id:<identity>" is the id AgentID derives, never a name a token carries.
+		c.Agent = ""
+	}
 	c.Labelled = c.Agent != ""
 	return c, nil
 }

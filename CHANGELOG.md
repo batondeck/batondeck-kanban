@@ -6,6 +6,16 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A token label of the form `id:<x>` is refused at mint (P-352). `token create` and
+  `POST /api/me/cli-tokens` answer `VALIDATION` for any label whose agent (trimmed, control
+  characters dropped) starts with `id:`, the caller's own id included. That form is the agent id the
+  server derives for a caller that names no agent, so such a token presented its caller's MCP agent,
+  claims and events as that identity's agentless self. A token minted with such a label before this
+  release now names no agent, as the default label `cli` does. `ID:x` and other labels mint as
+  before, under the first-minter rule.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under
