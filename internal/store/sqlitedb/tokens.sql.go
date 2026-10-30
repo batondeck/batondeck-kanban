@@ -10,6 +10,36 @@ import (
 	"database/sql"
 )
 
+const deleteLapsedTokens = `-- name: DeleteLapsedTokens :execrows
+DELETE FROM tokens WHERE id IN (
+  SELECT r.id FROM (
+    SELECT t.id, t.created_at, t.revoked_at, t.expires_at,
+      ROW_NUMBER() OVER (PARTITION BY t.identity_id, t.label ORDER BY t.created_at DESC, t.id DESC) AS newest
+    FROM tokens t) r
+  WHERE r.newest > 1
+    AND (r.revoked_at < CAST(?1 AS INTEGER) OR r.expires_at < CAST(?1 AS INTEGER))
+  ORDER BY r.created_at, r.id LIMIT ?2)
+`
+
+type DeleteLapsedTokensParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: tokens revoked or expired before the cutoff, oldest first, a page at a time,
+// except the newest row (created_at, then id) of each (identity_id, label). The table is also the
+// label-ownership record, which reads every row of any status, so each label an identity carried
+// keeps one row. A row's rank within its (identity_id, label), newest first, is read in one pass:
+// there is no (identity_id, label) index, so a correlated "a newer row exists" scanned the table
+// once per row (review Advisory 1).
+func (q *Queries) DeleteLapsedTokens(ctx context.Context, arg DeleteLapsedTokensParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteLapsedTokens, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getToken = `-- name: GetToken :one
 SELECT id, identity_id, subject, secret_hash, label, permissions, created_at, expires_at, last_used_at, revoked_at
 FROM tokens WHERE id = ?

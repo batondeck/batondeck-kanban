@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -149,6 +150,45 @@ func TestALabelBelongsToOneIdentity(t *testing.T) {
 	}
 	if _, err := mint(alice, "agent-a"); err != nil {
 		t.Fatalf("alice mints her lapsed label back: %v", err)
+	}
+}
+
+// P-44: the retention sweep deletes lapsed token rows, and label ownership survives it. Alice's two
+// scout tokens lapse far past LapsedGrace; the sweep takes the older row and keeps the newest, so
+// bob's mint of scout is still VALIDATION and alice still mints it back.
+func TestALapsedLabelStaysItsOwnersAfterTheSweep(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	alice, bob := f.addUser(t, "alice", "pw"), f.addUser(t, "bob", "pw")
+	var ids []string
+	for range 2 {
+		_, info, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "scout", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, info.ID)
+		f.clk.add(time.Millisecond)
+	}
+	if err := f.st.RevokeToken(ctx, ids[1], f.clk.now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.add(MaxTokenTTL + retention.LapsedGrace + time.Hour) // both lapsed more than the grace ago
+	swept := (&retention.Sweeper{Store: f.st, Now: f.clk.now, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}).Sweep(ctx)
+	if swept.Tokens != 1 {
+		t.Fatalf("swept %d tokens, want 1 (the older scout row)", swept.Tokens)
+	}
+	if _, err := f.st.GetToken(ctx, ids[0]); err == nil {
+		t.Fatal("the older lapsed scout row outlived the sweep")
+	}
+	if _, err := f.st.GetToken(ctx, ids[1]); err != nil {
+		t.Fatalf("the newest scout row: %v, want it kept", err)
+	}
+	_, _, err := f.svc.Tokens.Create(ctx, bob.ID, bob.Email, "scout", 0)
+	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["label"] != "scout" {
+		t.Fatalf("bob mints alice's swept, lapsed scout: %v, want VALIDATION on label scout", err)
+	}
+	if _, _, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "scout", 0); err != nil {
+		t.Fatalf("alice mints her lapsed label back after the sweep: %v", err)
 	}
 }
 

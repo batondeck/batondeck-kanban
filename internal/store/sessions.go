@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
+
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
 	"github.com/batondeck/batondeck-kanban/internal/store/sqlitedb"
 )
@@ -49,6 +51,17 @@ func (s *SQLite) DeleteUserSessions(ctx context.Context, userID string) (int64, 
 	return n, nil
 }
 
+func (s *SQLite) DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authWrite().DeleteExpiredSessions(ctx, sqlitedb.DeleteExpiredSessionsParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired sessions", err)
+	}
+	return n, nil
+}
+
 // --- Postgres ---
 
 func (s *Postgres) CreateSession(ctx context.Context, sess Session) error {
@@ -77,6 +90,17 @@ func (s *Postgres) DeleteUserSessions(ctx context.Context, userID string) (int64
 	n, err := s.authQ().DeleteUserSessions(ctx, userID)
 	if err != nil {
 		return 0, authErr("delete user sessions", err)
+	}
+	return n, nil
+}
+
+func (s *Postgres) DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authQ().DeleteExpiredSessions(ctx, pgdb.DeleteExpiredSessionsParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete expired sessions", err)
 	}
 	return n, nil
 }

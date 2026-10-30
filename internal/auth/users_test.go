@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
@@ -93,6 +94,60 @@ func TestRefusalDisabledUser(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+}
+
+// Enable is the way back from Disable (P-46): the password works again, and a token or session
+// the user held before resolves again once the account cache entry expires.
+func TestEnableUndoesDisable(t *testing.T) {
+	f := newFixture(t)
+	f.svc.AccountCacheTTL = 50 * time.Millisecond
+	ctx := context.Background()
+	alice := f.addUser(t, "alice", "pw")
+	tok, _, err := f.svc.Tokens.Create(ctx, alice.ID, alice.Email, "a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _, err := f.svc.Login(ctx, "192.0.2.1", "alice", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Accounts.Disable(ctx, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.add(50 * time.Millisecond)
+	_, err = f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw")
+	wantCode(t, err, domain.CodeUnauthenticated)
+	_, err = f.svc.ResolveCaller(ctx, tok)
+	wantCode(t, err, domain.CodeUnauthenticated)
+	_, _, err = f.svc.ResolveSession(ctx, sess)
+	wantCode(t, err, domain.CodeUnauthenticated)
+
+	u, was, err := f.svc.Accounts.Enable(ctx, "ALICE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !was || u.ID != alice.ID || u.DisabledAt != 0 {
+		t.Fatalf("Enable: was %v, id %s, disabled_at %d", was, u.ID, u.DisabledAt)
+	}
+	if _, err := f.svc.Accounts.Authenticate(ctx, "192.0.2.1", "alice", "pw"); err != nil {
+		t.Fatalf("the password after Enable: %v", err)
+	}
+	// The cached disabled state answers until its entry expires; then the account is read again.
+	f.clk.add(50 * time.Millisecond)
+	if _, err := f.svc.ResolveCaller(ctx, tok); err != nil {
+		t.Fatalf("the token after Enable and a fresh account read: %v", err)
+	}
+	if _, _, err := f.svc.ResolveSession(ctx, sess); err != nil {
+		t.Fatalf("the session after Enable and a fresh account read: %v", err)
+	}
+
+	// An enabled user: nothing changes, and was is false.
+	u, was, err = f.svc.Accounts.Enable(ctx, "alice")
+	if err != nil || was || u.DisabledAt != 0 {
+		t.Fatalf("enabling an enabled user: was %v, disabled_at %d, err %v", was, u.DisabledAt, err)
+	}
+	_, _, err = f.svc.Accounts.Enable(ctx, "nobody")
+	wantCode(t, err, domain.CodeNotFound)
 }
 
 func TestSetPasswordReplacesTheOldOne(t *testing.T) {

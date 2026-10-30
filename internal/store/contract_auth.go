@@ -64,6 +64,9 @@ type Users interface {
 	// DisableUser sets disabled_at to at unless it is already set (the first time stands);
 	// ErrNotFound when no user has id.
 	DisableUser(ctx context.Context, id string, at int64) error
+	// EnableUser clears disabled_at, the way back from DisableUser; an enabled user stays as it is.
+	// ErrNotFound when no user has id.
+	EnableUser(ctx context.Context, id string) error
 	// SetUserPassword replaces the password hash; ErrNotFound when no user has id.
 	SetUserPassword(ctx context.Context, id, passwordHash string) error
 }
@@ -79,6 +82,9 @@ type Sessions interface {
 	// DeleteUserSessions removes every session of the user (a password change) and returns how many
 	// it removed; a user with none, or no such user, is 0 and no error.
 	DeleteUserSessions(ctx context.Context, userID string) (int64, error)
+	// DeleteExpiredSessions removes at most limit sessions whose ExpiresAt is before before, oldest
+	// expiry first (the retention sweep), and returns how many; a limit <= 0 is VALIDATION.
+	DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error)
 }
 
 // Tokens is the tokens table. Key: ID. Expiry and revocation are judged by the caller.
@@ -93,6 +99,11 @@ type Tokens interface {
 	// RevokeToken sets revoked_at to at unless it is already set (the first time stands);
 	// ErrNotFound when no token has id.
 	RevokeToken(ctx context.Context, id string, at int64) error
+	// DeleteLapsedTokens removes at most limit tokens revoked or expired before before, oldest first
+	// (created_at, then id), and returns how many; a limit <= 0 is VALIDATION. It never removes the
+	// newest row (created_at, then id) of an (IdentityID, Label): the table is also the label-ownership
+	// record, read over rows of every status, so each label an identity carried keeps a row.
+	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
 }
 
 var (

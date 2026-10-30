@@ -9,6 +9,26 @@ import (
 	"context"
 )
 
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions WHERE id_hash IN (
+  SELECT s.id_hash FROM sessions s WHERE s.expires_at < $1::bigint
+  ORDER BY s.expires_at, s.id_hash COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteExpiredSessionsParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: sessions that expired before the cutoff, oldest expiry first, a page at a time.
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, arg DeleteExpiredSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredSessions, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id_hash = $1
 `

@@ -14,6 +14,10 @@ Notable changes to batondeck-kanban. The format follows
   (`/api/login` and the OAuth sign-in page) and `/register`'s limit count each client, not every
   user as the proxy. Unset, the header is never read and the peer counts, as before; a malformed
   entry stops `serve` at start. The README's step 6 and `compose.yaml` say how to set it.
+- **`batondeck-kanban user enable LOGIN`**, the way back from `user disable`: it clears the
+  user's disabled mark, and their unexpired browser sessions and tokens resolve again within the
+  account cache's 60 s. Enabling a user who is not disabled says so and changes nothing; an unknown
+  login exits 1 (P-46).
 
 ### Changed
 
@@ -50,6 +54,40 @@ Notable changes to batondeck-kanban. The format follows
   the checkpoint sought among its newest 200 context items, and null when none of the three is
   found. Nothing is stored for it and no migration runs.
   `claim_next` costs two more read statements for it, after the claim commits.
+- **The retention sweep deletes lapsed browser sessions and API tokens.** A session expired, and
+  an API token expired or revoked, more than 7 days ago (`retention.LapsedGrace`) is deleted, a
+  page at a time like the other steps; before, every sign-in and every token rotation added a row
+  for good. Each identity's newest token row of each label stays, because the tokens table is also
+  the record of who owns a label: a lapsed label stays its first minter's. For the week of grace
+  `token list` still shows a lapsed token with its status. After the week `token list` shows only
+  each label's newest lapsed row, and `token revoke ID` of a swept row answers
+  `NOT_FOUND: token not found` (exit 1), where it had printed the time the token was revoked (P-44).
+- **The retention sweep deletes lapsed OAuth codes and tokens.** An authorization code, access
+  token or refresh token expired more than 7 days ago (`retention.LapsedGrace`) is deleted, used or
+  not and whatever its grant's state, a page at a time like the other steps; before, every
+  connector authorization and every hourly refresh added rows for good. Inside the week of grace a
+  rotated refresh token or a spent code presented again still finds its row and revokes its grant.
+  After the week such a replay is refused as an unknown grant (`invalid_grant`) and no longer
+  revokes the grant: in 0.1.0 reuse detection had no end. The client and the grant itself stay
+  (P-125).
+- **The retention sweep deletes the alert states of DONE or deleted on-call tickets.** A
+  fingerprint's correlation row, stamped with the delivery window (`retention.deliveries_days`, 30
+  days by default), is deleted once it has expired and its ticket is DONE or deleted; before, an
+  integration that sees a new fingerprint per incident added a row per incident for good. An open
+  ticket's row stays whatever its expiry, so a late firing still appends to that ticket. A DONE
+  ticket reopened after its expired row was swept is no longer correlated: its alert's next firing
+  files a new ticket, and a resolved event is recorded without annotating or closing the reopened
+  one (P-226).
+- **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and
+  `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
+  usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr
+  (P-311). A usage error still exits 2 on stderr.
+- **Two tests no longer fail at random under load.** The idempotency-window conformance test
+  bounded the replay's expiry by sleeping past the first call's 100 ms window, then renewed the key
+  inside a second 100 ms window that a slow machine could outrun; the renewed key now has an hour.
+  The Postgres bus test that fills an earlier hole took A before D, an order the bus does not
+  promise; it now takes both in either order and still judges C's hole (P-157, which delivers
+  P-94).
 
 ## [0.1.0]
 

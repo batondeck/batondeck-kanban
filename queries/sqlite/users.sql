@@ -20,5 +20,9 @@ FROM users ORDER BY created_at, id;
 -- name: DisableUser :execrows
 UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL;
 
+-- name: EnableUser :execrows
+-- Rows matched, not rows changed: an enabled user counts too, so 0 means no such user.
+UPDATE users SET disabled_at = NULL WHERE id = ?;
+
 -- name: SetUserPassword :execrows
 UPDATE users SET password_hash = ? WHERE id = ?;

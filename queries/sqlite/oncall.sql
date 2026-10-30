@@ -77,3 +77,13 @@ DELETE FROM deliveries WHERE (project_id, integration_id, id) IN (
 DELETE FROM delivery_raw_bodies WHERE (project_id, integration_id, delivery_id) IN (
   SELECT r.project_id, r.integration_id, r.delivery_id FROM delivery_raw_bodies r WHERE r.expires_at <= CAST(sqlc.arg(now) AS INTEGER)
   ORDER BY r.expires_at, r.delivery_id LIMIT sqlc.arg(page_limit));
+
+-- The bounded sweep of alert states: at most page_limit rows expired at or before now whose
+-- ticket is gone or DONE, oldest expiry first. A row of an open ticket stays whatever its expiry,
+-- since the next firing appends to that ticket through it; a row with no expiry stays.
+-- name: DeleteExpiredAlertStates :execrows
+DELETE FROM alert_states WHERE (project_id, integration_id, fingerprint_hash) IN (
+  SELECT a.project_id, a.integration_id, a.fingerprint_hash FROM alert_states a
+  WHERE a.expires_at IS NOT NULL AND a.expires_at <= CAST(sqlc.arg(now) AS INTEGER)
+    AND NOT EXISTS (SELECT 1 FROM tasks k WHERE k.project_id = a.project_id AND k.id = a.task_id AND k.status <> 'DONE')
+  ORDER BY a.expires_at, a.fingerprint_hash LIMIT sqlc.arg(page_limit));
