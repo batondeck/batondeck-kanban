@@ -10,6 +10,32 @@ import (
 	"database/sql"
 )
 
+const deleteLapsedTokens = `-- name: DeleteLapsedTokens :execrows
+DELETE FROM tokens WHERE id IN (
+  SELECT t.id FROM tokens t
+  WHERE (t.revoked_at < $1::bigint OR t.expires_at < $1::bigint)
+    AND EXISTS (SELECT 1 FROM tokens n WHERE n.identity_id = t.identity_id AND n.label = t.label
+      AND (n.created_at > t.created_at OR (n.created_at = t.created_at AND n.id COLLATE "C" > t.id)))
+  ORDER BY t.created_at, t.id COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteLapsedTokensParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: tokens revoked or expired before the cutoff, oldest first, a page at a time,
+// except the newest row (created_at, then id) of each (identity_id, label). The table is also the
+// label-ownership record, which reads every row of any status, so each label an identity carried
+// keeps one row. Ids compare COLLATE "C", as bytes, as SQLite's BINARY does.
+func (q *Queries) DeleteLapsedTokens(ctx context.Context, arg DeleteLapsedTokensParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLapsedTokens, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getToken = `-- name: GetToken :one
 SELECT id, identity_id, subject, secret_hash, label, permissions, created_at, expires_at, last_used_at, revoked_at
 FROM tokens WHERE id = $1

@@ -152,6 +152,67 @@ func TestASweepRemovesExpiredDeliveriesAndRawBodies(t *testing.T) {
 	}
 }
 
+// P-44: a sweep deletes the browser session expired more than LapsedGrace ago and the API token
+// expired more than LapsedGrace ago whose label has a newer row, and keeps a session and a token
+// lapsed less than LapsedGrace ago, a live session and token, and the newest row of a lapsed label
+// (label ownership reads it), on memstore and both engines; a second sweep deletes nothing.
+func TestASweepRemovesLapsedSessionsAndTokens(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+			at := func(ago time.Duration) int64 { return now.Add(-ago).UnixMilli() }
+			if err := s.CreateUser(ctx, store.User{ID: "U-1", Email: "alice", DisplayName: "alice", PasswordHash: "h", CreatedAt: at(60 * day)}); err != nil {
+				t.Fatal(err)
+			}
+			for hash, expires := range map[string]time.Duration{"old": 8 * day, "recent": 6 * day, "live": -day} {
+				if err := s.CreateSession(ctx, store.Session{IDHash: hash, UserID: "U-1", CSRFToken: "c", CreatedAt: at(9 * day), LastSeenAt: at(9 * day), ExpiresAt: at(expires)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, tk := range []struct {
+				id, label        string
+				created, expires time.Duration
+			}{
+				{"T-old", "scout", 40 * day, 8 * day},    // lapsed past the grace, a newer scout row: deleted
+				{"T-recent", "scout", 30 * day, 6 * day}, // lapsed inside the grace: kept
+				{"T-live", "scout", 20 * day, -10 * day}, // live: kept
+				{"T-last", "probe", 40 * day, 8 * day},   // lapsed past the grace, probe's newest row: kept
+			} {
+				if err := s.CreateToken(ctx, store.Token{ID: tk.id, IdentityID: "U-1", Subject: "alice", SecretHash: "s-" + tk.id, Label: tk.label,
+					Permissions: "[]", CreatedAt: at(tk.created), ExpiresAt: at(tk.expires)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+				Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			if got := sw.Sweep(ctx); got != (Swept{Sessions: 1, Tokens: 1}) {
+				t.Fatalf("swept %+v, want one session and one token", got)
+			}
+			if _, err := s.GetSession(ctx, "old"); err == nil {
+				t.Fatal("the session expired 8 days ago outlived the grace")
+			}
+			for _, h := range []string{"recent", "live"} {
+				if _, err := s.GetSession(ctx, h); err != nil {
+					t.Fatalf("session %s: %v, want it kept", h, err)
+				}
+			}
+			if _, err := s.GetToken(ctx, "T-old"); err == nil {
+				t.Fatal("the token expired 8 days ago with a newer row of its label outlived the grace")
+			}
+			for _, id := range []string{"T-recent", "T-live", "T-last"} {
+				if _, err := s.GetToken(ctx, id); err != nil {
+					t.Fatalf("token %s: %v, want it kept", id, err)
+				}
+			}
+			if again := sw.Sweep(ctx); again != (Swept{}) {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+		})
+	}
+}
+
 // fake deletes whatever it is asked to, or fails one step.
 type fake struct {
 	calls map[string]int
@@ -182,6 +243,14 @@ func (f *fake) DeleteIdleAgentSessions(_ context.Context, _ int64, limit int) (i
 	return f.del("agent sessions", limit)
 }
 
+func (f *fake) DeleteExpiredSessions(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("sessions", limit)
+}
+
+func (f *fake) DeleteLapsedTokens(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("tokens", limit)
+}
+
 func (f *fake) DeleteExpiredDeliveries(_ context.Context, _ int64, limit int) (int64, error) {
 	return f.del("deliveries", limit)
 }
@@ -200,7 +269,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {

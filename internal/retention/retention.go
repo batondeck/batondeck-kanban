@@ -3,8 +3,10 @@
 // outlived its window — memory past its own expiry, change-log rows past ChangeLog, tool_calls rows
 // past ToolCalls, the agent sessions idle past AgentSessionIdle (ADR-0004), the on-call deliveries
 // and the raw webhook bodies past the expiry stamped on each at write time (retention.deliveries_days
-// and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), and the blobs no attachment or
-// memory entry references any more. Task events are kept. Each table's delete is bounded per
+// and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), the browser sessions expired and
+// the API tokens expired or revoked more than LapsedGrace ago (a token's newest row per label stays,
+// as the label-ownership record), and the blobs no attachment or memory entry references any more.
+// Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.
 package retention
@@ -30,6 +32,10 @@ const (
 	// AgentSessionIdle is how long an agent session row outlives its last request (ADR-0004: the
 	// GC that replaced prune_agent_sessions).
 	AgentSessionIdle = 30 * time.Minute
+	// LapsedGrace is how long a lapsed credential's row outlives its expiry or revocation before a
+	// sweep deletes it: a browser session past its expiry, an API token past its expiry or
+	// revocation. For that week `token list` still shows a lapsed token with its status.
+	LapsedGrace = 7 * 24 * time.Hour
 )
 
 // Store is the slice of the store a sweep deletes through.
@@ -38,6 +44,8 @@ type Store interface {
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
@@ -59,7 +67,7 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, AgentSessions, Deliveries, RawBodies, Blobs int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, Deliveries, RawBodies, Blobs int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -74,7 +82,8 @@ type Sweeper struct {
 }
 
 // Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
-// then the expired deliveries
+// then the browser sessions and API tokens lapsed more than LapsedGrace ago, then the expired
+// deliveries
 // (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
 // unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
@@ -111,6 +120,9 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.AgentSessions = step("agent sessions", func(limit int) (int64, error) {
 		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit)
 	})
+	lapsed := ms - LapsedGrace.Milliseconds()
+	out.Sessions = step("sessions", func(limit int) (int64, error) { return s.Store.DeleteExpiredSessions(ctx, lapsed, limit) })
+	out.Tokens = step("tokens", func(limit int) (int64, error) { return s.Store.DeleteLapsedTokens(ctx, lapsed, limit) })
 	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
 	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })
 	if s.CollectBlobs != nil {

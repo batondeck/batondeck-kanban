@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
+
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
 	"github.com/batondeck/batondeck-kanban/internal/store/sqlitedb"
 )
@@ -76,6 +78,17 @@ func (s *SQLite) RevokeToken(ctx context.Context, id string, at int64) error {
 	return nil
 }
 
+func (s *SQLite) DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authWrite().DeleteLapsedTokens(ctx, sqlitedb.DeleteLapsedTokensParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete lapsed tokens", err)
+	}
+	return n, nil
+}
+
 // --- Postgres ---
 
 func (s *Postgres) CreateToken(ctx context.Context, t Token) error {
@@ -121,4 +134,15 @@ func (s *Postgres) RevokeToken(ctx context.Context, id string, at int64) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Postgres) DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := s.authQ().DeleteLapsedTokens(ctx, pgdb.DeleteLapsedTokensParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, authErr("delete lapsed tokens", err)
+	}
+	return n, nil
 }
