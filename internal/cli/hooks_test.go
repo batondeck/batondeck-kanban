@@ -406,8 +406,9 @@ func hookEngines() []struct {
 // times over, since an unversioned ingest is retried on STALE; on SQLite an injected one) and
 // INTERNAL (a plain store error). Alertmanager and PagerDuty retry a 5xx and drop a 4xx other than
 // 429, so a 400 here dropped the alert. The sender's retry, once the fault clears, lands the event
-// once: the landed ones replayed, one ticket, its occurrences counted once. RATE_LIMITED stays 429,
-// a non-retryable refusal (VALIDATION, CONFLICT_LOCKED) stays 400 VALIDATION.
+// once: the landed ones replayed, one ticket, its occurrences counted once. RATE_LIMITED is 503 too,
+// with its own code and Retry-After (P-353: Alertmanager drops a 429 as well); a non-retryable
+// refusal (VALIDATION, CONFLICT_LOCKED) stays 400 VALIDATION.
 func TestHookAnswersARetryableIngestFailureWith503(t *testing.T) {
 	for _, eng := range hookEngines() {
 		for _, fx := range hookFixtures() {
@@ -491,7 +492,7 @@ func TestHookAnswersARetryableIngestFailureWith503(t *testing.T) {
 				faults.set("", "")
 				occurrences(3)
 
-				// Over the rate budget stays 429.
+				// Over the rate budget is 503 RATE_LIMITED with the budget's Retry-After (P-353).
 				slow, err := h.a.core.Oncall().CreateIntegration(ctx, h.admin, service.CreateIntegrationReq{ProjectID: h.project, BoardID: h.board, Name: "slow",
 					Source: service.IntegrationSource(fx.source), Auth: fx.auth, Routing: service.IntegrationRouting{Mode: "broadcast"}, Limits: service.IntegrationLimitsIn{RatePerMin: 1}})
 				if err != nil {
@@ -500,11 +501,13 @@ func TestHookAnswersARetryableIngestFailureWith503(t *testing.T) {
 				// Its budget is one delivery: a grouped fixture's second event is over it already.
 				body := fx.variant(t, 20, true)
 				if got := h.post(t, slow.Integration.ID, body, fx.sign(body)); fx.before == 0 && got.status != http.StatusAccepted ||
-					fx.before > 0 && (got.status != http.StatusTooManyRequests || len(got.body.Results) != fx.before || got.header.Get("Retry-After") != "60") {
+					fx.before > 0 && (got.status != http.StatusServiceUnavailable || got.body.Code != "RATE_LIMITED" || !got.body.Retryable ||
+						len(got.body.Results) != fx.before || got.header.Get("Retry-After") != "60") {
 					t.Fatalf("the slow integration's first delivery: %d Retry-After %q %s", got.status, got.header.Get("Retry-After"), got.raw)
 				}
 				body = fx.variant(t, 21, true)
-				if got := h.post(t, slow.Integration.ID, body, fx.sign(body)); got.status != http.StatusTooManyRequests || got.body.Code != "RATE_LIMITED" || got.header.Get("Retry-After") != "60" {
+				if got := h.post(t, slow.Integration.ID, body, fx.sign(body)); got.status != http.StatusServiceUnavailable || got.body.Code != "RATE_LIMITED" ||
+					!got.body.Retryable || got.header.Get("Retry-After") != "60" {
 					t.Fatalf("over the budget: %d Retry-After %q %s", got.status, got.header.Get("Retry-After"), got.raw)
 				}
 			})
@@ -512,10 +515,12 @@ func TestHookAnswersARetryableIngestFailureWith503(t *testing.T) {
 	}
 }
 
-// P-233: every 429 says when to retry. The integration's budget refills one token in
-// ceil(60/ratePerMin) seconds (40 a minute: 2; 1 a minute: 60); the pre-check on the presented id
+// P-233: every rate-limited answer says when to retry. The integration's budget refills one token
+// in ceil(60/ratePerMin) seconds (40 a minute: 2; 1 a minute: 60); the pre-check on the presented id
 // refills 120 a second (1). An accepted delivery and an unauthorized one carry no Retry-After.
-func TestHook429CarriesRetryAfter(t *testing.T) {
+// P-353: the answer is 503 RATE_LIMITED retryable, not 429, which Alertmanager drops (this test was
+// TestHook429CarriesRetryAfter).
+func TestHookRateLimitedIs503WithRetryAfter(t *testing.T) {
 	for _, eng := range hookEngines() {
 		t.Run(eng.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -547,19 +552,22 @@ func TestHook429CarriesRetryAfter(t *testing.T) {
 						t.Fatalf("rate %d, delivery %d: %d Retry-After %q", c.rate, i, got.status, got.header.Get("Retry-After"))
 					}
 				}
-				if got := send(99); got.status != http.StatusTooManyRequests || got.header.Get("Retry-After") != c.want {
-					t.Fatalf("rate %d over the budget: %d Retry-After %q, want %s", c.rate, got.status, got.header.Get("Retry-After"), c.want)
+				limited := func(got hookAnswer) bool {
+					return got.status == http.StatusServiceUnavailable && got.body.Code == "RATE_LIMITED" && got.body.Retryable && got.header.Get("Retry-After") == c.want
 				}
-				if got := wrong(); got.status != http.StatusTooManyRequests || got.header.Get("Retry-After") != c.want {
-					t.Fatalf("an unauthorized delivery over the budget: %d Retry-After %q, want 429 %s", got.status, got.header.Get("Retry-After"), c.want)
+				if got := send(99); !limited(got) {
+					t.Fatalf("rate %d over the budget: %d Retry-After %q %s, want 503 RATE_LIMITED %s", c.rate, got.status, got.header.Get("Retry-After"), got.raw, c.want)
+				}
+				if got := wrong(); !limited(got) {
+					t.Fatalf("an unauthorized delivery over the budget: %d Retry-After %q %s, want 503 RATE_LIMITED %s", got.status, got.header.Get("Retry-After"), got.raw, c.want)
 				}
 			}
 			// The pre-check: a flood on one presented id (unknown, so 404 until the burst is spent).
 			for i := range 500 {
 				got := h.post(t, "I-00000000000000000000000000000000", []byte(`{}`), nil)
-				if got.status == http.StatusTooManyRequests {
-					if got.header.Get("Retry-After") != "1" {
-						t.Fatalf("the pre-check's 429: Retry-After %q", got.header.Get("Retry-After"))
+				if got.status == http.StatusServiceUnavailable {
+					if got.header.Get("Retry-After") != "1" || got.body.Code != "RATE_LIMITED" || !got.body.Retryable {
+						t.Fatalf("the pre-check's 503: Retry-After %q %s", got.header.Get("Retry-After"), got.raw)
 					}
 					return
 				}

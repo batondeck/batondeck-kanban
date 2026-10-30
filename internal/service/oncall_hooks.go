@@ -47,7 +47,8 @@ const (
 	HookNotFound HookRefusal = "not_found"
 	// HookTooLarge is a body over the integration's payloadCapKb: nothing is written.
 	HookTooLarge HookRefusal = "too_large"
-	// HookRateLimited is over the integration's rate budget.
+	// HookRateLimited is over the integration's rate budget, or the pre-check's burst: the route
+	// answers it 503 RATE_LIMITED with Retry-After, which Alertmanager and PagerDuty both retry (P-353).
 	HookRateLimited HookRefusal = "rate_limited"
 	// HookUnauthorized is a signature, key or bearer that does not verify: a rejected delivery row.
 	HookUnauthorized HookRefusal = "unauthorized"
@@ -56,7 +57,8 @@ const (
 	HookBadRequest HookRefusal = "bad_request"
 	// HookUnavailable is a verified delivery whose ingest failed retryably (a lost race, STALE, or
 	// a store fault, INTERNAL): nothing of the failed event landed, and the sender is told to retry,
-	// since Alertmanager and PagerDuty retry a 5xx and drop a 4xx other than 429 (P-233).
+	// since Alertmanager and PagerDuty retry a 5xx, while Alertmanager drops every 4xx and PagerDuty
+	// every 4xx other than 429 (P-233).
 	HookUnavailable HookRefusal = "unavailable"
 )
 

@@ -6,6 +6,15 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `POST /hooks/{id}` over its rate budget, or over the pre-check's burst, answers
+  `503 Service Unavailable` with `Retry-After` and `{"code":"RATE_LIMITED","retryable":true,…}`,
+  not 429 (P-353; owner call 2026-10-30, a change to R2.9's "the 11th is 429"). Alertmanager's
+  webhook retries only a 5xx, so a 429 dropped the alert that tripped the limit; PagerDuty retries
+  both. `Retry-After` is unchanged: `ceil(60/ratePerMin)` seconds, 1 for the pre-check. The
+  integration form's hint says so instead of promising a retry of a 429.
+
 ### Fixed
 
 - A path the board does not have answers 404, not the web UI's page with 200 (P-303): the

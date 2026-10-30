@@ -681,7 +681,7 @@ export function IntegrationForm({
                 value={form.ratePerMin}
                 onChange={(ratePerMin) => set({ ratePerMin })}
                 placeholder="60"
-                hint="Over it, deliveries are refused 429 and your source retries."
+                hint="Over it, deliveries are refused 503 RATE_LIMITED with Retry-After; a source that retries a 5xx retries them."
               />
               <TextField
                 id="oc-cap"
