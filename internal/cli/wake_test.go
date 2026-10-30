@@ -81,9 +81,10 @@ type dirServer struct {
 	reg        string
 	keys       *core.Keyring
 	logs       *lockedLog
-	stop       func()
-	alice, bob person // alice is P's admin; bob a master of P
-	carol      person // a member of nothing until a test adds her
+	stop       func()       // halt, then the P-205 check that the dispatcher has returned
+	halt       func() error // stops serve and waits for serveUntil, once; its result is kept
+	alice, bob person       // alice is P's admin; bob a master of P
+	carol      person       // a member of nothing until a test adds her
 	project    string
 	board      string
 	columns    map[domain.Status]string
@@ -230,11 +231,15 @@ func startDirectoryWith(t *testing.T, from *dirServer, o dirOpts) *dirServer {
 	if code, _ := httpDo(t, &http.Client{Timeout: 5 * time.Second}, http.MethodGet, "http://"+s.tcp+"/healthz", "", ""); code != http.StatusOK {
 		t.Fatalf("healthz %d", code)
 	}
-	var once sync.Once
+	var once, halted sync.Once
+	var served error
+	s.halt = func() error {
+		halted.Do(func() { cancel(); served = <-done })
+		return served
+	}
 	s.stop = func() {
 		once.Do(func() {
-			cancel()
-			if err := <-done; err != nil {
+			if err := s.halt(); err != nil {
 				t.Errorf("serveUntil: %v", err)
 			}
 			select { // P-205: no directory write may follow serve's return (the store closes next)
@@ -1066,5 +1071,45 @@ func TestDirectoryDropsAnOAuthEntryAfterRefreshReuse(t *testing.T) {
 	s.waitLog(t, fmt.Sprintf("dropped pid %d (worker, %s): its bearer no longer resolves", c.pid, s.alice.id), 1)
 	if len(s.pids()) != 0 {
 		t.Fatalf("pids %v after the family was revoked", s.pids())
+	}
+}
+
+// P-205 requirement 2 (tested; review B4): serve's wait for the session directory's dispatcher is
+// bounded by the shutdown budget. With the dispatcher held in a recheck (the create_project row's
+// re-read of carol's entry), serveUntil still returns within the budget and says it stopped
+// without it; released, the dispatcher returns.
+func TestServeStopsWithinTheBudgetBehindAHeldDispatcher(t *testing.T) {
+	// Serial: it shrinks the package's shutdownBudget.
+	shrink(t, &shutdownBudget, 300*time.Millisecond)
+	s := startDirectory(t, nil)
+	c := s.client(t, "s-carol", "")
+	s.register(t, s.carol, c, "worker")
+	held, release := holdRecheck(t, s, s.carol.id)
+	if _, err := s.a.core.Projects().Create(context.Background(), s.alice.caller(), service.CreateProjectReq{Name: "Q"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the create_project row's re-read never reached carol's entry")
+	}
+	start := time.Now()
+	stopped := make(chan error, 1)
+	go func() { stopped <- s.halt() }()
+	select {
+	case <-stopped:
+		if took := time.Since(start); took > shutdownBudget+2*time.Second {
+			t.Errorf("serveUntil took %s behind a held dispatcher, budget %s", took, shutdownBudget)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatalf("serveUntil still stopping 5s after the stop, budget %s, behind a held dispatcher", shutdownBudget)
+	}
+	s.waitLog(t, "the session directory's dispatcher was still delivering at the shutdown budget", 1)
+	release()
+	select {
+	case <-s.a.dir.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dispatcher did not return once released")
 	}
 }
