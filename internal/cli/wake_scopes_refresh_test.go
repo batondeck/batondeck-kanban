@@ -249,7 +249,10 @@ func TestDirectoryRescopesAfterTheTapDropsAMembershipChange(t *testing.T) {
 	release()
 	s.waitLog(t, "the dispatcher dropped", 1)
 	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
-	if f := content(t, c.frame(t, s.win.Slow+time.Second)); f.ProjectID != s.project {
+	// The ring comes once the loop has drained the TapBuffer+16 buffered rows, which under -race on a
+	// 2-vCPU CI runner took more than Slow+1 s. The directory's own sweep is the default 60 s, so a
+	// doorbell within 30 s is still the re-read's, not the sweep's.
+	if f := content(t, c.frame(t, 30*time.Second)); f.ProjectID != s.project {
 		t.Fatalf("after the drop: %+v, want a doorbell for P", f)
 	}
 }
