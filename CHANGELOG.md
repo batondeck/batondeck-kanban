@@ -29,6 +29,13 @@ Notable changes to batondeck-kanban. The format follows
   label's token, and a string naming no identity and no token's label are claimed as before, and a
   master or admin claims any task. A browser session names no agent, so its claim of a task
   assigned to the member's own agent label is refused, as `claim_next` is.
+- A lease that recorded an agent is that agent's for every lease-guarded outcome (P-320).
+  `heartbeat_task`, `release_task`, `complete_task`, `block_task`, `fail_task`, `handoff_task` and
+  `orchestrate_subtasks` answer `LEASE_EXPIRED` when the claim named an agent and the caller is not
+  that agent: another agent of the same identity holding the lease id, or that identity with no
+  agent named, as a second `claim_task` already was. A lease that recorded no agent (a browser's
+  claim, or one from before agents were recorded) is acted on by any caller of its identity, as
+  before.
 
 ## [0.1.0]
 

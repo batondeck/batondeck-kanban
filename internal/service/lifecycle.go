@@ -88,14 +88,24 @@ func unsupported(field, why string) error {
 }
 
 // leaseHeld is conductor's assertLeaseHeld: the caller holds this live lease. Any mismatch (no
-// lease, another lease id, another owner, past its expiry) is LEASE_EXPIRED, indistinguishable from a
-// lease that is gone, so a leaseId lifted from a board read drives nothing.
+// lease, another lease id, another owner, another agent, past its expiry) is LEASE_EXPIRED,
+// indistinguishable from a lease that is gone, so a leaseId lifted from a board read drives nothing.
+// A lease is its agent's (P-320, G6): where the claim recorded an agent, the caller must be that
+// agent, compared as heldBy compares them (sameAgentID), so another agent of the same identity, or
+// that identity with no agent named, is refused. A claim that recorded no agent (an agentless claim,
+// or one from before P-257) is the owning identity's on any of its callers. A master gets no pass.
 func leaseHeld(t store.Task, leaseID string, caller domain.Caller, now int64) error {
 	c := t.Claim
-	if c == nil || c.LeaseID != leaseID || c.Owner != caller.Identity || c.ExpiresAt <= now {
+	if c == nil || c.LeaseID != leaseID || c.Owner != caller.Identity || c.ExpiresAt <= now || !leaseAgent(c, caller) {
 		return store.LeaseExpired(t.ID)
 	}
 	return nil
+}
+
+// leaseAgent is leaseHeld's agent test: true when the claim recorded no agent, or recorded the
+// caller's.
+func leaseAgent(c *store.TaskClaim, caller domain.Caller) bool {
+	return c.AgentID == nil || sameAgentID(c.AgentID, callerAgent(caller))
 }
 
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
@@ -594,7 +604,9 @@ func labelRefusedIn(tokens []store.Token, caller domain.Caller, label string, no
 // and never earlier than the expiry already held, so a heartbeat does not cut a longer claim short
 // (conductor's "a heartbeat never SHORTENS a lease"); an explicit leaseSeconds is written as given. The version does not move (conductor:
 // "without bumping the task version"), so mutate loads no task; the change row names the task and
-// its board. Another owner's lease answers LEASE_EXPIRED, as conductor's assertLeaseHeld does.
+// its board. Another owner's lease answers LEASE_EXPIRED, as conductor's assertLeaseHeld does, and
+// so does another agent's (leaseAgent, P-320): store.Heartbeat matches the identity alone, so the
+// task it returns is judged inside the transaction and a refusal rolls the write back.
 func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req HeartbeatTaskReq) (HeartbeatTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "heartbeat_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -623,6 +635,9 @@ func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req Hear
 		}
 		if err != nil {
 			return HeartbeatTaskResp{}, err
+		}
+		if task.Claim == nil || !leaseAgent(task.Claim, caller) {
+			return HeartbeatTaskResp{}, store.LeaseExpired(req.TaskID)
 		}
 		if err := pend.permit(&task); err != nil {
 			return HeartbeatTaskResp{}, err
