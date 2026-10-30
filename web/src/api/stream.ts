@@ -27,6 +27,30 @@ function sseConnect(
   let delay = 1000;
   let stopped = false;
   let reconnected = false;
+  // *** A CLOSED STREAM MAY BE A SIGNED-OUT ONE (P-282). *** Once the session ends the server closes the
+  // stream and the browser's reconnect meets 401 (internal/api/stream.go, P-219), but EventSource hides
+  // the status: CLOSED looks exactly like a 5xx blip, so the backoff below would retry every 30s forever
+  // on a screen that still looks signed in. Ask /api/session, which answers 401 only when the session is
+  // gone: then cancel the reconnect drop() armed and send the app to sign-in through the event a 401
+  // from req() fires (http.ts). Any other answer, or none, leaves that reconnect as it was; it is armed
+  // BEFORE the probe, so a slow probe never delays it.
+  const probeSession = (src: EventSource): void => {
+    let probe: Promise<Response>;
+    try {
+      probe = fetch('/api/session', { credentials: 'include' });
+    } catch {
+      return;
+    }
+    probe.then(
+      (res) => {
+        if (res.status !== 401 || stopped || es !== src) return;
+        stopped = true;
+        clearTimeout(timer);
+        window.dispatchEvent(new Event('batondeck:unauthorized'));
+      },
+      () => {},
+    );
+  };
   const connect = (): void => {
     // *** A STREAM MUST NEVER TAKE DOWN THE TREE THAT OPENED IT. *** `NotificationsNavLink` mounts this
     // app-wide, so an EventSource that is absent (jsdom, an old or locked-down browser) or throws on
@@ -86,6 +110,7 @@ function sseConnect(
       // so a retry that never lands is still rescued. CLOSED is terminal and ours to redo.
       if (src.readyState !== 2) return;
       drop();
+      probeSession(src);
     });
   };
   connect();

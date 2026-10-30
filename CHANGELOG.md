@@ -12,6 +12,12 @@ Notable changes to batondeck-kanban. The format follows
   row the retention sweep has deleted (P-281). The replay read only rows after the cursor, so a tab
   that came back after the sweep got the surviving rows as if nothing were missing and kept a board
   without the changes swept in between; the SPA already refetches on `resync`.
+- The web UI goes to the sign-in form when its session ends while a tab is open (P-282). After a
+  logout in another tab, a `user passwd`, a `user disable` or an expiry, the server closes
+  `/api/stream` and the browser's reconnect meets 401, which EventSource reports only as a closed
+  stream; the tab kept reconnecting, backing off to every 30 s, on a screen that still looked
+  signed in. A closed stream now asks `/api/session`, and a 401 there ends the reconnects and shows
+  sign-in; any other answer reconnects as before.
 
 ## [0.1.0]
 
