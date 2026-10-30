@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `/api/stream` answers `event: resync` to a cursor (`Last-Event-ID` or `?cursor=`) whose change-log
+  row the retention sweep has deleted (P-281). The replay read only rows after the cursor, so a tab
+  that came back after the sweep got the surviving rows as if nothing were missing and kept a board
+  without the changes swept in between; the SPA already refetches on `resync`.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

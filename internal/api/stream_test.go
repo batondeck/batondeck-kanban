@@ -15,6 +15,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/bus"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
@@ -393,6 +394,88 @@ func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
 			t.Fatalf("7 rows after the cursor, cap 6: %+v, want resync", f)
 		}
 		old.quiet(t, 300*time.Millisecond)
+	})
+}
+
+// P-281: a reconnect whose cursor row the retention sweep deleted gets resync and no board frame, by
+// Last-Event-ID and by ?cursor=: when a later row of the board survived the sweep, and when only
+// another board's row did (ReadChanges' id > since found nothing of this board, so the stream used to
+// stay silent). The controls: the same cursor before any sweep, and after a sweep of only the rows
+// older than it, replays one board frame.
+func TestStreamResyncsACursorBelowTheSweptHorizon(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{Ping: time.Minute})
+		ctx := context.Background()
+		pid, bid := seedBoard(t, l.harness, l.core, "H")
+		qid, qbid := seedBoard(t, l.harness, l.core, "Q")
+		// tick is a sweep boundary: every row written before it is older than it, every row after is not.
+		tick := func() time.Time {
+			time.Sleep(5 * time.Millisecond)
+			at := time.Now()
+			time.Sleep(5 * time.Millisecond)
+			return at
+		}
+		// sweep is the real retention sweep with the change log's window ending at before.
+		sweep := func(before time.Time) int64 {
+			t.Helper()
+			const keep = 1000 * time.Hour // the other tables keep everything
+			w := retention.Sweeper{Store: s.Store, Windows: retention.Windows{ChangeLog: time.Hour, ToolCalls: keep, AgentSessions: keep}, Now: func() time.Time { return before.Add(time.Hour) }}
+			return w.Sweep(ctx).ChangeLog
+		}
+		resume := func(cursor string, byHeader bool) *sseClient {
+			if byHeader {
+				return l.stream(t, "?projectId="+pid+"&boardId="+bid, map[string]string{"Last-Event-ID": cursor})
+			}
+			return l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+cursor, nil)
+		}
+		expect := func(cursor, want, why string) {
+			t.Helper()
+			for _, byHeader := range []bool{true, false} {
+				r := resume(cursor, byHeader)
+				if f := r.next(t, time.Second); f.event != "ready" {
+					t.Fatalf("%s: %+v, want ready", why, f)
+				}
+				f := r.next(t, time.Second)
+				if f.event != want {
+					t.Fatalf("%s (Last-Event-ID %v): %s %s, want %s", why, byHeader, f.event, f.data, want)
+				}
+				if want == "resync" {
+					r.quiet(t, 300*time.Millisecond) // and no replayed board frame after it
+				}
+				r.cancel()
+			}
+		}
+
+		older := tick() // the seed rows are older than the cursor
+		c := l.stream(t, "?projectId="+pid+"&boardId="+bid, nil)
+		c.next(t, time.Second)
+		time.Sleep(50 * time.Millisecond)
+		l.addTask(t, l.caller(), pid, bid, "seen")
+		seen := c.next(t, time.Second)
+		if seen.event != "board" || seen.id == "" {
+			t.Fatalf("%+v, want a board frame with an id", seen)
+		}
+		c.cancel()
+		cut := tick()
+		l.addTask(t, l.caller(), pid, bid, "after")
+
+		expect(seen.id, "board", "before any sweep")
+		if n := sweep(older); n == 0 {
+			t.Fatal("the sweep of the rows older than the cursor deleted none")
+		}
+		expect(seen.id, "board", "the rows older than the cursor swept, its own kept")
+
+		if n := sweep(cut); n == 0 {
+			t.Fatal("the sweep up to the cursor deleted none")
+		}
+		expect(seen.id, "resync", "the cursor's row swept, a later row of the board kept")
+
+		cut = tick()
+		l.addTask(t, l.caller(), qid, qbid, "elsewhere") // the only survivor names another project
+		if n := sweep(cut); n == 0 {
+			t.Fatal("the sweep of the board's rows deleted none")
+		}
+		expect(seen.id, "resync", "every row of the board swept, another project's kept")
 	})
 }
 

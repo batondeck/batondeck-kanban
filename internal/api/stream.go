@@ -71,10 +71,11 @@ func feedURI(projectID, boardID string) string {
 // non-member gets 403, an unknown board 404), and again at every board frame: a caller who has lost
 // the board has the stream closed. Each board frame's SSE id is the last change-log id it covers;
 // a reconnect with that cursor (Last-Event-ID, or ?cursor=) replays what it missed as one board
-// frame, or, past ReplayCap rows, gets resync. Every stream, board or none, carries the caller's
-// notifications frame (conductor's identity-routed notifications hub): list_notifications {limit:
-// 50} as the caller, once on open and again per StreamCoalesce of the caller's notification rows,
-// read from the bus by the caller's identity scope. A notification row is never a board change.
+// frame, or, past ReplayCap rows or below the swept horizon (its own row gone), gets resync.
+// Every stream, board or none, carries the caller's notifications frame (conductor's
+// identity-routed notifications hub): list_notifications {limit: 50} as the caller, once on open
+// and again per StreamCoalesce of the caller's notification rows, read from the bus by the
+// caller's identity scope. A notification row is never a board change.
 // The caller is resolved again before every ping, board, presence and notifications frame (P-219):
 // once the credential no longer resolves (a logout, a disabled user as of the account cache, a
 // revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
@@ -345,14 +346,37 @@ func (s *stream) compose(ctx context.Context, caller domain.Caller, projectID, b
 
 // replay is the project's changes after since, reading at most replayCap rows of the change log
 // (one ReplayAll per replayPage, so at most replayCap/replayPage+1 statements): resync when more
-// rows than that follow the cursor.
+// rows than that follow the cursor, or when the cursor is below the change log's horizon (P-281).
+// The retention sweep deletes the oldest rows first (DeleteChangesOlderThan), so the cursor's own
+// row still in the log proves that no row after it was swept: the first read starts one below the
+// cursor to see that row, which is not replayed or counted again. A cursor whose row is gone may
+// have missed swept rows that ReadChanges' id > since would skip in silence, so it gets resync; if
+// nothing after it was swept, that costs the client one refetch. Cursor 0 has no row of its own and
+// is above the horizon while the log still starts at id 1, the first id both engines assign.
 func (s *stream) replay(ctx context.Context, projectID string, since int64) (out []change, resync bool, err error) {
-	scanned := 0
-	for {
-		n := min(replayPage, s.replayCap+1-scanned)
-		page, err := s.o.Bus.ReplayAll(ctx, since, n)
+	anchor := max(since, 1) // the row the first page must open with
+	from, scanned := anchor-1, 0
+	for first := true; ; first = false {
+		n := s.replayCap + 1 - scanned
+		if first && since > 0 {
+			n++ // the cursor's own row
+		}
+		n = min(replayPage, n)
+		page, err := s.o.Bus.ReplayAll(ctx, from, n)
 		if err != nil {
 			return nil, false, err
+		}
+		full := len(page) == n
+		if len(page) > 0 {
+			from = page[len(page)-1].ID
+		}
+		if first {
+			if len(page) == 0 || page[0].ID != anchor {
+				return nil, true, nil // the horizon has passed the cursor
+			}
+			if since > 0 {
+				page = page[1:]
+			}
 		}
 		for _, c := range page {
 			if scanned++; scanned > s.replayCap {
@@ -362,10 +386,9 @@ func (s *stream) replay(ctx context.Context, projectID string, since int64) (out
 				out = append(out, changeOf(c.ID, c.Payload))
 			}
 		}
-		if len(page) < n {
+		if !full {
 			return out, false, nil
 		}
-		since = page[len(page)-1].ID
 	}
 }
 
