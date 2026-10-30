@@ -39,10 +39,12 @@ import (
 // listener. A client is a `sleep` this test starts (the process the directory watches), a fake
 // Claude Code registry entry naming it, and a fake inbox socket that records every byte written.
 
-// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects.
+// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects. listed, when set,
+// runs after each ListProjects read with its identity, before the result is returned.
 type countedSQLite struct {
 	*store.SQLite
 	rechecks atomic.Int64
+	listed   atomic.Pointer[func(identityID string)]
 }
 
 func (c *countedSQLite) GetToken(ctx context.Context, id string) (store.Token, error) {
@@ -57,7 +59,11 @@ func (c *countedSQLite) GetUser(ctx context.Context, id string) (store.User, err
 
 func (c *countedSQLite) ListProjects(ctx context.Context, identityID string) ([]store.ProjectMembership, error) {
 	c.rechecks.Add(1)
-	return c.SQLite.ListProjects(ctx, identityID)
+	out, err := c.SQLite.ListProjects(ctx, identityID)
+	if h := c.listed.Load(); h != nil {
+		(*h)(identityID)
+	}
+	return out, err
 }
 
 // person is a user with an API token.

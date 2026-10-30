@@ -14,6 +14,11 @@ Notable changes to batondeck-kanban. The format follows
   longer deletes the agent session of a client still connected to this serve process (one that only
   pings, or waits on a long task); its row goes 30 minutes after its last request once it
   disconnects.
+- **A device session hears a project from the moment it joins (P-229, P-331).** A registered
+  Claude Code session added to a project, or whose user creates one, gets that project's broadcast
+  and changed doorbells at once instead of after the next 60 s directory sweep; removed or deleted,
+  it stops hearing them at once. The re-read runs only on a membership change: an idle directory
+  still makes no statements between sweeps.
 
 ## [0.1.0]
 

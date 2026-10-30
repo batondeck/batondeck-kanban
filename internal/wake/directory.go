@@ -102,9 +102,16 @@ type Directory struct {
 	index   map[string]map[int64]bool // recipient key → pids
 	changed chan struct{}             // closed on the next change
 	catch   chan []released           // catch-up frames for the loop
+	rescope chan int64                // a registered pid whose scopes the loop re-reads (Register)
+	gen     atomic.Int64              // bumped by every sweep before it lists the entries
 	writes  atomic.Int64              // doorbells written, for tests and the log
 	done    chan struct{}
 }
+
+// rescopes is the tools whose change rows change who is a member of which project, the only
+// writers of project_members: the dispatcher re-reads every entry's scopes before it routes one
+// (P-229, P-331), so a membership gained or lost is heard at once, not at the next Sweep.
+var rescopes = map[string]bool{"add_member": true, "remove_member": true, "create_project": true, "delete_project": true}
 
 var _ service.DeviceSessions = (*Directory)(nil)
 
@@ -121,7 +128,7 @@ func NewDirectory(o Options) (*Directory, error) {
 	}
 	o.Windows = o.Windows.withDefaults()
 	return &Directory{o: o, entries: map[int64]*entry{}, index: map[string]map[int64]bool{},
-		changed: make(chan struct{}), catch: make(chan []released, 16), done: make(chan struct{})}, nil
+		changed: make(chan struct{}), catch: make(chan []released, 16), rescope: make(chan int64, 16), done: make(chan struct{})}, nil
 }
 
 // Start rebuilds the directory from its rows, re-validating each pid, socket and bearer (a row that
@@ -272,6 +279,9 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 			adapter = AdapterClaudeCode
 		}
 	}
+	// A sweep that lists the entries between this read and the put below misses this entry and may
+	// have seen a membership this read did not: the generation says so, and the loop re-reads it.
+	gen := d.gen.Load()
 	scopes, err := d.o.Scopes(ctx, caller)
 	if err != nil {
 		return RegisterResp{}, err
@@ -315,6 +325,13 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 		scopes: scopes, lastCursor: cursor, registered: time.Now()}
 	d.put(e)
 	d.o.Logger.Printf("wake: registered pid %d (%s, %s, agent %s, adapter %q) from peer pid %d", e.pid, e.role, e.identity, e.agent, adapter, peer.PID)
+	if d.gen.Load() != gen {
+		select {
+		case d.rescope <- e.pid:
+		case <-ctx.Done():
+		case <-d.done:
+		}
+	}
 	if cursor > 0 {
 		d.catchUp(ctx, e)
 	}
@@ -421,6 +438,10 @@ func (d *Directory) Done() <-chan struct{} { return d.done }
 // catchUp replays the log after e's last delivered cursor and holds what rings e, coalesced as
 // live doorbells are (one frame per kind).
 func (d *Directory) catchUp(ctx context.Context, e *entry) {
+	d.mu.Lock()
+	snap := *e // the loop rewrites the scopes under mu while this replays
+	d.mu.Unlock()
+	e = &snap
 	if e.lastCursor <= 0 {
 		return
 	}
@@ -471,7 +492,7 @@ func (d *Directory) catchUp(ctx context.Context, e *entry) {
 }
 
 // loop is the dispatcher: the tap's rows into the coalescer, due frames onto their sockets, exits
-// out of the directory, and the sweep.
+// out of the directory, and the sweep. It is the one writer of the entries' scopes (recheck).
 func (d *Directory) loop(ctx context.Context, tap *bus.Subscription) {
 	defer close(d.done)
 	defer d.watch.Close()
@@ -488,7 +509,11 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription) {
 			if !open {
 				return
 			}
-			d.route(co, rowOf(c.ID, c.Scope, c.ProjectID, c.Kind, c.Payload))
+			r := rowOf(c.ID, c.Scope, c.ProjectID, c.Kind, c.Payload)
+			if rescopes[r.Tool] {
+				d.sweep(ctx) // before r routes: r's own project may be one an entry just joined
+			}
+			d.route(co, r)
 		case frames := <-d.catch:
 			now := time.Now()
 			for _, r := range frames {
@@ -501,12 +526,20 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription) {
 			}
 		case pid := <-d.watch.Exited():
 			d.drop(ctx, int64(pid), "the process exited")
+		case pid := <-d.rescope:
+			d.mu.Lock()
+			e := d.entries[pid]
+			d.mu.Unlock()
+			if e != nil {
+				d.sweepOne(ctx, e)
+			}
 		case <-sweep.C:
 			d.sweep(ctx)
 		}
 		if n := tap.Dropped(); n > dropped {
 			d.o.Logger.Printf("wake: the dispatcher dropped %d change(s); ringing every entry", n-dropped)
 			dropped = n
+			d.sweep(ctx) // a dropped change may be a membership's (P-229)
 			d.ringAll(co)
 		}
 	}
@@ -589,15 +622,23 @@ func (d *Directory) recheck(ctx context.Context, e *entry) (why string, ok bool)
 	return "", true
 }
 
-// sweep rechecks every entry.
+// sweep rechecks every entry: every Sweep, on a membership change (rescopes) and after the tap
+// dropped changes. It bumps gen first, so a Register that read its scopes before and puts its entry
+// after the listing has the loop recheck that entry (P-229).
 func (d *Directory) sweep(ctx context.Context) {
+	d.gen.Add(1)
 	d.mu.Lock()
 	all := slices.Collect(maps.Values(d.entries))
 	d.mu.Unlock()
 	for _, e := range all {
-		if why, ok := d.recheck(ctx, e); ok && why != "" {
-			d.drop(ctx, e.pid, why)
-		}
+		d.sweepOne(ctx, e)
+	}
+}
+
+// sweepOne rechecks e, dropping it when it no longer holds.
+func (d *Directory) sweepOne(ctx context.Context, e *entry) {
+	if why, ok := d.recheck(ctx, e); ok && why != "" {
+		d.drop(ctx, e.pid, why)
 	}
 }
 

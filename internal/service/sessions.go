@@ -293,8 +293,10 @@ func (s sessions) DropWakeSession(ctx context.Context, id string) (err error) {
 }
 
 // WakeScopes is the token scopes a caller's doorbell listener subscribes to: its own (the assigned
-// doorbells naming it) and BroadcastScope of every project it is a member of, read once (one
-// ListProjects). A membership gained after the read is not heard until the listener reconnects.
+// doorbells naming it) and BroadcastScope of every project it is a member of (one ListProjects).
+// The device directory (internal/wake) reads it at register and re-reads it for every entry on each
+// Sweep and whenever it reads an add_member, remove_member, create_project or delete_project change,
+// so a membership is heard from its own change on (P-229, P-331).
 func (c *Core) WakeScopes(ctx context.Context, caller domain.Caller) ([]string, error) {
 	if caller.TokenScope == "" {
 		return nil, internalf("wake scopes: the caller has no token scope")
