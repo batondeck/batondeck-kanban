@@ -76,7 +76,7 @@ func TestOperationsSummary(t *testing.T) {
 				ProjectID: id, Days: 7, Total: 7, Errors: 2, ErrorRate: 2.0 / 7, AvgLatencyMs: 25.1,
 				ByTool:    []OpsToolRow{{Tool: "claim_next", Calls: 4, AvgMs: 16.3}, {Tool: "get_task", Calls: 3, AvgMs: 37}},
 				ByDay:     []OpsDayRow{{Day: "2026-10-20", Calls: 1}, {Day: "2026-10-23", Calls: 3}, {Day: "2026-10-24", Calls: 3}},
-				ByAgent:   []OpsAgentRow{{Agent: "claude", Calls: 4}, {Agent: "(unknown)", Calls: 2}, {Agent: "codex", Calls: 1}},
+				ByAgent:   []OpsAgentRow{{Agent: "claude", IdentityID: "alice", Calls: 4}, {Agent: "(unknown)", IdentityID: "alice", Calls: 2}, {Agent: "codex", IdentityID: "alice", Calls: 1}},
 				Retention: retention,
 			}
 			if !reflect.DeepEqual(week, want) {
@@ -104,6 +104,43 @@ func TestOperationsSummary(t *testing.T) {
 			day, err := c.Analytics().Operations(ctx, alice, OperationsReq{ProjectID: id, Days: 1})
 			if err != nil || day.Total != 3 || day.ErrorRate != 0 || len(day.ByAgent) != 1 {
 				t.Fatalf("1 day = %+v, %v; want today's 3 ok calls", day, err)
+			}
+		})
+	}
+}
+
+// P-335: an agent is its identity plus its name. alice's and bob's claude-code (each a client's own
+// name on a default-label token) are two byAgent rows, each naming its identity and its own count.
+func TestOperationsByAgentKeysTheAgentWithItsIdentity(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	ts := now.Add(-time.Hour).UnixMilli()
+	for _, e := range analyticsEngines {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			c := New(st, Options{ToolCallFlush: -1, Now: func() time.Time { return now }})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			alice := domain.Caller{Identity: "alice", Agent: "claude-code", TokenScope: "alice"}
+			p, err := c.Projects().Create(ctx, alice, CreateProjectReq{Name: "two users"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := func(identity, tool string) store.ToolCall {
+				return store.ToolCall{TS: ts, Tool: tool, Identity: identity, Agent: "claude-code", Outcome: store.ToolCallOK, Code: "OK", LatencyMs: 1, ProjectID: p.ProjectID}
+			}
+			if err := st.InsertToolCalls(ctx, []store.ToolCall{
+				row("alice", "get_task"), row("alice", "get_task"), row("alice", "list_tasks"),
+				row("bob", "get_task"), row("bob", "claim_next"),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.Analytics().Operations(ctx, alice, OperationsReq{ProjectID: p.ProjectID, Days: 7})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []OpsAgentRow{{Agent: "claude-code", IdentityID: "alice", Calls: 3}, {Agent: "claude-code", IdentityID: "bob", Calls: 2}}
+			if !reflect.DeepEqual(got.ByAgent, want) || got.Total != 5 {
+				t.Fatalf("byAgent = %+v (total %d), want %+v: one name under two identities is two agents", got.ByAgent, got.Total, want)
 			}
 		})
 	}

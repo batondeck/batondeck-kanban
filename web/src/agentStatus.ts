@@ -66,13 +66,31 @@ export interface AgentEntry {
   tool: ToolKey | null;
 }
 
-/** Agents holding a live (non-expired) claim on any of these tasks — the "busy" set for presence dots. */
-export function busyAgentNames(tasks: Task[]): Set<string> {
+/**
+ * An agent's key in the busy set: its identity plus its name. A name alone is no agent's — every
+ * user's default-label session is `claude-code` — so bob's claim must not mark alice's own
+ * `claude-code` busy (P-335).
+ */
+export function agentKey(identityId: string | undefined, agentName: string): string {
+  return `${identityId ?? ''}\u0000${agentName}`;
+}
+
+/** Is any agent called `name`, of any identity, in the busy set? For a board name with no session. */
+function anyBusyNamed(busyKeys: Set<string>, name: string): boolean {
+  for (const k of busyKeys) if (k.slice(k.indexOf('\u0000') + 1) === name) return true;
+  return false;
+}
+
+/**
+ * Agents holding a live (non-expired) claim on any of these tasks — the "busy" set for presence dots,
+ * keyed by `agentKey(claim.owner, claim.agent)`.
+ */
+export function busyAgentKeys(tasks: Task[]): Set<string> {
   const now = Date.now();
   const s = new Set<string>();
   for (const t of tasks) {
     const c = t.claim;
-    if (c?.agent && (!c.expiresAt || new Date(c.expiresAt).getTime() > now)) s.add(c.agent);
+    if (c?.agent && (!c.expiresAt || new Date(c.expiresAt).getTime() > now)) s.add(agentKey(c.owner, c.agent));
   }
   return s;
 }
@@ -98,13 +116,13 @@ export function isSessionOnline(
   return !Number.isNaN(sinceSeen) && sinceSeen <= uiSettings().presenceOfflineAfterMs;
 }
 
-export function deriveAgentState(s: AgentSession, busyNames: Set<string>, now: number): AgentState {
+export function deriveAgentState(s: AgentSession, busyKeys: Set<string>, now: number): AgentState {
   // An active lease is definitive: the agent is working even if it isn't currently polling (lastSeenAt
   // can legitimately go stale while a long task runs), so "busy" wins over the staleness check.
   // Before `busy`, deliberately: a revoked agent may still hold a live claim (the lease outlives the
   // disconnect), and rendering that as "working" invites waiting for a result that cannot arrive.
   if (s.revokedAt) return 'offline';
-  if (busyNames.has(s.agentName)) return 'busy';
+  if (busyKeys.has(agentKey(s.identityId, s.agentName))) return 'busy';
   if (!isSessionOnline(s, now)) return 'offline';
   const sinceFirst = now - Date.parse(s.firstSeenAt);
   if (!Number.isNaN(sinceFirst) && sinceFirst < CONNECTING_WINDOW_MS && s.requestCount <= 2) return 'connecting';
@@ -117,20 +135,22 @@ export function stateOrder(s: AgentState): number {
 }
 
 /**
- * Collapse sessions (keyed by identity+agentName) to one entry per agent name, keeping the freshest,
- * and fold in any extra names already referenced on the board (assignees) so you can still see/route
- * to an agent that isn't currently connected (shown offline, unless it holds a live claim).
+ * Collapse sessions to one entry per agent — identity plus agent name, so two users' same-named
+ * agents stay two entries (P-335) — keeping the freshest, and fold in any extra names already
+ * referenced on the board (assignees) so you can still see/route to an agent that isn't currently
+ * connected (shown offline, unless a live claim names it).
  */
 export function buildAgentList(
   sessions: AgentSession[],
-  busyNames: Set<string>,
+  busyKeys: Set<string>,
   extraNames: string[],
   now: number,
 ): AgentEntry[] {
-  const byName = new Map<string, AgentEntry>();
+  const byAgent = new Map<string, AgentEntry>();
   for (const s of sessions) {
     if (!s.agentName) continue;
-    const prev = byName.get(s.agentName);
+    const key = agentKey(s.identityId, s.agentName);
+    const prev = byAgent.get(key);
     // A device row (listed live by the directory) outranks an MCP row of the same name, then the
     // newer activity wins.
     //
@@ -142,9 +162,9 @@ export function buildAgentList(
     } else if (prev && (prev.device ?? false) !== isDeviceRow(s)) {
       if (prev.device) continue; // keep the one the directory lists
     } else if (prev && livenessAt(prev) >= livenessAt(s)) continue;
-    byName.set(s.agentName, {
+    byAgent.set(key, {
       name: s.agentName,
-      state: deriveAgentState(s, busyNames, now),
+      state: deriveAgentState(s, busyKeys, now),
       lastSeenAt: s.lastSeenAt,
       ...(isDeviceRow(s) ? { device: true } : {}),
       revokedAt: s.revokedAt,
@@ -152,10 +172,14 @@ export function buildAgentList(
       tool: toolKey(s.agentName, s.clientName),
     });
   }
+  const named = new Set([...byAgent.values()].map((e) => e.name));
   for (const n of extraNames) {
-    if (n && !byName.has(n)) byName.set(n, { name: n, state: busyNames.has(n) ? 'busy' : 'offline', lastSeenAt: '', tool: toolKey(n) });
+    if (n && !named.has(n)) {
+      named.add(n);
+      byAgent.set(agentKey(undefined, n), { name: n, state: anyBusyNamed(busyKeys, n) ? 'busy' : 'offline', lastSeenAt: '', tool: toolKey(n) });
+    }
   }
-  return [...byName.values()].sort((a, b) => stateOrder(a.state) - stateOrder(b.state) || a.name.localeCompare(b.name));
+  return [...byAgent.values()].sort((a, b) => stateOrder(a.state) - stateOrder(b.state) || a.name.localeCompare(b.name));
 }
 
 /**

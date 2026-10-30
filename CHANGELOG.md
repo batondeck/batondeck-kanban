@@ -11,6 +11,11 @@ Notable changes to batondeck-kanban. The format follows
   token or on its OAuth token is refused 403 (`session user mismatch`), instead of acting as another
   agent under the session's `agent_sessions` row. A rotated token of the same label still works
   (P-323).
+- An agent is its identity plus its name wherever two users' agents meet. The operations summary's
+  `byAgent` has one row per (identity, agent), each with its `identityId`, so two users'
+  `claude-code` sessions are two agents; on the board and in the assign menus, bob's live claim no
+  longer shows alice's own same-named session as Busy, and two users' same-named agents stay two
+  entries (P-335).
 
 ## [0.1.0]
 

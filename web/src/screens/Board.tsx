@@ -30,7 +30,7 @@ import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
 import { boardTasksKey, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
 import { TaskDrawer } from './TaskDrawer.js';
-import { type AgentEntry, STATE_META, buildAgentList, busyAgentNames, isLiveEntry } from '../agentStatus.js';
+import { type AgentEntry, STATE_META, agentKey, buildAgentList, busyAgentKeys, isLiveEntry } from '../agentStatus.js';
 import { uiSettings } from '../settings.js';
 import { StatusDot } from '../AgentSelect.js';
 import type { ActivityEvent, AgentSession, Board as BoardT, Sprint, SprintStatus, Status, Task } from '../types.js';
@@ -171,7 +171,7 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true }: {
           <div className="assign-list">
             {menuAgents.length === 0 && <div className="assign-empty">No agents online — type a name to assign.</div>}
             {menuAgents.map((a) => (
-              <button key={a.name} type="button" className="assign-item" role="menuitem" onClick={() => pick(a.name)} title={STATE_META[a.state].label}>
+              <button key={agentKey(a.identityId, a.name)} type="button" className="assign-item" role="menuitem" onClick={() => pick(a.name)} title={STATE_META[a.state].label}>
                 <StatusDot state={a.state} size={7} />
                 <Avatar id={a.name} tool={a.tool} />
                 <Marquee className="assign-name">{a.name.split('@')[0]}</Marquee>
@@ -806,10 +806,10 @@ export function Board() {
 
   // Live agent presence: an agent holding a non-expired claim is "busy"; everything else is derived from
   // session recency. Recomputed as the (polled) sessions/tasks change, so the dots stay current.
-  const busyNames = useMemo(() => busyAgentNames(allTasks), [allTasks]);
+  const busyKeys = useMemo(() => busyAgentKeys(allTasks), [allTasks]);
   const agentList = useMemo(
-    () => buildAgentList(agentsQ.data?.sessions ?? [], busyNames, allTasks.map((t) => t.assignee).filter(Boolean) as string[], Date.now()),
-    [agentsQ.data, busyNames, allTasks],
+    () => buildAgentList(agentsQ.data?.sessions ?? [], busyKeys, allTasks.map((t) => t.assignee).filter(Boolean) as string[], Date.now()),
+    [agentsQ.data, busyKeys, allTasks],
   );
 
   const [moveErr, setMoveErr] = useState<string | null>(null);

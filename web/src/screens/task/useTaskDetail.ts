@@ -17,7 +17,7 @@ import * as tasksApi from '../../api/tasks.js';
 import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
-import { buildAgentList, busyAgentNames } from '../../agentStatus.js';
+import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
 import type { ActivityEvent, Status, Task } from '../../types.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
@@ -92,18 +92,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // Board's key, so opening the drawer from the board is still free; once the board has loaded more,
   // the two get their own entries instead of fighting over one.
   const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => boardsApi.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
-  const busyNames = useMemo(() => busyAgentNames(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
+  const busyKeys = useMemo(() => busyAgentKeys(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
   const agentList = useMemo(
     () => buildAgentList(
       agentsQ.data?.sessions ?? [],
-      busyNames,
+      busyKeys,
       [
         ...((histQ.data?.events ?? []).map((e) => e.agent).filter(Boolean) as string[]),
         ...((boardTasksQ.data?.tasks ?? []).map((t) => t.assignee).filter(Boolean) as string[]),
       ],
       Date.now(),
     ),
-    [agentsQ.data, busyNames, histQ.data, boardTasksQ.data],
+    [agentsQ.data, busyKeys, histQ.data, boardTasksQ.data],
   );
   // @mention candidates for the comment composer: project member identities + known agent names. Only
   // member identities actually resolve to a notification server-side; agent names are offered for convenience.
