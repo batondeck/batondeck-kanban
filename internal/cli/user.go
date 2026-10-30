@@ -75,6 +75,10 @@ func user(args []string, stdout, stderr io.Writer) int {
 		userUsage(stderr)
 		return 2
 	}
+	if isHelp(args[0]) {
+		userUsage(stdout)
+		return 0
+	}
 	sub, rest := args[0], args[1:]
 	var cfgPath, name string
 	var admin bool
@@ -89,8 +93,8 @@ func user(args []string, stdout, stderr io.Writer) int {
 		userUsage(stderr)
 		return 2
 	}
-	if err := fs.Parse(rest); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, rest, stdout); !ok {
+		return code
 	}
 	wantArgs := 1
 	if sub == "list" {

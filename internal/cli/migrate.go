@@ -18,8 +18,8 @@ import (
 func migrate(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("migrate", &cfgPath, stderr)
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {

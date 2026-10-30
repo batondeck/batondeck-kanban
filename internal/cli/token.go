@@ -36,6 +36,10 @@ func token(args []string, stdout, stderr io.Writer) int {
 		tokenUsage(stderr)
 		return 2
 	}
+	if isHelp(args[0]) {
+		tokenUsage(stdout)
+		return 0
+	}
 	sub, rest := args[0], args[1:]
 	var cfgPath, login, label string
 	var ttl time.Duration
@@ -55,8 +59,8 @@ func token(args []string, stdout, stderr io.Writer) int {
 		tokenUsage(stderr)
 		return 2
 	}
-	if err := fs.Parse(rest); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, rest, stdout); !ok {
+		return code
 	}
 	if fs.NArg() != wantArgs || (sub == "create" && login == "") {
 		tokenUsage(stderr)

@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Help at every level exits 0 on stdout.** `user`, `token` and `session` take `help`, `-h` and
+  `--help` in place of a subcommand, and every command and subcommand's `-h` and `--help` print its
+  usage on stdout and exit 0; they had exited 2 with "unknown subcommand" or the usage on stderr
+  (P-311). A usage error still exits 2 on stderr.
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

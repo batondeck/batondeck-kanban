@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -30,26 +31,30 @@ import (
 // The first argument names the command: serve, migrate, token, user, session, doctor,
 // healthcheck or version; help, -h and --help print the usage to stdout and return 0. No arguments,
 // or a command it does not know, prints the usage to stderr and returns 2.
+// Help is asked for the same way at every level, and always answered on stdout with 0: `user`,
+// `token` and `session` take help, -h and --help in place of a subcommand, and every command and
+// subcommand takes -h and --help among its flags (parseFlags).
 // Across the commands 0 is success, 1 is a failure of the work, and 2 is a usage error (a flag
-// that does not parse, an unknown command or subcommand, a missing argument); session's failures
-// alone exit 0, since a client's hook runs it.
+// that does not parse, an unknown command or subcommand, a missing argument), printed on stderr;
+// session's failures alone exit 0, since a client's hook runs it.
 func Run(args []string, version string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		usage(stderr)
 		return 2
 	}
 	cmd, rest := args[0], args[1:]
-	switch cmd {
-	case "help", "-h", "--help":
+	if isHelp(cmd) {
 		usage(stdout)
 		return 0
+	}
+	switch cmd {
 	case "version":
 		fmt.Fprintln(stdout, "batondeck-kanban "+version)
 		return 0
 	case "serve":
-		return serve(rest, version, stderr)
+		return serve(rest, version, stdout, stderr)
 	case "healthcheck":
-		return healthcheck(rest, stderr)
+		return healthcheck(rest, stdout, stderr)
 	case "migrate":
 		return migrate(rest, stdout, stderr)
 	case "doctor":
@@ -59,7 +64,7 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 	case "token":
 		return token(rest, stdout, stderr)
 	case "session":
-		return session(rest, stderr)
+		return session(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "batondeck-kanban: unknown command %q\n", cmd)
 		usage(stderr)
@@ -84,6 +89,9 @@ commands:
 run batondeck-kanban serve -h for the configuration: every BATONDECK_* variable and its default.
 `)
 }
+
+// isHelp reports whether arg, in a command's or a subcommand's place, asks for the usage.
+func isHelp(arg string) bool { return arg == "help" || arg == "-h" || arg == "--help" }
 
 // commonFlags returns a FlagSet with the -config flag every subcommand shares.
 //
@@ -186,12 +194,12 @@ func engineHandler(version, engine string, mcp http.Handler, mounts ...func(*htt
 }
 
 // serve listens on the configured address until SIGINT or SIGTERM, then shuts down.
-func serve(args []string, version string, stderr io.Writer) int {
+func serve(args []string, version string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("serve", &cfgPath, stderr)
 	serverHelp(fs, "Migrates the store, then serves /healthz, the MCP server at /mcp and the web UI.")
-	if err := fs.Parse(args); err != nil {
-		return parseExit(err)
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -298,21 +306,34 @@ func listenAll(entries []string, logger *log.Logger) ([]net.Listener, error) {
 	return lns, nil
 }
 
-// parseExit is the exit code of a flag parse error: 0 for -h, which printed the help, 2 otherwise.
-func parseExit(err error) int {
-	if errors.Is(err, flag.ErrHelp) {
-		return 0
+// parseFlags parses args into fs, whose output is the command's stderr. ok is false when the
+// command is to stop and return code: -h or --help printed fs's usage to stdout (0), or a flag that
+// does not parse printed its error and the usage to stderr (2).
+func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (code int, ok bool) {
+	stderr := fs.Output()
+	var buf bytes.Buffer
+	fs.SetOutput(&buf)
+	err := fs.Parse(args)
+	fs.SetOutput(stderr)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		_, _ = buf.WriteTo(stdout)
+		return 0, false
+	case err != nil:
+		_, _ = buf.WriteTo(stderr)
+		return 2, false
 	}
-	return 2
+	_, _ = buf.WriteTo(stderr)
+	return 0, true
 }
 
 // healthcheck probes /healthz on the configured listen address; the container HEALTHCHECK runs
 // this (distroless has no shell or curl). Exit 0 iff it answers 200.
-func healthcheck(args []string, stderr io.Writer) int {
+func healthcheck(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("healthcheck", &cfgPath, stderr)
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
