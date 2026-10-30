@@ -42,7 +42,7 @@ server's device directory, so the server can start a turn in it when there is wo
    | `BATONDECK_URL` | `.mcp.json` (the server URL) and `scripts/mcp.sh` | optional: the server's base URL, default `http://localhost:8080`; set it when the board listens on another port or host, or sits behind `BATONDECK_PUBLIC_URL`. Unset it rather than export it empty: Claude Code reads an empty one as set, so the url becomes `/mcp` and does not connect (`scripts/mcp.sh` takes the default either way) |
    | `BATONDECK_LISTEN` or `BATONDECK_CONFIG` | both hooks | the same listen list or config file the server runs with; the hooks use its first `unix://` entry |
    | `BATONDECK_ROLE` | SessionStart | `worker` (the default) or `master` |
-   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token carries; the server refuses another agent's label, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
+   | `BATONDECK_AGENT` | SessionStart | optional: an agent label; a task assigned to that label rings this session. It must be this token's own label (`token create --label`) or a name no other account's token and no live token of your own carries (your own revoked or expired label included); the server refuses another account's label (revoked or expired tokens included), a live label of your own account that this token does not carry, and `id:<identity>` for any identity but this token's own, and the session then starts without a wake entry |
 
    `batondeck-kanban` must be on `PATH`.
 4. Start Claude Code with the plugin loaded for that session:

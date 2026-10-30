@@ -2,8 +2,14 @@ package mcp_test
 
 import (
 	"context"
+	"net/http"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth/authfake"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -92,6 +98,95 @@ func TestTheAgentIsStampedAndKeysTheSessionOnTheRealStack(t *testing.T) {
 		for _, tool := range []string{"create_board", "create_task", "claim_next", "get_task"} {
 			if !slices.Contains(stamped, tool) {
 				t.Fatalf("tool_calls groups %v, want %s stamped agent-a", stamped, tool)
+			}
+		}
+	})
+}
+
+// swapBearer presents whichever bearer it holds now, so one client session can send a later
+// request on another of its identity's tokens, as a client that swaps its token mid-session does.
+type swapBearer struct{ bearer atomic.Value }
+
+func (s *swapBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+s.bearer.Load().(string))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// P-323: a session opened on the token labelled agent-a refuses a later request on the same
+// identity's default-label token or its OAuth token, before any handler runs: the session keeps
+// agent-a's agent_sessions row, no tool runs and no tool_calls row is written for another agent.
+func TestASwappedBearerRunsNoToolOnTheSessionOnTheRealStack(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := bk.BootHarness(t, s.Services, agentResolver(), func(o *bk.Options) { o.HiddenTools = s.Core.HiddenTools })
+		tools.Register(h.Server(), s.Services)
+		s.Core.SetAgentSessionEnder(h.Server())
+
+		swap := &swapBearer{}
+		swap.bearer.Store(agentLabelled)
+		dial, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cs, err := sdk.NewClient(&sdk.Implementation{Name: "swapper", Version: "0.0.1"}, nil).Connect(dial, &sdk.StreamableClientTransport{
+			Endpoint: h.URL(), HTTPClient: &http.Client{Transport: swap}, MaxRetries: -1,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		a := &caller{t: t, cs: cs, called: map[string]int{}}
+		p := str(a.call("create_project", map[string]any{"name": "Swap", "idempotencyKey": "p-swap"})["projectId"])
+
+		for _, other := range []string{agentPlain, agentOAuth} {
+			swap.bearer.Store(other)
+			for _, c := range []struct {
+				tool string
+				args map[string]any
+			}{
+				{"create_project", map[string]any{"name": "Swapped", "idempotencyKey": "p-swapped-" + other}},
+				{"create_board", map[string]any{"projectId": p, "name": "Swapped"}},
+			} {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: c.tool, Arguments: c.args})
+				cancel()
+				if err == nil {
+					t.Fatalf("%s on agent-a's session with bearer %s: %+v, want the request refused (403)", c.tool, other, res)
+				}
+				if !strings.Contains(err.Error(), "Forbidden") && !strings.Contains(err.Error(), "403") {
+					t.Fatalf("%s on agent-a's session with bearer %s: %v, want 403", c.tool, other, err)
+				}
+			}
+		}
+
+		// A fresh session on agent-a's token reads what the refused requests left.
+		v := &caller{t: t, cs: h.ConnectAs(t, agentLabelled, "reader"), called: map[string]int{}}
+		var names []string
+		for _, pr := range v.call("list_projects", map[string]any{})["projects"].([]any) {
+			names = append(names, str(obj(pr)["name"]))
+		}
+		if !slices.Equal(names, []string{"Swap"}) {
+			t.Fatalf("list_projects %v, want only Swap: a refused create_project ran", names)
+		}
+		if boards := v.call("list_boards", map[string]any{"projectId": p})["boards"].([]any); len(boards) != 0 {
+			t.Fatalf("list_boards %v, want none: a refused create_board ran", boards)
+		}
+		var agents []string
+		for _, r := range v.call("list_agent_sessions", map[string]any{})["sessions"].([]any) {
+			agents = append(agents, str(obj(r)["agentId"]))
+		}
+		if !slices.Equal(agents, []string{"agent-a"}) {
+			t.Fatalf("list_agent_sessions agents %v, want agent-a's row alone", agents)
+		}
+
+		if err := s.Core.FlushToolCalls(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		groups, err := s.Store.SummarizeToolCalls(context.Background(), p, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range groups {
+			if g.Agent != "agent-a" || g.Tool == "create_board" {
+				t.Fatalf("tool_calls group %+v in the project, want agent-a's alone and no create_board", g)
 			}
 		}
 	})

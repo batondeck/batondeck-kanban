@@ -169,6 +169,35 @@ Notable changes to batondeck-kanban. The format follows
   again after any refetch, until the next change. The answer now keeps those rows, as the Agents
   screen already did, and task detail applies the presence frames itself, so on the full task page
   too a session that leaves is gone with the next frame.
+- An MCP session is bound to how its bearer authenticated and the agent it carries, as well as its
+  identity: a later request on the same identity's token with another label, on its default-label
+  token or on its OAuth token is refused 403 (`session user mismatch`), instead of acting as another
+  agent under the session's `agent_sessions` row. A rotated token of the same label still works
+  (P-323).
+- An agent is its identity plus its name wherever two users' agents meet. The operations summary's
+  `byAgent` has one row per (identity, agent), each with its `identityId`, so two users'
+  `claude-code` sessions are two agents; on the board and in the assign menus, bob's live claim no
+  longer shows alice's own same-named session as Busy, and two users' same-named agents stay two
+  entries (P-335).
+- A worker registered under a name no token carried no longer keeps its wake doorbell once that
+  name is a label it may not claim: another identity mints it, or its own identity mints it on a
+  token other than the one the worker registered from, while that token is live. Delivery re-reads
+  the label's owner and drops the entry, logged as `its agent "<name>" is another agent's label`,
+  instead of ringing it with that label's work. A worker under its own token's label is rung with
+  no extra read (P-344).
+- A mention reads a worker's label the way it resolves one. A body token names a label when it is
+  the label or the label's local part (`@pbob` names `pbob@x.example`), and never names a label it
+  only starts (`@pt` does not name `pt bob`). So a free name a mention of another identity's label
+  also names no longer rings that worker, and a free name that only begins another label still
+  does. A free name equal to another project member's login, email local part or display name no
+  longer aliases its registrant: `@will` rings will alone. The `session` usage, the plugin README
+  and the register refusal now say a live label of the bearer's own account, on a token that does
+  not carry it, is refused as well (P-348, P-349).
+- A mention of a label is its first minter's. A member who mints a case or local-part variant of
+  a label another member minted first (`OPS-BOT` of `ops-bot`, `deploy-bot@evil.example` of
+  `deploy-bot`) no longer takes that label's mentions: `@ops-bot` and `@deploy-bot` mention, ring
+  and notify the first minter alone, and `@deploy-bot@evil.example` still reaches the variant's
+  own worker (P-348).
 
 ## [0.1.0]
 

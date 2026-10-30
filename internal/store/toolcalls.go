@@ -99,7 +99,7 @@ func summarizeToolCalls(ctx context.Context, e engine, projectID string, since i
 	}
 	out := make([]ToolCallGroup, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ToolCallGroup{Tool: r.Tool, Outcome: ToolCallOutcome(r.Outcome), Agent: r.Agent, Day: r.Day, Calls: r.Calls, LatencySum: r.LatencySum})
+		out = append(out, ToolCallGroup{Tool: r.Tool, Outcome: ToolCallOutcome(r.Outcome), Agent: r.Agent, Identity: r.Identity, Day: r.Day, Calls: r.Calls, LatencySum: r.LatencySum})
 	}
 	return out, nil
 }

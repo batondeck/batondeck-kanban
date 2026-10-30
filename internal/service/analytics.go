@@ -50,7 +50,10 @@ func (a analytics) Operations(ctx context.Context, caller domain.Caller, req Ope
 			OldestDay: now.Add(-time.Duration(a.c.toolCallRetentionDays) * 24 * time.Hour).Format(time.DateOnly)}}
 	// aggregateOps (bq.ts:199): totals, then per tool, per day and per agent.
 	type toolAcc struct{ calls, latency int64 }
-	tools, byDay, byAgent := map[string]*toolAcc{}, map[string]int64{}, map[string]int64{}
+	// An agent is keyed with its identity: one name (a client's own, claude-code) under two
+	// identities is two agents (P-335).
+	type agentKey struct{ identity, agent string }
+	tools, byDay, byAgent := map[string]*toolAcc{}, map[string]int64{}, map[agentKey]int64{}
 	var latency int64
 	for _, g := range groups {
 		resp.Total += g.Calls
@@ -66,7 +69,7 @@ func (a analytics) Operations(ctx context.Context, caller domain.Caller, req Ope
 		t.calls += g.Calls
 		t.latency += g.LatencySum
 		byDay[g.Day] += g.Calls
-		byAgent[cmp.Or(g.Agent, "(unknown)")] += g.Calls
+		byAgent[agentKey{g.Identity, cmp.Or(g.Agent, "(unknown)")}] += g.Calls
 	}
 	if resp.Total > 0 {
 		resp.ErrorRate = float64(resp.Errors) / float64(resp.Total)
@@ -78,14 +81,14 @@ func (a analytics) Operations(ctx context.Context, caller domain.Caller, req Ope
 	for day, n := range byDay {
 		resp.ByDay = append(resp.ByDay, OpsDayRow{Day: day, Calls: n})
 	}
-	for agent, n := range byAgent {
-		resp.ByAgent = append(resp.ByAgent, OpsAgentRow{Agent: agent, Calls: n})
+	for k, n := range byAgent {
+		resp.ByAgent = append(resp.ByAgent, OpsAgentRow{Agent: k.agent, IdentityID: k.identity, Calls: n})
 	}
 	// Conductor's sorts, with a name tiebreak so equal counts do not reorder between calls.
 	slices.SortFunc(resp.ByTool, func(x, y OpsToolRow) int { return cmp.Or(cmp.Compare(y.Calls, x.Calls), cmp.Compare(x.Tool, y.Tool)) })
 	slices.SortFunc(resp.ByDay, func(x, y OpsDayRow) int { return cmp.Compare(x.Day, y.Day) })
 	slices.SortFunc(resp.ByAgent, func(x, y OpsAgentRow) int {
-		return cmp.Or(cmp.Compare(y.Calls, x.Calls), cmp.Compare(x.Agent, y.Agent))
+		return cmp.Or(cmp.Compare(y.Calls, x.Calls), cmp.Compare(x.Agent, y.Agent), cmp.Compare(x.IdentityID, y.IdentityID))
 	})
 	return resp, nil
 }

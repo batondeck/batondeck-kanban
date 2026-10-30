@@ -39,12 +39,19 @@ import (
 // listener. A client is a `sleep` this test starts (the process the directory watches), a fake
 // Claude Code registry entry naming it, and a fake inbox socket that records every byte written.
 
-// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects. listed, when set,
-// runs after each ListProjects read with its identity, before the result is returned.
+// countedSQLite counts the reads a recheck makes: GetToken, GetUser, ListProjects; and, apart,
+// the reads of every token row a label check makes (ListTokens, P-344). listed, when set, runs after
+// each ListProjects read with its identity, before the result is returned.
 type countedSQLite struct {
 	*store.SQLite
-	rechecks atomic.Int64
-	listed   atomic.Pointer[func(identityID string)]
+	rechecks   atomic.Int64
+	tokenLists atomic.Int64
+	listed     atomic.Pointer[func(identityID string)]
+}
+
+func (c *countedSQLite) ListTokens(ctx context.Context, identityID string) ([]store.Token, error) {
+	c.tokenLists.Add(1)
+	return c.SQLite.ListTokens(ctx, identityID)
 }
 
 func (c *countedSQLite) GetToken(ctx context.Context, id string) (store.Token, error) {
