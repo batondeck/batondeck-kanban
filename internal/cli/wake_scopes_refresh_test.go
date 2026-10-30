@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,6 +78,8 @@ func TestDirectoryRescopesOnAProjectCreatedAfterRegister(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The create_project row re-reads alice's scopes by itself, before any add_member (review B2).
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
 	if _, err := s.a.core.Projects().AddMember(ctx, s.alice.caller(), service.AddMemberReq{ProjectID: q.ProjectID, IdentityID: s.bob.id, Role: domain.RoleMaster}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,4 +180,106 @@ func TestDirectoryIdleIssuesNoRecheck(t *testing.T) {
 	if n := s.st.rechecks.Load() - n0; n != 0 {
 		t.Fatalf("an idle directory of one entry made %d recheck reads in 2 s, want 0", n)
 	}
+}
+
+// holdRecheck arms s's listed hook: the first ListProjects for identity after it blocks its caller
+// (the dispatcher, inside a recheck) until release or 30 s; held is closed once it blocks. The test's
+// end releases it.
+func holdRecheck(t *testing.T, s *dirServer, identity string) (held <-chan struct{}, release func()) {
+	t.Helper()
+	h, r := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	var once sync.Once
+	release = func() { once.Do(func() { close(r) }) }
+	hook := func(id string) {
+		if id == identity && first.CompareAndSwap(false, true) {
+			close(h)
+			select {
+			case <-r:
+			case <-time.After(30 * time.Second):
+			}
+		}
+	}
+	s.st.listed.Store(&hook)
+	t.Cleanup(func() { release(); s.st.listed.Store(nil) })
+	return h, release
+}
+
+// P-229 requirement 2 (tested; review B1): a membership change the dispatcher's tap dropped is
+// heard at once, not at the next 60 s sweep: the re-read after a drop runs before every entry is
+// rung, so carol's ring names P. The loop is held in carol's recheck (the create_project row's
+// re-read) while more than TapBuffer changes and then carol's add_member are written and offered,
+// so the tap drops that add_member row. Without the re-read the ring names no project, the
+// buffered rows route under her old scopes, and no doorbell for P comes.
+func TestDirectoryRescopesAfterTheTapDropsAMembershipChange(t *testing.T) {
+	t.Parallel()
+	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow})
+	c := s.client(t, "s-carol", "")
+	s.register(t, s.carol, c, "worker")
+	held, release := holdRecheck(t, s, s.carol.id)
+	ctx := context.Background()
+	if _, err := s.a.core.Projects().Create(ctx, s.alice.caller(), service.CreateProjectReq{Name: "Q"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the create_project row's re-read never reached carol's entry")
+	}
+	for range wake.TapBuffer + 16 {
+		s.task(t, s.alice, "")
+	}
+	if _, err := s.a.core.Projects().AddMember(ctx, s.alice.caller(), service.AddMemberReq{ProjectID: s.project, IdentityID: s.carol.id, Role: domain.RoleWorker}); err != nil {
+		t.Fatal(err)
+	}
+	var last int64 // the add_member row's id; ReadChanges answers a page at a time
+	for {
+		rows, err := s.st.ReadChanges(ctx, last, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 0 {
+			break
+		}
+		last = rows[len(rows)-1].ID
+	}
+	for deadline := time.Now().Add(10 * time.Second); s.a.bus.Frontier() < last; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the bus read to %d, not to the add_member row %d", s.a.bus.Frontier(), last)
+		}
+	}
+	release()
+	s.waitLog(t, "the dispatcher dropped", 1)
+	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
+	if f := content(t, c.frame(t, s.win.Slow+time.Second)); f.ProjectID != s.project {
+		t.Fatalf("after the drop: %+v, want a doorbell for P", f)
+	}
+}
+
+// P-229 requirement 6 (tested; review B3): a change that is not a membership change re-reads no
+// entry. carol, a member of nothing, is never rechecked while bob files a task in P that rings
+// alice; alice's doorbell shows the dispatcher has routed that row.
+func TestDirectoryANonMembershipChangeRereadsNoEntry(t *testing.T) {
+	t.Parallel()
+	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow})
+	other := s.client(t, "s-carol", "")
+	s.register(t, s.carol, other, "worker")
+	c := s.client(t, "s-alice", "")
+	s.register(t, s.alice, c, "worker")
+	var carols atomic.Int64
+	hook := func(id string) {
+		if id == s.carol.id {
+			carols.Add(1)
+		}
+	}
+	s.st.listed.Store(&hook)
+	t.Cleanup(func() { s.st.listed.Store(nil) })
+	s.task(t, s.bob, "")
+	if f := content(t, c.frame(t, s.win.Slow+time.Second)); f.Kind != wake.KindBroadcast || f.ProjectID != s.project {
+		t.Fatalf("alice: %+v, want P's broadcast", f)
+	}
+	if n := carols.Load(); n != 0 {
+		t.Fatalf("a task change re-read carol's scopes %d times, want 0", n)
+	}
+	other.none(t, 100*time.Millisecond)
 }
