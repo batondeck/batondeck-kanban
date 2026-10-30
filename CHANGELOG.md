@@ -16,6 +16,10 @@ Notable changes to batondeck-kanban. The format follows
   `claude-code` sessions are two agents; on the board and in the assign menus, bob's live claim no
   longer shows alice's own same-named session as Busy, and two users' same-named agents stay two
   entries (P-335).
+- A worker registered under a name no token carried no longer keeps its wake doorbell after another
+  identity mints that name: delivery re-reads the label's owner and drops the entry, logged as
+  `its agent "<name>" is another agent's label`, instead of ringing it with the minter's work. A
+  worker under its own token's label is rung with no extra read (P-344).
 
 ## [0.1.0]
 

@@ -558,8 +558,10 @@ func (d *Directory) ringAll(co *coalescer) {
 
 // recheck re-resolves e's bearer uncached and re-reads its scopes, updating them in place (owner
 // ruling 2026-10-23): "" while the entry holds, else why it must be dropped. ok false is a failed
-// read, which keeps the entry and skips this delivery.
-func (d *Directory) recheck(ctx context.Context, e *entry) (why string, ok bool) {
+// read, which keeps the entry and skips this delivery. With agent (the delivery's recheck, not the
+// sweep's) a worker's label is judged again as restore judges it, so a free name another identity
+// has since minted stops ringing (P-344).
+func (d *Directory) recheck(ctx context.Context, e *entry, agent bool) (why string, ok bool) {
 	caller, err := d.o.Resolver.ResolveCaller(auth.FreshAccount(ctx), e.bearer)
 	if err != nil {
 		if be, isBD := domain.AsBatonDeckError(err); isBD && be.Code == domain.CodeUnauthenticated {
@@ -570,6 +572,11 @@ func (d *Directory) recheck(ctx context.Context, e *entry) (why string, ok bool)
 	}
 	if caller.Identity != e.identity {
 		return "its bearer resolves to another identity", true
+	}
+	if agent {
+		if why, ok := d.recheckAgent(ctx, e, caller); !ok || why != "" {
+			return why, ok
+		}
 	}
 	scopes, err := d.o.Scopes(ctx, caller)
 	if err != nil {
@@ -589,13 +596,31 @@ func (d *Directory) recheck(ctx context.Context, e *entry) (why string, ok bool)
 	return "", true
 }
 
-// sweep rechecks every entry.
+// recheckAgent is restore's agent check for a worker under a name that is not its bearer's own
+// token label: "" while CheckWakeAgent passes it, restore's reason when it is another agent's
+// label now. A master, an id: agent and a worker under its bearer's own label read nothing: the
+// mint refuses a label another identity holds, so the own label needs no token read.
+func (d *Directory) recheckAgent(ctx context.Context, e *entry, caller domain.Caller) (why string, ok bool) {
+	if e.label() == "" || (caller.Labelled && caller.Agent == e.agent) {
+		return "", true
+	}
+	if err := d.o.Sessions.CheckWakeAgent(ctx, caller, e.agent); err != nil {
+		if be, isBD := domain.AsBatonDeckError(err); isBD && be.Code == domain.CodeForbidden {
+			return fmt.Sprintf("its agent %q is another agent's label", e.agent), true
+		}
+		d.o.Logger.Printf("wake: re-reading the label of pid %d's agent: %+v", e.pid, err)
+		return "", false
+	}
+	return "", true
+}
+
+// sweep rechecks every entry; its recheck reads no token row (R3.5: 3 statements an entry).
 func (d *Directory) sweep(ctx context.Context) {
 	d.mu.Lock()
 	all := slices.Collect(maps.Values(d.entries))
 	d.mu.Unlock()
 	for _, e := range all {
-		if why, ok := d.recheck(ctx, e); ok && why != "" {
+		if why, ok := d.recheck(ctx, e, false); ok && why != "" {
 			d.drop(ctx, e.pid, why)
 		}
 	}
@@ -612,7 +637,8 @@ func (e *entry) label() string {
 }
 
 // deliver writes one released frame to its entry's socket, after the recheck: a revoked bearer, a
-// gone registry entry, a reused pid or a socket nobody answers drops the entry instead. The cursor
+// worker's name another identity has since minted (P-344), a gone registry entry, a reused pid or a
+// socket nobody answers drops the entry instead. The cursor
 // is the lower of the frame's and the bus's frontier (P-108), and is recorded once written.
 // ponytail: one socket write inline in the loop (bounded by WriteTimeout per step); a device has a
 // handful of entries. Upgrade path: a delivery goroutine per entry.
@@ -623,7 +649,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	if e == nil || e.adapter == "" {
 		return
 	}
-	why, ok := d.recheck(ctx, e)
+	why, ok := d.recheck(ctx, e, true)
 	if !ok {
 		return
 	}
