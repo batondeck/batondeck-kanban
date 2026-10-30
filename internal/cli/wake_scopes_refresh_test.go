@@ -89,7 +89,7 @@ func TestDirectoryRescopesOnAProjectCreatedAfterRegister(t *testing.T) {
 	if f := content(t, c.frame(t, s.win.Slow+time.Second)); f.Kind != wake.KindBroadcast || f.ProjectID != q.ProjectID {
 		t.Fatalf("after Q's task: %+v, want Q's broadcast", f)
 	}
-	if _, err := s.a.core.Projects().Delete(ctx, s.alice.caller(), service.DeleteProjectReq{ProjectID: q.ProjectID}); err != nil {
+	if _, err := s.a.core.Projects().Delete(ctx, s.alice.caller(), service.DeleteProjectReq(q)); err != nil {
 		t.Fatal(err)
 	}
 	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 2) // gained Q, then lost it
