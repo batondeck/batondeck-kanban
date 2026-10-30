@@ -22,7 +22,7 @@ var (
 )
 
 // sampleBriefing is a get_task_context answer with every required slice and map set and the
-// nullable sections (modelHint, resume, review) null: resume is null until P-117.
+// nullable sections (modelHint, resume, review) null.
 func sampleBriefing() service.GetTaskContextResp {
 	edge := service.DependencyEdge{ID: "E-1", ProjectID: "P-1", FromTaskID: "T-2", ToTaskID: "T-1", Type: "blocks", CreatedBy: "u-ada", Ts: "2026-10-23T00:00:00.000Z"}
 	return service.GetTaskContextResp{
@@ -180,7 +180,8 @@ func TestContextTools(t *testing.T) {
 
 // TestContextTaskBriefingShape: get_task_context as served carries items and workflow.allowedMoves
 // and no title, description or id, in its output schema and in a real answer (conductor's briefing
-// quirk, kept), and resume is null (P-117 is unported) in the answer and said so in the description.
+// quirk, kept), resume is present (null when the service answers none), and the description says
+// when resume is null (P-117).
 func TestContextTaskBriefingShape(t *testing.T) {
 	f := servicefake.New()
 	h := bootTools(t, f.Services())
@@ -226,8 +227,8 @@ func TestContextTaskBriefingShape(t *testing.T) {
 	if r, ok := out["resume"]; !ok || r != nil {
 		t.Errorf("get_task_context answered resume %v (present %v), want null", r, ok)
 	}
-	if want := "resume is not yet available and is always null; do not treat null as 'start fresh'"; !strings.Contains(tool.Description, want) {
+	if want := "branch, head commit and last checkpoint (sought in the newest 200 items); null if none"; !strings.Contains(tool.Description, want) || strings.Contains(tool.Description, "not yet available") || strings.Contains(tool.Description, "only when") {
 		t.Errorf("get_task_context's description %q does not say %q", tool.Description, want)
 	}
-	t.Logf("get_task_context output properties: %d; items, workflow.allowedMoves present; no title/description/id; resume null", len(props))
+	t.Logf("get_task_context output properties: %d; items, workflow.allowedMoves present; no title/description/id; resume present", len(props))
 }

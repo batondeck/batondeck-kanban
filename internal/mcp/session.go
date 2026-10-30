@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,16 +102,28 @@ func (t *sessionTable) of(key string) []*mcp.ServerSession {
 	return out
 }
 
-// leave counts one fewer and reports whether it was the agent session's last.
-func (t *sessionTable) leave(key string) (last bool) {
+// leave counts one fewer live MCP session on an agent session.
+func (t *sessionTable) leave(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.agents[key]--
-	if t.agents[key] > 0 {
-		return false
+	if t.agents[key] <= 0 {
+		delete(t.agents, key)
 	}
-	delete(t.agents, key)
-	return true
+}
+
+// LiveAgentSessions is the (identity, agent) pair of every agent session holding at least one live
+// MCP session in this process, unordered: the rows the retention sweep keeps however idle (P-279).
+func (s *Server) LiveAgentSessions() [][2]string {
+	s.sessions.mu.Lock()
+	defer s.sessions.mu.Unlock()
+	out := make([][2]string, 0, len(s.sessions.agents))
+	for key := range s.sessions.agents {
+		if identity, agent, ok := strings.Cut(key, "::"); ok {
+			out = append(out, [2]string{identity, agent})
+		}
+	}
+	return out
 }
 
 // sessionKind is how a session's caller authenticated (D6): an OAuth access token, else an API
@@ -123,10 +136,11 @@ func sessionKind(c domain.Caller) service.SessionKind {
 }
 
 // sessionMiddleware keeps the agent_sessions row of each MCP session: written at initialize (a
-// session over the bound is refused there, and go-sdk drops a session whose initialize failed),
-// touched by every tool call, removed when the session ends, by idle
-// collection, DELETE or close, when that was the last live MCP session of its agent. A bookkeeping
-// failure is logged and never fails the request.
+// session over the bound is refused there, and go-sdk drops a session whose initialize failed) and
+// touched by every tool call. The end of a session (idle collection, DELETE, Close, a restart)
+// leaves the row: plan Clarification 7 GCs it 30 min after its last request, which the retention
+// sweep does (AgentSessionIdle), skipping an agent LiveAgentSessions still names (P-279);
+// disconnect_agent deletes it at once. A bookkeeping failure is logged and never fails the request.
 //
 // The row is keyed by (identity, agent), not by MCP session: the agent is Caller.Agent (the token's
 // label, the OAuth client's name, else the session's clientInfo.name), so two clients on one token
@@ -188,17 +202,7 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 		_ = ss.Wait()
 		s.sessions.release(id)
 		s.tools.forget(id)
-		if !s.sessions.leave(key) {
-			return
-		}
-		// The request's context is gone with its request; the removal outlives it.
-		_, err := s.services.Sessions.RemoveAgentSession(context.WithoutCancel(ctx), caller, service.RemoveAgentSessionReq{SessionKey: key})
-		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
-			return // disconnect_agent deleted the row first
-		}
-		if err != nil {
-			s.log.Printf("mcp: remove agent session %s failed: %+v", key, err)
-		}
+		s.sessions.leave(key) // the row stays: the retention sweep collects it once idle (P-264)
 	}()
 	return res, nil
 }

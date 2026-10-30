@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -255,6 +256,92 @@ func oauth(t *testing.T, newStore Factory) {
 		}
 		if err := s.CreateOAuthFamily(ctx, oauthFamily("F-2", "C-none", 20)); err == nil {
 			t.Fatal("a family of a missing client was accepted")
+		}
+	})
+	// The retention sweep (P-125), with the cutoff at 300: codes and tokens that expired before it
+	// go, used or not and whatever their family, oldest expiry first, at most limit a statement;
+	// one expiring at the cutoff and a later one stay, and so do the client and the families.
+	t.Run("DeleteExpiredCodesAndTokensTakeTheOldestBeforeTheCutoff", func(t *testing.T) {
+		s := migrated(t, newStore)
+		noErr(t, s.CreateOAuthClient(ctx, oauthClient("C-1", 1)))
+		noErr(t, s.CreateOAuthFamily(ctx, oauthFamily("F-1", "C-1", 1)))
+		noErr(t, s.CreateOAuthFamily(ctx, oauthFamily("F-2", "C-1", 1)))
+		noErr(t, s.RevokeOAuthFamily(ctx, "F-1", 5, "refresh_reuse"))
+		// The keys sort against their expiry, so the order taken is the expiry's.
+		for hash, expires := range map[string]int64{"k-w": 400, "k-x": 300, "k-y": 200, "k-z": 100} {
+			c := oauthCode(hash, "C-1", 1)
+			c.ExpiresAt = expires
+			noErr(t, s.CreateOAuthCode(ctx, c))
+		}
+		if _, err := s.ConsumeOAuthCode(ctx, "k-z", 50); err != nil {
+			t.Fatal(err)
+		}
+		for _, x := range []struct {
+			hash, kind, family string
+			expires            int64
+		}{{"t-w", store.OAuthAccess, "F-2", 400}, {"t-x", store.OAuthRefresh, "F-2", 300}, {"t-y", store.OAuthRefresh, "F-1", 200}, {"t-z", store.OAuthAccess, "F-2", 100}} {
+			tok := oauthToken(x.hash, x.kind, x.family, "C-1", 1)
+			tok.ExpiresAt = x.expires
+			noErr(t, s.CreateOAuthToken(ctx, tok))
+		}
+		if _, err := s.ConsumeOAuthToken(ctx, "t-y", 60); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, page := range []struct {
+			limit int
+			want  int64
+		}{{1, 1}, {10, 1}, {10, 0}} {
+			if n, err := s.DeleteExpiredOAuthCodes(ctx, 300, page.limit); err != nil || n != page.want {
+				t.Fatalf("codes, limit %d: %d %v, want %d", page.limit, n, err, page.want)
+			}
+			if n, err := s.DeleteExpiredOAuthTokens(ctx, 300, page.limit); err != nil || n != page.want {
+				t.Fatalf("tokens, limit %d: %d %v, want %d", page.limit, n, err, page.want)
+			}
+			if page.limit == 1 {
+				// The first page took the oldest: k-z and t-z, not k-y and t-y.
+				if _, err := s.GetOAuthToken(ctx, "t-z"); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("t-z after the first page: %v, want ErrNotFound", err)
+				}
+				if _, err := s.GetOAuthToken(ctx, "t-y"); err != nil {
+					t.Fatalf("t-y after the first page: %v, want it kept", err)
+				}
+			}
+		}
+		for _, h := range []string{"t-y", "t-z"} {
+			if _, err := s.GetOAuthToken(ctx, h); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("token %s: %v, want it deleted", h, err)
+			}
+		}
+		for _, h := range []string{"t-x", "t-w"} {
+			if _, err := s.GetOAuthToken(ctx, h); err != nil {
+				t.Fatalf("token %s: %v, want it kept", h, err)
+			}
+		}
+		// A code can only be read by consuming it; the sweep's last step, so that is fine here.
+		for _, h := range []string{"k-y", "k-z"} {
+			if _, err := s.ConsumeOAuthCode(ctx, h, 70); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("code %s: %v, want it deleted", h, err)
+			}
+		}
+		for _, h := range []string{"k-x", "k-w"} {
+			if _, err := s.ConsumeOAuthCode(ctx, h, 70); err != nil {
+				t.Fatalf("code %s: %v, want it kept", h, err)
+			}
+		}
+		if _, err := s.GetOAuthClient(ctx, "C-1"); err != nil {
+			t.Fatalf("the client: %v, want it kept", err)
+		}
+		for _, f := range []string{"F-1", "F-2"} {
+			if _, err := s.GetOAuthFamily(ctx, f); err != nil {
+				t.Fatalf("family %s: %v, want it kept", f, err)
+			}
+		}
+		for _, limit := range []int{0, -1} {
+			_, err := s.DeleteExpiredOAuthCodes(ctx, 300, limit)
+			wantErr(t, err, domain.CodeValidation, "")
+			_, err = s.DeleteExpiredOAuthTokens(ctx, 300, limit)
+			wantErr(t, err, domain.CodeValidation, "")
 		}
 	})
 }

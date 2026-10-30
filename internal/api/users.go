@@ -14,8 +14,9 @@ import (
 )
 
 // userRoutes are Settings' users page (R1.15): the workspace admin lists the local accounts and
-// adds one. Nothing else is here by design: disable, password reset and role changes are the host's
-// `batondeck-kanban user disable|passwd`. Both answer FORBIDDEN to anyone but a workspace admin.
+// adds one. Nothing else is here by design: disable, enable, password reset and role changes are the
+// host's `batondeck-kanban user disable|enable|passwd`. Both answer FORBIDDEN to anyone but a
+// workspace admin.
 func userRoutes(o *Options) []route {
 	return []route{
 		{Method: "GET", Path: "/api/users", h: adminOnly(o, listUsers)},

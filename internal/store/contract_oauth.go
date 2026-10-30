@@ -89,6 +89,14 @@ type OAuth interface {
 	// DeleteUnusedOAuthClients deletes every client never used and created before createdBefore,
 	// and returns how many.
 	DeleteUnusedOAuthClients(ctx context.Context, createdBefore int64) (int64, error)
+	// DeleteExpiredOAuthCodes removes at most limit codes whose ExpiresAt is before before, used or
+	// not, oldest expiry first (the retention sweep), and returns how many; a limit <= 0 is
+	// VALIDATION. The client and the family stay.
+	DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error)
+	// DeleteExpiredOAuthTokens removes at most limit access and refresh tokens whose ExpiresAt is
+	// before before, whatever their UsedAt, RevokedAt or family, oldest expiry first (the retention
+	// sweep), and returns how many; a limit <= 0 is VALIDATION. The family stays.
+	DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error)
 
 	// CreateOAuthCode inserts c; UsedAt is ignored. Its ClientID must name a client.
 	CreateOAuthCode(ctx context.Context, c OAuthCode) error

@@ -379,6 +379,36 @@ func (s *Store) DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, l
 	})
 }
 
+// DeleteExpiredAlertStates is the engines' statement: the rows expired at or before now whose
+// ticket is gone or DONE, oldest expiry first (then the fingerprint's key), at most limit.
+func (s *Store) DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a sweep needs a positive limit", map[string]any{"limit": limit})
+	}
+	return get(ctx, s, func(st *state) (int64, error) {
+		var keys [][3]string
+		for k, a := range st.alertStates {
+			if a.ExpiresAt == 0 || a.ExpiresAt > now {
+				continue
+			}
+			if task, ok := st.tasks[[2]string{a.ProjectID, a.TaskID}]; ok && task.Status != domain.Done {
+				continue
+			}
+			keys = append(keys, k)
+		}
+		slices.SortFunc(keys, func(x, y [3]string) int {
+			return cmp.Or(cmp.Compare(st.alertStates[x].ExpiresAt, st.alertStates[y].ExpiresAt), cmp.Compare(x[2], y[2]))
+		})
+		if len(keys) > limit {
+			keys = keys[:limit]
+		}
+		for _, k := range keys {
+			delete(st.alertStates, k)
+		}
+		return int64(len(keys)), nil
+	})
+}
+
 // deleteProjectOncall is a project delete's cascade: its integrations, their deliveries, raw
 // bodies and alert states (the engines' ON DELETE CASCADE).
 func deleteProjectOncall(st *state, projectID string) {

@@ -68,15 +68,16 @@ func TestEnvVarsListEveryVariableTheSourcesRead(t *testing.T) {
 	}
 }
 
-// serve -h and doctor -h print every variable with its default and the config-file rule, and exit 0.
+// serve -h and doctor -h print every variable with its default and the config-file rule on stdout,
+// and exit 0.
 func TestServeAndDoctorHelpListEveryVariable(t *testing.T) {
 	for _, cmd := range []string{"serve", "doctor"} {
-		code, _, errs := run(cmd, "-h")
-		if code != 0 || !strings.Contains(errs, "usage: batondeck-kanban "+cmd) || !strings.Contains(errs, "environment > config file > defaults") {
-			t.Fatalf("%s -h: %d %q", cmd, code, errs)
+		code, out, errs := run(cmd, "-h")
+		if code != 0 || errs != "" || !strings.Contains(out, "usage: batondeck-kanban "+cmd) || !strings.Contains(out, "environment > config file > defaults") {
+			t.Fatalf("%s -h: %d %q %q", cmd, code, out, errs)
 		}
 		for _, v := range core.EnvVars() {
-			if !strings.Contains(errs, "  "+v.Name+"\n") || !strings.Contains(errs, "default: "+v.Default+"\n") {
+			if !strings.Contains(out, "  "+v.Name+"\n") || !strings.Contains(out, "default: "+v.Default+"\n") {
 				t.Errorf("%s -h does not list %s with its default", cmd, v.Name)
 			}
 		}
@@ -92,5 +93,46 @@ func TestHelpExitsZero(t *testing.T) {
 	}
 	if code, _, errs := run("bogus"); code != 2 || !strings.Contains(errs, `unknown command "bogus"`) {
 		t.Fatalf("bogus: %d %q", code, errs)
+	}
+}
+
+// P-311: user, token and session answer help, -h and --help in a subcommand's place with their
+// usage on stdout and 0, as the top level does; a bare group or an unknown subcommand is still a
+// usage error on stderr.
+func TestSubcommandHelpExitsZero(t *testing.T) {
+	for _, group := range []string{"user", "token", "session"} {
+		for _, arg := range []string{"help", "-h", "--help"} {
+			code, out, errs := run(group, arg)
+			if code != 0 || !strings.HasPrefix(out, "usage: batondeck-kanban "+group+" <subcommand>") || errs != "" {
+				t.Errorf("%s %s: %d %q %q", group, arg, code, out, errs)
+			}
+		}
+		for _, args := range [][]string{{group}, {group, "frob"}} {
+			code, out, errs := run(args...)
+			if code != 2 || out != "" || !strings.Contains(errs, "usage: batondeck-kanban "+group) {
+				t.Errorf("%v: %d %q %q, want 2 and the usage on stderr", args, code, out, errs)
+			}
+		}
+	}
+}
+
+// P-311: every command's and subcommand's own -h and --help print its flags on stdout and exit 0;
+// a flag that does not parse is still the error and the flags on stderr, exit 2.
+func TestEveryFlagSetHelpExitsZero(t *testing.T) {
+	commands := [][]string{{"serve"}, {"migrate"}, {"doctor"}, {"healthcheck"},
+		{"user", "add"}, {"user", "disable"}, {"user", "enable"}, {"user", "passwd"}, {"user", "list"},
+		{"token", "create"}, {"token", "list"}, {"token", "revoke"},
+		{"session", "register"}, {"session", "unregister"}}
+	for _, cmd := range commands {
+		for _, flag := range []string{"-h", "--help"} {
+			code, out, errs := run(append(slices.Clone(cmd), flag)...)
+			if code != 0 || !strings.Contains(out, "-config") || errs != "" {
+				t.Errorf("%v %s: %d %q %q, want 0 and the flags on stdout", cmd, flag, code, out, errs)
+			}
+		}
+		code, out, errs := run(append(slices.Clone(cmd), "-bogus")...)
+		if code != 2 || out != "" || !strings.Contains(errs, "flag provided but not defined: -bogus") || !strings.Contains(errs, "-config") {
+			t.Errorf("%v -bogus: %d %q %q, want 2 and the error on stderr", cmd, code, out, errs)
+		}
 	}
 }

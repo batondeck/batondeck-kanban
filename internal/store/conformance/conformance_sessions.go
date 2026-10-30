@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -93,6 +94,57 @@ func sessions(t *testing.T, newStore Factory) {
 		}
 		if n, err := s.DeleteUserSessions(ctx, "U-none"); err != nil || n != 0 {
 			t.Fatalf("DeleteUserSessions of no user: %d %v, want 0", n, err)
+		}
+	})
+
+	// The retention sweep (P-44): only sessions that expired before the cutoff go, at most limit a
+	// statement, oldest expiry first; one expiring at the cutoff and a later one stay.
+	t.Run("SessionsDeleteExpiredTakesTheOldestBeforeTheCutoff", func(t *testing.T) {
+		s := migrated(t, newStore)
+		if err := s.CreateUser(ctx, testUser("U-1", "a@x.test", 1)); err != nil {
+			t.Fatal(err)
+		}
+		// The hashes sort against their expiry, so the order taken is the expiry's.
+		for _, x := range []struct {
+			hash    string
+			expires int64
+		}{{"h-v", 50}, {"h-w", 40}, {"h-x", 30}, {"h-y", 20}, {"h-z", 10}} {
+			if err := s.CreateSession(ctx, store.Session{IDHash: x.hash, UserID: "U-1", CSRFToken: "c", CreatedAt: 1, LastSeenAt: 1, ExpiresAt: x.expires}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		gone := func(hashes ...string) {
+			t.Helper()
+			for _, h := range hashes {
+				if _, err := s.GetSession(ctx, h); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("session %s: %v, want it deleted", h, err)
+				}
+			}
+		}
+		kept := func(hashes ...string) {
+			t.Helper()
+			for _, h := range hashes {
+				if _, err := s.GetSession(ctx, h); err != nil {
+					t.Fatalf("session %s: %v, want it kept", h, err)
+				}
+			}
+		}
+		if n, err := s.DeleteExpiredSessions(ctx, 40, 2); err != nil || n != 2 {
+			t.Fatalf("first page: %d %v, want 2", n, err)
+		}
+		gone("h-z", "h-y")
+		kept("h-x", "h-w", "h-v")
+		if n, err := s.DeleteExpiredSessions(ctx, 40, 10); err != nil || n != 1 {
+			t.Fatalf("second page: %d %v, want 1", n, err)
+		}
+		gone("h-x")
+		kept("h-w", "h-v")
+		if n, err := s.DeleteExpiredSessions(ctx, 40, 10); err != nil || n != 0 {
+			t.Fatalf("third page: %d %v, want 0", n, err)
+		}
+		for _, limit := range []int{0, -1} {
+			_, err := s.DeleteExpiredSessions(ctx, 40, limit)
+			wantErr(t, err, domain.CodeValidation, "")
 		}
 	})
 

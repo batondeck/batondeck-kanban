@@ -42,7 +42,9 @@ const (
 	AssignedMaxHold = time.Second
 	SlowWindow      = 5 * time.Second
 	// Sweep is how often every entry's bearer is re-resolved uncached and its scopes re-read: 3
-	// statements per entry (GetToken or GetOAuthToken, GetUser, ListProjects), none in between.
+	// statements per entry (GetToken or GetOAuthToken, GetUser, ListProjects). In between, the same
+	// recheck runs only when the dispatcher reads a membership change (rescopes) or its tap drops
+	// changes (P-229): an idle directory issues none.
 	Sweep = 60 * time.Second
 )
 

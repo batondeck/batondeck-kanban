@@ -84,19 +84,10 @@ func (s sessions) TouchAgentSession(ctx context.Context, caller domain.Caller, r
 	return resp, s.c.mapErr("touch_agent_session", err)
 }
 
-func (s sessions) RemoveAgentSession(ctx context.Context, caller domain.Caller, req RemoveAgentSessionReq) (resp RemoveAgentSessionResp, err error) {
-	defer s.c.recovered("remove_agent_session", &err)
-	agent, err := ownKey(caller, req.SessionKey)
-	if err != nil {
-		return resp, err
-	}
-	return resp, s.c.mapErr("remove_agent_session", s.c.store.DeleteAgentSession(ctx, caller.Identity, agent))
-}
-
 // DisconnectAgent ends the live sessions before it deletes the row, so a tool call racing it cannot
-// touch the row back into being on a session that is still open; the end of the last session
-// deletes the row too (RemoveAgentSession), and whichever runs second finds it gone (NOT_FOUND,
-// which the transport's end ignores).
+// touch the row back into being on a session that is still open. The end of a session leaves the
+// row (P-264), so the delete here is the one that removes it; a row already gone (the retention
+// sweep's, or a concurrent disconnect's) is NOT_FOUND only when no live session was ended either.
 func (s sessions) DisconnectAgent(ctx context.Context, caller domain.Caller, req DisconnectAgentReq) (resp DisconnectAgentResp, err error) {
 	defer s.c.recovered("disconnect_agent", &err)
 	if _, err := s.c.authorize(ctx, caller, "", "disconnect_agent", domain.GrantSubject{}, false); err != nil {
@@ -241,7 +232,7 @@ func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agen
 		}
 		return nil
 	}
-	refused, err := s.c.labelRefused(ctx, caller, agent)
+	refused, err := s.c.labelRefused(ctx, s.c.store, caller, agent)
 	if err != nil {
 		return s.c.mapErr("register_wake_session", err)
 	}
@@ -302,8 +293,10 @@ func (s sessions) DropWakeSession(ctx context.Context, id string) (err error) {
 }
 
 // WakeScopes is the token scopes a caller's doorbell listener subscribes to: its own (the assigned
-// doorbells naming it) and BroadcastScope of every project it is a member of, read once (one
-// ListProjects). A membership gained after the read is not heard until the listener reconnects.
+// doorbells naming it) and BroadcastScope of every project it is a member of (one ListProjects).
+// The device directory (internal/wake) reads it at register and re-reads it for every entry on each
+// Sweep and whenever it reads an add_member, remove_member, create_project or delete_project change,
+// so a membership is heard from its own change on (P-229, P-331).
 func (c *Core) WakeScopes(ctx context.Context, caller domain.Caller) ([]string, error) {
 	if caller.TokenScope == "" {
 		return nil, internalf("wake scopes: the caller has no token scope")

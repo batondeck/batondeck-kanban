@@ -38,12 +38,14 @@ const (
 	// get_board, snapshot dropped: the board and one GROUP BY status count. A cached snapshot
 	// answers with none, which would pin nothing.
 	pinGetBoard = 2
-	// claim_next, snapshot cached: the frontier claim, the summary, the event and the change row.
-	pinClaimNext = 4
-	// claim_next on Postgres: the same four and NotifyChanges, the pg_notify every change row sends
+	// claim_next, snapshot cached: the frontier claim, the summary, the event and the change row,
+	// then resume's artifacts and one page of context items, read after the commit. Raised from 4 by
+	// P-117 for those two: resume was always null without them.
+	pinClaimNext = 6
+	// claim_next on Postgres: the same six and NotifyChanges, the pg_notify every change row sends
 	// the other processes' WatchChanges (internal/store/watch.go). Raised from the plan's 4 for that
-	// statement alone; SQLite holds 4.
-	pinClaimNextPostgres = 5
+	// statement, and by P-117 for resume's two reads; SQLite holds 6.
+	pinClaimNextPostgres = 7
 	// get_task_context, snapshot cached: the task, its summary, a page of items, its memory, the
 	// edges on each side, its artifacts, its attachments and its open follow-ups. Raised from 6 by
 	// P-236 for the last three: one statement each, never one per row.

@@ -3,8 +3,12 @@
 // outlived its window — memory past its own expiry, change-log rows past ChangeLog, tool_calls rows
 // past ToolCalls, the agent sessions idle past AgentSessionIdle (ADR-0004), the on-call deliveries
 // and the raw webhook bodies past the expiry stamped on each at write time (retention.deliveries_days
-// and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), and the blobs no attachment or
-// memory entry references any more. Task events are kept. Each table's delete is bounded per
+// and raw_bodies_days, 30 and 7 by default, plan §Clarifications 5), the on-call alert states past
+// that same delivery window once their ticket is DONE or gone, the browser sessions expired and
+// the API tokens expired or revoked more than LapsedGrace ago (a token's newest row per label stays,
+// as the label-ownership record), the OAuth codes and tokens expired more than LapsedGrace ago, and
+// the blobs no attachment or memory entry references any more.
+// Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.
 package retention
@@ -30,6 +34,12 @@ const (
 	// AgentSessionIdle is how long an agent session row outlives its last request (ADR-0004: the
 	// GC that replaced prune_agent_sessions).
 	AgentSessionIdle = 30 * time.Minute
+	// LapsedGrace is how long a lapsed credential's row outlives its expiry or revocation before a
+	// sweep deletes it: a browser session past its expiry, an API token past its expiry or
+	// revocation, an OAuth code or token past its expiry. For that week `token list` still shows a
+	// lapsed token with its status, and a rotated OAuth refresh token presented again still finds
+	// its row and revokes its family.
+	LapsedGrace = 7 * 24 * time.Hour
 )
 
 // Store is the slice of the store a sweep deletes through.
@@ -37,9 +47,14 @@ type Store interface {
 	DeleteExpiredMemory(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteChangesOlderThan(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteToolCallsOlderThan(ctx context.Context, before int64, limit int) (int64, error)
-	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteIdleAgentSessions(ctx context.Context, before int64, limit int, keep []store.AgentSessionKey) (int64, error)
+	DeleteExpiredSessions(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteLapsedTokens(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredOAuthCodes(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredOAuthTokens(ctx context.Context, before int64, limit int) (int64, error)
 	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
+	DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
 }
 
@@ -59,24 +74,30 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, AgentSessions, Deliveries, RawBodies, Blobs int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens int64
+	Deliveries, RawBodies, AlertStates, Blobs                                              int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
 // drops it), and the sweep goes on to the next step. CollectBlobs deletes the unreferenced blobs a
-// sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob.
+// sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob. Live is the agent
+// sessions with a live MCP session in this process (mcp.Server.LiveAgentSessions), read once per
+// sweep: their rows are not idle however long ago their last request was (P-279); nil keeps none.
 type Sweeper struct {
 	Store        Store
 	Windows      Windows
 	Now          func() time.Time
 	Report       func(step string, err error)
 	CollectBlobs func(ctx context.Context, sha256s []string)
+	Live         func() []store.AgentSessionKey
 }
 
 // Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
-// then the expired deliveries
-// (each with its raw body) and the expired raw bodies of kept deliveries, then one Batch of the blobs
-// unreferenced for BlobGrace (a blob CollectBlobs could not delete is listed again next tick).
+// then the browser sessions, API tokens, OAuth codes and OAuth tokens lapsed more than LapsedGrace
+// ago, then the expired deliveries (each with its raw body) and the expired raw bodies of kept
+// deliveries, then the expired alert states whose ticket is DONE or gone (an open ticket's stays, so
+// a late firing still appends to it), then one Batch of the blobs unreferenced for BlobGrace (a
+// blob CollectBlobs could not delete is listed again next tick).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	now := time.Now
 	if s.Now != nil {
@@ -108,11 +129,21 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.ToolCalls = step("tool calls", func(limit int) (int64, error) {
 		return s.Store.DeleteToolCallsOlderThan(ctx, ms-s.Windows.ToolCalls.Milliseconds(), limit)
 	})
+	var live []store.AgentSessionKey
+	if s.Live != nil {
+		live = s.Live()
+	}
 	out.AgentSessions = step("agent sessions", func(limit int) (int64, error) {
-		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit)
+		return s.Store.DeleteIdleAgentSessions(ctx, ms-s.Windows.AgentSessions.Milliseconds(), limit, live)
 	})
+	lapsed := ms - LapsedGrace.Milliseconds()
+	out.Sessions = step("sessions", func(limit int) (int64, error) { return s.Store.DeleteExpiredSessions(ctx, lapsed, limit) })
+	out.Tokens = step("tokens", func(limit int) (int64, error) { return s.Store.DeleteLapsedTokens(ctx, lapsed, limit) })
+	out.OAuthCodes = step("oauth codes", func(limit int) (int64, error) { return s.Store.DeleteExpiredOAuthCodes(ctx, lapsed, limit) })
+	out.OAuthTokens = step("oauth tokens", func(limit int) (int64, error) { return s.Store.DeleteExpiredOAuthTokens(ctx, lapsed, limit) })
 	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
 	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })
+	out.AlertStates = step("alert states", func(limit int) (int64, error) { return s.Store.DeleteExpiredAlertStates(ctx, ms, limit) })
 	if s.CollectBlobs != nil {
 		bs, err := s.Store.ListUnreferencedBlobs(ctx, ms-BlobGrace.Milliseconds(), Batch)
 		if err != nil && s.Report != nil && ctx.Err() == nil {

@@ -99,7 +99,10 @@ func tokenInfo(r store.Token, now time.Time) TokenInfo {
 // Create mints a token acting for identityID (a user's id), named label, living ttl (0 means
 // DefaultTokenTTL; above MaxTokenTTL is VALIDATION). A label whose agent any token of another
 // identity has carried, live, revoked or expired, is VALIDATION (P-257 B1, review round 2): the
-// label is that agent, the first identity to mint it keeps it, and a lapse does not hand it on.
+// label is that agent, the first identity to mint it keeps it, and a lapse does not hand it on. A
+// label whose agent starts "id:" is VALIDATION for everyone, the minter's own id included: that is
+// the form AgentID derives for a caller that names no agent, so as a label it would present the
+// token's caller as that identity's agentless self (P-352).
 // The returned plaintext is the ONLY time the secret exists outside a hash.
 func (t *TokenService) Create(ctx context.Context, identityID, subject, label string, ttl time.Duration) (plaintext string, info TokenInfo, err error) {
 	label = strings.TrimSpace(label)
@@ -111,6 +114,10 @@ func (t *TokenService) Create(ctx context.Context, identityID, subject, label st
 	}
 	if ttl < time.Minute || ttl > MaxTokenTTL {
 		return "", TokenInfo{}, domain.Validation("a token lives from 1 minute to 365 days", map[string]any{"field": "ttl"})
+	}
+	if agent := domain.TokenAgent(label); strings.HasPrefix(agent, "id:") {
+		return "", TokenInfo{}, domain.Validation("a token label cannot start with \"id:\": that form is the id the server derives for a caller that names no agent",
+			map[string]any{"field": "label", "label": agent})
 	}
 	if err := t.labelFree(ctx, identityID, label); err != nil {
 		return "", TokenInfo{}, err
@@ -135,11 +142,13 @@ func (t *TokenService) Create(ctx context.Context, identityID, subject, label st
 }
 
 // labelFree refuses a label whose agent (domain.TokenAgent) any token row of another identity
-// carries, whatever its status: token rows are never deleted, so the first identity to mint a label
-// owns it, and work handed to the label is never claimable by whoever mints it after a lapse. The
-// default label names no agent and is everyone's. It is a read before the insert, not a unique
-// index (no migration): two identities minting one new label at the same instant can both land,
-// and the service's label check (lifecycle ownLabel) then refuses both below master, for good.
+// carries, whatever its status, so the first identity to mint a label owns it, and work handed to
+// the label is never claimable by whoever mints it after a lapse. The retention sweep deletes lapsed
+// token rows but keeps each identity's newest row of each label (retention.LapsedGrace), so every
+// label an identity carried still has a row here. The default label names no agent and is
+// everyone's. It is a read before the insert, not a unique index (no migration): two identities
+// minting one new label at the same instant can both land, and the service's label check
+// (lifecycle ownLabel) then refuses both below master, for good.
 func (t *TokenService) labelFree(ctx context.Context, identityID, label string) error {
 	agent := domain.TokenAgent(label)
 	if agent == "" {

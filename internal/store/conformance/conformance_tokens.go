@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -87,6 +88,79 @@ func tokens(t *testing.T, newStore Factory) {
 		}
 		if err := s.RevokeToken(ctx, "none", 1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("RevokeToken: %v", err)
+		}
+	})
+	// The retention sweep (P-44), with the cutoff at 300: an expired and a revoked token of a label
+	// that has a newer row go, oldest first (created_at, then id), at most limit a statement. Kept:
+	// the newest row of each (identity, label) however lapsed (label ownership reads it), per
+	// identity, with a created_at tie broken by id; a live token; and tokens lapsed at or after the
+	// cutoff.
+	t.Run("TokensDeleteLapsedKeepsTheNewestRowOfEachLabel", func(t *testing.T) {
+		s := migrated(t, newStore)
+		tok := func(id, identity, label string, created, expires int64) store.Token {
+			return store.Token{ID: id, IdentityID: identity, Subject: identity + "@x.test", SecretHash: "sha-" + id,
+				Label: label, Permissions: "[]", CreatedAt: created, ExpiresAt: expires}
+		}
+		rows := []store.Token{
+			tok("t-k", "U-1", "tie", 90, 100),      // kept: newest of (U-1, tie), the tie broken by id
+			tok("t-j", "U-1", "tie", 90, 100),      // deleted: expired, t-k is newer by id
+			tok("t-i", "U-2", "scout", 15, 100),    // kept: newest of (U-2, scout), lapsed
+			tok("t-h", "U-1", "late", 65, 10_000),  // kept: revoked at 350, after the cutoff
+			tok("t-g", "U-1", "late", 70, 10_000),  // kept: live, newest of (U-1, late)
+			tok("t-f", "U-1", "late", 60, 400),     // kept: expired at 400, after the cutoff
+			tok("t-e", "U-1", "live", 5, 120),      // deleted: expired, t-d is newer
+			tok("t-d", "U-1", "live", 50, 10_000),  // kept: live
+			tok("t-c", "U-1", "scout", 40, 150),    // kept: newest of (U-1, scout), lapsed
+			tok("t-b", "U-1", "scout", 20, 10_000), // deleted: revoked at 30, t-c is newer
+			tok("t-a", "U-1", "scout", 10, 100),    // deleted: expired, t-c is newer
+		}
+		for _, r := range rows {
+			if err := s.CreateToken(ctx, r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for id, at := range map[string]int64{"t-b": 30, "t-h": 350} {
+			if err := s.RevokeToken(ctx, id, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		left := func() map[string]bool {
+			t.Helper()
+			l, err := s.ListTokens(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := map[string]bool{}
+			for _, x := range l {
+				out[x.ID] = true
+			}
+			return out
+		}
+		if n, err := s.DeleteLapsedTokens(ctx, 300, 2); err != nil || n != 2 {
+			t.Fatalf("first page: %d %v, want 2", n, err)
+		}
+		if l := left(); l["t-e"] || l["t-a"] || !l["t-b"] || !l["t-j"] {
+			t.Fatalf("after the first page %v: want t-e and t-a (the oldest) gone, t-b and t-j left", l)
+		}
+		if n, err := s.DeleteLapsedTokens(ctx, 300, 10); err != nil || n != 2 {
+			t.Fatalf("second page: %d %v, want 2", n, err)
+		}
+		want := map[string]bool{"t-c": true, "t-d": true, "t-f": true, "t-g": true, "t-h": true, "t-i": true, "t-k": true}
+		if l := left(); len(l) != len(want) {
+			t.Fatalf("left %v, want %v", l, want)
+		} else {
+			for id := range want {
+				if !l[id] {
+					t.Fatalf("left %v, want %v", l, want)
+				}
+			}
+		}
+		if n, err := s.DeleteLapsedTokens(ctx, 300, 10); err != nil || n != 0 {
+			t.Fatalf("third page: %d %v, want 0", n, err)
+		}
+		for _, limit := range []int{0, -1} {
+			_, err := s.DeleteLapsedTokens(ctx, 300, limit)
+			wantErr(t, err, domain.CodeValidation, "")
 		}
 	})
 }

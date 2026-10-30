@@ -189,10 +189,8 @@ func (s contextSvc) compose(ctx context.Context, caller domain.Caller, req GetTa
 	out := GetTaskContextResp{
 		Artifacts: []Artifact{}, Attachments: []AttachmentBrief{}, Fields: map[string]FieldValue{},
 		Items: []ContextItem{}, Memory: []MemoryEntry{}, OpenFollowUps: []OpenFollowUp{},
-		Deps:     TaskDeps{BlockedBy: []string{}, Blocks: []string{}, Edges: []DependencyEdge{}},
-		Workflow: Workflow{Status: task.Status, AllowedMoves: domain.AllowedNext(task.Status), Lanes: snap.Board.Columns},
-		// TODO(spec): resume (conductor's resumeState over the task's artifacts and checkpoint items)
-		// is unported (P-117); it reads as null.
+		Deps:        TaskDeps{BlockedBy: []string{}, Blocks: []string{}, Edges: []DependencyEdge{}},
+		Workflow:    Workflow{Status: task.Status, AllowedMoves: domain.AllowedNext(task.Status), Lanes: snap.Board.Columns},
 		Deliverable: task.Deliverable,
 	}
 	if out.Workflow.AllowedMoves == nil {
@@ -242,6 +240,10 @@ func (s contextSvc) compose(ctx context.Context, caller domain.Caller, req GetTa
 			return GetTaskContextResp{}, err
 		}
 	}
+	// resume (P-117) reuses the artifacts above and, when it is the newest page and settles the last
+	// checkpoint, the items page below; otherwise it reads the newest resumeItemsMax items.
+	var cp *Checkpoint
+	settled := false
 	if include["items"] {
 		page, err := st.ListContextItems(ctx, req.ProjectID, req.TaskID, store.ContextItemsQuery{Limit: limit, Cursor: req.Cursor})
 		if err != nil {
@@ -251,7 +253,19 @@ func (s contextSvc) compose(ctx context.Context, caller domain.Caller, req GetTa
 			out.Items = append(out.Items, itemOut(it))
 		}
 		out.NextCursor = page.NextCursor
+		if req.Cursor == "" {
+			cp = lastCheckpoint(page.Items)
+			settled = cp != nil || page.NextCursor == ""
+		}
 	}
+	if !settled {
+		page, err := st.ListContextItems(ctx, req.ProjectID, req.TaskID, store.ContextItemsQuery{Limit: resumeItemsMax})
+		if err != nil {
+			return GetTaskContextResp{}, err
+		}
+		cp = lastCheckpoint(page.Items)
+	}
+	out.Resume = resumeFrom(arts, cp)
 	if include["memory"] {
 		entries, err := st.ReadMemory(ctx, req.ProjectID, req.TaskID, store.ReadMemoryQuery{Identity: caller.Identity, Limit: limit})
 		if err != nil {

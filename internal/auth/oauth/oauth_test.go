@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/retention"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -311,6 +312,51 @@ func TestRefusalRefreshTokenReusedRevokesTheFamily(t *testing.T) {
 	st, fresh := f.exchange(t, clientID, code, verifier)
 	if _, ok := f.resolves(t, fresh["access_token"].(string)); st != http.StatusOK || !ok {
 		t.Fatalf("a fresh sign-in after the revocation: %d %v", st, fresh)
+	}
+}
+
+// P-125: the retention sweep keeps a lapsed OAuth row for LapsedGrace, so the reuse rules still
+// hold inside it. A rotated refresh token presented again after its expiry, and after a sweep, still
+// revokes its family; so does an authorization code exchanged again after its expiry and a sweep.
+func TestReuseInsideTheSweepsGraceStillRevokesTheFamily(t *testing.T) {
+	const day = 24 * time.Hour
+	f := newFixture(t)
+	ctx := context.Background()
+	sw := &retention.Sweeper{Store: f.st, Now: f.clk.now, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+
+	clientID, code, verifier := f.authorize(t, "master", nil)
+	_, first := f.exchange(t, clientID, code, verifier)
+	if st, second := f.refreshCall(t, clientID, first["refresh_token"].(string)); st != http.StatusOK {
+		t.Fatalf("rotation: %d %v", st, second)
+	}
+	// Past the rotated token's expiry by six days, inside the grace: the sweep takes the code and
+	// the two access tokens, lapsed by more than the grace, and keeps both refresh tokens.
+	f.clk.add(DefaultRefreshTTL + retention.LapsedGrace - day)
+	if got := sw.Sweep(ctx); got.OAuthCodes != 1 || got.OAuthTokens != 2 {
+		t.Fatalf("the first sweep: %+v, want the code and the two access tokens", got)
+	}
+	st, m := f.refreshCall(t, clientID, first["refresh_token"].(string))
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	fam, err := f.st.GetOAuthFamily(ctx, familyOf(auth.HashOAuthValue(code)))
+	if err != nil || fam.RevokedReason != "refresh_reuse" {
+		t.Fatalf("family: %+v %v, want revoked for refresh_reuse after the sweep", fam, err)
+	}
+
+	clientID, code, verifier = f.authorize(t, "master", nil)
+	if st, m := f.exchange(t, clientID, code, verifier); st != http.StatusOK {
+		t.Fatalf("the second grant: %d %v", st, m)
+	}
+	// Past the second code's expiry by six days, inside the grace: the sweep takes the first grant's
+	// refresh tokens, now lapsed by more than the grace, and keeps the code.
+	f.clk.add(retention.LapsedGrace - day)
+	if got := sw.Sweep(ctx); got.OAuthCodes != 0 || got.OAuthTokens != 2 {
+		t.Fatalf("the second sweep: %+v, want the first grant's two refresh tokens only", got)
+	}
+	st, m = f.exchange(t, clientID, code, verifier)
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	fam, err = f.st.GetOAuthFamily(ctx, familyOf(auth.HashOAuthValue(code)))
+	if err != nil || fam.RevokedReason != "code_reuse" {
+		t.Fatalf("family: %+v %v, want revoked for code_reuse after the sweep", fam, err)
 	}
 }
 

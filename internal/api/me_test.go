@@ -206,3 +206,25 @@ func TestALapsedLabelStaysItsMintersOnTheStack(t *testing.T) {
 		refused("once carol's tokens are revoked or expired")
 	})
 }
+
+// P-352: on each engine, a REST mint of a label of the form "id:<identity>" is refused, another
+// member's id and the caller's own alike, and writes no token; an ordinary label still mints.
+func TestAnIDLabelIsRefusedAtTheRESTMint(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		carol := h.as("carol")
+		for _, label := range []string{"id:" + carol.userID, "id:" + h.userID} {
+			code, out := h.do("POST", "/api/me/cli-tokens", `{"label":"`+label+`","ttlSeconds":3600}`, nil)
+			if code != http.StatusBadRequest || codeOf(t, out) != "VALIDATION" || !strings.Contains(out, `"label":"`+label+`"`) {
+				t.Fatalf("mint %q: %d %s, want 400 VALIDATION naming the label", label, code, out)
+			}
+		}
+		code, out := h.do("GET", "/api/me/cli-tokens", "", nil)
+		if code != http.StatusOK || strings.Contains(out, `"label":"id:`) {
+			t.Fatalf("list after the refusals: %d %s, want no id: label", code, out)
+		}
+		if code, out := h.do("POST", "/api/me/cli-tokens", `{"label":"agent-b","ttlSeconds":3600}`, nil); code != http.StatusOK {
+			t.Fatalf("mint agent-b: %d %s", code, out)
+		}
+	})
+}

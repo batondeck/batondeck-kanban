@@ -223,3 +223,38 @@ func TestBlobConfig(t *testing.T) {
 		}
 	}
 }
+
+// TestTrustedProxies: trusted_proxies from the file, BATONDECK_TRUSTED_PROXIES over it
+// (comma-separated, blanks dropped, empty = none), each an address or a masked prefix; anything
+// else is refused naming RuleTrustedProxies and the entry (P-291).
+func TestTrustedProxies(t *testing.T) {
+	c, err := Load("", env(map[string]string{"XDG_DATA_HOME": "/xdg"}))
+	if err != nil || c.TrustedProxies != nil {
+		t.Fatalf("default: %v, %v", c.TrustedProxies, err)
+	}
+	p := writeConfig(t, `{"trusted_proxies":["10.0.0.1","fd00::/8"]}`)
+	if c, err = Load(p, env(map[string]string{"XDG_DATA_HOME": "/xdg"})); err != nil || !slices.Equal(c.TrustedProxies, []string{"10.0.0.1", "fd00::/8"}) {
+		t.Fatalf("file: %v, %v", c.TrustedProxies, err)
+	}
+	if c, err = Load(p, env(map[string]string{"XDG_DATA_HOME": "/xdg", "BATONDECK_TRUSTED_PROXIES": " 127.0.0.1, 172.16.0.0/12 ,,"})); err != nil ||
+		!slices.Equal(c.TrustedProxies, []string{"127.0.0.1", "172.16.0.0/12"}) {
+		t.Fatalf("env over file: %v, %v", c.TrustedProxies, err)
+	}
+	if c, err = Load(p, env(map[string]string{"XDG_DATA_HOME": "/xdg", "BATONDECK_TRUSTED_PROXIES": ""})); err != nil || len(c.TrustedProxies) != 0 {
+		t.Fatalf("empty env clears the file's: %v, %v", c.TrustedProxies, err)
+	}
+	got, err := ParseTrustedProxies([]string{"10.0.0.1", "172.16.9.9/12", "::ffff:192.0.2.1", "2001:db8::1"})
+	var s []string
+	for _, p := range got {
+		s = append(s, p.String())
+	}
+	if err != nil || !slices.Equal(s, []string{"10.0.0.1/32", "172.16.0.0/12", "192.0.2.1/32", "2001:db8::1/128"}) {
+		t.Fatalf("parsed %v, %v", s, err)
+	}
+	for _, bad := range []string{"10.0.0.0/33", "proxy.local", "10.0.0.1:80", "fe80::1%eth0", "*"} {
+		if _, err := Load("", env(map[string]string{"XDG_DATA_HOME": "/xdg", "BATONDECK_TRUSTED_PROXIES": "10.0.0.1," + bad})); err == nil ||
+			!strings.Contains(err.Error(), RuleTrustedProxies) || !strings.Contains(err.Error(), strconv.Quote(bad)) {
+			t.Errorf("%q: %v, want %s naming it", bad, err, RuleTrustedProxies)
+		}
+	}
+}

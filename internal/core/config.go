@@ -6,6 +6,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,11 +15,12 @@ import (
 
 // Named validation rules: a rejected config names the exact rule violated.
 const (
-	RuleDatabaseURL = "database_url_is_a_file_path_or_postgres"
-	RuleEnum        = "invalid_enum_value"
-	RuleRetention   = "retention_days_are_positive_integers"
-	RuleListen      = "listen_entries_are_tcp_or_unix_urls"
-	RuleBlob        = "blob_max_bytes_is_a_positive_integer"
+	RuleDatabaseURL    = "database_url_is_a_file_path_or_postgres"
+	RuleEnum           = "invalid_enum_value"
+	RuleRetention      = "retention_days_are_positive_integers"
+	RuleListen         = "listen_entries_are_tcp_or_unix_urls"
+	RuleBlob           = "blob_max_bytes_is_a_positive_integer"
+	RuleTrustedProxies = "trusted_proxies_are_ip_addresses_or_cidrs"
 )
 
 // The engines database.url selects between.
@@ -66,7 +68,10 @@ type Retention struct {
 	// ToolCallsDays is tool_calls' window: 45 days by default (conductor's BigQuery table expiry).
 	ToolCallsDays int `json:"tool_calls_days"`
 	// DeliveriesDays is an on-call delivery's window: 30 days by default. It is stamped on the row
-	// (and its alert state) when written, so a change applies to deliveries written after it.
+	// (and its alert state) when written, so a change applies to deliveries written after it. An
+	// alert state is swept on that window once its ticket is DONE or deleted; an open ticket's
+	// stays, so a late firing still appends to it. A DONE ticket reopened after its state was swept
+	// is no longer correlated: its alert's next firing files a new ticket.
 	DeliveriesDays int `json:"deliveries_days"`
 	// RawBodiesDays is a refused delivery's raw body window: 7 days by default, stamped likewise.
 	RawBodiesDays int `json:"raw_bodies_days"`
@@ -108,6 +113,11 @@ type Config struct {
 	// is the OAuth server's issuer and the base of every URL in its RFC 8414 and RFC 9728 documents;
 	// while it is "", serve runs no OAuth server (internal/auth/oauth).
 	PublicURL string `json:"public_url"`
+	// TrustedProxies are the reverse proxies in front of the server, each an IP address or a CIDR
+	// prefix: a request whose peer is one is counted (by the sign-in limits and OAuth registration)
+	// against the client its X-Forwarded-For names. Empty, the header is never read. Environment:
+	// BATONDECK_TRUSTED_PROXIES, comma-separated.
+	TrustedProxies []string `json:"trusted_proxies"`
 	// Retention is the retention sweep's windows.
 	Retention Retention `json:"retention"`
 	// Blob is the blob store. Environment: BATONDECK_BLOB_DIR, BATONDECK_BLOB_MAX_BYTES.
@@ -133,6 +143,7 @@ func EnvVars() []EnvVar {
 		{"BATONDECK_DATABASE_SYNCHRONOUS", "FULL", "SQLite's synchronous pragma: FULL or NORMAL"},
 		{"BATONDECK_LISTEN", "tcp://127.0.0.1:8080", "comma-separated tcp://host:port or unix:///abs/path addresses"},
 		{"BATONDECK_PUBLIC_URL", "unset, no OAuth server: API tokens only", "the externally reachable base URL: the OAuth issuer, and the base of attachment links (unset, each link takes the requesting client's host)"},
+		{"BATONDECK_TRUSTED_PROXIES", "unset, X-Forwarded-For is never read", "comma-separated IP addresses or CIDRs of the reverse proxies in front of the server: a request from one counts against the client its X-Forwarded-For names (the sign-in and registration limits)"},
 		{"BATONDECK_RETENTION_CHANGE_LOG_DAYS", days(r.ChangeLogDays), "days the change log is kept"},
 		{"BATONDECK_RETENTION_TOOL_CALLS_DAYS", days(r.ToolCallsDays), "days tool-call records are kept"},
 		{"BATONDECK_RETENTION_DELIVERIES_DAYS", days(r.DeliveriesDays), "days an on-call delivery is kept"},
@@ -184,6 +195,14 @@ func Load(path string, lookup func(string) (string, bool)) (*Config, error) {
 		}
 	}
 	envStr("BATONDECK_PUBLIC_URL", &c.PublicURL)
+	if v, ok := lookup("BATONDECK_TRUSTED_PROXIES"); ok {
+		c.TrustedProxies = nil
+		for _, a := range strings.Split(v, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				c.TrustedProxies = append(c.TrustedProxies, a)
+			}
+		}
+	}
 	envDays := func(key string, dst *int) error {
 		v, ok := lookup(key)
 		if !ok {
@@ -254,10 +273,43 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: %w", RuleListen, err)
 		}
 	}
+	if _, err := ParseTrustedProxies(c.TrustedProxies); err != nil {
+		return err
+	}
 	if strings.Contains(c.Database.URL, "://") && c.Engine() != EnginePostgres {
 		return fmt.Errorf("%s: database.url %q is neither a file path nor a postgres:// URL", RuleDatabaseURL, c.Database.URL)
 	}
 	return nil
+}
+
+// ParseTrustedProxies reads trusted_proxies: each entry an IP address (its own /32 or /128) or a
+// CIDR prefix, masked; an IPv4-mapped IPv6 address is its IPv4 address. Anything else is refused
+// under RuleTrustedProxies, naming the entry.
+func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		var p netip.Prefix
+		var err error
+		if strings.Contains(e, "/") {
+			p, err = netip.ParsePrefix(e)
+			p = p.Masked()
+		} else {
+			var a netip.Addr
+			if a, err = netip.ParseAddr(e); err == nil {
+				if a.Zone() != "" {
+					err = fmt.Errorf("a zone is not allowed")
+				}
+				a = a.Unmap()
+				p = netip.PrefixFrom(a, a.BitLen())
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: trusted_proxies entry %q is neither an IP address nor a CIDR prefix such as 10.0.0.0/8", RuleTrustedProxies, e)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // Engine is the store engine database.url selects: postgres for a postgres:// or postgresql://

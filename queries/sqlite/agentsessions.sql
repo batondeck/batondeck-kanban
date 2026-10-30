@@ -38,8 +38,13 @@ WHERE CAST(sqlc.arg(identity_id) AS TEXT) = '' OR identity_id = CAST(sqlc.arg(id
 ORDER BY last_seen_at DESC, agent_id, identity_id
 LIMIT sqlc.arg(page_limit);
 
--- At most page_limit rows last seen before before, the longest idle first.
+-- At most page_limit rows last seen before before, the longest idle first, except the rows in
+-- keep, a JSON array of [identity_id, agent_id] pairs ('[]' for none): the agents with a live MCP
+-- session (P-279).
 -- name: DeleteIdleAgentSessions :execrows
 DELETE FROM agent_sessions WHERE (identity_id, agent_id) IN (
-  SELECT a.identity_id, a.agent_id FROM agent_sessions a WHERE a.last_seen_at < sqlc.arg(before)
+  SELECT a.identity_id, a.agent_id FROM agent_sessions a, (SELECT CAST(sqlc.arg(keep) AS TEXT) AS keep) p
+  WHERE a.last_seen_at < sqlc.arg(before)
+    AND NOT EXISTS (SELECT 1 FROM json_each(p.keep) k
+      WHERE json_extract(k.value, '$[0]') = a.identity_id AND json_extract(k.value, '$[1]') = a.agent_id)
   ORDER BY a.last_seen_at, a.identity_id, a.agent_id LIMIT sqlc.arg(page_limit));

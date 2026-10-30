@@ -13,10 +13,8 @@ func RegisterContext(s *mcp.Server, svc service.Services) {
 	mcp.Tool(s, "context", "add_context_item",
 		"Add a note, decision, link or field item to a task's context; get_task_context returns it under items. A retry with the same idempotencyKey replays the original item.",
 		c.AddItem)
-	// ponytail: resume is always null until P-117 ports the resume scan, and conductor's text reads
-	// null as "a fresh branch is safe"; P-117 restores that text with the scan.
 	mcp.Tool(s, "context", "get_task_context",
-		"A task's briefing: summary, fields, items, deps, attachments, memory, workflow. resume is not yet available and is always null; do not treat null as 'start fresh'.",
+		"A task's briefing: summary, fields, items, deps, attachments, memory, workflow, and resume: a prior worker's branch, head commit and last checkpoint (sought in the newest 200 items); null if none.",
 		c.GetTaskContext)
 	mcp.Tool(s, "context", "set_summary",
 		"Replace a task's rolling summary. Version-checked: a stale version is STALE. Returns the task with its new version.",

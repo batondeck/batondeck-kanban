@@ -131,7 +131,8 @@ func (a *Accounts) Lookup(ctx context.Context, login string) (store.User, error)
 }
 
 // Disable marks the user disabled. Their sessions and tokens stop resolving once the account cache
-// entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by default).
+// entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by default). Enable is the way
+// back.
 func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error) {
 	u, err := a.Lookup(ctx, login)
 	if err != nil {
@@ -141,6 +142,24 @@ func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error
 		return store.User{}, err
 	}
 	return a.Store.GetUser(ctx, u.ID)
+}
+
+// Enable clears the user's disabled mark, returning the user after and whether they were disabled;
+// enabling an enabled user changes nothing. Their unexpired sessions and tokens resolve again once
+// the account cache entry expires (AccountCacheTTL, 60 s by default), as Disable's take effect.
+func (a *Accounts) Enable(ctx context.Context, login string) (u store.User, wasDisabled bool, err error) {
+	u, err = a.Lookup(ctx, login)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	if err := a.Store.EnableUser(ctx, u.ID); err != nil {
+		return store.User{}, false, err
+	}
+	after, err := a.Store.GetUser(ctx, u.ID)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	return after, u.DisabledAt != 0, nil
 }
 
 // SetPassword replaces the user's password and ends every browser session of the user, returning

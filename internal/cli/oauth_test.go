@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
 )
 
 // With public_url set, serve mounts the OAuth server and /mcp takes its tokens: a bare request is
@@ -211,5 +213,55 @@ func TestServeWithoutPublicURLHasNoOAuth(t *testing.T) {
 	}
 	if _, err := compose(st, "x", "https://bk.example/base", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}); err == nil || !strings.Contains(err.Error(), "public_url") {
 		t.Fatalf("a public_url with a path: %v", err)
+	}
+}
+
+// TestWellKnownIs404WithOAuthOff (P-302): with public_url unset there is no OAuth server, so the
+// RFC 8414 and RFC 9728 discovery documents answer 404, not the SPA shell a client would try to
+// parse as JSON; with it set they are the JSON documents (control). On each engine.
+func TestWellKnownIs404WithOAuthOff(t *testing.T) {
+	paths := []string{"/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"}
+	for _, eng := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		for _, oauthOn := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/oauth=%t", eng.name, oauthOn), func(t *testing.T) {
+				srv := httptest.NewUnstartedServer(nil)
+				public := ""
+				if oauthOn {
+					public = "http://" + srv.Listener.Addr().String()
+				}
+				a, err := compose(eng.open(t), "x", public, log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{})
+				if err != nil || (a.as != nil) != oauthOn {
+					t.Fatalf("compose: %v, OAuth server %t", err, a != nil && a.as != nil)
+				}
+				defer a.core.Close(context.Background())
+				defer a.bus.Close()
+				srv.Config.Handler = a.handler("x")
+				srv.Start()
+				defer srv.Close()
+				for _, p := range paths {
+					resp, err := http.Get(srv.URL + p)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var doc map[string]any
+					jsonErr := json.NewDecoder(resp.Body).Decode(&doc)
+					resp.Body.Close()
+					ct := resp.Header.Get("Content-Type")
+					if !oauthOn && (resp.StatusCode != http.StatusNotFound || strings.HasPrefix(ct, "text/html")) {
+						t.Errorf("OAuth off, %s: %d %q, want 404 and not a page", p, resp.StatusCode, ct)
+					}
+					if oauthOn && (resp.StatusCode != http.StatusOK || !strings.HasPrefix(ct, "application/json") || jsonErr != nil ||
+						(doc["issuer"] != public && doc["resource"] != public+"/mcp")) {
+						t.Errorf("OAuth on, %s: %d %q %v %v, want the JSON document naming %s", p, resp.StatusCode, ct, jsonErr, doc, public)
+					}
+				}
+			})
+		}
 	}
 }

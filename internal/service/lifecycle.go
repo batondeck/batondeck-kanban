@@ -88,14 +88,24 @@ func unsupported(field, why string) error {
 }
 
 // leaseHeld is conductor's assertLeaseHeld: the caller holds this live lease. Any mismatch (no
-// lease, another lease id, another owner, past its expiry) is LEASE_EXPIRED, indistinguishable from a
-// lease that is gone, so a leaseId lifted from a board read drives nothing.
+// lease, another lease id, another owner, another agent, past its expiry) is LEASE_EXPIRED,
+// indistinguishable from a lease that is gone, so a leaseId lifted from a board read drives nothing.
+// A lease is its agent's (P-320, G6): where the claim recorded an agent, the caller must be that
+// agent, compared as heldBy compares them (sameAgentID), so another agent of the same identity, or
+// that identity with no agent named, is refused. A claim that recorded no agent (an agentless claim,
+// or one from before P-257) is the owning identity's on any of its callers. A master gets no pass.
 func leaseHeld(t store.Task, leaseID string, caller domain.Caller, now int64) error {
 	c := t.Claim
-	if c == nil || c.LeaseID != leaseID || c.Owner != caller.Identity || c.ExpiresAt <= now {
+	if c == nil || c.LeaseID != leaseID || c.Owner != caller.Identity || c.ExpiresAt <= now || !leaseAgent(c, caller) {
 		return store.LeaseExpired(t.ID)
 	}
 	return nil
+}
+
+// leaseAgent is leaseHeld's agent test: true when the claim recorded no agent, or recorded the
+// caller's.
+func leaseAgent(c *store.TaskClaim, caller domain.Caller) bool {
+	return c.AgentID == nil || sameAgentID(c.AgentID, callerAgent(caller))
 }
 
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
@@ -243,7 +253,13 @@ func replayedLease(task *Task, now time.Time) error {
 // and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
 // (G6): one agent in several sessions never mints a second lease that would silently end the
 // first. Another agent of the same identity (Caller.Agent, P-257) is another holder and is refused
-// CONFLICT_LOCKED, as conductor does for two distinct handles.
+// CONFLICT_LOCKED, as conductor does for two distinct handles. Below master, a task assigned to
+// someone else is refused FORBIDDEN by claim_next's rule, ownAssignee (P-334, P-297; owner ruling
+// 2026-10-30): another account's id or login, another member's id, or another agent's label. An
+// unassigned task, the caller's own id or login, its own label on that label's token, and a string
+// naming no identity and no token's label are claimed. The rule reads through the transaction, on
+// the task as loaded, before the re-claim path, so a task reassigned to another is not re-claimed;
+// an unassigned task, or one assigned to the caller's id, reads nothing more.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -266,6 +282,11 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
 		}, func(t *txn) (ClaimTaskResp, error) {
 			cur := *t.Task
+			if as := cur.Assignee; as != nil && *as != "" {
+				if err := l.ownAssignee(ctx, t.Tx, txMember(t.Tx), caller, a, req.ProjectID, *as); err != nil {
+					return ClaimTaskResp{}, err
+				}
+			}
 			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
 				// The second claim's leaseSeconds lengthens the shared lease, never shortens it.
 				held, err := t.Tx.Heartbeat(ctx, req.ProjectID, cur.ID, cur.Claim.LeaseID, caller.Identity, now+secs*1000, now, true)
@@ -300,7 +321,7 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if err != nil {
 				return ClaimTaskResp{}, err
 			}
-			// TODO(spec): resume is conductor's resumeState, unported (P-117); sprint is F6's.
+			// sprint is F6's.
 			return ClaimTaskResp{LeaseID: leaseID, Task: out}, nil
 		})
 	})
@@ -311,6 +332,11 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 		if err := replayedLease(&resp.Task, l.c.now()); err != nil {
 			return ClaimTaskResp{}, err
 		}
+	}
+	// resume is read after the claim commits, on every path (a fresh claim, the holder's re-claim, a
+	// replay): it lengthens no write transaction, and a replay answers the task's resume now.
+	if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, resp.Task.ID); err != nil {
+		return ClaimTaskResp{}, l.c.mapErr("claim_task", err)
 	}
 	return resp, nil
 }
@@ -412,6 +438,12 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 		}
 		resp.Attempts = 0 // attempts diagnoses this call, which tried nothing (conductor)
 	}
+	if resp.Task != nil {
+		// resume, as Claim: after the commit, on a replay too.
+		if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, resp.Task.ID); err != nil {
+			return ClaimNextResp{}, l.c.mapErr("claim_next", err)
+		}
+	}
 	return resp, nil
 }
 
@@ -439,7 +471,7 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 		if err := checkLabel("assignee", assignee); err != nil {
 			return q, err
 		}
-		if err := l.ownAssignee(ctx, caller, a, projectID, assignee); err != nil {
+		if err := l.ownAssignee(ctx, l.c.store, l.c.cachedMember, caller, a, projectID, assignee); err != nil {
 			return q, err
 		}
 		q.Assignee = &assignee
@@ -456,14 +488,15 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 // ownAssignee refuses, below master, an assignee naming another identity: another account (by
 // email or id) or another member of the project. Any other assignee is an agent label, refused when
 // another agent holds it (ownLabel). Read only on this path, so the claim's statement pins do not
-// move.
-func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a access, projectID, assignee string) error {
+// move. st and member are what its reads go through (namesAnotherIdentity): claim_task applies the
+// rule inside its transaction (P-334), claim_next and next_task before theirs.
+func (l lifecycle) ownAssignee(ctx context.Context, st store.Store, member memberFunc, caller domain.Caller, a access, projectID, assignee string) error {
 	if assignee == caller.Identity || domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
 	}
 	other := forbidden("assignee names another identity: only a master may read or claim another's work",
 		map[string]any{"field": "assignee", "requiredRole": domain.RoleMaster, "role": a.Role})
-	u, err := l.c.store.GetUserByEmail(ctx, strings.ToLower(assignee))
+	u, err := st.GetUserByEmail(ctx, strings.ToLower(assignee))
 	switch {
 	case err == nil && u.ID == caller.Identity:
 		return nil
@@ -472,20 +505,53 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 	case !errors.Is(err, store.ErrNotFound):
 		return l.c.mapErr("assignee", err)
 	}
-	switch _, err := l.c.store.GetUser(ctx, assignee); {
-	case err == nil:
-		return other
-	case !errors.Is(err, store.ErrNotFound):
+	switch named, err := namesAnotherIdentity(ctx, st, member, projectID, caller, assignee); {
+	case err != nil:
 		return l.c.mapErr("assignee", err)
-	}
-	e, err := l.c.accessEntry(ctx, projectID, assignee)
-	if err != nil {
-		return err
-	}
-	if e.member {
+	case named:
 		return other
 	}
-	return l.ownLabel(ctx, caller, a, "assignee", assignee)
+	return l.ownLabel(ctx, st, caller, a, "assignee", assignee)
+}
+
+// namesAnotherIdentity reports whether name is the id of an identity other than caller's: an
+// account's (a user row) or a member's of projectID. It is ownAssignee's identity test by id, and
+// the profile key's (P-351): an agent name equal to another identity's id would key that
+// identity's agentless profile and stats. st is the store its reads go through, and member answers
+// the membership: c.store and accessEntry's cache (Core.cachedMember) outside a transaction, the
+// transaction's own store and txMember inside one (memstore's transaction holds the store's one
+// mutex, so a read through c.store there would wait on itself). The caller's own id reads nothing.
+func namesAnotherIdentity(ctx context.Context, st store.Store, member memberFunc, projectID string, caller domain.Caller, name string) (bool, error) {
+	if name == caller.Identity {
+		return false, nil
+	}
+	switch _, err := st.GetUser(ctx, name); {
+	case err == nil:
+		return true, nil
+	case !errors.Is(err, store.ErrNotFound):
+		return false, err
+	}
+	return member(ctx, projectID, name)
+}
+
+// memberFunc reports whether identityID is a member of projectID.
+type memberFunc func(ctx context.Context, projectID, identityID string) (bool, error)
+
+// cachedMember is accessEntry's membership, for a call outside a transaction.
+func (c *Core) cachedMember(ctx context.Context, projectID, identityID string) (bool, error) {
+	e, err := c.accessEntry(ctx, projectID, identityID)
+	return e.member, err
+}
+
+// txMember is the membership read through tx, for a call inside that transaction.
+func txMember(tx store.Store) memberFunc {
+	return func(ctx context.Context, projectID, identityID string) (bool, error) {
+		_, err := tx.GetMember(ctx, projectID, identityID)
+		if be, ok := domain.AsBatonDeckError(err); ok && be.Code == domain.CodeNotFound {
+			return false, nil
+		}
+		return err == nil, err
+	}
 }
 
 // ownLabel refuses, below master, a label another agent holds (P-277, audit A2): a live API token's
@@ -499,12 +565,13 @@ func (l lifecycle) ownAssignee(ctx context.Context, caller domain.Caller, a acce
 // so another worker cannot name it while the owner's token has lapsed (P-338, delivered in P-257
 // review round 3). A string no other identity's token and no live token carries names no agent and
 // passes, as before. Read only when a label is named, so the claim's statement pins do not move.
-// The test itself is labelRefused, which a directory entry's agent also answers to (P-322).
-func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access, field, label string) error {
+// The test itself is labelRefused, which a directory entry's agent also answers to (P-322). st is
+// the store it reads through (c.store, or a transaction's own).
+func (l lifecycle) ownLabel(ctx context.Context, st store.Store, caller domain.Caller, a access, field, label string) error {
 	if domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 		return nil
 	}
-	refused, err := l.c.labelRefused(ctx, caller, label)
+	refused, err := l.c.labelRefused(ctx, st, caller, label)
 	if err != nil {
 		return l.c.mapErr(field, err)
 	}
@@ -519,9 +586,9 @@ func (l lifecycle) ownLabel(ctx context.Context, caller domain.Caller, a access,
 // caller. It is, when another identity's token row of any status carries it (the first minter owns
 // a label, R2-Q1), or when a live token carries it and caller is not that label's own token
 // (Caller.Labelled with Agent == label). A string no token carries, and the caller's own lapsed
-// label, are not refused. One read of every token row (REVIEW-78 A6, accepted).
-func (c *Core) labelRefused(ctx context.Context, caller domain.Caller, label string) (bool, error) {
-	tokens, err := c.store.ListTokens(ctx, "")
+// label, are not refused. One read of every token row (REVIEW-78 A6, accepted), through st.
+func (c *Core) labelRefused(ctx context.Context, st store.Store, caller domain.Caller, label string) (bool, error) {
+	tokens, err := st.ListTokens(ctx, "")
 	if err != nil {
 		return false, err
 	}
@@ -548,7 +615,9 @@ func labelRefusedIn(tokens []store.Token, caller domain.Caller, label string, no
 // and never earlier than the expiry already held, so a heartbeat does not cut a longer claim short
 // (conductor's "a heartbeat never SHORTENS a lease"); an explicit leaseSeconds is written as given. The version does not move (conductor:
 // "without bumping the task version"), so mutate loads no task; the change row names the task and
-// its board. Another owner's lease answers LEASE_EXPIRED, as conductor's assertLeaseHeld does.
+// its board. Another owner's lease answers LEASE_EXPIRED, as conductor's assertLeaseHeld does, and
+// so does another agent's (leaseAgent, P-320): store.Heartbeat matches the identity alone, so the
+// task it returns is judged inside the transaction and a refusal rolls the write back.
 func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req HeartbeatTaskReq) (HeartbeatTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "heartbeat_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -577,6 +646,9 @@ func (l lifecycle) Heartbeat(ctx context.Context, caller domain.Caller, req Hear
 		}
 		if err != nil {
 			return HeartbeatTaskResp{}, err
+		}
+		if task.Claim == nil || !leaseAgent(task.Claim, caller) {
+			return HeartbeatTaskResp{}, store.LeaseExpired(req.TaskID)
 		}
 		if err := pend.permit(&task); err != nil {
 			return HeartbeatTaskResp{}, err
@@ -1228,7 +1300,7 @@ func (l lifecycle) Handoff(ctx context.Context, caller domain.Caller, req Handof
 	if err := checkLabel("toAgent", req.ToAgent); err != nil {
 		return HandoffTaskResp{}, err
 	}
-	if err := l.ownLabel(ctx, caller, a, "toAgent", req.ToAgent); err != nil {
+	if err := l.ownLabel(ctx, l.c.store, caller, a, "toAgent", req.ToAgent); err != nil {
 		return HandoffTaskResp{}, err
 	}
 	if err := reasonArg("memoryNote", req.MemoryNote, false); err != nil {

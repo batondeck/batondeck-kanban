@@ -364,7 +364,25 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 	}
 }
 
-func TestAgentSessionRemovedWithItsLastMCPSession(t *testing.T) {
+// agentLive is whether (identity, agent) holds a live MCP session in h's table (LiveAgentSessions).
+func agentLive(h *harness, identity, agent string) bool {
+	return slices.Contains(h.srv.LiveAgentSessions(), [2]string{identity, agent})
+}
+
+// onlyTouches fails t when the transport asked service.Sessions for anything but a touch: the end of
+// an MCP session leaves its agent_sessions row for the retention sweep (P-264, plan Clarification 7).
+func onlyTouches(t *testing.T, f *servicefake.Fake) {
+	t.Helper()
+	for _, c := range f.Calls() {
+		if strings.HasPrefix(c.Method, "Sessions.") && c.Method != "Sessions.TouchAgentSession" {
+			t.Errorf("the transport called %s (%+v), want touches only: a session's end keeps its row", c.Method, c.Req)
+		}
+	}
+}
+
+// P-264 (tested): an agent session is live while any of its MCP sessions is, and the end of the last
+// leaves its row (no deleting call).
+func TestAgentSessionOutlivesItsLastMCPSession(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver())
 	one, two := h.connect(t, tokenAda), h.connect(t, tokenAda)
@@ -373,17 +391,19 @@ func TestAgentSessionRemovedWithItsLastMCPSession(t *testing.T) {
 		defer h.srv.sessions.mu.Unlock()
 		return len(h.srv.sessions.live)
 	}
+	if !agentLive(h, "u-ada", "harness") {
+		t.Fatalf("live agent sessions %v, want u-ada/harness", h.srv.LiveAgentSessions())
+	}
 	_ = one.Close()
 	waitFor(t, func() bool { return live() == 1 })
 	time.Sleep(200 * time.Millisecond) // the ended session's goroutine has decided by now
-	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 0 {
-		t.Fatalf("%d removals after the first of two sessions ended, want 0: the other still uses the row", n)
+	if !agentLive(h, "u-ada", "harness") {
+		t.Fatalf("after the first of two ended, live agent sessions %v, want u-ada/harness: the other still holds it", h.srv.LiveAgentSessions())
 	}
 	_ = two.Close()
-	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
-	if r := calls(f, "Sessions.RemoveAgentSession")[0].Req.(service.RemoveAgentSessionReq); r.SessionKey != "u-ada::harness" {
-		t.Errorf("removed %q, want u-ada::harness", r.SessionKey)
-	}
+	waitFor(t, func() bool { return !agentLive(h, "u-ada", "harness") })
+	time.Sleep(200 * time.Millisecond)
+	onlyTouches(t, f)
 }
 
 func TestToolListPerAudienceMemoised(t *testing.T) {
@@ -447,13 +467,11 @@ func TestSessionsCollectedWhenIdle(t *testing.T) {
 		t.Errorf("the active session was collected: %v", err)
 	}
 
-	removed := map[string]bool{}
-	for _, c := range calls(f, "Sessions.RemoveAgentSession") {
-		removed[c.Req.(service.RemoveAgentSessionReq).SessionKey] = true
+	waitFor(t, func() bool { return !agentLive(h, "u-ada", "harness") })
+	if !agentLive(h, "u-grace", "harness") {
+		t.Errorf("live agent sessions %v after the idle collection, want u-grace/harness only", h.srv.LiveAgentSessions())
 	}
-	if !removed["u-ada::harness"] || removed["u-grace::harness"] {
-		t.Errorf("removed %v, want the idle session's u-ada::harness only", removed)
-	}
+	onlyTouches(t, f) // the collected session's row stays for the retention sweep (P-264)
 	refreshed := 0
 	for _, c := range calls(f, "Sessions.TouchAgentSession")[start:] {
 		if r := c.Req.(service.TouchAgentSessionReq); r.SessionKey == "u-grace::harness" && r.Tool == "whoami" {
@@ -474,7 +492,7 @@ func TestSessionCountBounded(t *testing.T) {
 		t.Fatal("a second session past MaxSessions 1 was admitted")
 	}
 	_ = first.Close() // DELETE: the session ends and frees its slot
-	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
+	waitFor(t, func() bool { return !agentLive(h, "u-ada", "harness") })
 	if cs, err := h.dial(tokenAda); err != nil {
 		t.Errorf("after the first closed: %v", err)
 	} else {
@@ -563,8 +581,8 @@ func TestRecordPanicIsContained(t *testing.T) {
 	}
 }
 
-// Close ends a session holding an open GET stream, removes its agent session and admits no new
-// one, well inside a shutdown budget.
+// Close ends a session holding an open GET stream, leaves its agent session's row (P-264) and admits
+// no new one, well inside a shutdown budget.
 func TestCloseEndsLiveSessions(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver())
@@ -575,9 +593,10 @@ func TestCloseEndsLiveSessions(t *testing.T) {
 	if err := h.srv.Close(c); err != nil {
 		t.Fatalf("Close: %v after %s", err, time.Since(start))
 	}
-	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 1 {
-		t.Errorf("%d agent sessions removed by Close, want 1", n)
+	if got := h.srv.LiveAgentSessions(); len(got) != 0 {
+		t.Errorf("live agent sessions %v after Close, want none", got)
 	}
+	onlyTouches(t, f)
 	if cs, err := h.dial(tokenAda); err == nil {
 		t.Cleanup(func() { _ = cs.Close() })
 		t.Error("a session was admitted after Close")
@@ -596,7 +615,7 @@ func initialized(t *testing.T, h *harness, bearer string) string {
 }
 
 // A second initialize on a live session is refused by go-sdk and leaves the session in the
-// table, so Close still ends it and removes its agent session, once.
+// table, so Close still ends it, and its agent session was counted once (none is left live).
 func TestDuplicateInitializeKeepsTheSession(t *testing.T) {
 	f := servicefake.New()
 	h := bootHarness(t, f.Services(), resolver())
@@ -617,9 +636,13 @@ func TestDuplicateInitializeKeepsTheSession(t *testing.T) {
 	if err := h.srv.Close(c); err != nil {
 		t.Fatalf("Close: %v after %s", err, time.Since(start))
 	}
-	if n := len(calls(f, "Sessions.RemoveAgentSession")); n != 1 {
-		t.Errorf("%d agent sessions removed by Close, want 1", n)
+	if got := h.srv.LiveAgentSessions(); len(got) != 0 {
+		t.Errorf("live agent sessions %v after Close, want none: the duplicate initialize was counted", got)
 	}
+	if n := len(calls(f, "Sessions.TouchAgentSession")); n != 1 {
+		t.Errorf("%d agent session writes, want 1: the duplicate initialize wrote a connection", n)
+	}
+	onlyTouches(t, f)
 }
 
 // A duplicate initialize frees no slot: with MaxSessions 1 the next session is still refused,
@@ -647,7 +670,7 @@ func TestDuplicateInitializeKeepsTheBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	waitFor(t, func() bool { return len(calls(f, "Sessions.RemoveAgentSession")) == 1 })
+	waitFor(t, func() bool { return !agentLive(h, "u-ada", "harness") })
 	if cs, err := h.dial(tokenGrace); err != nil {
 		t.Errorf("after the first session ended: %v", err)
 	} else {

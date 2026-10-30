@@ -38,6 +38,7 @@ import (
 type app struct {
 	mcp  *mcp.Server
 	as   *oauth.Server // nil while public_url is unset
+	auth *auth.Service // resolves every bearer and session; runServer sets its trusted proxies
 	core *service.Core
 	bus  *bus.Bus
 	// dir is the device session directory (R0.25); serveUntil starts it.
@@ -97,8 +98,8 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 		sweep.CollectBlobs = sc.CollectBlobs
 	}
 	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
-	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days, raw bodies %d days, agent sessions %s idle",
-		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle)
+	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse",
+		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle, int(retention.LapsedGrace/day))
 	opts := mcp.Options{
 		Version:   version,
 		PublicURL: publicURL,
@@ -121,10 +122,19 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 	sc.SetDeviceSessions(dir)
 	srv := mcp.New(opts)
 	sc.SetAgentSessionEnder(srv)
+	// The sweep keeps the row of every agent with a live MCP session here, however idle (P-279).
+	sweep.Live = func() []store.AgentSessionKey {
+		live := srv.LiveAgentSessions()
+		keys := make([]store.AgentSessionKey, len(live))
+		for i, k := range live {
+			keys[i] = store.AgentSessionKey{IdentityID: k[0], AgentID: k[1]}
+		}
+		return keys
+	}
 	tools.Register(srv, opts.Services)
 	// The REST BFF calls every service; its presence frames read the device directory.
 	bff := api.Options{Services: opts.Services, Auth: resolver, Users: resolver.Accounts, Tokens: resolver.Tokens, Bus: b, Presence: dir, Logger: logger, OAuth: as != nil}
-	return &app{mcp: srv, as: as, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
+	return &app{mcp: srv, as: as, auth: resolver, core: sc, bus: b, dir: dir, sweep: sweep, sweepEvery: sweepEvery, engine: engineOf(st),
 		mount: func(mux *http.ServeMux) {
 			api.Mount(mux, bff)
 			if as != nil {
@@ -304,22 +314,51 @@ func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) 
 	}
 }
 
-// runServer serves the app over st on every listener until ctx ends or one fails.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention) error {
+// runServer serves the app over st on every listener until ctx ends or one fails. proxies are the
+// trusted reverse proxies (trusted_proxies), whose X-Forwarded-For names the client the sign-in and
+// registration limits count.
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies) error {
 	a, err := compose(st, version, publicURL, logger, sealer, media, ret)
 	if err != nil {
 		return err
 	}
+	a.trust(proxies, logger)
 	return serveUntil(ctx, lns, a, version, logger)
+}
+
+// trust makes the sign-in and registration limits count a request from one of proxies against the
+// client its X-Forwarded-For names, and logs the list; none leaves the header unread.
+func (a *app) trust(proxies auth.TrustedProxies, logger *log.Logger) {
+	if len(proxies) == 0 {
+		return
+	}
+	a.auth.Proxies = proxies
+	names := make([]string, len(proxies))
+	for i, p := range proxies {
+		names[i] = p.String()
+	}
+	logger.Printf("serve: trusted proxies %s: a request from one counts against the client its X-Forwarded-For names", strings.Join(names, ", "))
+}
+
+// awaitDirectory waits until the session directory's dispatcher has returned (the bus is closed, so
+// it is returning), or ctx ends: one socket write is bounded by its WriteTimeout, but a run of them
+// is not, and serve does not wait past its budget for them.
+func awaitDirectory(ctx context.Context, a *app, logger *log.Logger) {
+	select {
+	case <-a.dir.Done():
+	case <-ctx.Done():
+		logger.Printf("serve: the session directory's dispatcher was still delivering at the shutdown budget; stopping without it")
+	}
 }
 
 // serveUntil serves one handler on every listener, with the retention sweep running beside it, until
 // ctx ends or one fails, then stops in order: the sweep (it returns before the store can close), the
 // MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
 // deadline; a handler still running at the deadline is cancelled), the bus (which stops the
-// session directory's dispatcher and the board snapshot cache's feed), the HTTP server, and the
-// tool-call flush. The cache's feed is the bus's second tap, so it adds no statement. It returns the first
-// failure, naming the step.
+// session directory's dispatcher and the board snapshot cache's feed), the wait for that dispatcher
+// to return (no directory write may run once the store closes, P-205; bounded by shutdownBudget),
+// the HTTP server, and the tool-call flush. The cache's feed is the bus's second tap, so it adds no
+// statement. It returns the first failure, naming the step.
 func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string, logger *log.Logger) error {
 	if err := a.dir.Start(ctx); err != nil {
 		return fmt.Errorf("starting the session directory: %w", err)
@@ -327,6 +366,9 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	snaps, err := a.bus.Tap(ctx, snapshotTapBuffer)
 	if err != nil {
 		a.bus.Close()
+		stopped, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+		defer cancel()
+		awaitDirectory(stopped, a, logger)
 		return fmt.Errorf("subscribing the board snapshot cache to the bus: %w", err)
 	}
 	a.core.ResetSnapshots(true)
@@ -356,6 +398,7 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 		failed = fmt.Errorf("closing the MCP sessions: %w", err)
 	}
 	a.bus.Close()
+	awaitDirectory(shutdown, a, logger)
 	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
 		failed = fmt.Errorf("http shutdown: %w", err)
 	}
