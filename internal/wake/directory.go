@@ -44,6 +44,9 @@ type Options struct {
 	Windows Windows
 	// ProcessUID is core.ProcessUID unless a test replaces it.
 	ProcessUID func(pid int) (int, error)
+	// TapBuffer is the dispatcher's bus.Tap buffer, TapBuffer when zero. serve sets none; a test that
+	// overflows the tap sets a small one.
+	TapBuffer int
 }
 
 // entry is one registered client process.
@@ -126,6 +129,9 @@ func NewDirectory(o Options) (*Directory, error) {
 	if o.ProcessUID == nil {
 		o.ProcessUID = core.ProcessUID
 	}
+	if o.TapBuffer <= 0 {
+		o.TapBuffer = TapBuffer
+	}
 	o.Windows = o.Windows.withDefaults()
 	return &Directory{o: o, entries: map[int64]*entry{}, index: map[string]map[int64]bool{},
 		changed: make(chan struct{}), catch: make(chan []released, 16), rescope: make(chan int64, 16), done: make(chan struct{})}, nil
@@ -140,7 +146,7 @@ func (d *Directory) Start(ctx context.Context) error {
 		return err
 	}
 	d.watch = w
-	tap, err := d.o.Bus.Tap(ctx, TapBuffer)
+	tap, err := d.o.Bus.Tap(ctx, d.o.TapBuffer)
 	if err != nil {
 		w.Close()
 		return err

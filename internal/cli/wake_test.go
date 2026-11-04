@@ -160,9 +160,10 @@ func startDirectory(t *testing.T, from *dirServer) *dirServer {
 // server on); sweep and windows are the directory's, a zero one the production value. They reach
 // the directory through composeWith, never a package variable, so the tests can run in parallel.
 type dirOpts struct {
-	oauth   bool
-	sweep   time.Duration
-	windows wake.Windows
+	oauth     bool
+	sweep     time.Duration
+	windows   wake.Windows
+	tapBuffer int
 }
 
 // shortSweep is the sweep interval of a test that watches the sweep act.
@@ -216,7 +217,7 @@ func startDirectoryWith(t *testing.T, from *dirServer, o dirOpts) *dirServer {
 	if o.oauth {
 		public = "http://" + s.tcp
 	}
-	a, err := composeWith(s.st, "x", public, logger, s.keys, media, core.Retention{}, wakeTuning{registry: s.reg, sweep: o.sweep, windows: o.windows})
+	a, err := composeWith(s.st, "x", public, logger, s.keys, media, core.Retention{}, wakeTuning{registry: s.reg, sweep: o.sweep, windows: o.windows, tapBuffer: o.tapBuffer})
 	if err != nil {
 		t.Fatal(err)
 	}
