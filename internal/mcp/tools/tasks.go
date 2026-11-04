@@ -20,7 +20,7 @@ func RegisterTasks(s *mcp.Server, svc service.Services) {
 		"Update a task's fields (master role; version-checked). In `patch`, null clears a nullable field. `autoAssign` is not supported yet: set `patch.assignee`.",
 		t.Update)
 	mcp.Tool(s, "tasks", "move_task",
-		"Move a task to a column or status and/or reorder it (master role; version-checked). The status table is fixed (get_board); a full IN_PROGRESS column or another identity's live lease refuses it.",
+		"Move a task to a column or status and/or reorder it (master role; version-checked). The status table is fixed (get_board); a full IN_PROGRESS column or another holder's live lease refuses it.",
 		t.Move)
 	mcp.Tool(s, "tasks", "list_tasks",
 		"List a board's tasks with optional filters, a page at a time: `limit` 1 to 200 (default 50), then `nextCursor` as `cursor`. `assignee: null` lists the unassigned.",

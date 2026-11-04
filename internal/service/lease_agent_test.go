@@ -3,6 +3,7 @@ package service
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -125,6 +126,134 @@ func TestALeaseOutcomeIsItsAgentsOwn(t *testing.T) {
 		}
 		if got := e.get(t, free.ID); got.Claim != nil || got.Status != domain.Todo {
 			t.Fatalf("AC2 agent-b's release left %s %+v", got.Status, got.Claim)
+		}
+	})
+}
+
+// P-399: cancel_task and move_task, which take no lease id, follow P-320's rule through leaseYields.
+// On every engine, on agent-a's live lease: worker bob's agent-b, and worker bob's agentless caller,
+// are FORBIDDEN cancel_task (move_task is master tier); master mia's agent-b, and master carol, are
+// CONFLICT_LOCKED on cancel_task and on move_task out of IN_PROGRESS; each leaves the task as it
+// was. The controls: the lease's own agent cancels and moves; master mia's agentless caller (her
+// browser) moves and cancels her agent's live task; a lease that recorded no agent is any caller's
+// of its identity; a lapsed lease blocks no one, and reap_stale_leases still reaps one.
+func TestCancelAndMoveYieldOnlyToTheLeasesAgent(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		carol := e.member(t, e.project, "carol", domain.RoleMaster)
+		named := func(c domain.Caller, agent string) domain.Caller {
+			c.Agent, c.Labelled, c.Via = agent, true, domain.ViaAPIToken
+			return c
+		}
+		bobA, bobB := named(bob, "agent-a"), named(bob, "agent-b")
+		miaA, miaB := named(mia, "agent-a"), named(mia, "agent-b")
+		bobBrowser, miaBrowser := bob, mia // a browser session: no agent, Via ""
+		lc, ts := e.c.Lifecycle(), e.c.Tasks()
+
+		cancel := func(who domain.Caller, id string) error {
+			_, err := lc.Cancel(e.ctx, who, CancelTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version, Reason: "mine now"})
+			return err
+		}
+		move := func(who domain.Caller, id string, to domain.Status) error {
+			_, err := ts.Move(e.ctx, who, MoveTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version, ToStatus: to})
+			return err
+		}
+		type snap struct {
+			version int64
+			status  domain.Status
+			claim   store.TaskClaim
+			labels  []string
+			changes int
+		}
+		look := func(t *testing.T, id string) snap {
+			t.Helper()
+			got := e.get(t, id)
+			if got.Claim == nil {
+				t.Fatalf("%s has no claim: %+v", id, got)
+			}
+			return snap{got.Version, got.Status, *got.Claim, got.Labels, e.changeCount(t)}
+		}
+		type try struct {
+			step string
+			do   func() error
+			want domain.Code
+		}
+		refused := func(t *testing.T, id string, tries []try) {
+			t.Helper()
+			before := look(t, id)
+			for _, x := range tries {
+				err := x.do()
+				t.Logf("%s on %s: %v", x.step, id, err)
+				wantCode(t, err, x.want)
+			}
+			if after := look(t, id); !reflect.DeepEqual(after, before) {
+				t.Fatalf("%s: the task moved: %+v, was %+v", id, after, before)
+			}
+		}
+		allowed := func(t *testing.T, step string, err error, id string, want domain.Status) {
+			t.Helper()
+			got := e.get(t, id)
+			t.Logf("%s on %s: %v -> %s claim %v labels %v", step, id, err, got.Status, got.Claim, got.Labels)
+			if err != nil || got.Status != want || got.Claim != nil {
+				t.Fatalf("%s on %s: %v, left %s claim %+v; want %s with no claim", step, id, err, got.Status, got.Claim, want)
+			}
+		}
+
+		// AC1, below master: REVIEW-L4 probe P1, worker bob's agent-b on agent-a's live task.
+		w := e.task(t, domain.Todo)
+		e.claim(t, bobA, w.ID, 600)
+		refused(t, w.ID, []try{
+			{"worker agent-b cancel_task", func() error { return cancel(bobB, w.ID) }, domain.CodeForbidden},
+			{"worker agentless cancel_task", func() error { return cancel(bobBrowser, w.ID) }, domain.CodeForbidden},
+			{"worker agent-b move_task", func() error { return move(bobB, w.ID, domain.Todo) }, domain.CodeForbidden},
+		})
+		allowed(t, "AC2 worker agent-a cancels its own", cancel(bobA, w.ID), w.ID, domain.Done)
+
+		// AC1, at master: mia's agent-b, and carol, on mia's agent-a's live task.
+		m := e.task(t, domain.Todo)
+		e.claim(t, miaA, m.ID, 600)
+		refused(t, m.ID, []try{
+			{"master agent-b cancel_task", func() error { return cancel(miaB, m.ID) }, domain.CodeConflictLocked},
+			{"master agent-b move_task to TODO", func() error { return move(miaB, m.ID, domain.Todo) }, domain.CodeConflictLocked},
+			{"master agent-b move_task to REVIEW", func() error { return move(miaB, m.ID, domain.Review) }, domain.CodeConflictLocked},
+			{"carol cancel_task", func() error { return cancel(carol, m.ID) }, domain.CodeConflictLocked},
+			{"carol move_task to TODO", func() error { return move(carol, m.ID, domain.Todo) }, domain.CodeConflictLocked},
+		})
+		// AC2: the master's browser is the way out of a task its own agent holds.
+		allowed(t, "AC2 master agentless move_task", move(miaBrowser, m.ID, domain.Todo), m.ID, domain.Todo)
+		own := e.task(t, domain.Todo)
+		e.claim(t, miaA, own.ID, 600)
+		allowed(t, "AC2 master agent-a moves its own", move(miaA, own.ID, domain.Review), own.ID, domain.Review)
+		mc := e.task(t, domain.Todo)
+		e.claim(t, miaA, mc.ID, 600)
+		allowed(t, "AC2 master agentless cancel_task", cancel(miaBrowser, mc.ID), mc.ID, domain.Done)
+
+		// AC2: a lease that recorded no agent is any caller's of its identity.
+		free := e.task(t, domain.Todo)
+		bobNone := bob
+		bobNone.Via = domain.ViaAPIToken
+		e.claim(t, bobNone, free.ID, 600)
+		if got := e.get(t, free.ID).Claim; got == nil || got.AgentID != nil {
+			t.Fatalf("bob's agentless claim recorded agent %+v", got)
+		}
+		allowed(t, "AC2 worker agent-b cancels an agentless lease", cancel(bobB, free.ID), free.ID, domain.Done)
+
+		// AC3: a lapsed lease blocks no one; the reaper still reaps one.
+		var lapsed []string
+		for range 4 {
+			x := e.task(t, domain.Todo)
+			e.claim(t, miaA, x.ID, 1)
+			lapsed = append(lapsed, x.ID)
+		}
+		e.clock.advance(2 * time.Second)
+		allowed(t, "AC3 master agent-b move_task on a lapsed lease", move(miaB, lapsed[0], domain.Todo), lapsed[0], domain.Todo)
+		allowed(t, "AC3 master agent-b cancel_task on a lapsed lease", cancel(miaB, lapsed[1]), lapsed[1], domain.Done)
+		allowed(t, "AC3 carol move_task on a lapsed lease", move(carol, lapsed[2], domain.Todo), lapsed[2], domain.Todo)
+		r, err := lc.Reap(e.ctx, carol, ReapStaleLeasesReq{ProjectID: e.project, BoardID: e.board.ID})
+		allowed(t, "AC3 reap_stale_leases", err, lapsed[3], domain.Todo)
+		if r.Reaped != 1 {
+			t.Fatalf("reap_stale_leases reaped %d, want 1", r.Reaped)
 		}
 	})
 }

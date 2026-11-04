@@ -111,6 +111,22 @@ func leaseAgent(c *store.TaskClaim, caller domain.Caller) bool {
 
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
 
+// leaseYields is cancel_task's and move_task's lease test (P-399): whether a caller that presents no
+// lease id may end t's lease. A lapsed lease yields to anyone. A live one yields to its holder, the
+// owning identity under the agent the claim recorded (leaseAgent, P-320), and, at master, to the
+// owning identity's caller that names no agent: its browser's Status select is how a self-hoster
+// frees a task its own agent is stuck on. Another agent of that identity is another holder, as
+// another identity is.
+func leaseYields(t store.Task, caller domain.Caller, role domain.Role, now int64) bool {
+	if !liveLease(t, now) {
+		return true
+	}
+	if t.Claim.Owner != caller.Identity {
+		return false
+	}
+	return leaseAgent(t.Claim, caller) || (caller.Agent == "" && domain.RoleMeetsTier(role, domain.TierMaster))
+}
+
 // heldBy is whether t is IN_PROGRESS under a live lease of the caller that store.ClaimTask would
 // replace as the caller's own (the same identity under the same agent, claimInput's AgentID), on a
 // task it would still claim.
@@ -1499,8 +1515,9 @@ func (t *txn) handoffTarget(to string) (*string, error) {
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note
 // context item, from any status (a server action, like auto-unblock, not a move through the fixed
-// table). The master role, or the holder of the task's live lease; a master is CONFLICT_LOCKED by
-// another identity's live lease. Version-checked by mutate (STALE before any other judgement). As a
+// table). The master role, or the holder of the task's live lease (its identity under the agent the
+// claim recorded, leaseAgent: P-320, P-399); a master is CONFLICT_LOCKED by a live lease that does
+// not yield to it (leaseYields: another identity's, or another agent's). Version-checked by mutate (STALE before any other judgement). As a
 // landing on DONE it runs the poison-aware unblock under the project lock. A task already DONE is
 // INVALID_TRANSITION (it was delivered: relabelling it would take it out of every done figure), and
 // a racing parent is CONFLICT_LOCKED as move_task refuses it, so no race is left open under a DONE
@@ -1523,7 +1540,7 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 	}, func(t *txn) (CancelTaskResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()
-		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity
+		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity && leaseAgent(cur.Claim, caller)
 		if !owner && !domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 			return CancelTaskResp{}, forbidden("cancel_task needs the master role or the task's live lease",
 				map[string]any{"tool": "cancel_task", "role": a.Role, "requiredRole": domain.TierMinRole(domain.TierMaster)})
@@ -1535,7 +1552,7 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 			return CancelTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if !owner && liveLease(cur, now) {
+		if !owner && !leaseYields(cur, caller, a.Role, now) {
 			return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
