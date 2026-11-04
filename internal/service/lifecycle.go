@@ -111,12 +111,14 @@ func leaseAgent(c *store.TaskClaim, caller domain.Caller) bool {
 
 func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.ExpiresAt > now }
 
-// leaseYields is cancel_task's, move_task's and delete_task's lease test (P-399): whether a caller
-// that presents no lease id may end t's lease. A lapsed lease yields to anyone. A live one yields to its holder, the
-// owning identity under the agent the claim recorded (leaseAgent, P-320), and, at master, to the
-// owning identity's caller that names no agent: its browser's Status select is how a self-hoster
-// frees a task its own agent is stuck on. Another agent of that identity is another holder, as
-// another identity is.
+// leaseYields is the lease test of the routes that end or drop a lease without a lease id (P-399):
+// cancel_task, move_task, start_runs, and delete_task over every task it would delete. A lapsed
+// lease yields to anyone. A live one yields to its holder, the owning identity under the agent the
+// claim recorded (leaseAgent, P-320), and, at master, to the owning identity's caller that names no
+// agent: its browser's Status select is how a self-hoster frees a task its own agent is stuck on.
+// Another agent of that identity is another holder, as another identity is. The role clause is a
+// guard no caller reaches today: all four routes are master tier or refuse a non-holder below
+// master first; it is kept so a later caller below master is not handed another agent's lease.
 func leaseYields(t store.Task, caller domain.Caller, role domain.Role, now int64) bool {
 	if !liveLease(t, now) {
 		return true

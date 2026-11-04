@@ -130,8 +130,9 @@ func runsOut(runs []store.Task) ([]Task, error) {
 }
 
 // Start is start_runs (conductor runs.ts:205-323): the parent, version-checked, goes racing in one
-// write (an IN_PROGRESS parent drops to TODO, any lease is dropped) and n runs are created in the
-// same transaction. n is len(agents) when agents is sent, else count, else 1. Every status may
+// write (an IN_PROGRESS parent drops to TODO, its lease is dropped) and n runs are created in the
+// same transaction. A live lease that does not yield to the caller (leaseYields: another identity's,
+// or another agent's of the caller's identity, P-399) is CONFLICT_LOCKED, as move_task answers it. n is len(agents) when agents is sent, else count, else 1. Every status may
 // enter a race on the fixed table (each reaches IN_PROGRESS), but a poisoned parent may not: its
 // conductor counterpart, DEAD_LETTER, had no edge to IN_PROGRESS. A retried call with the same
 // idempotencyKey replays the race it opened (the mutation's replay: no per-run keys).
@@ -187,6 +188,9 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 		}
 		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
 			return StartRunsResp{}, domain.InvalidTransition(cur.Status, domain.InProgress, domain.AllowedNext(cur.Status), nil)
+		}
+		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
+			return StartRunsResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 		if err != nil {

@@ -329,3 +329,158 @@ func TestDeleteYieldsOnlyToTheLeasesAgent(t *testing.T) {
 		deleted(t, "AC3 carol delete_task on a lapsed lease", del(carol, l2), l2, c2)
 	})
 }
+
+// P-399 round 3: start_runs, which takes no lease id and drops the parent's lease, follows the same
+// rule through leaseYields. On every engine, on mia's agent-a's live lease: mia's agent-b and carol
+// (masters) are CONFLICT_LOCKED, and the task keeps its lease, status and version, with no run opened
+// and no change written. The controls: agent-a races its own task; mia's browser races her agent's
+// live task; a lapsed lease blocks neither mia's agent-b nor carol.
+func TestStartRunsYieldsOnlyToTheLeasesAgent(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		carol := e.member(t, e.project, "carol", domain.RoleMaster)
+		named := func(c domain.Caller, agent string) domain.Caller {
+			c.Agent, c.Labelled, c.Via = agent, true, domain.ViaAPIToken
+			return c
+		}
+		miaA, miaB := named(mia, "agent-a"), named(mia, "agent-b")
+		miaBrowser := mia // a browser session: no agent, Via ""
+		start := func(who domain.Caller, id string) error {
+			_, err := e.c.Runs().Start(e.ctx, who, StartRunsReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version, Count: 2})
+			return err
+		}
+		held := func(t *testing.T, secs int64) string {
+			t.Helper()
+			x := e.task(t, domain.Todo)
+			e.claim(t, miaA, x.ID, secs)
+			return x.ID
+		}
+		raced := func(t *testing.T, step string, err error, id string) {
+			t.Helper()
+			got := e.get(t, id)
+			runs := e.runIDs(t, id)
+			t.Logf("%s on %s: %v -> %s racing %v claim %v runs %v", step, id, err, got.Status, got.Racing, got.Claim, runs)
+			if err != nil || !got.Racing || got.Claim != nil || got.Status != domain.Todo || len(runs) != 2 {
+				t.Fatalf("%s on %s: %v, left %s racing %v claim %+v runs %v; want a racing TODO parent with no claim and 2 runs",
+					step, id, err, got.Status, got.Racing, got.Claim, runs)
+			}
+		}
+
+		// AC10: the sibling named master agent, and another identity, are refused; nothing changes.
+		id := held(t, 600)
+		before, changes, tasks := e.get(t, id), e.changeCount(t), e.taskCount(t)
+		if before.Claim == nil || before.Claim.AgentID == nil || *before.Claim.AgentID != "agent-a" {
+			t.Fatalf("agent-a's claim recorded %+v", before.Claim)
+		}
+		for _, who := range []domain.Caller{miaB, carol} {
+			err := start(who, id)
+			t.Logf("start_runs as %s/%q on agent-a's live %s: %v", who.Identity, who.Agent, id, err)
+			if be := wantCode(t, err, domain.CodeConflictLocked); be.Details["taskId"] != id || be.Details["owner"] != mia.Identity {
+				t.Fatalf("CONFLICT_LOCKED names %v, want %s held by %s", be.Details, id, mia.Identity)
+			}
+		}
+		if after := e.get(t, id); !reflect.DeepEqual(after, before) || e.changeCount(t) != changes || e.taskCount(t) != tasks || len(e.runIDs(t, id)) != 0 {
+			t.Fatalf("a refused start_runs changed the board: %+v, was %+v; changes %d, was %d; tasks %d, was %d",
+				after, before, e.changeCount(t), changes, e.taskCount(t), tasks)
+		}
+		// AC11: the lease's own agent, and the master's browser, race the task.
+		raced(t, "AC11 agent-a start_runs on its own", start(miaA, id), id)
+		id = held(t, 600)
+		raced(t, "AC11 master browser start_runs", start(miaBrowser, id), id)
+		// AC11: a lapsed lease blocks no one.
+		l1, l2 := held(t, 1), held(t, 1)
+		e.clock.advance(2 * time.Second)
+		raced(t, "AC11 master agent-b start_runs on a lapsed lease", start(miaB, l1), l1)
+		raced(t, "AC11 carol start_runs on a lapsed lease", start(carol, l2), l2)
+	})
+}
+
+// P-416: delete_task removes the task's subtasks and runs too, so a live lease on any of them that
+// does not yield to the caller refuses the delete, though the task itself is unleased. On every
+// engine: mia's agent-a holds a subtask (and, in a racing tree, a run); mia's agent-b and carol are
+// CONFLICT_LOCKED naming the held task, and the tree, the task count and the change log are as they
+// were. The controls: agent-a deletes the tree whose subtask it holds; a lapsed subtask lease blocks
+// neither mia's agent-b nor carol.
+func TestDeleteRefusesAHeldSubtask(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		carol := e.member(t, e.project, "carol", domain.RoleMaster)
+		named := func(c domain.Caller, agent string) domain.Caller {
+			c.Agent, c.Labelled, c.Via = agent, true, domain.ViaAPIToken
+			return c
+		}
+		miaA, miaB := named(mia, "agent-a"), named(mia, "agent-b")
+		del := func(who domain.Caller, id string) error {
+			_, err := e.c.Tasks().Delete(e.ctx, who, DeleteTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version})
+			return err
+		}
+		// tree is an unleased parent with a subtask agent-a holds for secs.
+		tree := func(t *testing.T, secs int64) (string, string) {
+			t.Helper()
+			x := e.task(t, domain.Todo)
+			sub, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: x.ID, Title: "child"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.claim(t, miaA, sub.Task.ID, secs)
+			return x.ID, sub.Task.ID
+		}
+		refused := func(t *testing.T, id, heldID string, ids ...string) {
+			t.Helper()
+			before := map[string]store.Task{}
+			for _, x := range ids {
+				before[x] = e.get(t, x)
+			}
+			changes, tasks := e.changeCount(t), e.taskCount(t)
+			if p := e.get(t, id); p.Claim != nil {
+				t.Fatalf("the parent %s is leased: %+v", id, p.Claim)
+			}
+			for _, who := range []domain.Caller{miaB, carol} {
+				err := del(who, id)
+				t.Logf("delete_task as %s/%q on %s, whose %s agent-a holds: %v", who.Identity, who.Agent, id, heldID, err)
+				if be := wantCode(t, err, domain.CodeConflictLocked); be.Details["taskId"] != heldID || be.Details["owner"] != mia.Identity {
+					t.Fatalf("CONFLICT_LOCKED names %v, want %s held by %s", be.Details, heldID, mia.Identity)
+				}
+			}
+			for _, x := range ids {
+				if after := e.get(t, x); !reflect.DeepEqual(after, before[x]) {
+					t.Fatalf("a refused delete changed %s: %+v, was %+v", x, after, before[x])
+				}
+			}
+			if e.changeCount(t) != changes || e.taskCount(t) != tasks {
+				t.Fatalf("a refused delete wrote: changes %d, was %d; tasks %d, was %d", e.changeCount(t), changes, e.taskCount(t), tasks)
+			}
+		}
+		deleted := func(t *testing.T, step string, err error, ids ...string) {
+			t.Helper()
+			t.Logf("%s on %v: %v", step, ids, err)
+			if err != nil {
+				t.Fatalf("%s: %v", step, err)
+			}
+			for _, id := range ids {
+				e.tkGone(t, id)
+			}
+		}
+
+		// AC12: a held subtask under an unleased parent.
+		id, child := tree(t, 600)
+		refused(t, id, child, id, child)
+		// AC12: a held run under a racing parent.
+		rp := e.task(t, domain.Todo)
+		if _, err := e.c.Runs().Start(e.ctx, e.alice, StartRunsReq{ProjectID: e.project, TaskID: rp.ID, Version: e.get(t, rp.ID).Version, Count: 2}); err != nil {
+			t.Fatal(err)
+		}
+		runs := e.runIDs(t, rp.ID)
+		e.claim(t, miaA, runs[1], 600)
+		refused(t, rp.ID, runs[1], append([]string{rp.ID}, runs...)...)
+		// AC13: the subtask's own agent deletes the tree; so does a racing tree's run holder.
+		deleted(t, "AC13 agent-a deletes the tree whose subtask it holds", del(miaA, id), id, child)
+		deleted(t, "AC13 agent-a deletes the race whose run it holds", del(miaA, rp.ID), append([]string{rp.ID}, runs...)...)
+		// AC13: a lapsed subtask lease blocks no one.
+		l1, c1 := tree(t, 1)
+		l2, c2 := tree(t, 1)
+		e.clock.advance(2 * time.Second)
+		deleted(t, "AC13 master agent-b delete_task over a lapsed subtask lease", del(miaB, l1), l1, c1)
+		deleted(t, "AC13 carol delete_task over a lapsed subtask lease", del(carol, l2), l2, c2)
+	})
+}

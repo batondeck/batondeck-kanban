@@ -6,16 +6,19 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
-- A lease that recorded an agent is that agent's for `cancel_task`, `move_task` and `delete_task`
-  too (P-399). Another agent of the same identity no longer cancels, moves or deletes the task that
-  agent holds: `cancel_task` answers `FORBIDDEN` below master and `CONFLICT_LOCKED` at master, and
-  `move_task` and `delete_task` answer `CONFLICT_LOCKED`, as all three already answered another
-  identity, and the task (with its subtasks) is left as it was. The same identity with no agent
-  named (its browser, or an unlabelled token over REST) is refused `cancel_task` below master, and
-  at master still moves, cancels or deletes its agents' live tasks, so the drawer's Status select
-  still frees a task its own agent is stuck on. A lease that
-  recorded no agent is the owning identity's on any of its callers, and a lapsed lease blocks no
-  one, as before.
+- A lease that recorded an agent is that agent's for `cancel_task`, `move_task`, `delete_task` and
+  `start_runs` too (P-399). Another agent of the same identity no longer cancels, moves, deletes or
+  races a task that agent holds: `cancel_task` answers `FORBIDDEN` below master and
+  `CONFLICT_LOCKED` at master, and the other three answer `CONFLICT_LOCKED`. `start_runs` now
+  refuses another identity's live lease the same way; it used to drop any lease. `delete_task` also
+  refuses when a subtask or run it would delete with the task is under such a lease, naming that
+  task (P-416). A refused call writes nothing. At master, the owning identity's caller that names
+  no agent still passes, so a self-hoster can free a task its own agent is stuck on. Its browser and
+  its unlabelled tokens over REST reach only `move_task` and `start_runs` (there is no REST cancel
+  or delete route). An MCP session that names no agent (no token label, and an empty
+  `clientInfo.name` or OAuth `client_name`) reaches all four. A lease that recorded no agent is the
+  owning identity's on any of its callers, and a lapsed lease blocks no one, as before. Not covered:
+  `cancel_runs` and `pick_run` still delete a run that another agent holds.
 - The `image-staging` workflow (`.github/workflows/image-staging.yml`): on demand, with a commit on
   main, it builds the two-architecture image and pushes it as `ghcr.io/batondeck/batondeck-kanban:staging`.
   The binary inside reports `0.1.0-staging+<sha>`. It cuts no release and moves no version tag

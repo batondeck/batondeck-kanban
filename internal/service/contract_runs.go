@@ -11,9 +11,11 @@ import (
 type Runs interface {
 	// Start is start_runs.
 	// Tier: master; version-checked on the parent (STALE); a racing, poisoned or ineligible parent
-	// INVALID_TRANSITION; more runs than maxRunsPerTask VALIDATION. Events: runs.started on the parent,
-	// task.created and run.opened on each run. Audit: none. Doorbell: assigned to each named run's
-	// agent, broadcast for each unnamed one. Replays on idempotencyKey.
+	// INVALID_TRANSITION; another holder's live lease on the parent CONFLICT_LOCKED (another
+	// identity's, or another agent's of the caller's, P-399); more runs than maxRunsPerTask
+	// VALIDATION. Events: runs.started on the parent, task.created and run.opened on each run. Audit:
+	// none. Doorbell: assigned to each named run's agent, broadcast for each unnamed one. Replays on
+	// idempotencyKey.
 	Start(ctx context.Context, caller domain.Caller, req StartRunsReq) (StartRunsResp, error)
 
 	// Open is open_run.

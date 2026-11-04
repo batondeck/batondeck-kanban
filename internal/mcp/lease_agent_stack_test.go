@@ -12,8 +12,10 @@ import (
 
 // P-399: REVIEW-L4 probe P1 over /mcp. Two labelled tokens of one identity, agent-a and agent-b, on
 // every selected engine: agent-a claims, and agent-b's cancel_task, move_task and delete_task are
-// refused (worker bob: FORBIDDEN; master ada: CONFLICT_LOCKED), the task and its subtask stay as
-// they were under agent-a's lease, and agent-a then completes it with that lease. Last, ada's
+// refused (worker bob: FORBIDDEN; master ada: CONFLICT_LOCKED), as is the probe's way round through
+// runs (start_runs, then cancel_runs, then cancel_task), the task and its subtask stay as they were
+// under agent-a's lease, and agent-a then completes it with that lease. Then (P-416) ada's agent-b
+// cannot delete an unleased parent whose subtask ada's agent-a holds, and agent-a can. Last, ada's
 // agent-a deletes a task it holds.
 const (
 	siblingAdaA = "bk_sibling_ada_a"
@@ -59,9 +61,11 @@ func TestASiblingAgentCannotEndAnotherAgentsLease(t *testing.T) {
 			cancel string // agent-b's cancel_task refusal
 			move   string // agent-b's move_task refusal
 			del    string // agent-b's delete_task refusal
+			start  string // agent-b's start_runs refusal
+			runs   string // agent-b's cancel_runs refusal (no race was opened)
 		}{
-			{"worker bob", bobA, bobB, "FORBIDDEN", "FORBIDDEN", "FORBIDDEN"},
-			{"master ada", adaA, adaB, "CONFLICT_LOCKED", "CONFLICT_LOCKED", "CONFLICT_LOCKED"},
+			{"worker bob", bobA, bobB, "FORBIDDEN", "FORBIDDEN", "FORBIDDEN", "FORBIDDEN", "FORBIDDEN"},
+			{"master ada", adaA, adaB, "CONFLICT_LOCKED", "CONFLICT_LOCKED", "CONFLICT_LOCKED", "CONFLICT_LOCKED", "INVALID_TRANSITION"},
 		} {
 			id := str(obj(adaA.call("create_task", map[string]any{"projectId": p, "boardId": b, "title": leg.name})["task"])["id"])
 			lease := str(leg.a.call("claim_task", map[string]any{"projectId": p, "taskId": id})["leaseId"])
@@ -74,6 +78,11 @@ func TestASiblingAgentCannotEndAnotherAgentsLease(t *testing.T) {
 			refused(leg.name, leg.b, "cancel_task", map[string]any{"projectId": p, "taskId": id, "version": before["version"], "reason": "mine now"}, leg.cancel)
 			refused(leg.name, leg.b, "move_task", map[string]any{"projectId": p, "taskId": id, "version": before["version"], "toStatus": "TODO"}, leg.move)
 			refused(leg.name, leg.b, "delete_task", map[string]any{"projectId": p, "taskId": id, "version": before["version"]}, leg.del)
+			// Probe P1 through runs: start_runs would drop agent-a's lease, cancel_runs end the race, and
+			// cancel_task then find no lease.
+			refused(leg.name, leg.b, "start_runs", map[string]any{"projectId": p, "taskId": id, "version": before["version"], "count": 1}, leg.start)
+			refused(leg.name, leg.b, "cancel_runs", map[string]any{"projectId": p, "taskId": id, "version": before["version"]}, leg.runs)
+			refused(leg.name, leg.b, "cancel_task", map[string]any{"projectId": p, "taskId": id, "version": before["version"], "reason": "mine now"}, leg.cancel)
 			after, afterChild := get(id), get(child)
 			if after["version"] != before["version"] || after["status"] != "IN_PROGRESS" || !jsonEqual(after["claim"], before["claim"]) || !jsonEqual(afterChild, beforeChild) {
 				t.Fatalf("%s: agent-b's refused calls changed the task or its subtask: %v / %v, was %v / %v", leg.name, after, afterChild, before, beforeChild)
@@ -84,6 +93,31 @@ func TestASiblingAgentCannotEndAnotherAgentsLease(t *testing.T) {
 				t.Fatalf("%s: agent-a's complete_task left %v", leg.name, done["status"])
 			}
 		}
+		// P-416: an unleased parent whose subtask ada's agent-a holds; agent-b's delete_task is refused
+		// naming the subtask, and the tree stays; agent-a's goes through.
+		parent := str(obj(adaA.call("create_task", map[string]any{"projectId": p, "boardId": b, "title": "held subtask"})["task"])["id"])
+		sub := str(obj(adaA.call("add_subtask", map[string]any{"projectId": p, "parentTaskId": parent, "title": "held subtask child"})["task"])["id"])
+		adaA.call("claim_task", map[string]any{"projectId": p, "taskId": sub})
+		before, beforeSub := get(parent), get(sub)
+		if before["claim"] != nil || str(obj(beforeSub["claim"])["agentId"]) != "agent-a" {
+			t.Fatalf("P-416: parent claim %v, subtask claim %v; want none and agent-a's", before["claim"], beforeSub["claim"])
+		}
+		e := bk.ToolError(t, adaB.cs, "delete_task", map[string]any{"projectId": p, "taskId": parent, "version": before["version"]})
+		t.Logf("%s P-416: agent-b delete_task on %s, whose %s agent-a holds: %v %v", s.Engine, parent, sub, e["code"], e["message"])
+		if e["code"] != "CONFLICT_LOCKED" || str(obj(e["details"])["taskId"]) != sub {
+			t.Fatalf("P-416: agent-b's delete_task: %v, want CONFLICT_LOCKED naming %s", e, sub)
+		}
+		if !jsonEqual(get(parent), before) || !jsonEqual(get(sub), beforeSub) {
+			t.Fatalf("P-416: agent-b's refused delete changed the tree")
+		}
+		adaA.call("delete_task", map[string]any{"projectId": p, "taskId": parent, "version": before["version"]})
+		for _, gone := range []string{parent, sub} {
+			if e := bk.ToolError(t, adaA.cs, "get_task", map[string]any{"projectId": p, "taskId": gone}); e["code"] != "NOT_FOUND" {
+				t.Fatalf("P-416: after agent-a's delete_task, get_task %s: %v, want NOT_FOUND", gone, e)
+			}
+		}
+		t.Logf("%s P-416: agent-a delete_task on %s -> %s and %s NOT_FOUND", s.Engine, parent, parent, sub)
+
 		// The control: ada's agent-a deletes the task it holds, with its subtask.
 		id := str(obj(adaA.call("create_task", map[string]any{"projectId": p, "boardId": b, "title": "own delete"})["task"])["id"])
 		adaA.call("claim_task", map[string]any{"projectId": p, "taskId": id})

@@ -16,8 +16,10 @@ import (
 type BlobGC func(ctx context.Context, sha256s []string)
 
 // Delete is delete_task (plan §Fold 2), master tier: version-checked by mutate (STALE), a live lease
-// that does not yield to the caller (leaseYields: another identity's, or another agent's of the
-// caller's identity, P-399) CONFLICT_LOCKED, a missing task (a second call) NOT_FOUND. One mutation runs
+// on any task it would delete (the deletion set: the task, its subtasks and runs) that does not
+// yield to the caller (leaseYields: another identity's, or another agent's of the caller's identity,
+// P-399, P-416) CONFLICT_LOCKED naming that task, before any write, a missing task (a second call)
+// NOT_FOUND. One mutation runs
 // deleteCascade under the project lock; the board-level task.deleted {id, title, status}, the audit
 // row (domain.DescribeAudit) and a change-log row per deleted task are written by mutate. After the
 // commit the blob hook is called with the freed hashes. The T-n is never reused: the store's counter
@@ -40,10 +42,15 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, Access: a, LockProject: true,
 	}, func(t *txn) (DeleteTaskResp, error) {
 		root := *t.Task
-		if !leaseYields(root, caller, a.Role, t.Now.UnixMilli()) {
-			return DeleteTaskResp{}, domain.ConflictLocked(root.ID, root.Claim.Owner)
+		set, err := t.deletionSet(root)
+		if err != nil {
+			return DeleteTaskResp{}, err
 		}
-		var err error
+		for _, x := range set {
+			if !leaseYields(x, caller, a.Role, t.Now.UnixMilli()) {
+				return DeleteTaskResp{}, domain.ConflictLocked(x.ID, x.Claim.Owner)
+			}
+		}
 		if blobs, err = t.deleteCascade(root); err != nil {
 			return DeleteTaskResp{}, err
 		}
