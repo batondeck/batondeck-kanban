@@ -53,7 +53,12 @@ type ContextItemsPage struct {
 // replay of an add is the caller's (Idempotency.WithIdempotency), not this area's. Order is (ts,
 // id), newest first unless Ascending; a cursor is base64url JSON {order, id} with order the ts.
 type Context interface {
-	// AddContextItem appends the item, stamped with a new id and the current time.
+	// AddContextItem appends the item, stamped with a new id and the current time, or one millisecond
+	// past the task's newest item when that is not earlier: a task's items are strictly increasing in
+	// ts in the order they were added, so the (ts, id) order is the insertion order even within one
+	// millisecond, where the random id alone would order them arbitrarily (resume's last checkpoint,
+	// P-117). add_context_item and cancel_task hold the task's lock (mutate's LockTask), so two of
+	// them on one task do not race the read.
 	AddContextItem(ctx context.Context, in AddContextItemInput) (ContextItem, error)
 	// ListContextItems is one page of the task's items in the query's order.
 	ListContextItems(ctx context.Context, projectID, taskID string, q ContextItemsQuery) (ContextItemsPage, error)

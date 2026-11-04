@@ -19,6 +19,12 @@ Notable changes to batondeck-kanban. The format follows
   `clientInfo.name` or OAuth `client_name`) reaches all four. A lease that recorded no agent is the
   owning identity's on any of its callers, and a lapsed lease blocks no one, as before. Not covered:
   `cancel_runs` and `pick_run` still delete a run that another agent holds.
+- A task's context items now keep the order they were added in, even when two land in the same
+  millisecond. Each item is stamped the current time, or one millisecond past the task's newest
+  item when that is not earlier. Before, two such items were ordered by their random ids, so
+  `get_task_context` could list them out of order and the resume that `claim_task`, `claim_next`
+  and `get_task_context` hand back could name the older of two checkpoint notes (P-117). Items
+  already stored keep their times.
 - The `image-staging` workflow (`.github/workflows/image-staging.yml`): on demand, with a commit on
   main, it builds the two-architecture image and pushes it as `ghcr.io/batondeck/batondeck-kanban:staging`.
   The binary inside reports `0.1.0-staging+<sha>`. It cuts no release and moves no version tag
