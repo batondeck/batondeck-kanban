@@ -36,7 +36,8 @@ type Tasks interface {
 	List(ctx context.Context, caller domain.Caller, req ListTasksReq) (ListTasksResp, error)
 
 	// Delete is delete_task.
-	// Tier: master; the plan §Fold 2 cascade. Event: task.deleted (board-level; the task's own log
+	// Tier: master; the plan §Fold 2 cascade; CONFLICT_LOCKED on another holder's live lease (another
+	// identity's, or another agent's of the caller's; the caller's own agentless caller passes, P-399). Event: task.deleted (board-level; the task's own log
 	// goes with it). Audit: task.deleted. Doorbell: none.
 	Delete(ctx context.Context, caller domain.Caller, req DeleteTaskReq) (DeleteTaskResp, error)
 }

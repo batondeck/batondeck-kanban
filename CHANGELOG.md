@@ -6,13 +6,14 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
-- A lease that recorded an agent is that agent's for `cancel_task` and `move_task` too (P-399).
-  Another agent of the same identity no longer cancels or moves the task that agent holds:
-  `cancel_task` answers `FORBIDDEN` below master and `CONFLICT_LOCKED` at master, and `move_task`
-  answers `CONFLICT_LOCKED`, as both already answered another identity, and the task is left
-  as it was. The same identity with no agent named (its browser, or an unlabelled token over REST)
-  is refused `cancel_task` below master, and at master still moves or cancels its agents' live
-  tasks, so the drawer's Status select still frees a task its own agent is stuck on. A lease that
+- A lease that recorded an agent is that agent's for `cancel_task`, `move_task` and `delete_task`
+  too (P-399). Another agent of the same identity no longer cancels, moves or deletes the task that
+  agent holds: `cancel_task` answers `FORBIDDEN` below master and `CONFLICT_LOCKED` at master, and
+  `move_task` and `delete_task` answer `CONFLICT_LOCKED`, as all three already answered another
+  identity, and the task (with its subtasks) is left as it was. The same identity with no agent
+  named (its browser, or an unlabelled token over REST) is refused `cancel_task` below master, and
+  at master still moves, cancels or deletes its agents' live tasks, so the drawer's Status select
+  still frees a task its own agent is stuck on. A lease that
   recorded no agent is the owning identity's on any of its callers, and a lapsed lease blocks no
   one, as before.
 

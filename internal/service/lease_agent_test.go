@@ -257,3 +257,75 @@ func TestCancelAndMoveYieldOnlyToTheLeasesAgent(t *testing.T) {
 		}
 	})
 }
+
+// P-399 round 2: delete_task, which takes no lease id and destroys the task with its subtasks, follows
+// the same rule through leaseYields. On every engine, on mia's agent-a's live lease: mia's agent-b and
+// carol (masters) are CONFLICT_LOCKED, and the task and its subtask are left as they were. The
+// controls: agent-a deletes its own; mia's browser and her agentless token delete her agent's live
+// task; a lapsed lease blocks neither mia's agent-b nor carol.
+func TestDeleteYieldsOnlyToTheLeasesAgent(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		mia := e.member(t, e.project, "mia", domain.RoleMaster)
+		carol := e.member(t, e.project, "carol", domain.RoleMaster)
+		named := func(c domain.Caller, agent string) domain.Caller {
+			c.Agent, c.Labelled, c.Via = agent, true, domain.ViaAPIToken
+			return c
+		}
+		miaA, miaB := named(mia, "agent-a"), named(mia, "agent-b")
+		miaBrowser, miaNone := mia, mia // a browser session (Via ""), and a token that names no agent
+		miaNone.Via = domain.ViaAPIToken
+		del := func(who domain.Caller, id string) error {
+			_, err := e.c.Tasks().Delete(e.ctx, who, DeleteTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version})
+			return err
+		}
+		held := func(t *testing.T, secs int64) (string, string) {
+			t.Helper()
+			x := e.task(t, domain.Todo)
+			e.claim(t, miaA, x.ID, secs)
+			sub, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: x.ID, Title: "child"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return x.ID, sub.Task.ID
+		}
+		deleted := func(t *testing.T, step string, err error, ids ...string) {
+			t.Helper()
+			t.Logf("%s on %v: %v", step, ids, err)
+			if err != nil {
+				t.Fatalf("%s: %v", step, err)
+			}
+			for _, id := range ids {
+				e.tkGone(t, id)
+			}
+		}
+
+		// AC1: the sibling named master agent, and another identity, are refused; nothing changes.
+		id, child := held(t, 600)
+		before, beforeChild, changes := e.get(t, id), e.get(t, child), e.changeCount(t)
+		if before.Claim == nil || before.Claim.AgentID == nil || *before.Claim.AgentID != "agent-a" {
+			t.Fatalf("agent-a's claim recorded %+v", before.Claim)
+		}
+		for _, who := range []domain.Caller{miaB, carol} {
+			err := del(who, id)
+			t.Logf("delete_task as %s/%q on agent-a's live %s: %v", who.Identity, who.Agent, id, err)
+			wantCode(t, err, domain.CodeConflictLocked)
+		}
+		if after, afterChild := e.get(t, id), e.get(t, child); !reflect.DeepEqual(after, before) || !reflect.DeepEqual(afterChild, beforeChild) || e.changeCount(t) != changes {
+			t.Fatalf("a refused delete changed the task or its subtask: %+v / %+v, was %+v / %+v", after, afterChild, before, beforeChild)
+		}
+		// AC2: the lease's own agent deletes it, with its subtask.
+		deleted(t, "AC2 agent-a deletes its own", del(miaA, id), id, child)
+		// AC2: the master's browser, and her token that names no agent, delete her agent's live task.
+		id, child = held(t, 600)
+		deleted(t, "AC2 master browser delete_task", del(miaBrowser, id), id, child)
+		id, child = held(t, 600)
+		deleted(t, "AC2 master agentless token delete_task", del(miaNone, id), id, child)
+
+		// AC3: a lapsed lease blocks no one.
+		l1, c1 := held(t, 1)
+		l2, c2 := held(t, 1)
+		e.clock.advance(2 * time.Second)
+		deleted(t, "AC3 master agent-b delete_task on a lapsed lease", del(miaB, l1), l1, c1)
+		deleted(t, "AC3 carol delete_task on a lapsed lease", del(carol, l2), l2, c2)
+	})
+}
