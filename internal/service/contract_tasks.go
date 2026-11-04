@@ -24,7 +24,8 @@ type Tasks interface {
 
 	// Move is move_task.
 	// Tier: master; version-checked (STALE), the fixed table (INVALID_TRANSITION), the WIP limit
-	// (WIP_EXCEEDED), another identity's live lease (CONFLICT_LOCKED). Event: task.moved, plus
+	// (WIP_EXCEEDED), another holder's live lease (CONFLICT_LOCKED: another identity's, or another
+	// agent's of the caller's; the caller's own browser may move its agents' lease, P-399). Event: task.moved, plus
 	// task.dependency_cleared on each dependent a move to DONE unblocks. Audit: none. Doorbell: broadcast for
 	// every task that lands TODO with no assignee (the moved one and the unblocked dependents), and
 	// assigned to the assignee of each unblocked dependent that has one.
@@ -35,8 +36,10 @@ type Tasks interface {
 	List(ctx context.Context, caller domain.Caller, req ListTasksReq) (ListTasksResp, error)
 
 	// Delete is delete_task.
-	// Tier: master; the plan §Fold 2 cascade. Event: task.deleted (board-level; the task's own log
-	// goes with it). Audit: task.deleted. Doorbell: none.
+	// Tier: master; the plan §Fold 2 cascade; CONFLICT_LOCKED on another holder's live lease on any
+	// task it would delete (another identity's, or another agent's of the caller's; at master the
+	// caller's own agentless caller may delete its agents' tasks, P-399, P-416), before any write. Event: task.deleted
+	// (board-level; the task's own log goes with it). Audit: task.deleted. Doorbell: none.
 	Delete(ctx context.Context, caller domain.Caller, req DeleteTaskReq) (DeleteTaskResp, error)
 }
 

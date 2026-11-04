@@ -28,7 +28,14 @@ func (s *Store) AddContextItem(ctx context.Context, in store.AddContextItemInput
 		if _, err := st.task(in.ProjectID, in.TaskID); err != nil {
 			return store.ContextItem{}, err
 		}
-		it := store.ContextItem{ProjectID: in.ProjectID, TaskID: in.TaskID, ID: newID("CI-", 16), Kind: in.Kind, Body: in.Body, Author: in.Author, TS: nowMillis()}
+		// Strictly after the task's newest item (the contract's insertion order).
+		ts := nowMillis()
+		for k, x := range st.contextItems {
+			if k[0] == in.ProjectID && k[1] == in.TaskID && x.TS >= ts {
+				ts = x.TS + 1
+			}
+		}
+		it := store.ContextItem{ProjectID: in.ProjectID, TaskID: in.TaskID, ID: newID("CI-", 16), Kind: in.Kind, Body: in.Body, Author: in.Author, TS: ts}
 		st.contextItems[[3]string{it.ProjectID, it.TaskID, it.ID}] = it
 		return it, nil
 	})

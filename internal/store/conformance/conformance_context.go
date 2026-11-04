@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -60,6 +61,34 @@ func contextItems(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			if got := bodies(page.Items); len(got) != 1 || got[0] != "one" || page.NextCursor != "" {
 				t.Fatalf("second page %v, cursor %q: want [one] and no cursor", got, page.NextCursor)
+			}
+		})
+
+		// P-117's resume reads the newest checkpoint note off this order. Items added back to back,
+		// with no sleep, share milliseconds; the random id must not decide which is newest.
+		t.Run("AddsInOneMillisecondKeepInsertionOrder", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			const n = 40
+			var prev int64
+			for i := range n {
+				it, err := s.AddContextItem(ctx, store.AddContextItemInput{ProjectID: p, TaskID: task, Kind: store.ContextNote, Body: strconv.Itoa(i), Author: "alice"})
+				noErr(t, err)
+				if it.TS <= prev {
+					t.Fatalf("item %d stamped %d, not after the previous item's %d", i, it.TS, prev)
+				}
+				prev = it.TS
+			}
+			page, err := s.ListContextItems(ctx, p, task, store.ContextItemsQuery{Limit: n})
+			noErr(t, err)
+			got := bodies(page.Items)
+			for i, body := range got {
+				if body != strconv.Itoa(n-1-i) {
+					t.Fatalf("newest first %v: want the reverse of the insertion order", got)
+				}
+			}
+			if len(got) != n {
+				t.Fatalf("listed %d items, want %d", len(got), n)
 			}
 		})
 

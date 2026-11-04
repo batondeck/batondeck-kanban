@@ -62,8 +62,9 @@ type Lifecycle interface {
 	Handoff(ctx context.Context, caller domain.Caller, req HandoffTaskReq) (HandoffTaskResp, error)
 
 	// Cancel is cancel_task.
-	// The master role or the task's current owner (ADR-0001); version-checked (STALE); CONFLICT_LOCKED
-	// on another identity's live lease. Moves the task to DONE with the system label cancelled and the
+	// The master role or the holder of the task's live lease, its identity under the agent the claim
+	// recorded (ADR-0001, P-399); version-checked (STALE); CONFLICT_LOCKED on another holder's live
+	// lease (another identity's, or another agent's of the caller's identity). Moves the task to DONE with the system label cancelled and the
 	// reason as a context note. Event: task.moved (data {to: DONE, cancelled: true, reason}),
 	// context.added for the note, and task.dependency_cleared per dependent it unblocks; no event type
 	// of its own. Audit: none. Doorbell: as Move to DONE (each unblocked dependent: assigned to its

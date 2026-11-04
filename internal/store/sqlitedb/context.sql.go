@@ -31,7 +31,9 @@ const insertContextItem = `-- name: InsertContextItem :one
 
 INSERT INTO context_items (project_id, task_id, id, kind, body, author, ts)
 SELECT t.project_id, t.id, CAST(?1 AS TEXT), CAST(?2 AS TEXT), CAST(?3 AS TEXT),
-  CAST(?4 AS TEXT), CAST(?5 AS INTEGER)
+  CAST(?4 AS TEXT),
+  MAX(CAST(?5 AS INTEGER),
+      COALESCE((SELECT MAX(c.ts) + 1 FROM context_items c WHERE c.project_id = t.project_id AND c.task_id = t.id), 0))
 FROM tasks t WHERE t.project_id = ?6 AND t.id = ?7
 RETURNING project_id, task_id, id, kind, body, author, ts
 `
@@ -49,6 +51,8 @@ type InsertContextItemParams struct {
 // The context-item area. Every read starts FROM the task, so one statement answers both "no such
 // task" (no row) and "no items" (one row whose item columns are NULL).
 // An item on the task, in one statement: no row is a missing task.
+// ts is the given time, or one past the task's newest item's when that is not earlier, so a task's
+// items are strictly increasing in ts in the order they were added (store.Context.AddContextItem).
 func (q *Queries) InsertContextItem(ctx context.Context, arg InsertContextItemParams) (ContextItem, error) {
 	row := q.db.QueryRowContext(ctx, insertContextItem,
 		arg.ID,
