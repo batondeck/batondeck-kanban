@@ -66,9 +66,10 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 // numbers); a test passes its own to composeWith, so that tests running in parallel share no
 // package variable.
 type wakeTuning struct {
-	registry string
-	sweep    time.Duration
-	windows  wake.Windows
+	registry  string
+	sweep     time.Duration
+	windows   wake.Windows
+	tapBuffer int
 }
 
 // composeWith is compose with the directory's tuning given.
@@ -115,7 +116,7 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 	// The engines wake the tail on commit (store.ChangeWatcher); without one it polls.
 	watcher, _ := st.(store.ChangeWatcher)
 	b := bus.New(st, bus.Options{Watcher: watcher, OnError: func(err error) { logger.Printf("bus: %v", err) }})
-	dir, err := wake.NewDirectory(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Sessions: sc.WakeStore(), Registry: wt.registry, Logger: logger, Sweep: wt.sweep, Windows: wt.windows})
+	dir, err := wake.NewDirectory(wake.Options{Bus: b, Resolver: resolver, Scopes: sc.WakeScopes, Sessions: sc.WakeStore(), Registry: wt.registry, Logger: logger, Sweep: wt.sweep, Windows: wt.windows, TapBuffer: wt.tapBuffer})
 	if err != nil {
 		return nil, err
 	}

@@ -473,7 +473,8 @@ func patchIn(in TaskPatch) (store.TaskPatch, []string, error) {
 // Move is move_task (conductor tasks.ts:345-470) over domain.DecideMove: the fixed table
 // (INVALID_TRANSITION with allowed and path), a same-status move a reorder, a promotion of a
 // still-blocked task landing on BLOCKED, the WIP limit counted by status inside the transaction
-// (WIP_EXCEEDED). A racing task or another identity's live lease is CONFLICT_LOCKED. Leaving
+// (WIP_EXCEEDED). A racing task, or a live lease that does not yield to the caller (leaseYields:
+// another identity's, or another agent's of the caller's identity, P-399), is CONFLICT_LOCKED. Leaving
 // IN_PROGRESS drops the lease; entering it clears the retry backoff. Leaving a poisoned BLOCKED is the
 // un-poison (plan §Fold 1): claimAttempts to 0, the poisoned label and the reason cleared, through
 // SetStatus(Unpoison) — also when accrued blockers redirect it back to BLOCKED (P-42). Its master
@@ -514,7 +515,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 			return MoveTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if cur.Claim != nil && cur.Claim.Owner != caller.Identity && domain.HasLiveLease(&domain.Lease{ExpiresAt: time.UnixMilli(cur.Claim.ExpiresAt)}, t.Now) {
+		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
 			return MoveTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)

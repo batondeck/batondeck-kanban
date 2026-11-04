@@ -2,10 +2,14 @@
 -- task" (no row) and "no items" (one row whose item columns are NULL).
 
 -- An item on the task, in one statement: no row is a missing task.
+-- ts is the given time, or one past the task's newest item's when that is not earlier, so a task's
+-- items are strictly increasing in ts in the order they were added (store.Context.AddContextItem).
 -- name: InsertContextItem :one
 INSERT INTO context_items (project_id, task_id, id, kind, body, author, ts)
 SELECT t.project_id, t.id, CAST(sqlc.arg(id) AS TEXT), CAST(sqlc.arg(kind) AS TEXT), CAST(sqlc.arg(body) AS TEXT),
-  CAST(sqlc.arg(author) AS TEXT), CAST(sqlc.arg(ts) AS INTEGER)
+  CAST(sqlc.arg(author) AS TEXT),
+  MAX(CAST(sqlc.arg(ts) AS INTEGER),
+      COALESCE((SELECT MAX(c.ts) + 1 FROM context_items c WHERE c.project_id = t.project_id AND c.task_id = t.id), 0))
 FROM tasks t WHERE t.project_id = sqlc.arg(project_id) AND t.id = sqlc.arg(task_id)
 RETURNING project_id, task_id, id, kind, body, author, ts;
 

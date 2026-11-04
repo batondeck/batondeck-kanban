@@ -3,10 +3,14 @@
 -- COLLATE "C", as bytes, as SQLite's BINARY does.
 
 -- An item on the task, in one statement: no row is a missing task.
+-- ts is the given time, or one past the task's newest item's when that is not earlier, so a task's
+-- items are strictly increasing in ts in the order they were added (store.Context.AddContextItem).
 -- name: InsertContextItem :one
 INSERT INTO context_items (project_id, task_id, id, kind, body, author, ts)
 SELECT t.project_id, t.id, sqlc.arg(id)::text, sqlc.arg(kind)::text, sqlc.arg(body)::text,
-  sqlc.arg(author)::text, sqlc.arg(ts)::bigint
+  sqlc.arg(author)::text,
+  GREATEST(sqlc.arg(ts)::bigint,
+           COALESCE((SELECT MAX(c.ts) + 1 FROM context_items c WHERE c.project_id = t.project_id AND c.task_id = t.id), 0))
 FROM tasks t WHERE t.project_id = sqlc.arg(project_id) AND t.id = sqlc.arg(task_id)
 RETURNING project_id, task_id, id, kind, body, author, ts;
 

@@ -206,12 +206,14 @@ func holdRecheck(t *testing.T, s *dirServer, identity string) (held <-chan struc
 // P-229 requirement 2 (tested; review B1): a membership change the dispatcher's tap dropped is
 // heard at once, not at the next 60 s sweep: the re-read after a drop runs before every entry is
 // rung, so carol's ring names P. The loop is held in carol's recheck (the create_project row's
-// re-read) while more than TapBuffer changes and then carol's add_member are written and offered,
+// re-read) while more than the tap's buffer of changes and then carol's add_member are written and offered,
 // so the tap drops that add_member row. Without the re-read the ring names no project, the
 // buffered rows route under her old scopes, and no doorbell for P comes.
 func TestDirectoryRescopesAfterTheTapDropsAMembershipChange(t *testing.T) {
 	t.Parallel()
-	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow})
+	// A small tap: overflowing serve's 1024 took about 1040 writes, over 100 s under -race (P-398).
+	const tap = 16
+	s := startDirectoryWith(t, nil, dirOpts{windows: shortSlow, tapBuffer: tap})
 	c := s.client(t, "s-carol", "")
 	s.register(t, s.carol, c, "worker")
 	held, release := holdRecheck(t, s, s.carol.id)
@@ -224,7 +226,7 @@ func TestDirectoryRescopesAfterTheTapDropsAMembershipChange(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the create_project row's re-read never reached carol's entry")
 	}
-	for range wake.TapBuffer + 16 {
+	for range tap + 16 {
 		s.task(t, s.alice, "")
 	}
 	if _, err := s.a.core.Projects().AddMember(ctx, s.alice.caller(), service.AddMemberReq{ProjectID: s.project, IdentityID: s.carol.id, Role: domain.RoleWorker}); err != nil {
@@ -249,7 +251,7 @@ func TestDirectoryRescopesAfterTheTapDropsAMembershipChange(t *testing.T) {
 	release()
 	s.waitLog(t, "the dispatcher dropped", 1)
 	s.waitLog(t, fmt.Sprintf("the scopes of pid %d changed", c.pid), 1)
-	// The ring comes once the loop has drained the TapBuffer+16 buffered rows, which can take more
+	// The ring comes once the loop has drained the buffered rows, which can take more
 	// than Slow+1 s under -race on a 2-vCPU runner. The directory's own sweep is the default 60 s, so
 	// a doorbell within 30 s is still the re-read's, not the sweep's.
 	if f := content(t, c.frame(t, 30*time.Second)); f.ProjectID != s.project {
