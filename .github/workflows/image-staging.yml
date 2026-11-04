@@ -1,6 +1,7 @@
 # image-staging: builds the image from a commit on main and pushes it as
 # ghcr.io/batondeck/batondeck-kanban:staging, for linux/amd64 and linux/arm64. It cuts no release
-# and touches no version tag: the binary inside reports 0.1.0-staging+<short sha>. On demand only
+# and touches no version tag: the binary inside reports <version>-staging+<short sha>, the version
+# being plugin.json's (which release-check holds equal to compose.yaml's). On demand only
 # (workflow_dispatch), with the candidate's full SHA; it refuses a candidate that is not on main.
 #
 # WHY. The owner's 2026-11-04 ruling: "ship on prod and staging", where staging is this image and
@@ -17,6 +18,11 @@ on:
 permissions:
   contents: read
   packages: write
+
+# One staging build at a time: two runs would race on the :staging tag.
+concurrency:
+  group: image-staging
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -54,10 +60,15 @@ jobs:
 
       - name: Build and push :staging for linux/amd64 and linux/arm64
         run: |
-          version="0.1.0-staging+${CANDIDATE:0:12}"
+          version="$(jq -r .version plugin/.claude-plugin/plugin.json)-staging+${CANDIDATE:0:12}"
           docker buildx build --platform linux/amd64,linux/arm64 \
             --build-arg VERSION="$version" -t "$IMAGE:staging" --push .
           docker buildx imagetools inspect "$IMAGE:staging" | tee image-inspect.txt
           grep -q 'linux/amd64' image-inspect.txt
           grep -q 'linux/arm64' image-inspect.txt
-          echo "staging image $IMAGE:staging ($(sed -n 's/^Digest: *//p' image-inspect.txt | head -1)) reports $version"
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: The pushed image runs and reports its version
+        run: |
+          docker run --rm --platform linux/amd64 "$IMAGE:staging" version | tee version.txt
+          grep -qF "$version" version.txt

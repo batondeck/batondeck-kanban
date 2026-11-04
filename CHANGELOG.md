@@ -26,9 +26,9 @@ Notable changes to batondeck-kanban. The format follows
   and `get_task_context` hand back could name the older of two checkpoint notes (P-117). Items
   already stored keep their times.
 - The `image-staging` workflow (`.github/workflows/image-staging.yml`): on demand, with a commit on
-  main, it builds the two-architecture image and pushes it as `ghcr.io/batondeck/batondeck-kanban:staging`.
-  The binary inside reports `0.1.0-staging+<sha>`. It cuts no release and moves no version tag
-  (owner 2026-11-04).
+  main, it builds the two-architecture image and pushes it as `ghcr.io/batondeck/batondeck-kanban:staging`,
+  then runs it and checks the version it reports, `<version>-staging+<sha>`. One staging build runs at a
+  time. It cuts no release and moves no version tag (owner 2026-11-04).
 
 ## [0.1.0]
 
