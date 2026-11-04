@@ -16,6 +16,10 @@ Notable changes to batondeck-kanban. The format follows
   still frees a task its own agent is stuck on. A lease that
   recorded no agent is the owning identity's on any of its callers, and a lapsed lease blocks no
   one, as before.
+- The `image-staging` workflow (`.github/workflows/image-staging.yml`): on demand, with a commit on
+  main, it builds the two-architecture image and pushes it as `ghcr.io/batondeck/batondeck-kanban:staging`.
+  The binary inside reports `0.1.0-staging+<sha>`. It cuts no release and moves no version tag
+  (owner 2026-11-04).
 
 ## [0.1.0]
 
