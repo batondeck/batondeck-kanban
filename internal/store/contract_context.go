@@ -57,8 +57,9 @@ type Context interface {
 	// past the task's newest item when that is not earlier: a task's items are strictly increasing in
 	// ts in the order they were added, so the (ts, id) order is the insertion order even within one
 	// millisecond, where the random id alone would order them arbitrarily (resume's last checkpoint,
-	// P-117). add_context_item and cancel_task hold the task's lock (mutate's LockTask), so two of
-	// them on one task do not race the read.
+	// P-117). add_context_item and cancel_task hold the task's lock (mutate's LockTask); on-call's
+	// annotate is followed by a versioned task write, so a racing add fails it STALE; the incident
+	// note writes to a task its own transaction created. No two adds on one task race the read.
 	AddContextItem(ctx context.Context, in AddContextItemInput) (ContextItem, error)
 	// ListContextItems is one page of the task's items in the query's order.
 	ListContextItems(ctx context.Context, projectID, taskID string, q ContextItemsQuery) (ContextItemsPage, error)
