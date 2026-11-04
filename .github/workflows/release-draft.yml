@@ -81,6 +81,8 @@ jobs:
         run: |
           git config user.name "release-draft"
           git config user.email "release-draft@users.noreply.github.com"
+          # replace: checkout fetched the published tag; this run's local tag names the candidate instead.
+          if [ "${{ inputs.replace }}" = true ]; then git tag -d "v$VERSION" 2>/dev/null || true; fi
           git tag -a "v$VERSION" -m "batondeck-kanban $VERSION — CHANGELOG.md has the notes" "$CANDIDATE"
           test "$(git rev-parse "v$VERSION^{commit}")" = "$CANDIDATE"
 
