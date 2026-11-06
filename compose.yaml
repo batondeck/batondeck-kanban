@@ -2,8 +2,11 @@
 #
 #   printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 #   printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
-#   docker compose up -d
+#   docker compose up -d --wait
 #   curl -fsS http://127.0.0.1:8080/healthz
+#
+# --wait returns once the board's health check passes: `up -d` alone returns before it listens, and a
+# curl right after it gets an empty reply.
 #
 # `make image` refuses a VERSION this file's image line does not name (scripts/release-check.sh
 # compose), so a release bumps the tag here first.
@@ -41,6 +44,14 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - data:/data
+    # The image's own check runs every 30 s; this one lets `up --wait` return within seconds of the
+    # board listening. The image has no shell, so the test is the binary's own healthcheck.
+    healthcheck:
+      test: ["CMD", "/batondeck-kanban", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
 
   postgres:
