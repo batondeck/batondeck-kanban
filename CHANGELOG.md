@@ -1417,6 +1417,10 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
+  with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
+  `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an
+  empty reply (P-421, the e2e on macOS).
 - A task's context items now keep the order they were added in, even when two land in the same
   millisecond. Each item is stamped the current time, or one millisecond past the task's newest
   item when that is not earlier. Before, two such items were ordered by their random ids, so

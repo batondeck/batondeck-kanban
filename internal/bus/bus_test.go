@@ -788,7 +788,13 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 			t.Fatalf("delivered %d, want %d", c.ID, want)
 		}
 	}
-	if f := bus.frontier.Load(); f != ids[0] {
+	// read publishes the frontier after its deliveries (advance), so ids[3] can arrive while the
+	// frontier still reads 0: wait for the read's advance before checking where it held.
+	f := bus.frontier.Load()
+	for deadline := time.Now().Add(time.Second); f < ids[0] && time.Now().Before(deadline); f = bus.frontier.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	if f != ids[0] {
 		t.Fatalf("frontier %d, want it held at %d below the gap", f, ids[0])
 	}
 	time.Sleep(gap + 3*PollInterval)

@@ -49,7 +49,7 @@ either.
 ```bash
 printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
 printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
-docker compose up -d
+docker compose up -d --wait    # returns once the board answers its health check
 curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 ```
 
@@ -226,7 +226,7 @@ docker compose exec -T postgres psql -U batondeck -d batondeck -q -v ON_ERROR_ST
 docker compose create batondeck-kanban
 docker run --rm -i --volumes-from "$(docker compose ps -aq batondeck-kanban)" \
   postgres:16 tar -C /data -xzpf - < batondeck-data.tgz
-docker compose up -d
+docker compose up -d --wait
 ```
 
 `curl -fsS http://127.0.0.1:8080/healthz` then answers, and the board has its tasks and their

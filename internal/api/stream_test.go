@@ -354,6 +354,15 @@ func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
 		if seen.event != "board" || seen.id == "" {
 			t.Fatalf("%+v, want a board frame with an id", seen)
 		}
+		// A tap held from here, while c's subscription already runs the bus's tail, keeps that tail
+		// running between the streams below, so the last check can wait for it to pass m4: otherwise
+		// a tail whose read of m4 came late (deferred by WakeGap, or slow) could deliver m4 to old's
+		// new subscription, live after old's resync.
+		tap, err := l.bus.Tap(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tap.Close()
 		c.cancel()
 		for _, title := range []string{"m1", "m2", "m3"} {
 			l.addTask(t, l.caller(), pid, bid, title)
@@ -383,10 +392,16 @@ func TestStreamReplaysAMissedCursorAndCapsIt(t *testing.T) {
 		l.addTask(t, l.caller(), pid, bid, "m4") // 6 rows after the cursor: still within the cap of 6
 		within := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
 		within.next(t, time.Second)
-		if f := within.next(t, time.Second); f.event != "board" {
-			t.Fatalf("6 rows after the cursor, cap 6: %+v, want board", f)
+		m4 := within.next(t, time.Second)
+		if m4.event != "board" {
+			t.Fatalf("6 rows after the cursor, cap 6: %+v, want board", m4)
 		}
 		within.cancel()
+		for deadline := time.Now().Add(5 * time.Second); l.bus.Frontier() < atoi(t, m4.id); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the bus read to %d, not to m4's row %s", l.bus.Frontier(), m4.id)
+			}
+		}
 		l.addTask(t, l.caller(), qid, qbid, "q3") // 7 rows: past the cap
 		old := l.stream(t, "?projectId="+pid+"&boardId="+bid+"&cursor="+seen.id, nil)
 		old.next(t, time.Second)
