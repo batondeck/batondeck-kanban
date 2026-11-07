@@ -613,7 +613,8 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	b := postgresBackend(t)
 	var mu sync.Mutex
 	var reported []error
-	bus, _ := newBus(t, b, Options{GapTimeout: 300 * time.Millisecond, OnError: func(err error) {
+	gap := time.Second
+	bus, _ := newBus(t, b, Options{GapTimeout: gap, OnError: func(err error) {
 		mu.Lock()
 		reported = append(reported, err)
 		mu.Unlock()
@@ -636,10 +637,16 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	if c := next(t, sub, 2*time.Second); c.ID != after {
 		t.Fatalf("delivered %d, want %d", c.ID, after)
 	}
-	if f := bus.frontier.Load(); f != lost-1 {
-		t.Fatalf("frontier %d right after the gap, want it held at %d", f, lost-1)
+	// P-425: the hold is observed mid-GapTimeout, not right after the delivery. There the frontier
+	// reads lost-1 before the read's advance as well as after it (the seed's end), which proves no
+	// hold. Half a GapTimeout on, the read's advance has run and at least one tick (PollInterval)
+	// has had its chance to pass the gap early; the check fails falsely only if this goroutine
+	// oversleeps by half a GapTimeout.
+	time.Sleep(gap / 2)
+	if f := bus.frontier.Load(); f != lost-1 || bus.GapsPassed() != 0 {
+		t.Fatalf("frontier %d, gaps passed %d, half a GapTimeout after the gap; want it held at %d with none passed", f, bus.GapsPassed(), lost-1)
 	}
-	time.Sleep(300*time.Millisecond + 3*PollInterval) // no write: only the tick can move it
+	time.Sleep(gap/2 + 3*PollInterval) // no write: only the tick can move it
 	if f := bus.frontier.Load(); f != after {
 		t.Fatalf("frontier %d after GapTimeout with no write, want %d: the rolled-back id %d was never passed", f, after, lost)
 	}
