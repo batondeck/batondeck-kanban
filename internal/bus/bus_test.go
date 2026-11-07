@@ -781,7 +781,7 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	log := &hidingSet{ChangeLog: b.store}
 	w := &manual{wake: make(chan func(), 1)}
 	rep := &reporter{}
-	gap := 200 * time.Millisecond
+	gap := time.Second
 	bus := New(log, Options{Watcher: w, GapTimeout: gap, OnError: rep.on})
 	t.Cleanup(bus.Close)
 	sub := subscribe(t, bus, 0, "project:P-1")
@@ -804,7 +804,14 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	if f != ids[0] {
 		t.Fatalf("frontier %d, want it held at %d below the gap", f, ids[0])
 	}
-	time.Sleep(gap + 3*PollInterval)
+	// P-426: half a GapTimeout on, at least one tick (PollInterval) has had its chance to pass the
+	// gap early, and nothing may have been passed or reported yet. The check fails falsely only if
+	// this goroutine oversleeps by half a GapTimeout.
+	time.Sleep(gap / 2)
+	if f := bus.frontier.Load(); f != ids[0] || bus.GapsPassed() != 0 || len(rep.errs()) != 0 {
+		t.Fatalf("half a GapTimeout in: frontier %d (want %d), gaps %d (want 0), reported %v (want none)", f, ids[0], bus.GapsPassed(), rep.errs())
+	}
+	time.Sleep(gap/2 + 3*PollInterval)
 	got := rep.errs()
 	want := fmt.Sprintf("%v: ids %d..%d not committed within %v", ErrGapPassed, ids[1], ids[2], gap)
 	if f := bus.frontier.Load(); f != ids[3] || bus.GapsPassed() != 2 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) || got[0].Error() != want {
