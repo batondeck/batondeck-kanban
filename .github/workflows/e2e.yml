@@ -1,0 +1,102 @@
+# e2e: the end-to-end suites on every pull request, beside ci.yml's `make check` and not inside its
+# job. Both drive the real binary on a real port, the way clients do:
+#  - `make e2e` (test/e2e): every MCP tool, prompt and resource template in a scenario, on SQLite and on
+#    the Postgres 16 service, with a guard that fails when one has no scenario (P-428);
+#  - `make e2e-ui` (web/e2e): every route of the web UI in Chromium through Playwright, once on SQLite
+#    and once on Postgres, with a route guard (P-429).
+# The UI runs keep a screenshot of every screen, a trace and a video of every test (E2E_VIDEO=all), and
+# each run's HTML report, results and the screenshots are uploaded as artifacts, pass or fail, for
+# 14 days: download one and open e2e-report/index.html.
+name: e2e
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: batondeck
+          POSTGRES_PASSWORD: batondeck
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U batondeck -h 127.0.0.1"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      GOWORK: "off"
+      PG_DSN: postgres://batondeck:batondeck@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: make e2e, SQLite and Postgres
+        env:
+          BATONDECK_TEST_POSTGRES_DSN: ${{ env.PG_DSN }}
+        run: make e2e
+
+      - name: Install the web dependencies and Playwright's Chromium
+        working-directory: web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: make e2e-ui, SQLite
+        env:
+          E2E_VIDEO: all
+        run: make e2e-ui
+
+      - name: Upload the SQLite UI run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ui-sqlite
+          path: |
+            web/e2e-report/
+            web/e2e-results/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: make e2e-ui, Postgres
+        if: always()
+        env:
+          E2E_VIDEO: all
+          BATONDECK_TEST_POSTGRES_DSN: ${{ env.PG_DSN }}
+        run: |
+          rm -rf web/e2e-report web/e2e-results
+          make e2e-ui
+
+      - name: Upload the Postgres UI run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ui-postgres
+          path: |
+            web/e2e-report/
+            web/e2e-results/
+          retention-days: 14
+          if-no-files-found: warn
