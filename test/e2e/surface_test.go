@@ -297,7 +297,7 @@ func transportStreamableHTTP(t *testing.T, e *env) {
 
 	// A session: SSE replies, bound to its identity.
 	c := s.connect(t, s.tokens["viewer"], "e2e-transport")
-	want(t, c.session != "" && c.proto != "" && c.ServerVersion == "0.0.0-e2e" && c.Instructions != "", "initialize answered session %q proto %q version %q", c.session, c.proto, c.ServerVersion)
+	want(t, c.session != "" && c.proto != "" && c.ServerVersion == binVersion && c.Instructions != "", "initialize answered session %q proto %q version %q (the binary reports %q)", c.session, c.proto, c.ServerVersion, binVersion)
 	r, err := c.Request("tools/list", M{})
 	want(t, err == nil && r.ContentType == "text/event-stream", "tools/list answered %v %v", r, err)
 

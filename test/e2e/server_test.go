@@ -41,6 +41,9 @@ func engines(t *testing.T) []engine {
 		t.Log("BATONDECK_TEST_POSTGRES_DSN is unset: the Postgres engine is not run")
 		return out
 	}
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		t.Fatalf("BATONDECK_TEST_POSTGRES_DSN must be a URL (postgres://…): the suite names its own database in it")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	admin, err := pgx.Connect(ctx, dsn)
@@ -180,6 +183,7 @@ func startServer(t *testing.T, eng engine) *Server {
 	cmd := exec.Command(binPath, "serve")
 	cmd.Env = append(append([]string{}, s.env...), fmt.Sprintf("BATONDECK_LISTEN=tcp://127.0.0.1:%d", port))
 	cmd.Stdout, cmd.Stderr = s.log, s.log
+	cmd.SysProcAttr = serveProcAttr()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
