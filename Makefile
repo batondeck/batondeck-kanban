@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check e2e
+.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -152,6 +152,19 @@ web-dist-check:
 web-check:
 	@if [ ! -f web/package.json ]; then echo "web-check: no web/package.json yet"; exit 0; fi; \
 	cd web && { [ -d node_modules ] || npm ci; } && npm run typecheck && npm test
+
+# e2e-ui drives the web UI in Chromium against the real binary (web/playwright.config.ts): its global
+# setup runs `make build`, `migrate`, `user add` and `serve` on a free port, on SQLite, or on a fresh
+# database of BATONDECK_TEST_POSTGRES_DSN when that is set. Every route of web/src/App.tsx is reached and
+# its primary action done; the route guard fails, naming the route, when App.tsx gains one no spec
+# reaches. A screenshot of every screen and a trace each run; a video kept for a failed test, for every
+# test with E2E_VIDEO=all; E2E_HEADED=1 runs headed. The HTML report is web/e2e-report/index.html.
+# Not part of check. It needs the Chromium build of the pinned Playwright (`cd web && npx playwright
+# install chromium` once); node_modules is installed when it lacks @playwright/test.
+e2e-ui:
+	@if [ ! -f web/package.json ]; then echo "e2e-ui: no web/package.json yet"; exit 0; fi; \
+	cd web && { [ -d node_modules/@playwright/test ] || npm ci; } && ./node_modules/.bin/playwright test; \
+	s=$$?; echo "e2e-ui: the HTML report is web/e2e-report/index.html (cd web && npx playwright show-report e2e-report)"; exit $$s
 
 # web-states-check refuses a retired state name or the dropped transition routes anywhere in web/src,
 # tests included (ADR-0005: five states; ADR-0001: CANCELLED and DEAD_LETTER are labels now). The

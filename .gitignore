@@ -9,3 +9,6 @@
 # make bench's measurements and its last run (bench/baseline.json is the committed one)
 /bench/out/
 /bench/results.json
+# make e2e-ui: the Playwright HTML report, and each run's screenshots, traces, videos and server log
+/web/e2e-report/
+/web/e2e-results/
