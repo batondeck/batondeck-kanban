@@ -162,7 +162,7 @@ web-check:
 # Not part of check. It needs the Chromium build of the pinned Playwright (`cd web && npx playwright
 # install chromium` once); node_modules is installed when it lacks @playwright/test.
 e2e-ui:
-	@if [ ! -f web/package.json ]; then echo "e2e-ui: no web/package.json yet"; exit 0; fi; \
+	@if [ ! -f web/package.json ]; then echo "e2e-ui: no web/package.json"; exit 1; fi; \
 	cd web && { [ -d node_modules/@playwright/test ] || npm ci; } && ./node_modules/.bin/playwright test; \
 	s=$$?; echo "e2e-ui: the HTML report is web/e2e-report/index.html (cd web && npx playwright show-report e2e-report)"; exit $$s
 

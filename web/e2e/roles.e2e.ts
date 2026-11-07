@@ -1,7 +1,8 @@
 // Roles: a viewer and a worker of the same project, each signed in as themselves. Each sees what
 // its tier allows and is refused the rest: the screen either says so (a closed control with its
-// reason, the on-call refusal) or shows the server's refusal when the action is tried. Every refusal
-// is checked against the server too, so "nothing happened on screen" cannot pass for "refused".
+// reason, the on-call refusal) or shows the server's refusal when the action is tried. A refusal of an
+// action is also read back from the server (nothing was written), so "nothing happened on screen"
+// cannot pass for "refused"; the on-call refusal is the screen's own and is checked on screen.
 import type { Page } from '@playwright/test';
 import { McpClient, seedProject, seedTask, type SeededBoard } from './support/mcp.js';
 import { runState } from './support/state.js';

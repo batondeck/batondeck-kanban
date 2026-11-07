@@ -37,6 +37,8 @@ test.describe('workspace', () => {
     await page.getByLabel('Project', { exact: true }).selectOption({ label: b.projectName });
     await expect(page.getByRole('heading', { name: 'Workspace Telemetry' })).toBeVisible();
     await expect(page.locator('.chip', { hasText: b.boardName })).toBeVisible();
+    const totalTasks = page.locator('.card').filter({ has: page.locator('.muted', { hasText: /^Total Tasks$/ }) });
+    await expect(totalTasks.locator('.mono')).toHaveText('3');
     await atRoute(page, '/analytics', 'operations');
 
     await page.getByRole('link', { name: 'Reports' }).first().click();

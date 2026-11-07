@@ -53,6 +53,7 @@ async function healthy(child: ChildProcess, baseURL: string): Promise<boolean> {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
+  await stop(child);
   throw new Error(`serve did not answer ${baseURL}/healthz within 30 s`);
 }
 

@@ -20,8 +20,6 @@ test.describe('chronicle', () => {
     await expect(page.getByRole('heading', { name: 'New record' })).toBeVisible();
     await page.getByLabel('Title').fill('How we deploy');
     await expect(page.locator('#chr-slug')).toHaveValue(/how-we-deploy/);
-    const addFirst = page.getByRole('button', { name: 'Add the first block' });
-    if (await addFirst.isVisible()) await addFirst.click();
     await page.locator('textarea[aria-label^="Block "]').first().fill('Tag the commit, then `make dist` from a clean clone.');
     await atRoute(page, '/chronicle/new', 'filled in');
     await page.getByRole('button', { name: 'Create record' }).click();

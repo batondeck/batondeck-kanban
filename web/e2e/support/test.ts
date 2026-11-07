@@ -6,7 +6,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { test as base, expect, type Page } from '@playwright/test';
 import { SCREENS_DIR, VISITS_DIR } from './paths.js';
-import { routeRegex, SIGN_IN } from './routes.js';
+import { appRoutes, bestRoute, routeRegex, SIGN_IN } from './routes.js';
 import { runState, type Role } from './state.js';
 
 export { expect };
@@ -62,6 +62,8 @@ export async function atRoute(page: Page, route: string, label = ''): Promise<vo
   } else {
     const re = routeRegex(route);
     await expect.poll(() => new URL(page.url()).pathname, { message: `the URL is route ${route}` }).toMatch(re);
+    const pathname = new URL(page.url()).pathname;
+    expect(bestRoute(pathname, appRoutes()), `${pathname} is App.tsx's route ${route}, not a more specific one`).toBe(route);
   }
   await screenshot(page, route, label);
   recordVisit(route, page.url());
