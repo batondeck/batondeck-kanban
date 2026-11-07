@@ -13,6 +13,10 @@ Notable changes to batondeck-kanban. The format follows
   subscription, which is served from the end of the log, and set the frontier under the new tail.
   A read that finds its tail stopped when it comes to deliver now delivers nothing and does not
   move the frontier. (P-424)
+- A stopped change-bus tail no longer stores its frontier over the frontier of the tail started
+  after it. Its store after a read, on a stalled tick or after its seed could land after the stop
+  and rewind `Bus.Frontier()`, which the wake directory reads. Every store is now made under the
+  bus's lock and only while that tail is live. (P-427)
 
 ## [0.1.0]
 
