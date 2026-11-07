@@ -56,6 +56,10 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
    candidate changes and this sequence starts again. On another machine `make bench` compares
    nothing and says so: re-measure there with `make bench-baseline` and commit before going on.
 
+   The candidate's PR must also have the `e2e` workflow green (`.github/workflows/e2e.yml`: `make e2e`
+   on SQLite and Postgres, and `make e2e-ui` on both); it is not part of `make check`, so the gate
+   below does not run it.
+
 3. **Gate green on the tag commit, annotated tag.** Tag the candidate in the same clone, with
    `$CANDIDATE` still checked out, and push the tag; the pre-push hook runs `make check` on both
    engines on the checked-out tree, which is the tag's commit, and refuses the push if it fails. The
