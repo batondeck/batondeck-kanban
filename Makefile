@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check e2e
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -219,6 +219,15 @@ contract:
 # Postgres half needs BATONDECK_TEST_POSTGRES_DSN, as conformance does.
 perf:
 	go test -race -count=1 -v ./test/perf/
+
+# e2e drives the built binary (or BATONDECK_E2E_BIN) through migrate, user add, token create and
+# serve, then calls every listed tool, prompt and resource template over Streamable HTTP as several
+# identities (test/e2e); its guard names each one no scenario covers. SQLite always, Postgres too with
+# BATONDECK_TEST_POSTGRES_DSN (a fresh database per run). Outside check, and no -race: the binary
+# under test is built without it.
+E2E_TIMEOUT ?= 20m
+e2e:
+	go test -tags e2e -count=1 -timeout $(E2E_TIMEOUT) -v ./test/e2e/
 
 # bench runs plan §Performance's three numbers, outside check: the claim race (50 real MCP clients
 # call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 3 rounds), the

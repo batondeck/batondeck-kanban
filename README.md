@@ -8,6 +8,7 @@ build from source. The plan of record is `docs/release/plan-2026-10-22.md`.
 
 Build from source: `make build` (Go from `go.mod`), then `./batondeck-kanban version`. `make hooks`
 installs the git hooks, and `make check` is the gate they run.
+`make e2e` runs the binary end to end over MCP, every tool, prompt and resource template (`test/e2e`).
 
 ## Quickstart
 
