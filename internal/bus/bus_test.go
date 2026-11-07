@@ -1052,6 +1052,54 @@ func TestACancelledTailsReadDeliversNothingToALaterSubscriber(t *testing.T) {
 	}
 }
 
+// seedParking is parking that holds only a read of more than one row (seed's or read's, not end's).
+type seedParking struct{ parking }
+
+func (p *seedParking) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	rows, err := p.ChangeLog.ReadChanges(ctx, since, limit)
+	if limit > 1 && p.armed.CompareAndSwap(true, false) {
+		close(p.parked)
+		<-p.release
+	}
+	return rows, err
+}
+
+// P-427: a tail cancelled while its seed read is held never stores its frontier over the frontier
+// of the tail started for the next subscription. Frontier is the running tail's.
+func TestACancelledTailNeverStoresItsFrontierOverTheRunningTails(t *testing.T) {
+	b := memBackend(t)
+	log := &seedParking{parking{ChangeLog: b.store, parked: make(chan struct{}), release: make(chan struct{})}}
+	bus := New(log, Options{PollInterval: 10 * time.Millisecond})
+	t.Cleanup(bus.Close)
+	first := write(t, b.store, change("project:P-1", 1))[0]
+	log.armed.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan error, 1)
+	go func() {
+		_, err := bus.Subscribe(ctx, []string{"project:P-1"}, 0)
+		got <- err
+	}()
+	<-log.parked // the first tail's seed read found first; its frontier is not stored yet
+	cancel()
+	if err := <-got; !errors.Is(err, context.Canceled) { // the Subscribe's Close cancelled the first tail
+		t.Fatalf("Subscribe returned %v, want context.Canceled", err)
+	}
+	second := write(t, b.store, change("project:P-1", 2))[0]
+	subscribe(t, bus, 0, "project:P-1") // a new tail, seeded past second
+	if f := bus.Frontier(); f != second {
+		t.Fatalf("frontier %d after the new tail's seed, want %d", f, second)
+	}
+	close(log.release)
+	for deadline := time.Now().Add(2 * time.Second); bus.active.Load() > 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the cancelled tail did not end: %d tails running", bus.active.Load())
+		}
+	}
+	if f := bus.Frontier(); f != second {
+		t.Fatalf("frontier %d after the cancelled tail ended, want %d (the cancelled tail's was %d)", f, second, first)
+	}
+}
+
 // Subscribers come and go while changes flow: no panic, no send on a closed channel (-race).
 func TestChurn(t *testing.T) {
 	b := sqliteBackend(t)
