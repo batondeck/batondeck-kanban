@@ -6,6 +6,13 @@ Notable changes to batondeck-kanban. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The change bus no longer hands a change to a subscription made after its tail stopped. When the
+  last subscription closed during a read, that read could deliver what it found to the next
+  subscription, which is served from the end of the log, and set the frontier under the new tail.
+  A stopped tail now delivers nothing and leaves the frontier alone. (P-424)
+
 ## [0.1.0]
 
 The first release: its date is the tag `v0.1.0`'s. The entries recorded while it was built, under

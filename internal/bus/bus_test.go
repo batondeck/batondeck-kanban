@@ -996,6 +996,48 @@ func TestSubscribeRacingCloseFails(t *testing.T) {
 	<-closed
 }
 
+// parking is a change log whose first read to find a row after arm holds those rows until release.
+type parking struct {
+	store.ChangeLog
+	armed   atomic.Bool
+	parked  chan struct{}
+	release chan struct{}
+}
+
+func (p *parking) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	rows, err := p.ChangeLog.ReadChanges(ctx, since, limit)
+	if len(rows) > 0 && p.armed.CompareAndSwap(true, false) {
+		close(p.parked)
+		<-p.release
+	}
+	return rows, err
+}
+
+// P-424: a tail cancelled while its read holds a change delivers nothing to a subscription made
+// after the cancel (Subscribe: changes committed after it returns, each once). The new subscription's
+// own tail starts past that change and still delivers the next one.
+func TestACancelledTailsReadDeliversNothingToALaterSubscriber(t *testing.T) {
+	b := memBackend(t)
+	log := &parking{ChangeLog: b.store, parked: make(chan struct{}), release: make(chan struct{})}
+	bus := New(log, Options{PollInterval: 10 * time.Millisecond})
+	t.Cleanup(bus.Close)
+	first := subscribe(t, bus, 0, "project:P-1")
+	log.armed.Store(true)
+	held := write(t, b.store, change("project:P-1", 1))[0]
+	<-log.parked // the first tail's read found held and has not delivered it
+	first.Close()
+	later := subscribe(t, bus, 0, "project:P-1")
+	close(log.release)
+	quiet(t, later, 200*time.Millisecond)
+	if c, ok := <-first.C(); ok {
+		t.Fatalf("the closed subscription got %d", c.ID)
+	}
+	after := write(t, b.store, change("project:P-1", 2))[0]
+	if c := next(t, later, 2*time.Second); c.ID != after {
+		t.Fatalf("delivered %d, want %d (held was %d)", c.ID, after, held)
+	}
+}
+
 // Subscribers come and go while changes flow: no panic, no send on a closed channel (-race).
 func TestChurn(t *testing.T) {
 	b := sqliteBackend(t)
