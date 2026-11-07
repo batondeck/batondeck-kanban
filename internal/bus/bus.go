@@ -469,7 +469,7 @@ func (b *Bus) tail(ctx context.Context, r *runner, hint int64) {
 		close(r.ready)
 		return
 	}
-	b.frontier.Store(t.frontier)
+	b.publish(ctx, t.frontier)
 	close(r.ready)
 	tick := time.NewTicker(b.opts.PollInterval)
 	defer tick.Stop()
@@ -502,7 +502,7 @@ func (b *Bus) tail(ctx context.Context, r *runner, hint int64) {
 			case b.opts.Watcher == nil || degraded.Load():
 				read()
 			case !t.stalled.IsZero():
-				b.advance(t) // no statement: a gap's clock runs with no write
+				b.advance(ctx, t) // no statement: a gap's clock runs with no write
 			}
 		}
 	}
@@ -669,13 +669,24 @@ func (b *Bus) read(ctx context.Context, t *tailState) {
 			break
 		}
 	}
-	b.advance(t)
+	b.advance(ctx, t)
 }
 
 // advance moves the frontier now, reporting each run of ids it gives up on, and publishes it.
-func (b *Bus) advance(t *tailState) {
+func (b *Bus) advance(ctx context.Context, t *tailState) {
 	t.advance(time.Now(), b.opts.GapTimeout, b.passed)
-	b.frontier.Store(t.frontier)
+	b.publish(ctx, t.frontier)
+}
+
+// publish stores f as the running tail's frontier while ctx, that tail's, is live. remove cancels
+// a tail under b.mu, so under b.mu.RLock the store either comes before the cancel or is skipped: a
+// cancelled tail never stores over the frontier of the tail started for the next subscription.
+func (b *Bus) publish(ctx context.Context, f int64) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if ctx.Err() == nil {
+		b.frontier.Store(f)
+	}
 }
 
 // passed counts and reports ids given up on: a transaction that held them longer than GapTimeout
