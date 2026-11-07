@@ -7,7 +7,9 @@ Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`; until 
 build from source. The plan of record is `docs/release/plan-2026-10-22.md`.
 
 Build from source: `make build` (Go from `go.mod`), then `./batondeck-kanban version`. `make hooks`
-installs the git hooks, and `make check` is the gate they run.
+installs the git hooks, and `make check` is the gate they run. `make e2e-ui` drives the web UI in a
+real browser against the built binary (SQLite, or Postgres when `BATONDECK_TEST_POSTGRES_DSN` is set);
+its report is `web/e2e-report/index.html`.
 
 ## Quickstart
 
