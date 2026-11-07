@@ -613,7 +613,8 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	b := postgresBackend(t)
 	var mu sync.Mutex
 	var reported []error
-	bus, _ := newBus(t, b, Options{GapTimeout: 300 * time.Millisecond, OnError: func(err error) {
+	gap := time.Second
+	bus, _ := newBus(t, b, Options{GapTimeout: gap, OnError: func(err error) {
 		mu.Lock()
 		reported = append(reported, err)
 		mu.Unlock()
@@ -636,10 +637,16 @@ func TestPostgresPassesAnIDARolledBackTransactionTook(t *testing.T) {
 	if c := next(t, sub, 2*time.Second); c.ID != after {
 		t.Fatalf("delivered %d, want %d", c.ID, after)
 	}
-	if f := bus.frontier.Load(); f != lost-1 {
-		t.Fatalf("frontier %d right after the gap, want it held at %d", f, lost-1)
+	// P-425: the hold is observed mid-GapTimeout, not right after the delivery. There the frontier
+	// reads lost-1 before the read's advance as well as after it (the seed's end), which proves no
+	// hold. Half a GapTimeout on, the read's advance has run and at least one tick (PollInterval)
+	// has had its chance to pass the gap early; the check fails falsely only if this goroutine
+	// oversleeps by half a GapTimeout.
+	time.Sleep(gap / 2)
+	if f := bus.frontier.Load(); f != lost-1 || bus.GapsPassed() != 0 {
+		t.Fatalf("frontier %d, gaps passed %d, half a GapTimeout after the gap; want it held at %d with none passed", f, bus.GapsPassed(), lost-1)
 	}
-	time.Sleep(300*time.Millisecond + 3*PollInterval) // no write: only the tick can move it
+	time.Sleep(gap/2 + 3*PollInterval) // no write: only the tick can move it
 	if f := bus.frontier.Load(); f != after {
 		t.Fatalf("frontier %d after GapTimeout with no write, want %d: the rolled-back id %d was never passed", f, after, lost)
 	}
@@ -774,7 +781,7 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	log := &hidingSet{ChangeLog: b.store}
 	w := &manual{wake: make(chan func(), 1)}
 	rep := &reporter{}
-	gap := 200 * time.Millisecond
+	gap := time.Second
 	bus := New(log, Options{Watcher: w, GapTimeout: gap, OnError: rep.on})
 	t.Cleanup(bus.Close)
 	sub := subscribe(t, bus, 0, "project:P-1")
@@ -797,7 +804,14 @@ func TestAGapIsPassedOnTheTickWithNoWrite(t *testing.T) {
 	if f != ids[0] {
 		t.Fatalf("frontier %d, want it held at %d below the gap", f, ids[0])
 	}
-	time.Sleep(gap + 3*PollInterval)
+	// P-426: half a GapTimeout on, at least one tick (PollInterval) has had its chance to pass the
+	// gap early, and nothing may have been passed or reported yet. The check fails falsely only if
+	// this goroutine oversleeps by half a GapTimeout.
+	time.Sleep(gap / 2)
+	if f := bus.frontier.Load(); f != ids[0] || bus.GapsPassed() != 0 || len(rep.errs()) != 0 {
+		t.Fatalf("half a GapTimeout in: frontier %d (want %d), gaps %d (want 0), reported %v (want none)", f, ids[0], bus.GapsPassed(), rep.errs())
+	}
+	time.Sleep(gap/2 + 3*PollInterval)
 	got := rep.errs()
 	want := fmt.Sprintf("%v: ids %d..%d not committed within %v", ErrGapPassed, ids[1], ids[2], gap)
 	if f := bus.frontier.Load(); f != ids[3] || bus.GapsPassed() != 2 || len(got) != 1 || !errors.Is(got[0], ErrGapPassed) || got[0].Error() != want {
@@ -994,6 +1008,48 @@ func TestSubscribeRacingCloseFails(t *testing.T) {
 		t.Fatalf("Subscribe racing Close returned %v, want ErrClosed", err)
 	}
 	<-closed
+}
+
+// parking is a change log whose first read to find a row after arm holds those rows until release.
+type parking struct {
+	store.ChangeLog
+	armed   atomic.Bool
+	parked  chan struct{}
+	release chan struct{}
+}
+
+func (p *parking) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
+	rows, err := p.ChangeLog.ReadChanges(ctx, since, limit)
+	if len(rows) > 0 && p.armed.CompareAndSwap(true, false) {
+		close(p.parked)
+		<-p.release
+	}
+	return rows, err
+}
+
+// P-424: a tail cancelled while its read holds a change delivers nothing to a subscription made
+// after the cancel (Subscribe: changes committed after it returns, each once). The new subscription's
+// own tail starts past that change and still delivers the next one.
+func TestACancelledTailsReadDeliversNothingToALaterSubscriber(t *testing.T) {
+	b := memBackend(t)
+	log := &parking{ChangeLog: b.store, parked: make(chan struct{}), release: make(chan struct{})}
+	bus := New(log, Options{PollInterval: 10 * time.Millisecond})
+	t.Cleanup(bus.Close)
+	first := subscribe(t, bus, 0, "project:P-1")
+	log.armed.Store(true)
+	held := write(t, b.store, change("project:P-1", 1))[0]
+	<-log.parked // the first tail's read found held and has not delivered it
+	first.Close()
+	later := subscribe(t, bus, 0, "project:P-1")
+	close(log.release)
+	quiet(t, later, 200*time.Millisecond)
+	if c, ok := <-first.C(); ok {
+		t.Fatalf("the closed subscription got %d", c.ID)
+	}
+	after := write(t, b.store, change("project:P-1", 2))[0]
+	if c := next(t, later, 2*time.Second); c.ID != after {
+		t.Fatalf("delivered %d, want %d (held was %d)", c.ID, after, held)
+	}
 }
 
 // Subscribers come and go while changes flow: no panic, no send on a closed channel (-race).

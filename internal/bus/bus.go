@@ -649,6 +649,13 @@ func (b *Bus) read(ctx context.Context, t *tailState) {
 			return
 		}
 		b.mu.RLock()
+		// remove cancels this tail under b.mu once its last subscription closes, so a read that began
+		// before the cancel would otherwise deliver to subscriptions added after it, which a new
+		// tail serves from the end of the log: hand them nothing, and leave the frontier to that tail.
+		if ctx.Err() != nil {
+			b.mu.RUnlock()
+			return
+		}
 		for _, c := range rows {
 			since = c.ID
 			if _, ok := t.seen[c.ID]; ok {
