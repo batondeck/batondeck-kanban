@@ -8,7 +8,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { roleAtLeast, useDisplayNames, useMyProjectRole } from '../displayNames.js';
+import { useDisplayNames, useMyProjectRole } from '../displayNames.js';
+import { closedWhy, mayCall } from '../toolFloors.js';
 import { Icon } from '../icons.js';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -92,10 +93,17 @@ function columnIdOf(board: BoardT | undefined, t: Task): string {
 // accepts a free-typed name, and writes task.assignee — which is exactly what the assignee-aware
 // wait_for_task / next_task {assignee} picks up. Menu is fixed-positioned so the column's
 // own overflow scroll can't clip it; clicks are stopped so they neither open the drawer nor start a drag.
-export function AssigneePicker({ task, agents, onAssign, tabbable = true }: {
+export function AssigneePicker({ task, agents, onAssign, tabbable = true, canAssign, closedWhy }: {
   task: Task;
   agents: AgentEntry[];
   onAssign: (taskId: string, version: number, assignee: string | null) => void;
+  /**
+   * May the caller set the assignee? It is `update_task`, tier master (P-440). Below it the chip stays
+   * (it is the card's WHO, and the assignee is still worth reading) but is disabled, its title says why,
+   * and `closedWhy.id` points at the one reason the board shows for every card, rather than one per card.
+   */
+  canAssign: boolean;
+  closedWhy?: { id: string; text: string } | null;
   /**
    * Is this chip in the tab order? On a board card the answer is "only when the card is SELECTED".
    *
@@ -140,18 +148,38 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true }: {
   const pick = (name: string | null): void => { onAssign(task.id, task.version, name); setOpen(false); setTyped(''); };
   const stop = (e: React.SyntheticEvent): void => e.stopPropagation();
   const menuAgents = agents.filter((a) => isLiveEntry(a, Date.now()));
+  // Closed: no menu, and the reason in the title (and, once the role is known, the board's line).
+  const closed = !canAssign;
+  const closedTitle = closedWhy?.text ?? 'Checking your role';
 
   return (
     <span onClick={stop} onPointerDown={stop}>
       {task.assignee ? (
-        <button ref={btnRef} type="button" className="assign-chip" onClick={toggle} title={`Assigned to ${task.assignee} — click to reassign`}>
+        <button
+          ref={btnRef}
+          type="button"
+          className="assign-chip"
+          onClick={toggle}
+          disabled={closed}
+          title={closed ? `Assigned to ${task.assignee}. ${closedTitle}` : `Assigned to ${task.assignee} — click to reassign`}
+          aria-describedby={closed && closedWhy ? closedWhy.id : undefined}
+        >
           <StatusDot state={agents.find((a) => a.name === task.assignee)?.state ?? 'offline'} size={7} />
           <Avatar id={task.assignee} tool={agents.find((a) => a.name === task.assignee)?.tool ?? null} />
           {/* No `label` — the enclosing button's title already names it; a second name would be read twice. */}
           <Marquee className="assign-name">{task.assignee.split('@')[0]}</Marquee>
         </button>
       ) : (
-        <button ref={btnRef} type="button" className="assign-chip ghost" onClick={toggle} title="Assign to an agent" tabIndex={tabbable ? undefined : -1}>
+        <button
+          ref={btnRef}
+          type="button"
+          className="assign-chip ghost"
+          onClick={toggle}
+          disabled={closed}
+          title={closed ? closedTitle : 'Assign to an agent'}
+          aria-describedby={closed && closedWhy ? closedWhy.id : undefined}
+          tabIndex={tabbable ? undefined : -1}
+        >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
           assign
         </button>
@@ -166,7 +194,7 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true }: {
           nothing" the owner hit. Rendering into `document.body` puts the menu outside every card,
           so no ancestor transform — this one, the `card-in` keyframe, or the drag overlay's
           `rotate(2deg)` — can capture it again. */}
-      {open && coords && createPortal(
+      {open && !closed && coords && createPortal(
         <div ref={menuRef} className="assign-menu" role="menu" style={{ top: coords.top, left: coords.left }} onClick={stop} onPointerDown={stop}>
           <div className="assign-head">Assign to agent</div>
           <div className="assign-list">
@@ -198,7 +226,7 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true }: {
   );
 }
 
-export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign }: {
+export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy }: {
   t: Task;
   col: { status: Status };
   sub?: { done: number; total: number };
@@ -217,6 +245,9 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
   onOpen: () => void;
   agents: AgentEntry[];
   onAssign: (taskId: string, version: number, assignee: string | null) => void;
+  /** Passed to the assign chip (P-440). */
+  canAssign: boolean;
+  assignClosedWhy?: { id: string; text: string } | null;
 }) {
   const lease = t.claim ? leaseLeft(t.claim.expiresAt) : null;
   // The hover-reveal state that used to gate the "+ assign" chip is GONE, along with its two mouse
@@ -296,7 +327,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
                   shape under the pointer and two identical tickets read differently. The chip is
                   styled quiet (dashed, muted) instead, which keeps resting cards calm without making
                   the only way to assign work invisible until you happen to hover it. */}
-              <AssigneePicker task={t} agents={agents} onAssign={onAssign} tabbable={selected} />
+              <AssigneePicker task={t} agents={agents} onAssign={onAssign} tabbable={selected} canAssign={canAssign} closedWhy={assignClosedWhy} />
             </>
           )}
         </div>
@@ -311,10 +342,11 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
   );
 }
 
-function DraggableCard(props: { t: Task; col: { status: Status }; sub?: { done: number; total: number }; sprintName?: string | null; selected: boolean; changed?: boolean; pending?: boolean; ripple?: boolean; onOpen: () => void; agents: AgentEntry[]; onAssign: (taskId: string, version: number, assignee: string | null) => void }) {
+function DraggableCard({ canMove, ...props }: Parameters<typeof TaskCard>[0] & { canMove: boolean }) {
   // Sortable so cards reorder *within* a lane (not just move between lanes); dnd-kit supplies the
-  // transform/transition for the drag + neighbour shuffle.
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.t.id });
+  // transform/transition for the drag + neighbour shuffle. A move is `move_task`, tier master: below it
+  // the card does not drag at all (P-440), rather than snapping back after the server refuses it.
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.t.id, disabled: !canMove });
   // Leave is framer's (React removes the node the instant a task moves column, so CSS can't see it);
   // ENTER is the plain `.card` CSS keyframe, which also gives the column-transition for free — the
   // card unmounts here and mounts in the destination column, where it plays in. Exit animates opacity
@@ -384,7 +416,7 @@ function BoardSkeleton() {
  *
  * Exported for the render test: pure props in, DOM out — no queries, no router.
  */
-export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask, onLifecycle, busySprintId, loading, error }: {
+export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask, onLifecycle, lifecycleClosedWhy, busySprintId, loading, error }: {
   sprints: Sprint[];
   tasks: Task[];
   /** The currently filtered sprint id ('' = none) — the active row is marked and clicking it clears. */
@@ -396,6 +428,11 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
    * guarded on it rather than assuming a handler.
    */
   onLifecycle?: (sprint: Sprint, status: SprintStatus) => void;
+  /**
+   * Why the lifecycle controls are absent: `update_sprint` is tier master (P-440). The board omits
+   * `onLifecycle` below master, which hides Start, Close and Abandon on every row; this one line says why.
+   */
+  lifecycleClosedWhy?: string | null;
   /** The sprint currently mid-transition — its controls disable so a double-click cannot double-post. */
   busySprintId?: string;
   loading?: boolean;
@@ -407,6 +444,9 @@ export function SprintsRail({ sprints, tasks, filterSprint, onFilter, onOpenTask
       <div className="cards">
         {loading && [0, 1].map((i) => <div key={i} className="skeleton" style={{ height: 34 }} />)}
         {error && <div className="error" style={{ fontSize: 12 }}>Couldn’t load sprints.</div>}
+        {lifecycleClosedWhy && sprints.some((s) => s.status === 'PROPOSED' || s.status === 'ACTIVE') && (
+          <div className="muted" style={{ fontSize: 12 }}>{lifecycleClosedWhy}</div>
+        )}
         {sprints.map((s) => {
           const members = tasks.filter((t) => t.sprintIds?.includes(s.id));
           // A cancelled member is DONE but not delivered, so it is not done here, as get_sprint counts it (P-208).
@@ -616,8 +656,21 @@ export function Board() {
   // the caller's in this project, from the roster; while it loads the button is closed with no reason
   // shown yet. Hiding is not enforcing: the server still refuses.
   const myRole = useMyProjectRole(projectId);
-  const canCreate = roleAtLeast(myRole, 'master');
-  const createClosedWhy = !canCreate && myRole !== undefined ? 'Only a master can create tasks.' : null;
+  const canCreate = mayCall(myRole, 'create_task');
+  const createClosedWhy = closedWhy(myRole, 'create_task', 'create tasks') ?? null;
+  // The rest of the board's writes, from the same table (P-440): a new board is `create_board` (write),
+  // the card's assign chip and the palette's priority are `update_task`, a drag and the palette's status
+  // are `move_task`, the sprint lifecycle is `update_sprint` (all master). Each is closed below its floor.
+  const canNewBoard = mayCall(myRole, 'create_board');
+  const newBoardWhy = closedWhy(myRole, 'create_board', 'create boards') ?? null;
+  const canAssign = mayCall(myRole, 'update_task');
+  const canMoveCards = mayCall(myRole, 'move_task');
+  const cardsWhy = closedWhy(myRole, 'update_task', 'assign, move or reprioritise tasks') ?? null;
+  const assignClosedWhy = cardsWhy ? { id: 'cards-closed', text: cardsWhy } : null;
+  const statusWhy = closedWhy(myRole, 'move_task', 'change the status') ?? null;
+  const priorityWhy = closedWhy(myRole, 'update_task', 'change the priority') ?? null;
+  const canRunSprints = mayCall(myRole, 'update_sprint');
+  const sprintsWhy = closedWhy(myRole, 'update_sprint', 'start, close or abandon sprints') ?? null;
   // Close the create row and return focus to the trigger (keyboard/SR users aren't dropped to <body>).
   const closeCreate = (): void => { setCreating(false); setTimeout(() => newTaskBtnRef.current?.focus(), 0); };
 
@@ -1034,24 +1087,30 @@ export function Board() {
     const actions = target
       ? [
           { id: 'open', label: `Open ${target.id}`, kbd: '↵', run: () => setOpenTask(target.id) },
-          {
-            id: 'status',
-            label: 'Set status',
-            kbd: 's',
-            children: STATUSES.map((st) => ({ label: st.replace('_', ' '), run: () => setStatus.mutate({ vars: st, task: target }) })),
-          },
-          {
-            id: 'priority',
-            label: 'Set priority',
-            kbd: 'p',
-            children: PRIORITIES.map((pr) => ({ label: pr, run: () => setPriority.mutate({ vars: pr, task: target }) })),
-          },
+          // Below master both are closed (P-440): listed, so the reader learns they exist, but with no
+          // sub-page to open and the reason beside them. `s` and `p` then open the palette on that reason.
+          canMoveCards
+            ? {
+                id: 'status',
+                label: 'Set status',
+                kbd: 's',
+                children: STATUSES.map((st) => ({ label: st.replace('_', ' '), run: () => setStatus.mutate({ vars: st, task: target }) })),
+              }
+            : { id: 'status', label: 'Set status', kbd: 's', closedWhy: statusWhy ?? 'Checking your role' },
+          canAssign
+            ? {
+                id: 'priority',
+                label: 'Set priority',
+                kbd: 'p',
+                children: PRIORITIES.map((pr) => ({ label: pr, run: () => setPriority.mutate({ vars: pr, task: target }) })),
+              }
+            : { id: 'priority', label: 'Set priority', kbd: 'p', closedWhy: priorityWhy ?? 'Checking your role' },
         ]
       : [];
     publishPalette({ projectId, boardId, actions, openTask: (id) => setOpenTask(id) });
     return () => clearPalette();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, boardId, selectedId, openTask, allTasks]);
+  }, [projectId, boardId, selectedId, openTask, allTasks, canMoveCards, canAssign, statusWhy, priorityWhy]);
 
   // Is the board showing a NARROWED view? Drives the column badge (see the Column render): with a
   // filter on, a badge counting every task contradicts the column under it.
@@ -1090,7 +1149,17 @@ export function Board() {
               </select>
             )}
             <AgentPresence agents={agentList} />
-            <button className="btn secondary" onClick={() => { setNewBoardOpen((v) => !v); setTimeout(() => newBoardRef.current?.focus(), 0); }} aria-expanded={newBoardOpen} title="Create a new board in this project">+ New board</button>
+            <button
+              className="btn secondary"
+              disabled={!canNewBoard}
+              onClick={() => { setNewBoardOpen((v) => !v); setTimeout(() => newBoardRef.current?.focus(), 0); }}
+              aria-expanded={canNewBoard && newBoardOpen}
+              title={canNewBoard ? 'Create a new board in this project' : newBoardWhy ?? 'Checking your role'}
+              aria-describedby={newBoardWhy ? 'new-board-closed' : undefined}
+            >
+              + New board
+            </button>
+            {newBoardWhy && <span id="new-board-closed" className="muted" style={{ fontSize: 12 }}>{newBoardWhy}</span>}
             <button
               ref={newTaskBtnRef}
               className="btn"
@@ -1110,7 +1179,7 @@ export function Board() {
       />
 
       {/* New-board row — a project has many boards; create one here and jump into it. */}
-      {newBoardOpen && (
+      {newBoardOpen && canNewBoard && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-low)' }}>
           <input
             ref={newBoardRef}
@@ -1196,6 +1265,8 @@ export function Board() {
 
       {boardQ.isError && <p className="error" style={{ fontSize: 12, margin: '0 12px' }}>Couldn’t load this board.</p>}
       {moveErr && <p className="error" style={{ fontSize: 12, margin: '0 12px' }}>{moveErr}</p>}
+      {/* One reason for every card's closed assign chip and drag (P-440), referenced by each chip. */}
+      {cardsWhy && <p id="cards-closed" className="muted" style={{ fontSize: 12, margin: '6px 12px 0' }}>{cardsWhy}</p>}
       {sprintMsg && (
         <p className="error" role="status" style={{ fontSize: 12, margin: '0 12px' }} onClick={() => setSprintMsg(null)}>{sprintMsg}</p>
       )}
@@ -1255,6 +1326,7 @@ export function Board() {
             onDragStart={(e) => setDragId(String(e.active.id))}
             onDragEnd={(e) => {
               setDragId(null);
+              if (!canMoveCards) return;
               const activeId = String(e.active.id);
               const overId = e.over?.id ? String(e.over.id) : null;
               if (!board || !overId || overId === activeId) return;
@@ -1338,6 +1410,9 @@ export function Board() {
                             }}
                             agents={agentList}
                             onAssign={onAssign}
+                            canAssign={canAssign}
+                            assignClosedWhy={assignClosedWhy}
+                            canMove={canMoveCards}
                           />
                         ))}
                       </AnimatePresence>
@@ -1370,7 +1445,7 @@ export function Board() {
               * (`.card` keyframe, --t-3 "travel"), which is the motion the board already speaks.
               */}
             <DragOverlay className="drag-overlay" dropAnimation={null}>
-              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} />}
+              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} canAssign={canAssign} assignClosedWhy={assignClosedWhy} />}
             </DragOverlay>
           </DndContext>
         )}
@@ -1382,7 +1457,8 @@ export function Board() {
             filterSprint={filters.sprint}
             onFilter={(sprintId) => setFilters({ ...filters, sprint: sprintId })}
             onOpenTask={(id) => { setOpenTask(id); setSelectedId(id); }}
-            onLifecycle={(s, status) => sprintLifecycle.mutate({ sprint: s, status })}
+            onLifecycle={canRunSprints ? (s, status) => sprintLifecycle.mutate({ sprint: s, status }) : undefined}
+            lifecycleClosedWhy={sprintsWhy}
             busySprintId={sprintLifecycle.isPending ? sprintLifecycle.variables?.sprint.id : undefined}
             loading={sprintsQ.isLoading}
             error={sprintsQ.isError}

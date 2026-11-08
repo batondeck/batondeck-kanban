@@ -19,7 +19,7 @@ const poisoned: Task = { ...task, status: 'BLOCKED', labels: ['poisoned'], claim
 const depBlocked: Task = { ...task, status: 'BLOCKED', labels: [], blockedBy: ['T-9'], dueAt: null };
 
 const card = (t: Task): HTMLElement =>
-  render(<TaskCard t={t} col={{ status: 'BLOCKED' }} selected={false} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} />).container;
+  render(<TaskCard t={t} col={{ status: 'BLOCKED' }} selected={false} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} canAssign />).container;
 
 describe('the poison badge on the Blocked lane', () => {
   it('shows on a poisoned task, with its attempts', () => {

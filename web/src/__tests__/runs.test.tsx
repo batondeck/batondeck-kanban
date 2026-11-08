@@ -37,7 +37,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={task} />
+        <Runs projectId="p1" canRace task={task} />
       </QueryClientProvider>,
     );
     fireEvent.click(await screen.findByText('Race this task'));
@@ -63,7 +63,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={{ ...task, racing: true }} />
+        <Runs projectId="p1" canRace task={{ ...task, racing: true }} />
       </QueryClientProvider>,
     );
     const picks = await screen.findAllByText(/^\s*Pick\s*$/);
@@ -101,7 +101,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={{ ...task, racing: true }} />
+        <Runs projectId="p1" canRace task={{ ...task, racing: true }} />
       </QueryClientProvider>,
     );
     fireEvent.click((await screen.findAllByText(/^\s*Pick\s*$/))[0]!);
@@ -120,7 +120,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={{ ...task, racing: true }} />
+        <Runs projectId="p1" canRace task={{ ...task, racing: true }} />
       </QueryClientProvider>,
     );
     expect(await screen.findByText(/Racing · 3 runs open/)).toBeInTheDocument();
@@ -143,7 +143,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { container } = render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={{ ...task, racing: true }} cancelled={new Set(['T-2'])} />
+        <Runs projectId="p1" canRace task={{ ...task, racing: true }} cancelled={new Set(['T-2'])} />
       </QueryClientProvider>,
     );
     expect(await screen.findByText('wrong approach')).toBeInTheDocument();
@@ -163,7 +163,7 @@ describe('Runs — race start', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Runs projectId="p1" task={task} />
+        <Runs projectId="p1" canRace task={task} />
       </QueryClientProvider>,
     );
     expect(await screen.findByText('Win')).toBeInTheDocument();

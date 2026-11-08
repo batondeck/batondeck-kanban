@@ -64,6 +64,7 @@ function mount(over: { agents?: AgentEntry[]; t?: Task } = {}): { onAssign: Retu
       onOpen={onOpen}
       agents={over.agents ?? [liveAgent('creepy-gopher'), liveAgent('opus-bot')]}
       onAssign={onAssign}
+      canAssign
     />,
   );
   return { onAssign, onOpen };

@@ -1468,6 +1468,17 @@ this section's headings in CHANGELOG.md, are all part of it.
   nor `all: true` (`{}`, `{all: false}`, `{ids: []}`) with VALIDATION, `details.field` `ids`, as the
   tool's description requires. It answered `updated: 0`. The web UI, which always sends one id or
   `all: true`, is unchanged. (P-439)
+- Every write control in the web UI that the caller's project role cannot call is closed, with its
+  reason, the way P-432 closed "+ New task" and Comment. On the board: "+ New board", the card's
+  "+ assign" chip, dragging a card, the sprint lifecycle, and the palette's Set status and Set
+  priority, which stay listed but disabled. On a task: Edit, every Details field, the description and
+  digest, dependencies, subtasks, notes, links, memory, the file drop, the Follow-ups composer and
+  Ack, and the race controls. Also Projects' "New board", and Chronicle's New record, Create, Edit,
+  Delete, Land and Revert. Opening a project with no boards, from Projects or the palette, no longer
+  creates one for a role that cannot. The role is the caller's in the project (`useMyProjectRole`),
+  and the floors are one table in `web/src/toolFloors.ts`, copied from `internal/domain/grants.go`
+  and checked against it by a test. Each control showed open and failed only after the server
+  refused. The server's checks are unchanged (P-440).
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

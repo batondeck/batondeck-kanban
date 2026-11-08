@@ -14,7 +14,8 @@ import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
-import { roleAtLeast, useMyProjectRole } from '../displayNames.js';
+import { useMyProjectRole } from '../displayNames.js';
+import { closedWhy, mayCall } from '../toolFloors.js';
 import { useSingleProject } from '../projectContext.js';
 
 const STATUS_COLOR: Record<Status, string> = {
@@ -523,13 +524,17 @@ export function Settings() {
    */
   const myRole = useMyProjectRole(projectId);
   const roleKnown = myRole !== undefined;
-  const canAddColumn = roleAtLeast(myRole, 'worker');
-  const canEditColumns = roleAtLeast(myRole, 'member');
-  const canManageMembers = roleAtLeast(myRole, 'admin');
-  const canChangeWorkflow = roleAtLeast(myRole, 'admin');
-  const columnsWhy = !roleKnown || canEditColumns ? null : canAddColumn ? 'Only a member or an admin can rename, limit or delete columns.' : 'A viewer cannot change columns.';
-  const membersWhy = roleKnown && !canManageMembers ? 'Only a project admin can add or remove members.' : null;
-  const workflowWhy = roleKnown && !canChangeWorkflow ? 'Only a project admin can change workflow settings.' : null;
+  const canAddColumn = mayCall(myRole, 'add_column');
+  const canEditColumns = mayCall(myRole, 'update_column') && mayCall(myRole, 'remove_column');
+  const canManageMembers = mayCall(myRole, 'add_member') && mayCall(myRole, 'remove_member');
+  const canChangeWorkflow = mayCall(myRole, 'update_settings');
+  const columnsWhy = !roleKnown || canEditColumns
+    ? null
+    : canAddColumn
+      ? closedWhy(myRole, 'update_column', 'rename, limit or delete columns')!
+      : closedWhy(myRole, 'add_column', 'change columns')!;
+  const membersWhy = closedWhy(myRole, 'add_member', 'add or remove members') ?? null;
+  const workflowWhy = closedWhy(myRole, 'update_settings', 'change workflow settings') ?? null;
 
   /**
    * THE BOARD PICKER FOR EVERY BOARD-SCOPED SETTING, rendered in each section that one governs.

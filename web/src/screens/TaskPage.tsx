@@ -102,7 +102,9 @@ export function TaskPage() {
   const { projectId = '', boardId = '', taskId = '' } = useParams();
   const navigate = useNavigate();
   const d = useTaskDetail(projectId, taskId);
-  const { task, taskQ, err, editing, setEditing, startEdit } = d;
+  const { task, taskQ, err, editing, setEditing, startEdit, canEdit, why } = d;
+  // Edit is `update_task`, tier master (P-440): below it the button is closed and says why.
+  const editWhy = why('update_task', 'edit tasks');
   const [tab, setTab] = useState<SectionId>('details');
   const { refs, scrollTo } = useSectionNav();
   const boardHref = `/projects/${projectId}/boards/${boardId}`;
@@ -145,9 +147,16 @@ export function TaskPage() {
                 copy reads "click Edit (or double-click)" — the drawer has one in its header, the page
                 never did, so the instruction pointed at nothing. Same `startEdit`/`editing` state the
                 double-click path already uses. */}
-            <button className="btn secondary" onClick={editing ? () => setEditing(false) : startEdit}>
+            <button
+              className="btn secondary"
+              disabled={!editing && !canEdit}
+              title={!editing && !canEdit ? editWhy ?? 'Checking your role' : undefined}
+              aria-describedby={!editing && editWhy ? 'task-edit-closed' : undefined}
+              onClick={editing ? () => setEditing(false) : startEdit}
+            >
               {editing ? 'Cancel' : 'Edit'}
             </button>
+            {!editing && editWhy && <span id="task-edit-closed" className="muted" style={{ fontSize: 12 }}>{editWhy}</span>}
             <Link className="btn secondary" to={boardHref}>Back to board</Link>
           </>
         }
