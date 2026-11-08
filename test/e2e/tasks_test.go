@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -48,9 +49,10 @@ func taskCreateGetUpdate(t *testing.T, e *env) {
 	want(t, S(e.get(t, p, id), "title") == "Write the feed parser", "a refused update changed the title")
 }
 
-// The master moves a task along the fixed table and reorders it; an illegal jump is
-// INVALID_TRANSITION, a stale version STALE, a live lease another holds CONFLICT_LOCKED, and the
-// worker may not move tasks. Each move is read back through get_task and the board's counts.
+// The master moves a task along the fixed table and reorders it, with toColumnId and with an order
+// alone; an illegal jump is INVALID_TRANSITION, a stale version STALE, a live lease another holds
+// CONFLICT_LOCKED (a reorder alone too), and the worker may not move tasks. Each move is read back
+// through get_task and the board's counts.
 func taskMove(t *testing.T, e *env) {
 	p := e.project(t, "Moves")
 	id := S(e.task(t, p, "movable", nil), "id")
@@ -68,17 +70,27 @@ func taskMove(t *testing.T, e *env) {
 	want(t, S(back, "status") == "TODO", "move_task by toColumnId answered %s", js(back))
 
 	// Reorder: the second task moved above the first in its own column, by a fractional order key
-	// that sorts before it. (A reorder alone, without toColumnId or toStatus, is refused although the
-	// description reads "and/or reorder it"; reported.)
+	// that sorts before it.
 	other := S(e.task(t, p, "second", nil), "id")
 	first := e.get(t, p, id)
 	reordered := O(e.master.Call(t, "move_task", M{"projectId": p.id, "taskId": other, "version": e.version(t, p, other), "toColumnId": p.cols["TODO"], "order": "Zz"}), "task")
 	want(t, S(reordered, "order") < S(first, "order"), "the reorder left order %q not before %q", S(reordered, "order"), S(first, "order"))
 	e.master.Refuse(t, "move_task", M{"projectId": p.id, "taskId": other, "version": e.version(t, p, other), "toColumnId": p.cols["TODO"], "order": "0"}, "VALIDATION")
+	// A reorder by its order key alone, as the description says: the first task back above the
+	// second, in the same column and status, read back through get_task. Naming none of toColumnId,
+	// toStatus and order is refused.
+	alone := O(e.master.Call(t, "move_task", M{"projectId": p.id, "taskId": id, "version": e.version(t, p, id), "order": "Zy"}), "task")
+	gotFirst, gotOther := e.get(t, p, id), e.get(t, p, other)
+	want(t, S(alone, "order") == "Zy" && S(gotFirst, "order") == "Zy" && S(gotFirst, "order") < S(gotOther, "order") &&
+		S(gotFirst, "status") == "TODO" && S(gotFirst, "columnId") == p.cols["TODO"], "move_task with order alone answered %s, reads back %s (the other at %q)", js(alone), js(gotFirst), S(gotOther, "order"))
+	e.master.Refuse(t, "move_task", M{"projectId": p.id, "taskId": id, "version": e.version(t, p, id)}, "VALIDATION")
+	desc := description(t, e.master, "move_task")
+	want(t, strings.Contains(desc, "`order` alone: in its column"), "move_task's description does not say an order alone reorders in its column: %q", desc)
 
-	// Another holder's live lease refuses a move.
+	// Another holder's live lease refuses a move, and a reorder alone.
 	claim(t, e.worker, p, id)
 	e.master.Refuse(t, "move_task", M{"projectId": p.id, "taskId": id, "version": e.version(t, p, id), "toStatus": "TODO"}, "CONFLICT_LOCKED")
+	e.master.Refuse(t, "move_task", M{"projectId": p.id, "taskId": id, "version": e.version(t, p, id), "order": "Zx"}, "CONFLICT_LOCKED")
 	want(t, S(e.get(t, p, id), "status") == "IN_PROGRESS", "a refused move changed the status")
 }
 

@@ -1432,6 +1432,11 @@ this section's headings in CHANGELOG.md, are all part of it.
   subject as given or in that stored form; a project or task id still matches exactly. (P-435)
 - `complete_task`'s description says what it does with `artifacts`: they are merged into the task's
   own. It said they were refused, though the call has always stored them. (P-436)
+- `move_task` with an `order` and no `toColumnId` or `toStatus` reorders the task within its own
+  column, as its description's "and/or reorder it" says, under the same master tier, version and
+  lease checks as any move. It was refused with VALIDATION "move_task requires toColumnId or
+  toStatus". A call naming none of the three is still VALIDATION, now "requires toColumnId, toStatus
+  or order". The web UI's drag, which always names its column, is unchanged. (P-437)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

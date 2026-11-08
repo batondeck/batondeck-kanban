@@ -338,3 +338,58 @@ func sessionsMeAuditOnTheStack(t *testing.T, h *bk.Harness, c *caller, deleted s
 		t.Fatalf("list_audit_log: %v, want task.deleted:%s and agent.disconnected:u-grace", actions, deleted)
 	}
 }
+
+// TestMoveTaskOrderAlone (P-437): move_task with an order and no toColumnId or toStatus reorders the
+// task within its own column, read back through get_task, under move_task's own checks: the master
+// tier (a worker is FORBIDDEN) and another holder's live lease (CONFLICT_LOCKED). A move naming none
+// of the three is VALIDATION.
+func TestMoveTaskOrderAlone(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := bootStack(t, s)
+		ada := &caller{t: t, cs: h.Connect(t, stackOwner), called: map[string]int{}}
+		grace := &caller{t: t, cs: h.Connect(t, stackGrace), called: map[string]int{}}
+		p := str(ada.call("create_project", map[string]any{"name": "Reorder"})["projectId"])
+		b := str(obj(ada.call("create_board", map[string]any{"projectId": p, "name": "Main"})["board"])["id"])
+		ada.call("add_member", map[string]any{"projectId": p, "identityId": "u-grace", "role": "worker"})
+		get := func(id string) map[string]any {
+			return obj(ada.call("get_task", map[string]any{"projectId": p, "taskId": id})["task"])
+		}
+		mk := func(title string) map[string]any {
+			return obj(ada.call("create_task", map[string]any{"projectId": p, "boardId": b, "title": title})["task"])
+		}
+		// first is the task at the column's head, second the one after it; second moves above first.
+		first, second := mk("one"), mk("two")
+		if str(first["order"]) > str(second["order"]) {
+			first, second = second, first
+		}
+		key, err := domain.OrderBetween("", str(first["order"]))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wantCode(t, grace.cs, "move_task", map[string]any{"projectId": p, "taskId": second["id"], "version": second["version"], "order": key}, "FORBIDDEN")
+		wantCode(t, ada.cs, "move_task", map[string]any{"projectId": p, "taskId": second["id"], "version": second["version"]}, "VALIDATION")
+
+		moved := obj(ada.call("move_task", map[string]any{"projectId": p, "taskId": second["id"], "version": second["version"], "order": key})["task"])
+		got := get(str(second["id"]))
+		if moved["order"] != key || got["order"] != key || got["status"] != "TODO" || got["columnId"] != second["columnId"] || str(got["order"]) >= str(first["order"]) {
+			t.Fatalf("order alone answered %v and reads back %v; want order %s before %v in column %v, still TODO", moved, got, key, first["order"], second["columnId"])
+		}
+		page := ada.call("list_tasks", map[string]any{"projectId": p, "boardId": b})["tasks"].([]any)
+		if len(page) != 2 || obj(page[0])["id"] != second["id"] {
+			t.Fatalf("list_tasks after the reorder: %v, want second first", page)
+		}
+
+		// Another holder's live lease refuses it, as it refuses any move.
+		grace.call("claim_task", map[string]any{"projectId": p, "taskId": first["id"]})
+		held := get(str(first["id"]))
+		later, err := domain.OrderBetween(str(held["order"]), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCode(t, ada.cs, "move_task", map[string]any{"projectId": p, "taskId": first["id"], "version": held["version"], "order": later}, "CONFLICT_LOCKED")
+		if after := get(str(first["id"])); after["order"] != held["order"] || after["status"] != "IN_PROGRESS" {
+			t.Fatalf("a refused reorder changed the task: %v, was %v", after, held)
+		}
+	})
+}
