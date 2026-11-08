@@ -65,16 +65,14 @@ func completionLanding(f LandingFacts) ([]Status, bool) {
 	return []Status{Done}, true
 }
 
-// moveLanding: move_task names its status only in the toStatus form; a toColumnId-only move would need
-// the board to resolve, so it is undecidable here and a statuses grant refuses it.
+// moveLanding: move_task names its status only in the toStatus form. A toColumnId-only move would need
+// the board to resolve, and an order-only move (P-437) writes the task in whatever status it has, which
+// the call does not name: both are undecidable here, so a statuses grant refuses them.
 func moveLanding(f LandingFacts) ([]Status, bool) {
-	switch {
-	case f.ToStatus != "":
+	if f.ToStatus != "" {
 		return []Status{f.ToStatus}, true
-	case f.ToColumnID != "":
-		return nil, false
 	}
-	return []Status{}, true
+	return nil, false
 }
 
 // Posture is a tool's authorization posture.

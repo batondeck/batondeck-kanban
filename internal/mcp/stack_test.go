@@ -341,8 +341,9 @@ func sessionsMeAuditOnTheStack(t *testing.T, h *bk.Harness, c *caller, deleted s
 
 // TestMoveTaskOrderAlone (P-437): move_task with an order and no toColumnId or toStatus reorders the
 // task within its own column, read back through get_task, under move_task's own checks: the master
-// tier (a worker is FORBIDDEN) and another holder's live lease (CONFLICT_LOCKED). A move naming none
-// of the three is VALIDATION.
+// tier (a worker is FORBIDDEN), another holder's live lease (CONFLICT_LOCKED) and a statuses grant,
+// which cannot know the status an order-only move lands in and so refuses it (FORBIDDEN), as it refuses
+// a toColumnId-only move. A move naming none of the three is VALIDATION.
 func TestMoveTaskOrderAlone(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		h := bootStack(t, s)
@@ -390,6 +391,24 @@ func TestMoveTaskOrderAlone(t *testing.T) {
 		wantCode(t, ada.cs, "move_task", map[string]any{"projectId": p, "taskId": first["id"], "version": held["version"], "order": later}, "CONFLICT_LOCKED")
 		if after := get(str(first["id"])); after["order"] != held["order"] || after["status"] != "IN_PROGRESS" {
 			t.Fatalf("a refused reorder changed the task: %v, was %v", after, held)
+		}
+
+		// A master narrowed to TODO by a statuses grant: the order-only form is refused (the grant
+		// cannot see where it lands), the toStatus form naming TODO still reorders.
+		ada.call("add_member", map[string]any{"projectId": p, "identityId": "u-grace", "role": "master"})
+		ada.call("grant_capabilities", map[string]any{"projectId": p, "identityId": "u-grace", "scope": map[string]any{"statuses": []any{"TODO"}}})
+		cur := get(str(second["id"]))
+		top, err := domain.OrderBetween("", str(cur["order"]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCode(t, grace.cs, "move_task", map[string]any{"projectId": p, "taskId": second["id"], "version": cur["version"], "order": top}, "FORBIDDEN")
+		if after := get(str(second["id"])); after["order"] != cur["order"] || after["version"] != cur["version"] {
+			t.Fatalf("a grant-refused reorder changed the task: %v, was %v", after, cur)
+		}
+		ok := obj(grace.call("move_task", map[string]any{"projectId": p, "taskId": second["id"], "version": cur["version"], "toStatus": "TODO", "order": top})["task"])
+		if ok["order"] != top || get(str(second["id"]))["order"] != top {
+			t.Fatalf("the toStatus TODO reorder under the grant answered %v", ok)
 		}
 	})
 }

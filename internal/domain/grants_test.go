@@ -101,6 +101,9 @@ func TestCheckGrantLandingStatus(t *testing.T) {
 		expectGrant(t, working, GrantSubject{Tool: "some_future_tool"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "complete_task"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1"}, "status:*")
+		// P-437: an order-only move lands in the task's current status, which the call does not name.
+		expectGrant(t, working, GrantSubject{Tool: "move_task"}, "status:*")
+		expectGrant(t, CapabilityGrant{Statuses: []Status{Todo}}, GrantSubject{Tool: "move_task"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1", ToStatus: Todo}, "")
 		expectGrant(t, CapabilityGrant{Tools: []string{"some_future_tool"}}, GrantSubject{Tool: "some_future_tool"}, "")
 	})
