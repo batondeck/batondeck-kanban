@@ -135,7 +135,8 @@ function CommentNode({
 }: {
   node: TreeNode;
   depth: number;
-  onReply: (c: Comment) => void;
+  /** Absent when the caller cannot comment: a reply is a comment, so no Reply is offered (P-432). */
+  onReply?: (c: Comment) => void;
   /** Account id → display name (P-314): the author is a `U-<hex>` id, never shown raw. */
   names: DisplayNames;
 }) {
@@ -152,13 +153,15 @@ function CommentNode({
           {c.mentions.length > 0 && (
             <span className="chip" title={`mentioned ${c.mentions.map((m) => personName(m, names)).join(', ')}`}>@{c.mentions.length}</span>
           )}
-          <button
-            className="btn secondary"
-            style={{ marginLeft: 'auto', padding: '1px 8px', fontSize: 11 }}
-            onClick={() => onReply(c)}
-          >
-            Reply
-          </button>
+          {onReply && (
+            <button
+              className="btn secondary"
+              style={{ marginLeft: 'auto', padding: '1px 8px', fontSize: 11 }}
+              onClick={() => onReply(c)}
+            >
+              Reply
+            </button>
+          )}
         </Cluster>
         <div className="md" style={{ marginTop: 6, fontSize: 14 }}>
           <ReactMarkdown components={mdComponents} remarkPlugins={plugins}>{c.body}</ReactMarkdown>
@@ -179,10 +182,20 @@ export function Comments({
   projectId,
   taskId,
   mentionCandidates,
+  canComment,
+  closedWhy,
 }: {
   projectId: string;
   taskId: string;
   mentionCandidates: string[];
+  /**
+   * May the caller post here? `add_comment` is tier write, so a viewer may not (P-432). Required, so a
+   * new caller decides rather than inheriting an open composer. Closed, the composer and Reply are
+   * disabled and `closedWhy` says why; the server still refuses whatever reaches it.
+   */
+  canComment: boolean;
+  /** The reason shown beside the closed composer; absent while the caller's role is still loading. */
+  closedWhy?: string;
 }) {
   const qc = useQueryClient();
   const names = useDisplayNames(projectId);
@@ -248,7 +261,7 @@ export function Comments({
 
   const post = async (): Promise<void> => {
     const text = wireBody(body, picks).trim();
-    if (!text || busy) return;
+    if (!text || busy || !canComment) return;
     setBusy(true);
     setErr(null);
     try {
@@ -275,7 +288,7 @@ export function Comments({
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No comments yet.</p>
         )}
         {threads.map((t) => (
-          <CommentNode key={t.comment.id} node={t} depth={0} onReply={setReplyTo} names={names} />
+          <CommentNode key={t.comment.id} node={t} depth={0} onReply={canComment ? setReplyTo : undefined} names={names} />
         ))}
       </Stack>
 
@@ -291,6 +304,8 @@ export function Comments({
           className="input"
           style={{ width: '100%', minHeight: 64, resize: 'vertical', fontFamily: 'inherit' }}
           placeholder="Write a comment… markdown supported, @mention a teammate"
+          disabled={!canComment}
+          aria-describedby={closedWhy ? 'comment-closed' : undefined}
           value={body}
           onChange={(e) => onBodyChange(e.target.value, e.target.selectionStart, e.target.selectionEnd)}
           onKeyDown={(e) => {
@@ -318,12 +333,17 @@ export function Comments({
           {/* A disabled button is not a busy affordance: it says "you cannot press this", not "it is
               working". On a slow post the row went silent and people pressed again. `aria-busy` plus
               the mark carries it without the label jumping width. */}
-          <button className="btn" disabled={!body.trim() || busy} aria-busy={busy} onClick={() => void post()}
+          <button className="btn" disabled={!canComment || !body.trim() || busy} aria-busy={busy} onClick={() => void post()}
+                  title={closedWhy} aria-describedby={closedWhy ? 'comment-closed' : undefined}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             {busy && <InlineLoader size={16} label="Posting" />}
             {busy ? 'Posting…' : replyTo ? 'Reply' : 'Comment'}
           </button>
-          <span className="muted" style={{ fontSize: 11 }}>⌘↵ to send</span>
+          {closedWhy ? (
+            <span id="comment-closed" className="muted" style={{ fontSize: 12 }}>{closedWhy}</span>
+          ) : (
+            <span className="muted" style={{ fontSize: 11 }}>⌘↵ to send</span>
+          )}
           {err && <span className="error" style={{ fontSize: 11 }}>{err}</span>}
         </div>
       </div>

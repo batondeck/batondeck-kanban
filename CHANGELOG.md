@@ -1417,6 +1417,25 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- The task page's Review panel names who completed the task, the way the rest of the ticket names
+  a person: the member's name, else their login, else the shortened id when nothing names the
+  account. It printed the stored account id ("completed by U-4e68…") (P-431).
+- A role below an action's tier is shown that action closed, with its reason, as Status and Claim
+  already were: the board's "+ New task" and its `c` shortcut below master, a task's Comment and
+  Reply for a viewer, and in Settings "+ Add Member" and Remove below project admin, the column
+  edits below member (adding one below worker) and the review-step switch below project admin.
+  Before, a viewer was offered them and learnt of the refusal only from the server's error. The
+  server's checks are unchanged (P-432).
+- Every Settings control has an accessible name: the top bar's project select (captioned
+  "Project", named "Project to configure"), the column name and WIP inputs and their Save and
+  delete buttons (named by column), the new column's inputs, the Members add input and role select,
+  each Remove (named by member), the "Require review step" switch (named by its caption) and your
+  ticket token limit. On-call's project select is named "On-call project", apart from the
+  sidebar's "Project". Screen readers announced them without a name (P-433).
+- Settings and On-call work on the project selected in the sidebar, and picking a project in
+  their own picker selects it in the sidebar: one selection, not three. While the sidebar says "All
+  projects" they take the first project, as before, and select it in the sidebar. Each kept its own
+  pick, so the sidebar could name one project while Settings configured another (P-434).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.

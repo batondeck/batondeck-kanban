@@ -20,6 +20,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, cleanup } from '@testing-library/react';
 import { Settings } from '../screens/Settings.js';
+import { ProjectProvider } from '../projectContext.js';
 
 const NAMED = 'U-81bb37ce-9de5-4345-8c8d-c35db36fbc1f';
 const UNRESOLVED = 'U-00000000-0000-4000-8000-000000000000';
@@ -62,7 +63,9 @@ describe('Settings member roster — account ids resolve to a person (T-319)', (
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Settings />
+        <ProjectProvider>
+          <Settings />
+        </ProjectProvider>
       </QueryClientProvider>,
     );
 
@@ -81,7 +84,9 @@ describe('Settings member roster — account ids resolve to a person (T-319)', (
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <Settings />
+        <ProjectProvider>
+          <Settings />
+        </ProjectProvider>
       </QueryClientProvider>,
     );
     expect(await screen.findByText(NAMED)).toBeInTheDocument();

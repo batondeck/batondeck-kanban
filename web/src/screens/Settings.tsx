@@ -14,6 +14,8 @@ import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
+import { roleAtLeast, useMyProjectRole } from '../displayNames.js';
+import { useSingleProject } from '../projectContext.js';
 
 const STATUS_COLOR: Record<Status, string> = {
   TODO: 'var(--ready)',
@@ -25,11 +27,15 @@ const STATUS_COLOR: Record<Status, string> = {
 
 /** A small bordered card used as a settings panel. */
 /** Pill toggle switch matching the mockup. */
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, disabled, title, labelledBy, describedBy }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string; labelledBy: string; describedBy?: string }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
+      aria-labelledby={labelledBy}
+      disabled={disabled}
+      title={title}
+      aria-describedby={describedBy}
       onClick={() => onChange(!checked)}
       style={{
         position: 'relative',
@@ -41,6 +47,8 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
         background: checked ? 'var(--accent)' : 'var(--outline-variant)',
         transition: 'background 0.15s',
         padding: 0,
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? 'default' : 'pointer',
       }}
     >
       <span
@@ -111,7 +119,7 @@ function MyTokenBudget() {
       <Panel pad>
         <Stack gap={16}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Your ticket token limit</div>
+            <div id="my-token-limit-label" style={{ fontSize: 14, fontWeight: 600 }}>Your ticket token limit</div>
             <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
               Leave empty to use the project&apos;s limit. You can set a <strong>lower</strong> limit for
               yourself; a higher one has no effect, because a project&apos;s limit is a ceiling you cannot raise.
@@ -121,6 +129,7 @@ function MyTokenBudget() {
                 className="input"
                 type="number"
                 min={100}
+                aria-labelledby="my-token-limit-label"
                 placeholder={`Project default (${s.defaults.maxTicketTokens.toLocaleString()})`}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -490,9 +499,8 @@ function CliTokens() {
 
 export function Settings() {
   const qc = useQueryClient();
-  const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
-  const [selected, setSelected] = useState('');
-  const projectId = selected || projects.data?.projects[0]?.projectId || '';
+  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  const { projectId, setProjectId, projects } = useSingleProject();
 
   const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId), enabled: !!projectId });
   const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
@@ -501,7 +509,27 @@ export function Settings() {
   // screen beneath the name — two accounts may legitimately render the same name.
   const memberDisplay = projQ.data?.memberDisplay ?? {};
   const [selBoard, setSelBoard] = useState('');
+  // Whichever picker changed the project, the board picked in the last one no longer applies.
+  useEffect(() => setSelBoard(''), [projectId]);
   const board = boardsQ.data?.boards.find((b) => b.id === selBoard) ?? boardsQ.data?.boards[0];
+
+  /**
+   * WHAT THE CALLER'S ROLE IN THIS PROJECT LETS THEM CHANGE HERE (P-432), the tiers of
+   * `internal/domain/grants.go`: `add_column` is write (a worker or above), `update_column` and
+   * `remove_column` structural (a member or above), `add_member`, `remove_member` and
+   * `update_settings` admin. A control below its tier is disabled and says why, as the task's Status
+   * and Claim do, instead of offering a click the server refuses. While the role loads every one is
+   * closed with no reason yet (fail closed). Hiding is not enforcing: the server still decides.
+   */
+  const myRole = useMyProjectRole(projectId);
+  const roleKnown = myRole !== undefined;
+  const canAddColumn = roleAtLeast(myRole, 'worker');
+  const canEditColumns = roleAtLeast(myRole, 'member');
+  const canManageMembers = roleAtLeast(myRole, 'admin');
+  const canChangeWorkflow = roleAtLeast(myRole, 'admin');
+  const columnsWhy = !roleKnown || canEditColumns ? null : canAddColumn ? 'Only a member or an admin can rename, limit or delete columns.' : 'A viewer cannot change columns.';
+  const membersWhy = roleKnown && !canManageMembers ? 'Only a project admin can add or remove members.' : null;
+  const workflowWhy = roleKnown && !canChangeWorkflow ? 'Only a project admin can change workflow settings.' : null;
 
   /**
    * THE BOARD PICKER FOR EVERY BOARD-SCOPED SETTING, rendered in each section that one governs.
@@ -631,9 +659,13 @@ export function Settings() {
       <div className="topbar">
         <h1 style={{ fontSize: 16, margin: 0 }}>Settings</h1>
         <div style={{ flex: 1 }} />
-        <select className="input" value={projectId} onChange={(e) => { setSelected(e.target.value); setSelBoard(''); }}>
-          {projects.data?.projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
-        </select>
+        {/* Captioned like the board picker, and named apart from the sidebar's "Project" (P-433). */}
+        <label className="picker-labelled">
+          <span className="picker-caption">Project</span>
+          <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            {projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
+          </select>
+        </label>
       </div>
       <div className="page" style={{ maxWidth: 820 }}>
         <header style={{ marginBottom: 24 }}>
@@ -669,6 +701,9 @@ export function Settings() {
                       className="input"
                       style={{ width: '100%' }}
                       value={d.name}
+                      aria-label={`Name of column ${c.name}`}
+                      disabled={!canEditColumns}
+                      aria-describedby={columnsWhy ? 'columns-closed' : undefined}
                       onChange={(e) => setDrafts({ ...drafts, [c.id]: { ...d, name: e.target.value } })}
                     />
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
@@ -680,13 +715,17 @@ export function Settings() {
                       style={{ width: '100%', textAlign: 'right' }}
                       placeholder="∞"
                       value={d.wip}
+                      aria-label={`WIP limit of column ${c.name}`}
+                      disabled={!canEditColumns}
+                      aria-describedby={columnsWhy ? 'columns-closed' : undefined}
                       onChange={(e) => setDrafts({ ...drafts, [c.id]: { ...d, wip: e.target.value } })}
                     />
                     <Cluster gap={4} justify='flex-end'>
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px' }}
-                        disabled={!dirty}
+                        aria-label={`Save column ${c.name}`}
+                        disabled={!dirty || !canEditColumns}
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
                         onClick={() => void guard(
@@ -699,7 +738,10 @@ export function Settings() {
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px', color: 'var(--text-muted)' }}
-                        title="Delete column"
+                        aria-label={`Delete column ${c.name}`}
+                        title={columnsWhy ?? 'Delete column'}
+                        disabled={!canEditColumns}
+                        aria-describedby={columnsWhy ? 'columns-closed' : undefined}
                         onClick={() => void guard(boardsApi.removeColumn(projectId, board.id, c.id))}
                       >
                         <Icon name="close" size={12} />
@@ -714,10 +756,12 @@ export function Settings() {
                   className="input"
                   style={{ flex: 1 }}
                   placeholder="New column name"
+                  aria-label="New column name"
                   value={col.name}
+                  disabled={!canAddColumn}
                   onChange={(e) => setCol({ ...col, name: e.target.value })}
                 />
-                <select className="input" style={{ width: 160 }} value={col.status} onChange={(e) => setCol({ ...col, status: e.target.value as Status })}>
+                <select className="input" style={{ width: 160 }} aria-label="New column status" value={col.status} disabled={!canAddColumn} onChange={(e) => setCol({ ...col, status: e.target.value as Status })}>
                   {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
                 </select>
                 <input
@@ -725,10 +769,23 @@ export function Settings() {
                   style={{ width: 80, textAlign: 'right' }}
                   placeholder="∞"
                   value={col.wip}
+                  aria-label="New column WIP limit"
+                  disabled={!canAddColumn}
                   onChange={(e) => setCol({ ...col, wip: e.target.value })}
                 />
-                <button className="btn" disabled={!col.name} onClick={() => addColumn.mutate()}>+ Add Column</button>
+                <button
+                  className="btn"
+                  disabled={!canAddColumn || !col.name}
+                  title={!canAddColumn && columnsWhy ? columnsWhy : undefined}
+                  aria-describedby={!canAddColumn && columnsWhy ? 'columns-closed' : undefined}
+                  onClick={() => addColumn.mutate()}
+                >
+                  + Add Column
+                </button>
               </div>
+              {columnsWhy && (
+                <p id="columns-closed" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>{columnsWhy}</p>
+              )}
             </Panel>
           ) : (
             <Panel pad>
@@ -777,6 +834,10 @@ export function Settings() {
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px', color: 'var(--text-muted)' }}
+                        aria-label={`Remove ${name ?? id}`}
+                        disabled={!canManageMembers}
+                        title={membersWhy ?? undefined}
+                        aria-describedby={membersWhy ? 'members-closed' : undefined}
                         onClick={() => removeMember.mutate(id)}
                       >
                         Remove
@@ -793,14 +854,27 @@ export function Settings() {
                 style={{ flex: 1 }}
                 type="email"
                 placeholder="teammate@example.com"
+                aria-label="New member login"
                 value={member}
+                disabled={!canManageMembers}
                 onChange={(e) => setMember(e.target.value)}
               />
-              <select className="input" style={{ width: 130 }} value={role} onChange={(e) => setRole(e.target.value)}>
+              <select className="input" style={{ width: 130 }} aria-label="New member role" value={role} disabled={!canManageMembers} onChange={(e) => setRole(e.target.value)}>
                 {HUMAN_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
-              <button className="btn" disabled={!member} onClick={() => addMember.mutate()}>+ Add Member</button>
+              <button
+                className="btn"
+                disabled={!canManageMembers || !member}
+                title={membersWhy ?? undefined}
+                aria-describedby={membersWhy ? 'members-closed' : undefined}
+                onClick={() => addMember.mutate()}
+              >
+                + Add Member
+              </button>
             </div>
+            {membersWhy && (
+              <p id="members-closed" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>{membersWhy}</p>
+            )}
           </Panel>
         </section>
 
@@ -822,13 +896,23 @@ export function Settings() {
               <Panel pad>
                 <Cluster gap={16} align='flex-start' justify='space-between'>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
+                    <div id="review-step-label" style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
                     <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
                       When off, completing a task sends it straight to Done instead of Review. Useful for simple pipelines.
                     </p>
                   </div>
-                  <Toggle checked={settings.reviewEnabled} onChange={(v) => void guard(projectsApi.updateSettings(projectId, { reviewEnabled: v }))} />
+                  <Toggle
+                    labelledBy="review-step-label"
+                    checked={settings.reviewEnabled}
+                    disabled={!canChangeWorkflow}
+                    title={workflowWhy ?? undefined}
+                    describedBy={workflowWhy ? 'workflow-closed' : undefined}
+                    onChange={(v) => void guard(projectsApi.updateSettings(projectId, { reviewEnabled: v }))}
+                  />
                 </Cluster>
+                {workflowWhy && (
+                  <p id="workflow-closed" className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>{workflowWhy}</p>
+                )}
               </Panel>
               {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
                   cost control over the tenant, not a workflow choice, and the core refuses both fields
