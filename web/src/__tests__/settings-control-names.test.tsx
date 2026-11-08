@@ -36,6 +36,8 @@ const board = {
 };
 
 function mount(): HTMLElement {
+  // Settings configures the selected project; on "All projects" it only asks for one (P-442).
+  localStorage.setItem('bd.projectId', 'p1');
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {

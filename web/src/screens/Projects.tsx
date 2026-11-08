@@ -8,6 +8,8 @@ import { defaultBoardName } from '../api/boards.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
 import { useProject } from '../projectContext.js';
+import { useMyProjectRole } from '../displayNames.js';
+import { closedWhy, mayCall } from '../toolFloors.js';
 import { Avatar, PageHeader } from '../components.js';
 import { fire, pushToast } from '../toast.js';
 import { toolKey } from '../ToolLogo.js';
@@ -28,7 +30,7 @@ export function Projects() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const { permissions, ui } = useAuth();
-  const { projectId: selected, projects: roster } = useProject();
+  const { projectId: selected, projects: roster, setProjectId } = useProject();
   const [name, setName] = useState('');
   const [connectOpen, setConnectOpen] = useState(false);
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
@@ -37,6 +39,11 @@ export function Projects() {
   // The sidebar switcher scopes this grid: "All projects" ('') shows every PROJECT card; a selected
   // project shows THAT project's BOARDS instead (a project has many boards).
   const selectedName = roster.find((p) => p.projectId === selected)?.name ?? '';
+  // A board is `create_board`, tier write (P-440): below it "New board" is closed and says why, and
+  // opening a project with no board shows its empty board list instead of creating one.
+  const selectedRole = useMyProjectRole(selected);
+  const canNewBoard = mayCall(selectedRole, 'create_board');
+  const newBoardWhy = closedWhy(selectedRole, 'create_board', 'create boards');
 
   // The card's members/avatars/colour ride along on `list_projects` — ONE request for the whole grid,
   // the same shape as the sessions fetch below.
@@ -104,6 +111,10 @@ export function Projects() {
   async function open(projectId: string): Promise<void> {
     const projectName = list.find((p) => p.projectId === projectId)?.name;
     const { boards } = await boardsApi.listBoards(projectId);
+    if (!boards[0] && !mayCall(roster.find((p) => p.projectId === projectId)?.role, 'create_board')) {
+      setProjectId(projectId);
+      return;
+    }
     const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
     nav(`/projects/${projectId}/boards/${board.id}`);
   }
@@ -121,11 +132,23 @@ export function Projects() {
               <input
                 className="input"
                 placeholder="New board name"
+                aria-label="New board name"
                 value={name}
+                disabled={!canNewBoard}
+                aria-describedby={newBoardWhy ? 'projects-new-board-closed' : undefined}
                 onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && name && !createBoard.isPending) createBoard.mutate(name); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && name && canNewBoard && !createBoard.isPending) createBoard.mutate(name); }}
               />
-              <button className="btn" disabled={!name || createBoard.isPending} onClick={() => createBoard.mutate(name)}>New board</button>
+              <button
+                className="btn"
+                disabled={!canNewBoard || !name || createBoard.isPending}
+                title={newBoardWhy}
+                aria-describedby={newBoardWhy ? 'projects-new-board-closed' : undefined}
+                onClick={() => createBoard.mutate(name)}
+              >
+                New board
+              </button>
+              {newBoardWhy && <span id="projects-new-board-closed" className="muted" style={{ fontSize: 12 }}>{newBoardWhy}</span>}
             </>
           ) : (
             <>
@@ -180,7 +203,7 @@ export function Projects() {
               );
             })}
           {selected && boardsQ.data && boards.length === 0 && (
-            <p className="muted">No boards in this project yet — create one.</p>
+            <p className="muted">{canNewBoard ? 'No boards in this project yet — create one.' : 'No boards in this project yet.'}</p>
           )}
 
           {/* "All projects" → show every project card. */}

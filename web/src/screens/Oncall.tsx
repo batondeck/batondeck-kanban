@@ -59,8 +59,10 @@ function Health({ projectId, integration }: { projectId: string; integration: In
 
 export default function Oncall() {
   const [setupOpen, setSetupOpen] = useState(false);
-  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  // The sidebar's selection, shared both ways (P-434). On "All projects" it is '': the picker shows
+  // with nothing chosen and the screen asks for a project, reading and storing nothing (P-442).
   const { projectId: activeProject, setProjectId, projects } = useSingleProject();
+  const pickPrompt = 'Pick a project to configure';
 
   const mayReadIntegrations = useMayReadIntegrations(activeProject);
   const integrationsQ = useQuery({
@@ -93,13 +95,20 @@ export default function Oncall() {
         title="On-call"
         subtitle="Telemetry webhooks become incident tickets, assigned by each integration's routing or broadcast to the project's agents."
         actions={
-          <button className="btn secondary" onClick={() => setSetupOpen(true)} aria-label="On-call setup">
+          <button
+            className="btn secondary"
+            onClick={() => setSetupOpen(true)}
+            aria-label="On-call setup"
+            disabled={!activeProject}
+            title={activeProject ? undefined : pickPrompt}
+          >
             <Icon name="settings" size={12} /> Setup
           </button>
         }
       />
 
-      {projects.length > 1 && (
+      {/* With one project the picker is only needed while none is chosen; with several, always. */}
+      {(projects.length > 1 || (projects.length === 1 && !activeProject)) && (
         <Cluster gap={8}>
           <label htmlFor="oncall-project">Project</label>
           {/* Named apart from the sidebar's "Project" select, which is on the same screen (P-433). */}
@@ -110,6 +119,7 @@ export default function Oncall() {
             value={activeProject}
             onChange={(e) => setProjectId(e.target.value)}
           >
+            {!activeProject && <option value="" disabled>Pick a project</option>}
             {projects.map((p) => (
               <option key={p.projectId} value={p.projectId}>
                 {p.name}
@@ -119,10 +129,15 @@ export default function Oncall() {
         </Cluster>
       )}
 
-      {!activeProject ? (
+      {projects.length === 0 ? (
         <EmptyState
           title="No project yet"
           hint="On-call integrations are configured per project. Create a project first."
+        />
+      ) : !activeProject ? (
+        <EmptyState
+          title={pickPrompt}
+          hint="On-call integrations are configured per project. Choose it in the picker above, or in the sidebar."
         />
       ) : (
         <>

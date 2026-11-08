@@ -14,7 +14,8 @@ import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
-import { roleAtLeast, useMyProjectRole } from '../displayNames.js';
+import { useMyProjectRole } from '../displayNames.js';
+import { closedWhy, mayCall } from '../toolFloors.js';
 import { useSingleProject } from '../projectContext.js';
 
 const STATUS_COLOR: Record<Status, string> = {
@@ -499,7 +500,8 @@ function CliTokens() {
 
 export function Settings() {
   const qc = useQueryClient();
-  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  // The sidebar's selection, shared both ways (P-434). On "All projects" it is '' and the project
+  // sections give way to "Pick a project to configure": nothing is loaded, edited or stored (P-442).
   const { projectId, setProjectId, projects } = useSingleProject();
 
   const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId), enabled: !!projectId });
@@ -523,13 +525,17 @@ export function Settings() {
    */
   const myRole = useMyProjectRole(projectId);
   const roleKnown = myRole !== undefined;
-  const canAddColumn = roleAtLeast(myRole, 'worker');
-  const canEditColumns = roleAtLeast(myRole, 'member');
-  const canManageMembers = roleAtLeast(myRole, 'admin');
-  const canChangeWorkflow = roleAtLeast(myRole, 'admin');
-  const columnsWhy = !roleKnown || canEditColumns ? null : canAddColumn ? 'Only a member or an admin can rename, limit or delete columns.' : 'A viewer cannot change columns.';
-  const membersWhy = roleKnown && !canManageMembers ? 'Only a project admin can add or remove members.' : null;
-  const workflowWhy = roleKnown && !canChangeWorkflow ? 'Only a project admin can change workflow settings.' : null;
+  const canAddColumn = mayCall(myRole, 'add_column');
+  const canEditColumns = mayCall(myRole, 'update_column') && mayCall(myRole, 'remove_column');
+  const canManageMembers = mayCall(myRole, 'add_member') && mayCall(myRole, 'remove_member');
+  const canChangeWorkflow = mayCall(myRole, 'update_settings');
+  const columnsWhy = !roleKnown || canEditColumns
+    ? null
+    : canAddColumn
+      ? closedWhy(myRole, 'update_column', 'rename, limit or delete columns')!
+      : closedWhy(myRole, 'add_column', 'change columns')!;
+  const membersWhy = closedWhy(myRole, 'add_member', 'add or remove members') ?? null;
+  const workflowWhy = closedWhy(myRole, 'update_settings', 'change workflow settings') ?? null;
 
   /**
    * THE BOARD PICKER FOR EVERY BOARD-SCOPED SETTING, rendered in each section that one governs.
@@ -663,6 +669,8 @@ export function Settings() {
         <label className="picker-labelled">
           <span className="picker-caption">Project</span>
           <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            {/* No project chosen (the sidebar's "All projects"): a placeholder, never a default pick. */}
+            {!projectId && <option value="" disabled>Pick a project</option>}
             {projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
           </select>
         </label>
@@ -677,6 +685,20 @@ export function Settings() {
 
         {err && <p className="error" style={{ fontSize: 12, marginBottom: 16 }}>{err}</p>}
 
+        {/* The project sections need one project. With none chosen they are replaced by the prompt. */}
+        {!projectId ? (
+          <section style={{ marginBottom: 36 }}>
+            <Panel pad>
+              <h3 style={{ ...sectionTitle, margin: '0 0 4px' }}>Pick a project to configure</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 14 }}>
+                {projects.length > 0
+                  ? 'Columns, members and workflow settings belong to one project. Choose it in the Project picker above, or in the sidebar.'
+                  : 'Columns, members and workflow settings belong to a project, and this account is not a member of one yet.'}
+              </p>
+            </Panel>
+          </section>
+        ) : (
+        <>
         {/* Columns */}
         <section style={{ marginBottom: 36 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -877,6 +899,8 @@ export function Settings() {
             )}
           </Panel>
         </section>
+        </>
+        )}
 
         <CliTokens />
         {/* Workspace scope, not project scope: it renders nothing for anyone but the workspace admin. */}
@@ -889,6 +913,7 @@ export function Settings() {
         <MyTokenBudget />
 
         {/* Workflow / policy */}
+        {projectId && (
         <section style={{ marginBottom: 36 }}>
           <h3 style={sectionTitle}>Workflow Settings</h3>
           {settings ? (
@@ -926,6 +951,7 @@ export function Settings() {
             </Panel>
           )}
         </section>
+        )}
 
 
         {/* Anchored so `/settings#sessions` from the Agents screen lands here. */}
