@@ -91,3 +91,18 @@ func (e *env) feedTypes(t *testing.T, c *Client, p *project) []string {
 	}
 	return types
 }
+
+// description is tool's description in c's tools/list, as served: what a client reads before it
+// calls the tool, so a scenario can hold it to the behaviour it observes.
+func description(t *testing.T, c *Client, tool string) string {
+	t.Helper()
+	names := c.List(t, "tools/list", "tools", "name")
+	descs := c.List(t, "tools/list", "tools", "description")
+	for i, n := range names {
+		if n == tool && i < len(descs) {
+			return descs[i]
+		}
+	}
+	t.Fatalf("tools/list as %s does not list %s", c.name, tool)
+	return ""
+}

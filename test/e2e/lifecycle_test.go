@@ -98,8 +98,7 @@ func lifeNextAndClaimNext(t *testing.T, e *env) {
 
 // complete_task: with review on the task lands REVIEW and the reviewer becomes its assignee; with it
 // off it lands DONE and unblocks its dependent, which claim_next then takes. Only the lease holder
-// completes. Artifacts on the call are merged into the task's own (the service's documented rule;
-// the tool description's "artifacts are refused" disagrees and is reported).
+// completes. Artifacts on the call are merged into the task's own, as the tool's description says.
 func lifeComplete(t *testing.T, e *env) {
 	p := e.project(t, "Completing")
 	id := S(e.task(t, p, "reviewed", nil), "id")
@@ -112,6 +111,8 @@ func lifeComplete(t *testing.T, e *env) {
 	got := e.get(t, p, id)
 	want(t, S(got, "status") == "REVIEW" && S(got, "assignee") == e.srv.ids["master"] && S(got, "deliverable") == "parser merged" &&
 		S(got, "review.completedBy") == e.srv.ids["worker"] && S(got, "artifacts.0.url") == "https://example.com/pr/1", "get_task after a reviewed completion: %s", js(got))
+	desc := description(t, e.worker, "complete_task")
+	want(t, strings.Contains(desc, "artifacts are merged into the task's own") && !strings.Contains(desc, "refused"), "complete_task's description does not say its artifacts are stored: %q", desc)
 	ctx := e.viewer.Call(t, "get_task_context", M{"projectId": p.id, "taskId": id})
 	want(t, S(ctx, "deliverable") == "parser merged" && S(ctx, "review.reviewer") == e.srv.ids["master"], "get_task_context after completion: %s", js(O(ctx, "review")))
 
