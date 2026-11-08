@@ -49,35 +49,39 @@ SELECT id, ts, action, actor, agent, subject, project_id, result, error_code, da
 WHERE (CAST(?1 AS TEXT) = '' OR project_id = CAST(?1 AS TEXT))
   AND (CAST(?2 AS TEXT) = '' OR actor = CAST(?2 AS TEXT))
   AND (CAST(?3 AS TEXT) = '' OR action = CAST(?3 AS TEXT))
-  AND (CAST(?4 AS TEXT) = '' OR subject = CAST(?4 AS TEXT))
-  AND ts >= CAST(?5 AS INTEGER) AND ts <= CAST(?6 AS INTEGER)
-  AND (ts < CAST(?7 AS INTEGER)
-       OR (ts = CAST(?7 AS INTEGER) AND id < CAST(?8 AS INTEGER)))
+  AND (CAST(?4 AS TEXT) = '' OR subject = CAST(?4 AS TEXT)
+       OR subject = CAST(?5 AS TEXT))
+  AND ts >= CAST(?6 AS INTEGER) AND ts <= CAST(?7 AS INTEGER)
+  AND (ts < CAST(?8 AS INTEGER)
+       OR (ts = CAST(?8 AS INTEGER) AND id < CAST(?9 AS INTEGER)))
 ORDER BY ts DESC, id DESC
-LIMIT ?9
+LIMIT ?10
 `
 
 type ListAuditLogParams struct {
-	ProjectID string
-	Actor     string
-	Action    string
-	Subject   string
-	Since     int64
-	Until     int64
-	AfterTs   int64
-	AfterID   int64
-	PageLimit int64
+	ProjectID    string
+	Actor        string
+	Action       string
+	Subject      string
+	SubjectAlias string
+	Since        int64
+	Until        int64
+	AfterTs      int64
+	AfterID      int64
+	PageLimit    int64
 }
 
 // One page of the audit log, newest first ((ts, id) descending), strictly after the cursor's
 // (after_ts, after_id). An empty string filter matches every row; since and until bound ts,
-// inclusive (the caller passes the extremes for "unbounded", and for "no cursor").
+// inclusive (the caller passes the extremes for "unbounded", and for "no cursor"). A non-empty
+// subject also matches subject_alias (the caller passes the subject itself when it has no alias).
 func (q *Queries) ListAuditLog(ctx context.Context, arg ListAuditLogParams) ([]AuditLog, error) {
 	rows, err := q.db.QueryContext(ctx, listAuditLog,
 		arg.ProjectID,
 		arg.Actor,
 		arg.Action,
 		arg.Subject,
+		arg.SubjectAlias,
 		arg.Since,
 		arg.Until,
 		arg.AfterTs,

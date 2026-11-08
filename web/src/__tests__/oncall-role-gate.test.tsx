@@ -43,14 +43,13 @@ import type { ReactNode } from 'react';
 const ING = 'ing_ba3c6ec8c12cc970c3ae16e2f62ddbaf';
 
 function mockProject(role: string) {
-  vi.doMock('../projectContext.js', () => ({
-    useProject: () => ({
-      projectId: 'p1',
-      setProjectId: () => {},
-      loading: false,
-      projects: [{ projectId: 'p1', name: 'P1', role }],
-    }),
-  }));
+  const ctx = () => ({
+    projectId: 'p1',
+    setProjectId: () => {},
+    loading: false,
+    projects: [{ projectId: 'p1', name: 'P1', role }],
+  });
+  vi.doMock('../projectContext.js', () => ({ useProject: ctx, useSingleProject: ctx }));
 }
 
 /**
@@ -74,8 +73,8 @@ function mockCaller(role: string, isAdmin: boolean) {
 /**
  * Records every URL the screen asks for, and answers enough for it to finish rendering.
  *
- * `role` must match the one `mockProject` feeds. `Oncall.tsx` reads only `projectId` off this
- * response today, so a mismatch is inert — but a fixture whose membership row contradicts its own
+ * `role` must match the one `mockProject` feeds. `Oncall.tsx` takes its project from the shared
+ * selection (P-434), not this response, so a mismatch is inert — but a fixture whose membership row contradicts its own
  * premise is one refactor away from making the worker assertion vacuous.
  */
 function stub(role: string): string[] {
@@ -128,7 +127,9 @@ describe('Oncall screen', () => {
     const { default: Oncall } = await import('../screens/Oncall.js');
     render(<Oncall />, { wrapper });
     // Wait for the screen to settle, so "no call" means "did not call", not "has not called YET".
-    await waitFor(() => expect(calls.some((u) => u.includes('/projects'))).toBe(true));
+    // The project comes from the shared selection (P-434), which `mockProject` holds already, so the
+    // screen decides its integrations read on its first render; the heading says that render happened.
+    await screen.findByRole('heading', { name: 'On-call' });
     await new Promise((r) => setTimeout(r, 50));
     return calls;
   }

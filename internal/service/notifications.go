@@ -50,10 +50,14 @@ func (s notificationsSvc) List(ctx context.Context, caller domain.Caller, req Li
 	return out, nil
 }
 
-// MarkRead is mark_notifications_read: one statement.
+// MarkRead is mark_notifications_read: one statement. Neither ids nor all: true (`{}`, `{all: false}`,
+// `{ids: []}`) names nothing to mark, and is VALIDATION rather than updated 0 (P-439).
 func (s notificationsSvc) MarkRead(ctx context.Context, caller domain.Caller, req MarkNotificationsReadReq) (MarkNotificationsReadResp, error) {
 	if _, err := s.c.authorize(ctx, caller, "", "mark_notifications_read", domain.GrantSubject{}, false); err != nil {
 		return MarkNotificationsReadResp{}, err
+	}
+	if len(req.IDs) == 0 && !req.All {
+		return MarkNotificationsReadResp{}, domain.Validation("mark_notifications_read needs ids or all: true", map[string]any{"field": "ids"})
 	}
 	if len(req.IDs) > maxMarkIDs {
 		return MarkNotificationsReadResp{}, domain.Validation("ids has more than 500 entries", map[string]any{"field": "ids", "max": maxMarkIDs})

@@ -26,7 +26,7 @@ func RegisterLifecycle(s *mcp.Server, svc service.Services) {
 		"Preview the best claimable TODO task, unassigned or yours, or null; claims nothing. strategy score ranks as rank_tasks; explain says why; useProfile: by your profile. includeInbox: REVIEW, BLOCKED.",
 		l.Next)
 	mcp.Tool(s, "lifecycle", "complete_task",
-		"Complete your leased task: REVIEW when the project reviews (the reviewer becomes the assignee), else DONE, which unblocks its dependents. artifacts are refused.",
+		"Complete your leased task: REVIEW when the project reviews (the reviewer becomes the assignee), else DONE, which unblocks its dependents. artifacts are merged into the task's own.",
 		l.Complete)
 	mcp.Tool(s, "lifecycle", "block_task",
 		"Mark your leased task BLOCKED with a reason and drop the lease. Each blockedBy id becomes a dependency in the same transaction; a cycle writes nothing.",

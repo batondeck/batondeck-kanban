@@ -471,7 +471,9 @@ func patchIn(in TaskPatch) (store.TaskPatch, []string, error) {
 }
 
 // Move is move_task (conductor tasks.ts:345-470) over domain.DecideMove: the fixed table
-// (INVALID_TRANSITION with allowed and path), a same-status move a reorder, a promotion of a
+// (INVALID_TRANSITION with allowed and path), a same-status move a reorder, an order key alone a
+// reorder within the task's column (P-437: no project lock, as it neither enters IN_PROGRESS nor
+// lands DONE; the tier and lease checks are a move's), a promotion of a
 // still-blocked task landing on BLOCKED, the WIP limit counted by status inside the transaction
 // (WIP_EXCEEDED). A racing task, or a live lease that does not yield to the caller (leaseYields:
 // another identity's, or another agent's of the caller's identity, P-399), is CONFLICT_LOCKED. Leaving

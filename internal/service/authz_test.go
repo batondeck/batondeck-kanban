@@ -234,6 +234,27 @@ func TestAuthorizeTaskGrantIsCheckedInMutate(t *testing.T) {
 	}
 }
 
+// P-438: a grant stored before grant_capabilities checked names, holding an unknown one in tools and
+// in deny, still decides by the names it holds: the unknown names restrict nothing on their own, the
+// listed real tool is admitted and an unlisted governed tool is refused with requiredCapability.
+func TestAuthorizeStoredGrantWithUnknownNamesDecides(t *testing.T) {
+	legacy := domain.CapabilityGrant{Tools: []string{"claim_taks", "claim_task"}, Deny: []string{"add_coment"}}
+	f := newFixture(t, Options{Grants: func(_ context.Context, _, identity string) (domain.CapabilityGrant, bool, error) {
+		return legacy, identity == "grace", nil
+	}})
+	grace := f.member(t, "grace", domain.RoleWorker)
+	if err := f.authorize(grace, "claim_task"); err != nil {
+		t.Fatalf("claim_task, listed: %v", err)
+	}
+	e := wantCode(t, f.authorize(grace, "write_memory"), domain.CodeForbidden)
+	if e.Details["requiredCapability"] != "tool:write_memory" {
+		t.Fatalf("write_memory, unlisted: details %v", e.Details)
+	}
+	if err := f.authorize(grace, "get_task"); err != nil {
+		t.Fatalf("an exempt read: %v", err)
+	}
+}
+
 // A grant reader's failure is INTERNAL, logged, and not cached.
 func TestAuthorizeGrantReaderErrorIsInternal(t *testing.T) {
 	fail := true

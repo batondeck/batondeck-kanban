@@ -94,7 +94,8 @@ type MoveDecision struct {
 
 // DecideMove applies the move rules: the fixed transition table, a promotion of a still-blocked
 // task landing on BLOCKED, and the WIP limit, which applies only to entering IN_PROGRESS. A move to
-// the same status is a reorder.
+// the same status is a reorder, and so is an order key alone (no toColumnId, no toStatus): the task
+// keeps its column and status. A move naming none of the three is VALIDATION.
 func DecideMove(req MoveRequest) (MoveDecision, error) {
 	if req.Order != "" && !IsValidOrder(req.Order) {
 		return MoveDecision{}, Validation(fmt.Sprintf("Invalid order key: %q", req.Order), nil)
@@ -104,9 +105,17 @@ func DecideMove(req MoveRequest) (MoveDecision, error) {
 			return MoveDecision{}, err
 		}
 	}
-	target, err := ResolveColumnAndStatus(req.Board, req.ToColumnID, req.ToStatus, req.FromColumnID)
-	if err != nil {
-		return MoveDecision{}, err
+	var target MoveTarget
+	switch {
+	case req.ToColumnID == "" && req.ToStatus == "" && req.Order == "":
+		return MoveDecision{}, Validation("move_task requires toColumnId, toStatus or order", nil)
+	case req.ToColumnID == "" && req.ToStatus == "":
+		target = MoveTarget{ColumnID: req.FromColumnID, Status: req.FromStatus}
+	default:
+		var err error
+		if target, err = ResolveColumnAndStatus(req.Board, req.ToColumnID, req.ToStatus, req.FromColumnID); err != nil {
+			return MoveDecision{}, err
+		}
 	}
 	if !CanTransition(req.FromStatus, target.Status) {
 		return MoveDecision{}, InvalidTransition(req.FromStatus, target.Status,

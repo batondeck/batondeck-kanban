@@ -101,6 +101,9 @@ func TestCheckGrantLandingStatus(t *testing.T) {
 		expectGrant(t, working, GrantSubject{Tool: "some_future_tool"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "complete_task"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1"}, "status:*")
+		// P-437: an order-only move lands in the task's current status, which the call does not name.
+		expectGrant(t, working, GrantSubject{Tool: "move_task"}, "status:*")
+		expectGrant(t, CapabilityGrant{Statuses: []Status{Todo}}, GrantSubject{Tool: "move_task"}, "status:*")
 		expectGrant(t, working, GrantSubject{Tool: "move_task", ToColumnID: "C-1", ToStatus: Todo}, "")
 		expectGrant(t, CapabilityGrant{Tools: []string{"some_future_tool"}}, GrantSubject{Tool: "some_future_tool"}, "")
 	})
@@ -294,23 +297,69 @@ func TestGrantHiddenTools(t *testing.T) {
 	}
 }
 
-// CheckGrantEnforceable refuses a deny or tools entry naming a tool no grant reaches, naming the field
-// and the tools; a grant naming project tools only is the positive control.
+// CheckGrantEnforceable refuses a deny or tools entry naming no tool (P-438), an exempt tool (P-438)
+// or a tool no grant reaches, naming the field, every refused entry and each reason; a grant naming
+// governed project tools only is the positive control, as is every governed project tool at once.
 func TestCheckGrantEnforceable(t *testing.T) {
 	for _, c := range []struct {
-		g     CapabilityGrant
-		field string
-		tools []string
+		g       CapabilityGrant
+		field   string
+		tools   []string
+		reasons map[string][]string
 	}{
-		{CapabilityGrant{Deny: []string{"claim_task", "list_projects"}}, "deny", []string{"list_projects"}},
-		{CapabilityGrant{Tools: []string{"disconnect_agent", "list_agent_sessions"}}, "tools", []string{"disconnect_agent", "list_agent_sessions"}},
+		{CapabilityGrant{Deny: []string{"claim_task", "list_projects"}}, "deny", []string{"list_projects"},
+			map[string][]string{"unscoped": {"list_projects"}}},
+		{CapabilityGrant{Tools: []string{"disconnect_agent", "list_agent_sessions"}}, "tools", []string{"disconnect_agent", "list_agent_sessions"},
+			map[string][]string{"unscoped": {"disconnect_agent", "list_agent_sessions"}}},
+		{CapabilityGrant{Tools: []string{"no_such_tool"}}, "tools", []string{"no_such_tool"},
+			map[string][]string{"unknown": {"no_such_tool"}}},
+		{CapabilityGrant{Deny: []string{"add_coment", "add_comment", "get_task", "Claim_Task"}}, "deny", []string{"add_coment", "get_task", "Claim_Task"},
+			map[string][]string{"unknown": {"add_coment", "Claim_Task"}, "exempt": {"get_task"}}},
+		// deny is judged first; tools' typo is named once deny is clean.
+		{CapabilityGrant{Deny: []string{"get_board"}, Tools: []string{"claim_taks"}}, "deny", []string{"get_board"},
+			map[string][]string{"exempt": {"get_board"}}},
+		{CapabilityGrant{Deny: []string{"add_comment"}, Tools: []string{"claim_task", "claim_taks", "list_audit_log"}}, "tools", []string{"claim_taks", "list_audit_log"},
+			map[string][]string{"unknown": {"claim_taks"}, "unscoped": {"list_audit_log"}}},
 	} {
 		e, ok := AsBatonDeckError(CheckGrantEnforceable(c.g))
 		if !ok || e.Code != CodeValidation || e.Details["field"] != c.field || !reflect.DeepEqual(e.Details["tools"], c.tools) {
 			t.Errorf("CheckGrantEnforceable(%+v) = %v, want VALIDATION on %s naming %v", c.g, e, c.field, c.tools)
+			continue
+		}
+		for _, reason := range []string{"unknown", "exempt", "unscoped"} {
+			got, _ := e.Details[reason].([]string)
+			if !slices.Equal(got, c.reasons[reason]) {
+				t.Errorf("CheckGrantEnforceable(%+v) details.%s = %v, want %v", c.g, reason, got, c.reasons[reason])
+			}
+		}
+		for _, name := range c.tools {
+			if !strings.Contains(e.Message, name) {
+				t.Errorf("CheckGrantEnforceable(%+v) message %q does not name %s", c.g, e.Message, name)
+			}
 		}
 	}
 	if err := CheckGrantEnforceable(WorkerDefaultGrant()); err != nil {
 		t.Errorf("the worker default grant: %v", err)
+	}
+	governed := sortedTools(func(_ string, p Posture) bool { return p.TenantScoped && !p.GrantExempt })
+	if err := CheckGrantEnforceable(CapabilityGrant{Tools: governed, Deny: governed}); err != nil {
+		t.Errorf("every governed project tool: %v", err)
+	}
+}
+
+// A grant stored before CheckGrantEnforceable judged names still decides calls as it did (P-438): an
+// unknown name in deny restricts nothing, and an allowlist holding one admits exactly the governed
+// tools it also lists.
+func TestStoredGrantWithUnknownNamesStillDecides(t *testing.T) {
+	deny := CapabilityGrant{Deny: []string{"add_coment"}}
+	if got := CheckGrant(deny, GrantSubject{Tool: "add_comment"}); got != "" {
+		t.Errorf("deny [add_coment] refused add_comment: %q", got)
+	}
+	allow := CapabilityGrant{Tools: []string{"claim_taks", "heartbeat_task"}}
+	if got := CheckGrant(allow, GrantSubject{Tool: "heartbeat_task"}); got != "" {
+		t.Errorf("tools [claim_taks heartbeat_task] refused heartbeat_task: %q", got)
+	}
+	if got := CheckGrant(allow, GrantSubject{Tool: "claim_task"}); got != "tool:claim_task" {
+		t.Errorf("tools [claim_taks heartbeat_task] on claim_task: %q, want tool:claim_task", got)
 	}
 }

@@ -82,7 +82,7 @@ function NavIcon({ d }: { d: string }) {
 }
 
 /** Global project switcher — hidden while loading or when the user has no projects. */
-function ProjectSwitcher() {
+export function ProjectSwitcher() {
   const { projectId, setProjectId, projects, loading } = useProject();
   if (loading || projects.length === 0) return null;
   return (

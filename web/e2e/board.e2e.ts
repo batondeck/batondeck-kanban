@@ -50,13 +50,21 @@ test.describe('board', () => {
     await page.getByLabel('Labels (comma-separated)').fill('docs, release');
     await page.getByRole('button', { name: 'Add task' }).click();
     await page.getByRole('button', { name: 'Done', exact: true }).click();
-    const created = card(column(page, 'To do'), 'Write the release notes');
-    // The optimistic card animates out as the stored one replaces it: one card once that is done.
-    await expect(created).toHaveCount(1);
+    // Stored first, then on screen. The optimistic card ("T-…") animates out as the stored one replaces
+    // it, so a count taken before the stored card arrives can read 1 and then 2: wait for the stored
+    // card by its id, then for the optimistic one to have gone.
+    let taskId = '';
+    await expect
+      .poll(async () => {
+        const r = await new McpClient('admin').call<{ tasks: Array<{ id: string; title: string }> }>('list_tasks', { projectId: b.projectId, boardId: b.boardId });
+        taskId = r.tasks.find((t) => t.title === 'Write the release notes')?.id ?? '';
+        return taskId;
+      })
+      .not.toBe('');
+    const created = column(page, 'To do').locator(`.card[data-task-id="${taskId}"]`);
     await expect(created).toBeVisible();
+    await expect(card(column(page, 'To do'), 'Write the release notes')).toHaveCount(1);
     await expect(created.locator('.label')).toHaveText(['docs', 'release']);
-    await expect(created).toHaveAttribute('data-task-id', /^T-\d+$/);
-    const taskId = (await created.getAttribute('data-task-id'))!;
     await atRoute(page, '/projects/:projectId/boards/:boardId', 'task created');
 
     // Open it in the drawer and edit the title and the description.

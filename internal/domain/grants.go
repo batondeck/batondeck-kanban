@@ -65,16 +65,14 @@ func completionLanding(f LandingFacts) ([]Status, bool) {
 	return []Status{Done}, true
 }
 
-// moveLanding: move_task names its status only in the toStatus form; a toColumnId-only move would need
-// the board to resolve, so it is undecidable here and a statuses grant refuses it.
+// moveLanding: move_task names its status only in the toStatus form. A toColumnId-only move would need
+// the board to resolve, and an order-only move (P-437) writes the task in whatever status it has, which
+// the call does not name: both are undecidable here, so a statuses grant refuses them.
 func moveLanding(f LandingFacts) ([]Status, bool) {
-	switch {
-	case f.ToStatus != "":
+	if f.ToStatus != "" {
 		return []Status{f.ToStatus}, true
-	case f.ToColumnID != "":
-		return nil, false
 	}
-	return []Status{}, true
+	return nil, false
 }
 
 // Posture is a tool's authorization posture.
@@ -313,26 +311,57 @@ func GrantHiddenTools(grants []CapabilityGrant) []string {
 	return out
 }
 
-// CheckGrantEnforceable refuses a grant whose deny or tools names a tool no grant reaches
-// (GrantUnscopedTools): a grant is stored on a project and those tools take no projectId, so the
-// entry would be stored and never enforced. Their reach is the role's.
+// CheckGrantEnforceable refuses a grant whose deny or tools names anything but a tool a grant governs,
+// field by field (deny first), naming every such entry of the field: a name that is no tool (not in
+// toolPosture, the classification every served tool must have, so a typo); a GrantExempt tool, which no
+// grant narrows; and a tool no grant reaches (GrantUnscopedTools), because a grant is stored on a
+// project and those tools take no projectId. Each would be stored and never enforced, and a typo in
+// tools, an allowlist, would refuse every governed tool. details: field, tools (every refused entry, in
+// order) and, for each reason that applies, unknown, exempt and unscoped.
+//
+// It judges a grant being written. A grant stored before this check that holds such a name still
+// loads and is enforced as before (CheckGrant): an unknown or exempt name in deny restricts nothing,
+// and one in tools admits nothing beyond the governed tools it lists.
 func CheckGrantEnforceable(g CapabilityGrant) error {
 	unscoped := GrantUnscopedTools()
 	for _, f := range []struct {
 		field string
 		tools []string
 	}{{"deny", g.Deny}, {"tools", g.Tools}} {
-		var named []string
+		var named, unknown, exempt, unreached []string
 		for _, t := range f.tools {
-			if slices.Contains(unscoped, t) {
-				named = append(named, t)
+			p, classified := toolPosture[t]
+			switch {
+			case !classified:
+				unknown = append(unknown, t)
+			case p.GrantExempt:
+				exempt = append(exempt, t)
+			case slices.Contains(unscoped, t):
+				unreached = append(unreached, t)
+			default:
+				continue
 			}
+			named = append(named, t)
 		}
-		if len(named) > 0 {
-			return Validation(f.field+" names "+strings.Join(named, ", ")+", which a grant never restricts: a grant is stored on a project and "+
-				"these tools take no projectId, so the entry would never be enforced; their reach is governed by role",
-				map[string]any{"field": f.field, "tools": named})
+		if len(named) == 0 {
+			continue
 		}
+		details := map[string]any{"field": f.field, "tools": named}
+		var why []string
+		if len(unknown) > 0 {
+			details["unknown"] = unknown
+			why = append(why, strings.Join(unknown, ", ")+": no such tool")
+		}
+		if len(exempt) > 0 {
+			details["exempt"] = exempt
+			why = append(why, strings.Join(exempt, ", ")+": open to every role, a grant never restricts it")
+		}
+		if len(unreached) > 0 {
+			details["unscoped"] = unreached
+			why = append(why, strings.Join(unreached, ", ")+": takes no projectId, and a grant is stored on a project, so the entry "+
+				"would never be enforced; its reach is governed by role")
+		}
+		return Validation(f.field+" names "+strings.Join(named, ", ")+", which a grant cannot hold. "+strings.Join(why, ". ")+".", details)
 	}
 	return nil
 }

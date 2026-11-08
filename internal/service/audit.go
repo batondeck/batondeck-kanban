@@ -39,7 +39,13 @@ func (a audit) ListAuditLog(ctx context.Context, caller domain.Caller, req ListA
 	days := cmp.Or(req.Days, defaultAuditDays)
 	limit := cmp.Or(req.Limit, defaultAuditLimit)
 	since := a.c.now().Add(-time.Duration(days) * 24 * time.Hour).UnixMilli()
-	page, err := a.c.store.ListAuditLog(ctx, store.AuditFilter{Actor: req.Actor, Action: req.Action, Subject: req.Subject, Since: since}, "", int(limit))
+	// An identity subject is stored canonical (domain.CanonIdentity) and the API hands its ids out as
+	// "U-…", so the subject matches as given or in that form: project and task ids stay exact.
+	f := store.AuditFilter{Actor: req.Actor, Action: req.Action, Subject: req.Subject, Since: since}
+	if req.Subject != "" {
+		f.SubjectAlias = domain.CanonIdentity(req.Subject)
+	}
+	page, err := a.c.store.ListAuditLog(ctx, f, "", int(limit))
 	if err != nil {
 		return resp, a.c.mapErr("list_audit_log", err)
 	}

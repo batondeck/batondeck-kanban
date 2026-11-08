@@ -1417,6 +1417,25 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- The task page's Review panel names who completed the task, the way the rest of the ticket names
+  a person: the member's name, else their login, else the shortened id when nothing names the
+  account. It printed the stored account id ("completed by U-4e68…") (P-431).
+- A role below an action's tier is shown that action closed, with its reason, as Status and Claim
+  already were: the board's "+ New task" and its `c` shortcut below master, a task's Comment and
+  Reply for a viewer, and in Settings "+ Add Member" and Remove below project admin, the column
+  edits below member (adding one below worker) and the review-step switch below project admin.
+  Before, a viewer was offered them and learnt of the refusal only from the server's error. The
+  server's checks are unchanged (P-432).
+- Every Settings control has an accessible name: the top bar's project select (captioned
+  "Project", named "Project to configure"), the column name and WIP inputs and their Save and
+  delete buttons (named by column), the new column's inputs, the Members add input and role select,
+  each Remove (named by member), the "Require review step" switch (named by its caption) and your
+  ticket token limit. On-call's project select is named "On-call project", apart from the
+  sidebar's "Project". Screen readers announced them without a name (P-433).
+- Settings and On-call work on the project selected in the sidebar, and picking a project in
+  their own picker selects it in the sidebar: one selection, not three. While the sidebar says "All
+  projects" they take the first project, as before, and select it in the sidebar. Each kept its own
+  pick, so the sidebar could name one project while Settings configured another (P-434).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.
@@ -1426,6 +1445,29 @@ this section's headings in CHANGELOG.md, are all part of it.
   after it. Its store after a read, on a stalled tick or after its seed could land after the stop
   and rewind `Bus.Frontier()`, which the wake directory reads. Every store is now made under the
   bus's lock and only while that tail is live. (P-427)
+- `list_audit_log`'s `subject` filter, and `/api/audit?subject=`, find an identity's rows by the id
+  as the server hands it out (`U-…`). The rows store an identity subject trimmed and lower-cased, and
+  the filter compared it exactly, so the handed-out id found nothing. The filter now matches the
+  subject as given or in that stored form; a project or task id still matches exactly. (P-435)
+- `complete_task`'s description says what it does with `artifacts`: they are merged into the task's
+  own. It said they were refused, though the call has always stored them. (P-436)
+- `move_task` with an `order` and no `toColumnId` or `toStatus` reorders the task within its own
+  column, as its description's "and/or reorder it" says, under the same master tier, version and
+  lease checks as any move. It was refused with VALIDATION "move_task requires toColumnId or
+  toStatus". A call naming none of the three is still VALIDATION, now "requires toColumnId, toStatus
+  or order". A capability grant that narrows statuses refuses the order-only form, as it refuses a
+  `toColumnId`-only move, since the call does not name where the task lands. The web UI's drag,
+  which always names its column, is unchanged. (P-437)
+- `grant_capabilities` refuses with VALIDATION a `deny` or `tools` entry that is no tool, or a tool
+  no grant governs (an exempt read or self-scoped tool), as it already refused one that takes no
+  `projectId`. The refusal names each entry, with `details.unknown`, `details.exempt` and
+  `details.unscoped`. Such names were stored, so a typo in `tools`, an allowlist, silently denied
+  that member every governed tool. A grant stored before this release that holds such a name still
+  loads and is enforced by the names it holds; writing it again needs the names corrected. (P-438)
+- `mark_notifications_read`, and `POST /api/notifications/read`, refuse a call naming neither `ids`
+  nor `all: true` (`{}`, `{all: false}`, `{ids: []}`) with VALIDATION, `details.field` `ids`, as the
+  tool's description requires. It answered `updated: 0`. The web UI, which always sends one id or
+  `all: true`, is unchanged. (P-439)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

@@ -116,6 +116,15 @@ func TestDecideMove(t *testing.T) {
 		{"a reorder inside a full IN_PROGRESS takes no new slot",
 			MoveRequest{Board: fullBoard, FromStatus: InProgress, FromColumnID: "c-prog", ToStatus: InProgress, InProgressCount: 2},
 			MoveDecision{ColumnID: "c-prog", Status: InProgress}},
+		{"an order alone is a reorder: same column and status, the caller's key",
+			MoveRequest{Board: fullBoard, FromStatus: Review, FromColumnID: "c-review", Order: "a0V"},
+			MoveDecision{ColumnID: "c-review", Status: Review, Order: "a0V"}},
+		{"an order alone inside a full IN_PROGRESS takes no new slot",
+			MoveRequest{Board: fullBoard, FromStatus: InProgress, FromColumnID: "c-prog", Order: "a0V", InProgressCount: 2},
+			MoveDecision{ColumnID: "c-prog", Status: InProgress, Order: "a0V"}},
+		{"an order alone on a blocked TODO task is not redirected",
+			MoveRequest{Board: fullBoard, FromStatus: Todo, FromColumnID: "c-todo", Order: "a0V", OpenBlockers: 1},
+			MoveDecision{ColumnID: "c-todo", Status: Todo, Order: "a0V"}},
 		{"a WIP limit on a column other than IN_PROGRESS is not enforced",
 			MoveRequest{Board: fullBoard, FromStatus: InProgress, FromColumnID: "c-prog", ToStatus: Todo, InProgressCount: 99},
 			MoveDecision{ColumnID: "c-todo", Status: Todo, NeedsEndOfColumnOrder: true}},
@@ -157,6 +166,14 @@ func TestDecideMoveRefusals(t *testing.T) {
 	}
 	t.Run("a malformed order key is VALIDATION", func(t *testing.T) {
 		_, err := DecideMove(MoveRequest{Board: fullBoard, FromStatus: Todo, FromColumnID: "c-todo", ToStatus: Todo, Order: "z"})
+		wantErrContaining(t, err, CodeValidation, "Invalid order key")
+	})
+	t.Run("a move naming no column, status or order is VALIDATION", func(t *testing.T) {
+		_, err := DecideMove(MoveRequest{Board: fullBoard, FromStatus: Todo, FromColumnID: "c-todo"})
+		wantErrContaining(t, err, CodeValidation, "move_task requires toColumnId, toStatus or order")
+	})
+	t.Run("a malformed order key alone is VALIDATION", func(t *testing.T) {
+		_, err := DecideMove(MoveRequest{Board: fullBoard, FromStatus: Todo, FromColumnID: "c-todo", Order: "z"})
 		wantErrContaining(t, err, CodeValidation, "Invalid order key")
 	})
 	t.Run("an unknown target column is NOT_FOUND", func(t *testing.T) {
