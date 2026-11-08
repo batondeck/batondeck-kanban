@@ -31,8 +31,9 @@ func notificationsAbout(t *testing.T, c *Client, p *project, task, typ string) (
 }
 
 // A mention and a follow-up notify worker2, newest first, unread; marking one by id lowers the
-// unread count by one, another identity's mark and a second mark of it count nothing, and all:true
-// clears the rest. A limit past 200 and an empty id are refused.
+// unread count by one, another identity's mark and a second mark of it count nothing, a mark naming
+// neither ids nor all:true is refused and marks nothing, and all:true clears the rest. A limit past
+// 200 and an empty id are refused.
 func notificationsListAndMark(t *testing.T, e *env) {
 	p := e.project(t, "Notifications")
 	id := S(e.task(t, p, "noisy", nil), "id")
@@ -55,7 +56,14 @@ func notificationsListAndMark(t *testing.T, e *env) {
 	want(t, unread2 == unread-1 && B(after[0], "read") && !B(after[1], "read"), "after marking one: %s (unread %v, was %v)", js(after), unread2, unread)
 	again := e.worker2.Call(t, "mark_notifications_read", M{"ids": []any{S(notes[0], "id")}})
 	want(t, N(again, "updated") == 0, "a second mark of the same notification answered %s", js(again))
-	e.worker2.Call(t, "mark_notifications_read", M{"all": true})
+	for _, args := range []M{{}, {"all": false}, {"ids": []any{}}} {
+		refused := e.worker2.Refuse(t, "mark_notifications_read", args, "VALIDATION")
+		want(t, refused.Details["field"] == "ids", "mark_notifications_read %v refused %s %v", args, refused.Message, refused.Details)
+	}
+	still, unreadStill := notificationsAbout(t, e.worker2, p, id, "")
+	want(t, unreadStill == unread2 && !B(still[1], "read"), "a refused mark changed the unread count to %v (was %v): %s", unreadStill, unread2, js(still))
+	all := e.worker2.Call(t, "mark_notifications_read", M{"all": true})
+	want(t, N(all, "updated") >= 1, "mark_notifications_read all:true answered %s", js(all))
 	_, unread3 := notificationsAbout(t, e.worker2, p, id, "")
 	want(t, unread3 == 0, "unread after all:true is %v", unread3)
 

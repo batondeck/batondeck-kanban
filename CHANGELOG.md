@@ -1443,6 +1443,10 @@ this section's headings in CHANGELOG.md, are all part of it.
   `details.unscoped`. Such names were stored, so a typo in `tools`, an allowlist, silently denied
   that member every governed tool. A grant stored before this release that holds such a name still
   loads and is enforced by the names it holds; writing it again needs the names corrected. (P-438)
+- `mark_notifications_read`, and `POST /api/notifications/read`, refuse a call naming neither `ids`
+  nor `all: true` (`{}`, `{all: false}`, `{ids: []}`) with VALIDATION, `details.field` `ids`, as the
+  tool's description requires. It answered `updated: 0`. The web UI, which always sends one id or
+  `all: true`, is unchanged. (P-439)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

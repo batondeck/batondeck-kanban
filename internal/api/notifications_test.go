@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,10 @@ func TestStreamCarriesTheCallersNotifications(t *testing.T) {
 		}
 		if status, body := bob.do("POST", "/api/notifications/read", `{"all":true}`, nil); status != http.StatusOK || (body != `{"updated":0}`+"\n" && body != `{"updated":0}`) {
 			t.Fatalf("mark all after: %d %q", status, body)
+		}
+		// P-439: a body naming neither ids nor all: true is VALIDATION, not updated 0.
+		if status, body := bob.do("POST", "/api/notifications/read", `{}`, nil); status != http.StatusBadRequest || !strings.Contains(body, `"VALIDATION"`) {
+			t.Fatalf("POST /api/notifications/read {}: %d %q, want 400 VALIDATION", status, body)
 		}
 		if status, _ := bob.do("GET", "/api/notifications?limit=500", "", nil); status != http.StatusBadRequest {
 			t.Fatalf("limit 500: %d, want 400", status)
