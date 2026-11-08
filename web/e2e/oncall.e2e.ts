@@ -1,7 +1,7 @@
 // On-call, as the workspace admin: Setup opens on the source list, a Grafana integration is
 // created with a generated key (shown once), a test event is sent through it, and the screen's tiles
 // and delivery health count it. On-call works on the sidebar's selected project, and its own picker
-// moves the sidebar's (P-434).
+// moves the sidebar's (P-434); on "All projects" it asks for a project and stores nothing (P-442).
 import { McpClient, seedProject, type SeededBoard } from './support/mcp.js';
 import { atRoute, expect, test } from './support/test.js';
 
@@ -19,16 +19,32 @@ test.describe('on-call', () => {
     await expect(page.getByRole('heading', { name: 'On-call' })).toBeVisible();
     const sidebar = page.getByRole('combobox', { name: 'Project', exact: true });
     const picker = page.getByLabel('On-call project');
-    // "All projects" has no meaning here: On-call takes the first project and the sidebar names it.
-    await expect(sidebar).not.toHaveValue('');
-    await expect(picker).toHaveValue(await sidebar.inputValue());
+    const prompt = page.getByText('Pick a project to configure', { exact: true });
+    const integrationsTile = page.locator('.tile-k', { hasText: /^Integrations$/ });
+    // A fresh context starts on "All projects": the picker shows no project chosen, the screen asks
+    // for one, Setup is closed, and nothing is stored.
+    await expect(sidebar).toHaveValue('');
+    await expect(picker).toHaveValue('');
+    await expect(prompt).toBeVisible();
+    await expect(integrationsTile).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'On-call setup' })).toBeDisabled();
+    expect(await page.evaluate(() => localStorage.getItem('bd.projectId') ?? '')).toBe('');
+    await atRoute(page, '/oncall', 'All projects: pick a project to configure');
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+    await expect(sidebar).toHaveValue('');
+    await page.goto('/oncall');
+    await expect(prompt).toBeVisible();
 
     await sidebar.selectOption({ label: b.projectName });
     await expect(picker).toHaveValue(b.projectId);
+    await expect(prompt).toHaveCount(0);
+    await expect(integrationsTile).toBeVisible();
     await atRoute(page, '/oncall', 'follows the sidebar project');
 
     await picker.selectOption({ label: other.projectName });
     await expect(sidebar).toHaveValue(other.projectId);
+    expect(await page.evaluate(() => localStorage.getItem('bd.projectId'))).toBe(other.projectId);
     await atRoute(page, '/oncall', 'its picker moved the sidebar');
   });
 
@@ -37,9 +53,10 @@ test.describe('on-call', () => {
     await page.goto('/oncall');
     await expect(page.getByRole('heading', { name: 'On-call' })).toBeVisible();
     const tile = (label: string) => page.locator('.tile').filter({ has: page.locator('.tile-k', { hasText: new RegExp(`^${label}$`) }) }).locator('.tile-v');
-    await expect(tile('Integrations')).toBeVisible();
-    // On-call has a project picker of its own, shown when the account holds more than one project.
+    // On-call has a project picker of its own; on "All projects" it asks for one before showing anything.
+    await expect(page.getByText('Pick a project to configure', { exact: true })).toBeVisible();
     await page.getByLabel('On-call project').selectOption({ label: b.projectName });
+    await expect(tile('Integrations')).toBeVisible();
     await expect(tile('Integrations')).toHaveText('0');
     await atRoute(page, '/oncall', 'no integrations');
 

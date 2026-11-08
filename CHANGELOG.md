@@ -1479,6 +1479,11 @@ this section's headings in CHANGELOG.md, are all part of it.
   and the floors are one table in `web/src/toolFloors.ts`, copied from `internal/domain/grants.go`
   and checked against it by a test. Each control showed open and failed only after the server
   refused. The server's checks are unchanged (P-440).
+- On "All projects", Settings and On-call show their project picker with nothing chosen and the
+  prompt "Pick a project to configure". They load, edit and store nothing until a project is picked,
+  and picking one sets the shared selection as before. They took the first project and stored it,
+  which configured a project nobody chose and left the sidebar off "All projects" after leaving
+  Settings (P-442, replacing P-434's fallback).
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

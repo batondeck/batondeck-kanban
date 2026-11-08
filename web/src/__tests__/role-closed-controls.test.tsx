@@ -169,6 +169,8 @@ describe("the task's Comment is offered from worker up (add_comment is tier writ
 /* ---- Settings: members, columns, workflow ----------------------------------------------------------- */
 
 function settingsAs(role: string): Calls {
+  // Settings configures the selected project; on "All projects" it only asks for one (P-442).
+  localStorage.setItem('bd.projectId', 'p1');
   const project = {
     id: 'p1',
     name: 'P1',

@@ -500,7 +500,8 @@ function CliTokens() {
 
 export function Settings() {
   const qc = useQueryClient();
-  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  // The sidebar's selection, shared both ways (P-434). On "All projects" it is '' and the project
+  // sections give way to "Pick a project to configure": nothing is loaded, edited or stored (P-442).
   const { projectId, setProjectId, projects } = useSingleProject();
 
   const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId), enabled: !!projectId });
@@ -668,6 +669,8 @@ export function Settings() {
         <label className="picker-labelled">
           <span className="picker-caption">Project</span>
           <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            {/* No project chosen (the sidebar's "All projects"): a placeholder, never a default pick. */}
+            {!projectId && <option value="" disabled>Pick a project</option>}
             {projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
           </select>
         </label>
@@ -682,6 +685,20 @@ export function Settings() {
 
         {err && <p className="error" style={{ fontSize: 12, marginBottom: 16 }}>{err}</p>}
 
+        {/* The project sections need one project. With none chosen they are replaced by the prompt. */}
+        {!projectId ? (
+          <section style={{ marginBottom: 36 }}>
+            <Panel pad>
+              <h3 style={{ ...sectionTitle, margin: '0 0 4px' }}>Pick a project to configure</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 14 }}>
+                {projects.length > 0
+                  ? 'Columns, members and workflow settings belong to one project. Choose it in the Project picker above, or in the sidebar.'
+                  : 'Columns, members and workflow settings belong to a project, and this account is not a member of one yet.'}
+              </p>
+            </Panel>
+          </section>
+        ) : (
+        <>
         {/* Columns */}
         <section style={{ marginBottom: 36 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -882,6 +899,8 @@ export function Settings() {
             )}
           </Panel>
         </section>
+        </>
+        )}
 
         <CliTokens />
         {/* Workspace scope, not project scope: it renders nothing for anyone but the workspace admin. */}
@@ -894,6 +913,7 @@ export function Settings() {
         <MyTokenBudget />
 
         {/* Workflow / policy */}
+        {projectId && (
         <section style={{ marginBottom: 36 }}>
           <h3 style={sectionTitle}>Workflow Settings</h3>
           {settings ? (
@@ -931,6 +951,7 @@ export function Settings() {
             </Panel>
           )}
         </section>
+        )}
 
 
         {/* Anchored so `/settings#sessions` from the Agents screen lands here. */}
