@@ -326,6 +326,46 @@ describe('TaskDrawer — Review ownership (T-52 Part B)', () => {
     renderDrawer();
     expect(await screen.findByText(/Nobody owns this review/)).toBeInTheDocument();
   });
+
+  /**
+   * P-431: `completedBy` is the account id the core stored, and the panel printed it as given
+   * ("completed by U-4e68…"). It names the person the way the rest of the ticket does: the member's
+   * name, else their login, else the shortened id when nothing names the account.
+   */
+  describe('names who completed it (P-431)', () => {
+    const WES = 'U-4e68a1b2c3d4e5f6a7b8';
+    const completedBy = (who: string): Task => ({
+      ...task,
+      status: 'REVIEW',
+      review: { reviewer: null, completedBy: who, completedByAgent: null, requestedBy: who, requestedAt: new Date(now - 60_000).toISOString() },
+    });
+    const projectWith = (memberDisplay: Record<string, string>) => ({
+      json: {
+        project: { id: 'p1', name: 'P1', members: { 'alice@example.com': 'admin', [WES]: 'worker' }, settings: { reviewEnabled: true, quotaEnabled: false, txnCap: null } },
+        memberDisplay,
+      },
+    });
+
+    it("shows the member's name, never the account id", async () => {
+      vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: completedBy(WES) } }, '/projects/p1$': projectWith({ [WES]: 'Wes Worker' }) }));
+      renderDrawer();
+      expect(await screen.findByText(/completed by Wes Worker$/)).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(`completed by ${WES.slice(0, 6)}`))).not.toBeInTheDocument();
+    });
+
+    it('falls back to the login (its local part, as the header does) when the member has no name', async () => {
+      vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: completedBy(WES) } }, '/projects/p1$': projectWith({ [WES]: 'wes@example.com' }) }));
+      renderDrawer();
+      expect(await screen.findByText(/completed by wes$/)).toBeInTheDocument();
+    });
+
+    it('shows the shortened id only when nothing names the account', async () => {
+      vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: completedBy(WES) } }, '/projects/p1$': projectWith({}) }));
+      renderDrawer();
+      expect(await screen.findByText(`waiting 1m ago · completed by ${WES.slice(0, 10)}…`, { exact: false })).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(WES))).not.toBeInTheDocument();
+    });
+  });
 });
 
 /**

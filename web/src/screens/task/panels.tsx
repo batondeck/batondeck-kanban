@@ -11,7 +11,7 @@ import { Icon } from '../../icons.js';
 import ReactMarkdown from 'react-markdown';
 import * as contextApi from '../../api/context.js';
 import * as tasksApi from '../../api/tasks.js';
-import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, timeAgo } from '../../components.js';
+import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, personName, timeAgo } from '../../components.js';
 import { AppLinkCard, normalizeLink } from '../../AppLink.js';
 import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
 import { Comments } from '../Comments.js';
@@ -139,9 +139,13 @@ export function LeasePanel({ d }: P) {
 }
 
 /** Review ownership (T-52) — a ticket sitting in REVIEW must show WHO owns the review and how long it
- *  has waited, or it is an unowned lane again. */
+ *  has waited, or it is an unowned lane again.
+ *
+ *  `completedBy` is the account id the core stored (`U-<hex>`), so it is named the way the header's
+ *  "created by" and the comments name a person (P-431): the member's name, else their login, else the
+ *  shortened id when nothing names the account. */
 export function ReviewPanel({ d }: P) {
-  const { task } = d;
+  const { task, names } = d;
   if (task.status !== 'REVIEW' || !task.review) return null;
   return (
     <Panel title="Review" pad>
@@ -155,7 +159,7 @@ export function ReviewPanel({ d }: P) {
           <span style={{ fontSize: 14, color: 'var(--progress)' }}>Nobody owns this review — assign a reviewer.</span>
         )}
         <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }} title={task.review.requestedAt}>
-          waiting {timeAgo(task.review.requestedAt)} · completed by {task.review.completedBy.split('@')[0]}
+          waiting {timeAgo(task.review.requestedAt)} · completed by {personName(task.review.completedBy, names)}
         </span>
       </Cluster>
     </Panel>

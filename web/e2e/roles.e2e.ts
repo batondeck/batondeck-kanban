@@ -132,6 +132,11 @@ test.describe('as a worker', () => {
     await expect(page.getByLabel('Status')).toHaveValue('REVIEW');
     await expect(page.getByRole('button', { name: 'Mark complete' })).toHaveCount(0);
     await expect(page.getByLabel('Status')).toBeDisabled();
+    // The Review panel names the worker who completed it, never their account id (P-431).
+    const worker = runState().accounts.worker;
+    const completed = page.getByText(/· completed by /);
+    await expect(completed).toContainText(`completed by ${worker.name}`);
+    await expect(completed).not.toContainText(worker.id.slice(0, 6));
     await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'worker: completed, in Review');
   });
 });

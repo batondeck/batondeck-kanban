@@ -1417,6 +1417,9 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+- The task page's Review panel names who completed the task, the way the rest of the ticket names
+  a person: the member's name, else their login, else the shortened id when nothing names the
+  account. It printed the stored account id ("completed by U-4e68…") (P-431).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.
