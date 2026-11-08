@@ -1,9 +1,10 @@
 // Roles: a viewer and a worker of the same project, each signed in as themselves. Each sees what
 // its tier allows and is refused the rest: the screen says so, with a closed control and its reason
-// (P-432: "+ New task", Comment and "+ Add Member" join Status and Claim), or with the on-call
+// (P-432: "+ New task", Comment and "+ Add Member" join Status and Claim; P-440: every other write,
+// from "+ New board" and "+ assign" to the file drop and the palette), or with the on-call
 // refusal. A closed action is also read back from the server (nothing was written), so "nothing
 // happened on screen" cannot pass for "refused"; the on-call refusal is checked on screen.
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { McpClient, seedProject, seedTask, type SeededBoard } from './support/mcp.js';
 import { runState } from './support/state.js';
 import { atRoute, expect, test } from './support/test.js';
@@ -23,6 +24,32 @@ async function taskCount(): Promise<number> {
 async function commentBodies(taskId: string): Promise<string[]> {
   const r = await new McpClient('admin').call<{ comments: Array<{ body: string }> }>('list_comments', { projectId: b.projectId, taskId });
   return r.comments.map((c) => c.body);
+}
+
+/**
+ * Everything a closed task control could have written, read back as the admin: the task's version
+ * (Edit and Details are update_task), its notes and links, memory, attachments, follow-ups, and the
+ * project's boards. Equal before and after means nothing was written.
+ */
+async function written(taskId: string): Promise<unknown> {
+  const mcp = new McpClient('admin');
+  const at = { projectId: b.projectId, taskId };
+  const [task, ctx, mem, att, fus, boards] = await Promise.all([
+    mcp.call<{ task: { version: number } }>('get_task', at),
+    mcp.call<{ items: Array<{ id: string }> }>('get_task_context', at),
+    mcp.call<{ entries: Array<{ key: string }> }>('read_memory', at),
+    mcp.call<{ attachments: Array<{ id: string }> }>('list_attachments', at),
+    mcp.call<{ followUps: Array<{ id: string }> }>('list_follow_ups', at),
+    mcp.call<{ boards: Array<{ id: string }> }>('list_boards', { projectId: b.projectId }),
+  ]);
+  return {
+    version: task.task.version,
+    items: ctx.items.map((i) => i.id),
+    memory: mem.entries.map((e) => e.key),
+    attachments: att.attachments.map((a) => a.id),
+    followUps: fus.followUps.map((f) => f.id),
+    boards: boards.boards.map((x) => x.id),
+  };
 }
 
 /** On-call is a workspace-admin screen: no nav link, and the route itself says it is refused. */
@@ -83,6 +110,76 @@ test.describe('as a viewer', () => {
     // The page scrolls inside its own container, so a full-page shot shows only what is scrolled to.
     await comment.scrollIntoViewIfNeeded();
     await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'viewer: comment closed');
+  });
+
+  test('every other write is closed with its reason too, and nothing is written (P-440)', async ({ page }) => {
+    const task = await seedTask(b, 'Rotate the audit keys');
+    const before = await written(task.id);
+
+    // The board: "+ New board", the card's "+ assign" and the sprint lifecycle are closed and say why.
+    await page.goto(`/projects/${b.projectId}/boards/${b.boardId}`);
+    await expect(page.getByRole('heading', { name: b.boardName })).toBeVisible();
+    const card = page.locator(`.card[data-task-id="${task.id}"]`);
+    await expect(card).toBeVisible();
+    const newBoard = page.getByRole('button', { name: '+ New board' });
+    await expect(newBoard).toBeDisabled();
+    await expect(page.getByText('A viewer cannot create boards.')).toBeVisible();
+    await expect(newBoard).toHaveAccessibleDescription('A viewer cannot create boards.');
+    const cardsWhy = 'Only a master can assign, move or reprioritise tasks.';
+    await expect(page.getByText(cardsWhy)).toBeVisible();
+    await card.hover();
+    const assign = card.getByRole('button', { name: 'assign', exact: true });
+    await expect(assign).toBeDisabled();
+    await expect(assign).toHaveAccessibleDescription(cardsWhy);
+    await atRoute(page, '/projects/:projectId/boards/:boardId', 'viewer: new board and assign closed');
+
+    // The palette lists Set status and Set priority, disabled, each beside its reason; `s` opens no list.
+    await page.locator('body').press('j');
+    await page.locator('body').press('s');
+    // The palette's own list: the board's status filter has `<option>`s of the same names.
+    const palette = page.locator('[cmdk-list]');
+    const status = palette.getByRole('option', { name: /Set status/ });
+    await expect(status).toBeVisible();
+    await expect(status).toHaveAttribute('aria-disabled', 'true');
+    await expect(status).toHaveAccessibleDescription('Only a master can change the status.');
+    const priority = palette.getByRole('option', { name: /Set priority/ });
+    await expect(priority).toHaveAttribute('aria-disabled', 'true');
+    await expect(priority).toHaveAccessibleDescription('Only a master can change the priority.');
+    await expect(palette.getByRole('option', { name: 'IN PROGRESS', exact: true })).toHaveCount(0);
+    await atRoute(page, '/projects/:projectId/boards/:boardId', 'viewer: palette status and priority closed');
+    await page.keyboard.press('Escape');
+
+    // The task page: Edit, Details, a note, a link, memory, the file drop and Follow-ups.
+    await page.goto(taskPath(task.id));
+    await expect(page.getByRole('heading', { name: 'Rotate the audit keys' })).toBeVisible();
+    const closed: Array<[Locator, string]> = [
+      [page.getByRole('button', { name: 'Edit', exact: true }), 'Only a master can edit tasks.'],
+      [page.getByLabel('Priority', { exact: true }), 'Only a master can edit details.'],
+      [page.getByLabel('Assignee', { exact: true }), 'Only a master can edit details.'],
+      [page.getByPlaceholder('Add a note…'), 'A viewer cannot add notes.'],
+      [page.getByRole('button', { name: 'Attach', exact: true }), 'A viewer cannot attach links.'],
+      [page.getByRole('button', { name: 'Save', exact: true }), 'A viewer cannot write memory.'],
+      [page.getByRole('button', { name: /Drop a file/ }), 'A viewer cannot attach files.'],
+      [page.getByPlaceholder(/Add a follow-up/), 'Only a master can send follow-ups.'],
+      [page.getByRole('button', { name: 'Send', exact: true }), 'Only a master can send follow-ups.'],
+    ];
+    for (const [control, why] of closed) {
+      await expect(control).toBeDisabled();
+      await expect(control).toHaveAccessibleDescription(why);
+      await expect(page.getByText(why, { exact: true }).first()).toBeVisible();
+    }
+    // A file dropped on the closed zone is ignored.
+    const files = await page.evaluateHandle(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'dropped.txt', { type: 'text/plain' }));
+      return dt;
+    });
+    await page.getByRole('button', { name: /Drop a file/ }).dispatchEvent('drop', { dataTransfer: files });
+    await page.getByRole('button', { name: /Drop a file/ }).scrollIntoViewIfNeeded();
+    await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'viewer: note, link, memory and file drop closed');
+    await page.getByRole('button', { name: 'Send', exact: true }).scrollIntoViewIfNeeded();
+    await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'viewer: follow-ups closed');
+    expect(await written(task.id)).toEqual(before);
   });
 
   test('Settings has no Users panel, and members, columns and the review step are closed with their reason', async ({ page }) => {
@@ -149,6 +246,27 @@ test.describe('as a worker', () => {
     await expect(page.locator(`.card[data-task-id="${storedId}"]`)).toBeVisible();
     await expect(page.locator('.card[data-task-id]').filter({ hasText: 'Filed by a master' })).toHaveCount(1);
     await atRoute(page, '/projects/:projectId/boards/:boardId', 'master: new task created');
+  });
+
+  test('a worker keeps the tier-write controls: a note is stored, while Edit stays closed (P-440)', async ({ page }) => {
+    const task = await seedTask(b, 'Note the cache keys');
+    await page.goto(taskPath(task.id));
+    await expect(page.getByRole('heading', { name: 'Note the cache keys' })).toBeVisible();
+    const edit = page.getByRole('button', { name: 'Edit', exact: true });
+    await expect(edit).toBeDisabled();
+    await expect(edit).toHaveAccessibleDescription('Only a master can edit tasks.');
+    await expect(page.getByRole('button', { name: /Drop a file/ })).toBeEnabled();
+    await expect(page.getByText('A viewer cannot add notes.')).toHaveCount(0);
+    await page.getByPlaceholder('Add a note…').fill('Keys are per tenant.');
+    await page.getByPlaceholder('Add a note…').press('Enter');
+    await expect
+      .poll(async () => {
+        const r = await new McpClient('admin').call<{ items: Array<{ body: string }> }>('get_task_context', { projectId: b.projectId, taskId: task.id });
+        return r.items.map((i) => i.body);
+      })
+      .toContain('Keys are per tenant.');
+    await expect(page.getByText('Keys are per tenant.')).toBeVisible();
+    await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'worker: note stored, edit closed');
   });
 
   test('a worker claims and completes a task and comments, but cannot move its status', async ({ page }) => {

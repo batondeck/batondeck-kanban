@@ -35,6 +35,8 @@ const project = {
 };
 
 function stubGateway(memberDisplay: Record<string, string>): void {
+  // Settings configures the selected project; on "All projects" it only asks for one (P-442).
+  localStorage.setItem('bd.projectId', 'P-1');
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -55,6 +57,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 describe('Settings member roster — account ids resolve to a person (T-319)', () => {

@@ -69,7 +69,7 @@ describe('FollowUps', () => {
         ],
       },
     });
-    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" />);
+    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp canAck />);
     expect(await screen.findByText('Add a regression test')).toBeInTheDocument();
     expect(screen.getByText('Rename the flag')).toBeInTheDocument();
     expect(screen.getAllByText('→ u-will')).toHaveLength(2);

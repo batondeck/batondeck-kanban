@@ -33,7 +33,14 @@ function MiniBadge({ tone, children }: { tone: 'open' | 'acked'; children: React
   );
 }
 
-function FollowUpItem({ fu, isHolder, onAck, names }: { fu: FollowUp; isHolder: boolean; onAck: () => void; names: DisplayNames }) {
+function FollowUpItem({ fu, isHolder, onAck, names, ackClosedWhy }: {
+  fu: FollowUp;
+  isHolder: boolean;
+  onAck: () => void;
+  names: DisplayNames;
+  /** Ack is `ack_follow_up`, tier write (P-440): set when the holder's role is below it. */
+  ackClosedWhy?: string | null;
+}) {
   const open = fu.status === 'open';
   // Both ends are account ids (or an agent label for the target): named, never printed raw (P-314).
   const author = personName(fu.author, names);
@@ -64,7 +71,7 @@ function FollowUpItem({ fu, isHolder, onAck, names }: { fu: FollowUp; isHolder: 
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             {open ? <MiniBadge tone="open">Open</MiniBadge> : <MiniBadge tone="acked"><Icon name="check" size={11} /> Acked</MiniBadge>}
             {open && isHolder && (
-              <button className="btn secondary" style={{ padding: '1px 8px', fontSize: 11 }} onClick={onAck}>Ack</button>
+              <button className="btn secondary" style={{ padding: '1px 8px', fontSize: 11 }} disabled={!!ackClosedWhy} title={ackClosedWhy ?? undefined} onClick={onAck}>Ack</button>
             )}
           </span>
         </div>
@@ -73,7 +80,21 @@ function FollowUpItem({ fu, isHolder, onAck, names }: { fu: FollowUp; isHolder: 
   );
 }
 
-export function FollowUps({ projectId, task, identity }: { projectId: string; task: Task; identity: string | null }) {
+export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, canAck, ackClosedWhy }: {
+  projectId: string;
+  task: Task;
+  identity: string | null;
+  /**
+   * May the caller send a follow-up? `add_follow_up` is tier master (P-440). Below it the composer, the
+   * Reopen switch and Send are disabled and `closedWhy` says why, the way the comment composer does
+   * (P-432); while the role loads they are closed with no reason yet. The server still refuses.
+   */
+  canFollowUp: boolean;
+  closedWhy?: string;
+  /** May the caller ack one? `ack_follow_up` is tier write; the holder check below still applies. */
+  canAck: boolean;
+  ackClosedWhy?: string;
+}) {
   const taskId = task.id;
   const qc = useQueryClient();
   const names = useDisplayNames(projectId);
@@ -110,7 +131,7 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
 
   const send = async (): Promise<void> => {
     const text = body.trim();
-    if (!text || busy) return;
+    if (!text || busy || !canFollowUp) return;
     setBusy(true);
     setErr(null);
     try {
@@ -154,7 +175,14 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No follow-ups yet.</p>
         )}
         {followUps.map((fu) => (
-          <FollowUpItem key={fu.id} fu={fu} isHolder={isHolder} onAck={() => void ack(fu.id)} names={names} />
+          <FollowUpItem
+            key={fu.id}
+            fu={fu}
+            isHolder={isHolder}
+            onAck={() => void ack(fu.id)}
+            names={names}
+            ackClosedWhy={canAck ? null : ackClosedWhy ?? 'Checking your role'}
+          />
         ))}
       </Stack>
 
@@ -165,6 +193,8 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
           style={{ width: '100%', minHeight: 56, resize: 'vertical', fontFamily: 'inherit', background: 'var(--panel)' }}
           placeholder={target ? `Add a follow-up for ${target}…` : 'Add a follow-up…'}
           value={body}
+          disabled={!canFollowUp}
+          aria-describedby={closedWhy ? 'follow-up-closed' : undefined}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void send(); }}
         />
@@ -176,6 +206,8 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
                 type="button"
                 role="switch"
                 aria-checked={reopen}
+                disabled={!canFollowUp}
+                aria-describedby={closedWhy ? 'follow-up-closed' : undefined}
                 onClick={() => setReopen((v) => !v)}
                 style={{
                   position: 'relative', flex: '0 0 auto', width: 36, height: 20, borderRadius: 9999, border: 0, marginTop: 1,
@@ -191,10 +223,18 @@ export function FollowUps({ projectId, task, identity }: { projectId: string; ta
                 </span>
               </span>
             </label>
-          ) : (
+          ) : closedWhy ? null : (
             <span className="muted" style={{ fontSize: 11 }}>⌘↵ to send</span>
           )}
-          <button className="btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }} disabled={!body.trim() || busy} onClick={() => void send()}>
+          {closedWhy && <span id="follow-up-closed" className="muted" style={{ fontSize: 12 }}>{closedWhy}</span>}
+          <button
+            className="btn"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}
+            disabled={!canFollowUp || !body.trim() || busy}
+            title={closedWhy}
+            aria-describedby={closedWhy ? 'follow-up-closed' : undefined}
+            onClick={() => void send()}
+          >
             Send
           </button>
         </div>

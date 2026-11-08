@@ -1433,9 +1433,9 @@ this section's headings in CHANGELOG.md, are all part of it.
   ticket token limit. On-call's project select is named "On-call project", apart from the
   sidebar's "Project". Screen readers announced them without a name (P-433).
 - Settings and On-call work on the project selected in the sidebar, and picking a project in
-  their own picker selects it in the sidebar: one selection, not three. While the sidebar says "All
-  projects" they take the first project, as before, and select it in the sidebar. Each kept its own
-  pick, so the sidebar could name one project while Settings configured another (P-434).
+  their own picker selects it in the sidebar: one selection, not three. Each kept its own pick, so
+  the sidebar could name one project while Settings configured another (P-434; on "All projects"
+  they ask for a project, P-442).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.
@@ -1468,6 +1468,28 @@ this section's headings in CHANGELOG.md, are all part of it.
   nor `all: true` (`{}`, `{all: false}`, `{ids: []}`) with VALIDATION, `details.field` `ids`, as the
   tool's description requires. It answered `updated: 0`. The web UI, which always sends one id or
   `all: true`, is unchanged. (P-439)
+- The audit log stores a CLI token's `cli_token.minted` and `cli_token.revoked` rows with the identity
+  subject lower-cased, as it stores every other identity subject, so `list_audit_log` filtered by the
+  stored form finds them too. Rows written before keep their `U-…` subject, which the id as handed
+  out still finds. (P-441)
+- Every write control in the web UI that the caller's project role cannot call is closed, with its
+  reason, the way P-432 closed "+ New task" and Comment. On the board: "+ New board", the card's
+  "+ assign" chip, dragging a card, the sprint lifecycle, and the palette's Set status and Set
+  priority, which stay listed but disabled. On a task: Edit, every Details field, the description and
+  digest, dependencies, subtasks, notes, links, memory, the file drop, the Follow-ups composer and
+  Ack, and the race controls. Also Projects' "New board", and Chronicle's New record, Create, Edit,
+  Delete, Land and Revert, and On-call Setup's Enable or Disable, Rotate, Delete, Create and Save,
+  which need a member or an admin while a master may read the integrations. Closed "+ assign" chips
+  and palette items now also look closed. Opening a project with no boards, from Projects or the palette, no longer
+  creates one for a role that cannot. The role is the caller's in the project (`useMyProjectRole`),
+  and the floors are one table in `web/src/toolFloors.ts`, copied from `internal/domain/grants.go`
+  and checked against it by a test. Each control showed open and failed only after the server
+  refused. The server's checks are unchanged (P-440).
+- On "All projects", Settings and On-call show their project picker with nothing chosen and the
+  prompt "Pick a project to configure". They load, edit and store nothing until a project is picked,
+  and picking one sets the shared selection as before. They took the first project and stored it,
+  which configured a project nobody chose and left the sidebar off "All projects" after leaving
+  Settings (P-442, replacing P-434's fallback).
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

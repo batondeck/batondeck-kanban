@@ -1,7 +1,8 @@
 // Settings, as the workspace admin: a column added to the board, a member added and removed, the
 // review step switched off, a CLI token minted (shown once) and revoked, and a local user added
 // with its initial password shown once. Each change is read back from the server over MCP. Settings
-// works on the sidebar's selected project, and its own picker moves the sidebar's (P-434).
+// works on the sidebar's selected project, and its own picker moves the sidebar's (P-434); on "All
+// projects" it asks for a project and stores nothing (P-442).
 import type { Locator, Page } from '@playwright/test';
 import { McpClient, seedProject, type SeededBoard } from './support/mcp.js';
 import { runState } from './support/state.js';
@@ -20,29 +21,64 @@ test.describe('settings', () => {
     other = await seedProject('Settings other');
   });
 
+  test('on "All projects" Settings asks for a project, edits and stores nothing, and leaving it keeps "All projects"', async ({ page }) => {
+    const before = await new McpClient('admin').call<{ project: unknown }>('get_project', { projectId: b.projectId });
+    await page.goto('/settings');
+    await expect(page.getByRole('heading', { name: 'Board Configuration' })).toBeVisible();
+    const sidebar = page.getByRole('combobox', { name: 'Project', exact: true });
+    const picker = page.getByLabel('Project to configure');
+    // A fresh context starts on "All projects": the picker shows no project chosen, and the project
+    // sections give way to the prompt. The personal sections stay.
+    await expect(sidebar).toHaveValue('');
+    await expect(picker).toHaveValue('');
+    await expect(picker.locator('option:checked')).toHaveText('Pick a project');
+    await expect(page.getByRole('heading', { name: 'Pick a project to configure' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Columns' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Members' })).toHaveCount(0);
+    await expect(page.getByLabel('Board to configure')).toHaveCount(0);
+    await expect(page.locator('#cli-tokens')).toBeVisible();
+    // Nothing stored: the selection is still "All projects", in the sidebar and in the browser.
+    await expect(sidebar).toHaveValue('');
+    expect(await page.evaluate(() => localStorage.getItem('bd.projectId') ?? '')).toBe('');
+    await atRoute(page, '/settings', 'All projects: pick a project to configure');
+
+    // Leaving Settings leaves the sidebar where the reader left it.
+    await page.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible();
+    await expect(sidebar).toHaveValue('');
+    expect(await page.evaluate(() => localStorage.getItem('bd.projectId') ?? '')).toBe('');
+    // And nothing was edited.
+    expect(await new McpClient('admin').call<{ project: unknown }>('get_project', { projectId: b.projectId })).toEqual(before);
+  });
+
   test('Settings follows the sidebar project, and its picker moves the sidebar', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Board Configuration' })).toBeVisible();
     const sidebar = page.getByRole('combobox', { name: 'Project', exact: true });
     const picker = page.getByLabel('Project to configure');
-    // "All projects" has no meaning here: Settings takes the first project and the sidebar names it.
-    await expect(sidebar).not.toHaveValue('');
-    await expect(picker).toHaveValue(await sidebar.inputValue());
+    await expect(page.getByRole('heading', { name: 'Pick a project to configure' })).toBeVisible();
 
     // Sidebar -> Settings.
     await sidebar.selectOption({ label: b.projectName });
     await expect(picker).toHaveValue(b.projectId);
+    await expect(page.getByRole('heading', { name: 'Pick a project to configure' })).toHaveCount(0);
     await expect(page.getByLabel('Board to configure')).toHaveValue(b.boardId);
     await atRoute(page, '/settings', 'follows the sidebar project');
     await sidebar.selectOption({ label: other.projectName });
     await expect(picker).toHaveValue(other.projectId);
     await expect(page.getByLabel('Board to configure')).toHaveValue(other.boardId);
 
-    // Settings -> sidebar.
+    // Settings -> sidebar, from "All projects" too.
     await picker.selectOption({ label: b.projectName });
     await expect(sidebar).toHaveValue(b.projectId);
     await expect(page.getByLabel('Board to configure')).toHaveValue(b.boardId);
     await atRoute(page, '/settings', 'its picker moved the sidebar');
+    await sidebar.selectOption({ value: '' });
+    await expect(page.getByRole('heading', { name: 'Pick a project to configure' })).toBeVisible();
+    await expect(picker).toHaveValue('');
+    await picker.selectOption({ label: other.projectName });
+    await expect(sidebar).toHaveValue(other.projectId);
+    expect(await page.evaluate(() => localStorage.getItem('bd.projectId'))).toBe(other.projectId);
   });
 
   test('columns, members, workflow, CLI tokens and users', async ({ page }) => {

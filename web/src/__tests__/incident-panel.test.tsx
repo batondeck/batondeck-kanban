@@ -50,6 +50,10 @@ const task = (customFields: Record<string, string | number | boolean>): LoadedTa
     // panel's own logic: the filter under test is real, only the network is absent.
     agentsQ: { data: { sessions: [] } },
     histQ: { data: { events: [] } },
+    // The caller may edit (P-440): these tests are about what the panels show, not who may write.
+    canEdit: true,
+    canAnnotate: true,
+    why: () => undefined,
   }) as unknown as LoadedTaskDetail;
 
 const incidentFields = {

@@ -1,7 +1,7 @@
 /**
  * Global project selection. Fetches the roster via the same ['projects'] react-query key the screens
  * use (shared cache, no extra request), persists the pick to localStorage, and validates it against
- * the list (falls back to the first project). No visual output — the sidebar switcher renders it.
+ * the list (falls back to "All projects"). No visual output — the sidebar switcher renders it.
  */
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -47,18 +47,15 @@ export function useProject(): ProjectCtx {
 }
 
 /**
- * THE ONE PROJECT A SCREEN THAT NEEDS EXACTLY ONE WORKS ON (P-434). Settings and On-call configure a
- * single project, so they cannot show "All projects". They read and write the sidebar's selection
- * instead of keeping their own: picking a project in the sidebar changes theirs, and their picker
- * changes the sidebar's. While the sidebar says "All projects" they take the first project, as they
- * always have, and make it the shared selection so the sidebar names the project on screen.
+ * THE ONE PROJECT A SCREEN THAT NEEDS EXACTLY ONE WORKS ON (P-434, P-442). Settings and On-call
+ * configure a single project. They read and write the sidebar's selection instead of keeping their
+ * own: picking a project in the sidebar changes theirs, and their picker changes the sidebar's.
+ *
+ * While the sidebar says "All projects" the answer is '' — no project — and the screen shows its
+ * picker with nothing chosen and asks the reader to pick one. It does not take the first project:
+ * that edited a project nobody chose and stored it as the selection, so leaving Settings changed the
+ * sidebar the reader had left on "All projects" (P-434's fallback, replaced by P-442).
  */
 export function useSingleProject(): ProjectCtx {
-  const ctx = useProject();
-  const first = ctx.projects[0]?.projectId ?? '';
-  const { projectId: shared, setProjectId } = ctx;
-  useEffect(() => {
-    if (!shared && first) setProjectId(first);
-  }, [shared, first, setProjectId]);
-  return { ...ctx, projectId: shared || first };
+  return useProject();
 }

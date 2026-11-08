@@ -1,19 +1,21 @@
 /**
- * SETTINGS AND ON-CALL FOLLOW THE SIDEBAR'S PROJECT (P-434).
+ * SETTINGS AND ON-CALL FOLLOW THE SIDEBAR'S PROJECT (P-434), AND ASK FOR ONE ON "ALL PROJECTS" (P-442).
  *
  * Both screens kept their own project pick, starting from the first project whatever the sidebar
  * said, and their picker never moved the sidebar. Now there is one selection: the sidebar's
  * `ProjectSwitcher` and each screen's picker read and write the same `ProjectProvider` value (stored
  * under `bd.projectId`). The sidebar's "All projects" has no meaning on a screen that configures one
- * project, so there the screen takes the first project, as it did, and makes that the selection.
+ * project. P-434 took the first project there and stored it, which edited a project nobody chose and
+ * moved the sidebar off "All projects"; now the screen shows its picker with nothing chosen and the
+ * prompt "Pick a project to configure", and loads, edits and stores nothing until one is picked.
  *
  * Every case renders the REAL sidebar switcher beside the real screen, so "follows" is observed on
  * both controls rather than inferred from the context value.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { ProjectSwitcher } from '../App.js';
 import { Settings } from '../screens/Settings.js';
@@ -34,16 +36,19 @@ const PROJECTS = [
   { projectId: 'p2', name: 'Ops', role: 'admin' },
 ];
 
-/** Answers the reads both screens make; records every URL so a test can see which project loaded. */
-function stub(): string[] {
+/**
+ * Answers the reads both screens make; records every request (`METHOD url`) so a test can see which
+ * project loaded and that nothing was written.
+ */
+function stub(projects = PROJECTS): string[] {
   const calls: string[] = [];
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      calls.push(url);
-      if (url.endsWith('/api/session')) return json({ identity: 'U-1', csrfToken: 'c', isAdmin: false, permissions: [], subscriptionsEnabled: false, uiSettings: {} });
-      if (/\/api\/projects$/.test(url)) return json({ projects: PROJECTS });
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.endsWith('/api/session')) return json({ identity: 'U-1', csrfToken: 'c', isAdmin: true, permissions: [], subscriptionsEnabled: false, uiSettings: {} });
+      if (/\/api\/projects$/.test(url)) return json({ projects });
       const one = /\/api\/projects\/(p[12])$/.exec(url);
       if (one) return json({ project: { id: one[1], name: one[1] === 'p1' ? 'Roadmap' : 'Ops', members: { 'U-1': 'admin' }, settings: {} }, memberDisplay: {} });
       if (/\/boards$/.test(url)) return json({ boards: [] });
@@ -53,15 +58,20 @@ function stub(): string[] {
   return calls;
 }
 
+/** The screen at `/screen`, the real sidebar switcher beside it, and a link away to `/elsewhere`. */
 function mount(screenUnderTest: ReactElement): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/screen']}>
         <AuthProvider>
           <ProjectProvider>
             <ProjectSwitcher />
-            {screenUnderTest}
+            <Link to="/elsewhere">Leave</Link>
+            <Routes>
+              <Route path="/screen" element={screenUnderTest} />
+              <Route path="/elsewhere" element={<p>Elsewhere</p>} />
+            </Routes>
           </ProjectProvider>
         </AuthProvider>
       </MemoryRouter>
@@ -69,85 +79,160 @@ function mount(screenUnderTest: ReactElement): void {
   );
 }
 
-const sidebar = () => screen.getByRole('combobox', { name: 'Project' });
+const settle = () => act(() => new Promise<void>((r) => setTimeout(r, 50)));
+const loaded = (calls: string[], re: RegExp) => calls.some((c) => re.test(c));
+const wrote = (calls: string[]) => calls.filter((c) => !c.startsWith('GET '));
 
-describe('Settings shares the sidebar project selection (P-434)', () => {
-  it('"All projects" in the sidebar: Settings takes the first project and the sidebar then names it', async () => {
+const sidebar = () => screen.getByRole('combobox', { name: 'Project' });
+const value = (el: HTMLElement) => (el as HTMLSelectElement).value;
+const prompt = () => screen.queryByRole('heading', { name: 'Pick a project to configure' });
+
+describe('Settings on "All projects" asks for a project and stores nothing (P-442)', () => {
+  it('shows its picker with no project chosen and the prompt; loads, edits and stores nothing; the sidebar stays on All', async () => {
+    const calls = stub();
+    mount(<Settings />);
+    const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
+    await within(picker).findByRole('option', { name: 'Ops' });
+    await settle();
+    expect(value(picker)).toBe('');
+    expect(screen.getByRole('option', { name: 'Pick a project' })).toBeDisabled();
+    expect(prompt()).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Columns' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Members' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Workflow Settings' })).toBeNull();
+    expect(value(sidebar())).toBe('');
+    expect(localStorage.getItem('bd.projectId') ?? '').toBe('');
+    expect(loaded(calls, /\/api\/projects\/p[12]/), 'no project is loaded').toBe(false);
+    expect(wrote(calls)).toEqual([]);
+    // The personal sections stay: they follow the person, not the project.
+    expect(screen.getByRole('heading', { name: 'Your MCP sessions' })).toBeInTheDocument();
+  });
+
+  it('leaving Settings on "All projects" leaves the sidebar on "All projects"', async () => {
     stub();
     mount(<Settings />);
     const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
-    await waitFor(() => expect(picker).toHaveValue('p1'));
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
-    expect(localStorage.getItem('bd.projectId')).toBe('p1');
+    await within(picker).findByRole('option', { name: 'Ops' });
+    await settle();
+    fireEvent.click(screen.getByRole('link', { name: 'Leave' }));
+    await screen.findByText('Elsewhere');
+    await settle();
+    expect(value(sidebar())).toBe('');
+    expect(localStorage.getItem('bd.projectId') ?? '').toBe('');
   });
 
-  it('a project already picked in the sidebar is the one Settings opens on, not the first', async () => {
+  it('a project already picked in the sidebar is the one Settings opens on, with no prompt', async () => {
     localStorage.setItem('bd.projectId', 'p2');
     const calls = stub();
     mount(<Settings />);
     const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
-    await waitFor(() => expect(picker).toHaveValue('p2'));
-    await waitFor(() => expect(calls.some((u) => /\/api\/projects\/p2$/.test(u))).toBe(true));
-    expect(calls.some((u) => /\/api\/projects\/p1$/.test(u)), 'the first project is never loaded').toBe(false);
+    await waitFor(() => expect(value(picker)).toBe('p2'));
+    await waitFor(() => expect(loaded(calls, /\/api\/projects\/p2$/)).toBe(true));
+    expect(loaded(calls, /\/api\/projects\/p1$/), 'the first project is never loaded').toBe(false);
+    expect(prompt()).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Pick a project' })).toBeNull();
   });
 
-  it('changing the sidebar changes Settings, and Settings loads that project', async () => {
+  it('picking a project in the sidebar: Settings loads it and the prompt goes', async () => {
     const calls = stub();
     mount(<Settings />);
     const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
+    await within(picker).findByRole('option', { name: 'Ops' });
+    expect(prompt()).toBeInTheDocument();
     fireEvent.change(sidebar(), { target: { value: 'p2' } });
-    await waitFor(() => expect(picker).toHaveValue('p2'));
-    await waitFor(() => expect(calls.some((u) => /\/api\/projects\/p2$/.test(u))).toBe(true));
-  });
-
-  it('changing the Settings picker changes the sidebar and the stored selection', async () => {
-    stub();
-    mount(<Settings />);
-    const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
-    fireEvent.change(picker, { target: { value: 'p2' } });
-    await waitFor(() => expect(sidebar()).toHaveValue('p2'));
+    await waitFor(() => expect(value(picker)).toBe('p2'));
+    await waitFor(() => expect(loaded(calls, /\/api\/projects\/p2$/)).toBe(true));
+    expect(prompt()).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Columns' })).toBeInTheDocument();
     expect(localStorage.getItem('bd.projectId')).toBe('p2');
   });
 
-  it('"All projects" picked in the sidebar while on Settings comes back as the first project', async () => {
+  it('picking a project in the Settings picker sets the sidebar and the stored selection', async () => {
+    stub();
+    mount(<Settings />);
+    const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
+    await within(picker).findByRole('option', { name: 'Ops' });
+    fireEvent.change(picker, { target: { value: 'p2' } });
+    await waitFor(() => expect(value(sidebar())).toBe('p2'));
+    expect(localStorage.getItem('bd.projectId')).toBe('p2');
+    expect(prompt()).toBeNull();
+  });
+
+  it('"All projects" picked in the sidebar while on Settings brings the prompt back, not the first project', async () => {
     localStorage.setItem('bd.projectId', 'p2');
     stub();
     mount(<Settings />);
     const picker = await screen.findByRole('combobox', { name: 'Project to configure' });
-    await waitFor(() => expect(sidebar()).toHaveValue('p2'));
+    await waitFor(() => expect(value(sidebar())).toBe('p2'));
     fireEvent.change(sidebar(), { target: { value: '' } });
-    await waitFor(() => expect(picker).toHaveValue('p1'));
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
+    await waitFor(() => expect(prompt()).toBeInTheDocument());
+    await settle();
+    expect(value(picker)).toBe('');
+    expect(value(sidebar())).toBe('');
+    expect(localStorage.getItem('bd.projectId')).toBe('');
   });
 });
 
-describe('On-call shares the sidebar project selection (P-434)', () => {
-  it('"All projects" in the sidebar: On-call takes the first project and the sidebar then names it', async () => {
-    stub();
+describe('On-call on "All projects" asks for a project and stores nothing (P-442)', () => {
+  it('shows its picker with no project chosen and the prompt; reads no integrations, Setup is closed, the sidebar stays on All', async () => {
+    const calls = stub();
     mount(<Oncall />);
     const picker = await screen.findByRole('combobox', { name: 'On-call project' });
-    await waitFor(() => expect(picker).toHaveValue('p1'));
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
+    await within(picker).findByRole('option', { name: 'Ops' });
+    await settle();
+    expect(value(picker)).toBe('');
+    expect(screen.getByText('Pick a project to configure')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'On-call setup' })).toBeDisabled();
+    expect(value(sidebar())).toBe('');
+    expect(localStorage.getItem('bd.projectId') ?? '').toBe('');
+    expect(loaded(calls, /\/api\/projects\/p[12]\//), 'no project is read').toBe(false);
+    expect(wrote(calls)).toEqual([]);
   });
 
-  it('changing the sidebar changes On-call', async () => {
+  it('with a single project the picker still shows on "All projects", so it can be picked', async () => {
+    stub([PROJECTS[0]!]);
+    mount(<Oncall />);
+    const picker = await screen.findByRole('combobox', { name: 'On-call project' });
+    await within(picker).findByRole('option', { name: 'Roadmap' });
+    expect(value(picker)).toBe('');
+    expect(screen.getByText('Pick a project to configure')).toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: 'p1' } });
+    await waitFor(() => expect(value(sidebar())).toBe('p1'));
+    expect(screen.queryByText('Pick a project to configure')).toBeNull();
+    // One project, chosen: the picker has nothing left to offer.
+    expect(screen.queryByRole('combobox', { name: 'On-call project' })).toBeNull();
+  });
+
+  it('picking a project in the sidebar: On-call follows and the prompt goes', async () => {
     stub();
     mount(<Oncall />);
     const picker = await screen.findByRole('combobox', { name: 'On-call project' });
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
+    await within(picker).findByRole('option', { name: 'Ops' });
     fireEvent.change(sidebar(), { target: { value: 'p2' } });
-    await waitFor(() => expect(picker).toHaveValue('p2'));
+    await waitFor(() => expect(value(picker)).toBe('p2'));
+    expect(screen.queryByText('Pick a project to configure')).toBeNull();
+    expect(screen.getByRole('button', { name: 'On-call setup' })).toBeEnabled();
   });
 
-  it('changing the On-call picker changes the sidebar and the stored selection', async () => {
+  it('picking a project in the On-call picker sets the sidebar and the stored selection', async () => {
     stub();
     mount(<Oncall />);
     const picker = await screen.findByRole('combobox', { name: 'On-call project' });
-    await waitFor(() => expect(sidebar()).toHaveValue('p1'));
+    await within(picker).findByRole('option', { name: 'Ops' });
     fireEvent.change(picker, { target: { value: 'p2' } });
-    await waitFor(() => expect(sidebar()).toHaveValue('p2'));
+    await waitFor(() => expect(value(sidebar())).toBe('p2'));
     expect(localStorage.getItem('bd.projectId')).toBe('p2');
+  });
+
+  it('"All projects" picked in the sidebar while on On-call brings the prompt back', async () => {
+    localStorage.setItem('bd.projectId', 'p2');
+    stub();
+    mount(<Oncall />);
+    const picker = await screen.findByRole('combobox', { name: 'On-call project' });
+    await waitFor(() => expect(value(picker)).toBe('p2'));
+    fireEvent.change(sidebar(), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByText('Pick a project to configure')).toBeInTheDocument());
+    expect(value(picker)).toBe('');
+    expect(value(sidebar())).toBe('');
   });
 });

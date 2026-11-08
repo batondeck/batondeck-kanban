@@ -34,7 +34,7 @@ const task = (over: Partial<Task> = {}): Task =>
 
 const mount = (t: Task, selected = false): HTMLElement => {
   const { container } = render(
-    <TaskCard t={t} col={{ status: 'TODO' }} selected={selected} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} />,
+    <TaskCard t={t} col={{ status: 'TODO' }} selected={selected} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} canAssign />,
   );
   return container;
 };

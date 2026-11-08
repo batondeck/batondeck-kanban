@@ -34,7 +34,9 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   onOpenTask?: (taskId: string) => void;
 }) {
   const d = useTaskDetail(projectId, taskId);
-  const { task, taskQ, err, editing, draft, setDraft, startEdit, setEditing, taskById, canRequeue, move } = d;
+  const { task, taskQ, err, editing, draft, setDraft, startEdit, setEditing, taskById, canRequeue, move, canEdit, canRace, why } = d;
+  // Edit is `update_task`, tier master (P-440): below it the button is closed and says why.
+  const editWhy = why('update_task', 'edit tasks');
 
   // Section-nav anchors (Details / Discussion / Context / Files / Activity).
   const { refs, scrollTo } = useSectionNav();
@@ -159,7 +161,16 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
               >
                 <Icon name="link" />
               </button>
-              <button className="btn secondary" onClick={() => (editing ? setEditing(false) : startEdit())}>{editing ? 'Cancel' : 'Edit'}</button>
+              <button
+                className="btn secondary"
+                disabled={!editing && !canEdit}
+                title={!editing && !canEdit ? editWhy ?? 'Checking your role' : undefined}
+                aria-describedby={!editing && editWhy ? 'task-edit-closed' : undefined}
+                onClick={() => (editing ? setEditing(false) : startEdit())}
+              >
+                {editing ? 'Cancel' : 'Edit'}
+              </button>
+              {!editing && editWhy && <span id="task-edit-closed" className="muted" style={{ fontSize: 12 }}>{editWhy}</span>}
               <button className="btn secondary icon" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
             </Cluster>
           </Cluster>
@@ -307,7 +318,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
             {/* Runs — race section (renders only when this task is/was raced). Drawer-only: it
                 always renders a section and fires its own `list_runs` read, so promoting it to the
                 page is scope this commit does not take. */}
-            <Runs projectId={projectId} task={task} cancelled={new Set([...taskById.values()].filter(isCancelled).map((t) => t.id))} />
+            <Runs projectId={projectId} task={task} cancelled={new Set([...taskById.values()].filter(isCancelled).map((t) => t.id))} canRace={canRace} closedWhy={why('start_runs', 'race tasks')} />
           </div>
 
           <div ref={refs.files}>
