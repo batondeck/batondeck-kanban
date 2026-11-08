@@ -12,6 +12,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -62,7 +63,8 @@ func TestSettingsCLITokenAuthenticatesMCPUntilRevoked(t *testing.T) {
 			t.Fatalf("an MCP initialize with the revoked token: %d, want 401", code)
 		}
 
-		page, err := j.st.ListAuditLog(context.Background(), store.AuditFilter{Subject: j.userID("alice")}, "", 0)
+		// Token rows store the identity subject canonical, as every identity subject is (P-441).
+		page, err := j.st.ListAuditLog(context.Background(), store.AuditFilter{Subject: domain.CanonIdentity(j.userID("alice"))}, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
