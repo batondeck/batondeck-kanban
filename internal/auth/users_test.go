@@ -42,14 +42,18 @@ func TestPasswordHashIsArgon2idAndVerifies(t *testing.T) {
 func TestAddNormalizesAndRefusesADuplicateLogin(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	u, err := f.svc.Accounts.Add(ctx, "  Alice@Example.Test ", "", "pw", false)
+	// The password has a space, which base64 never holds: "the hash does not contain the password"
+	// cannot then pass or fail by chance on a random salt and digest (a two-letter "pw" appears in
+	// about one hash in sixty).
+	const password = "pw secret"
+	u, err := f.svc.Accounts.Add(ctx, "  Alice@Example.Test ", "", password, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.Email != "alice@example.test" || u.DisplayName != "alice" || !strings.HasPrefix(u.ID, "U-") || u.DisabledAt != 0 {
 		t.Fatalf("user %+v", u)
 	}
-	if strings.Contains(u.PasswordHash, "pw") || !VerifyPassword("pw", u.PasswordHash) {
+	if strings.Contains(u.PasswordHash, password) || !VerifyPassword(password, u.PasswordHash) {
 		t.Fatal("the stored hash is not the password's argon2id")
 	}
 	_, err = f.svc.Accounts.Add(ctx, "ALICE@example.test", "", "pw2", false)
