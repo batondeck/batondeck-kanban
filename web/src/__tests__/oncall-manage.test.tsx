@@ -25,6 +25,14 @@ import { fireEvent, render, screen, cleanup, waitFor } from '@testing-library/re
 import { OncallSetup } from '../screens/oncall/OncallSetup.js';
 import type { Integration } from '../types.js';
 
+// P-440: Setup's write controls follow the caller's project role. These cases are about what the
+// controls do, so they run as a role that may change integrations (an admin).
+vi.mock('../displayNames.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../displayNames.js')>()),
+  useMyProjectRole: () => 'admin',
+}));
+
+
 const calls: Array<{ method: string; url: string; body?: Record<string, unknown> }> = [];
 
 const CATALOG = {

@@ -371,12 +371,19 @@ export function ConfirmButton({
   onConfirm,
   className,
   style,
+  disabled,
+  title,
+  describedBy,
 }: {
   label: string;
   confirmLabel?: string;
   onConfirm: () => void;
   className?: string;
   style?: CSSProperties;
+  /** Closed, as a role-gated control is (P-440): no arming, no confirm. */
+  disabled?: boolean;
+  title?: string;
+  describedBy?: string;
 }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
@@ -388,6 +395,9 @@ export function ConfirmButton({
     <button
       className={[className, armed ? 'confirm-armed' : ''].filter(Boolean).join(' ') || undefined}
       style={style}
+      disabled={disabled}
+      title={title}
+      aria-describedby={describedBy}
       onBlur={() => setArmed(false)}
       onClick={() => {
         if (armed) {

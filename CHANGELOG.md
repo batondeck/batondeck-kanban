@@ -1478,7 +1478,9 @@ this section's headings in CHANGELOG.md, are all part of it.
   priority, which stay listed but disabled. On a task: Edit, every Details field, the description and
   digest, dependencies, subtasks, notes, links, memory, the file drop, the Follow-ups composer and
   Ack, and the race controls. Also Projects' "New board", and Chronicle's New record, Create, Edit,
-  Delete, Land and Revert. Opening a project with no boards, from Projects or the palette, no longer
+  Delete, Land and Revert, and On-call Setup's Enable or Disable, Rotate, Delete, Create and Save,
+  which need a member or an admin while a master may read the integrations. Closed "+ assign" chips
+  and palette items now also look closed. Opening a project with no boards, from Projects or the palette, no longer
   creates one for a role that cannot. The role is the caller's in the project (`useMyProjectRole`),
   and the floors are one table in `web/src/toolFloors.ts`, copied from `internal/domain/grants.go`
   and checked against it by a test. Each control showed open and failed only after the server

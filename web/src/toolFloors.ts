@@ -46,8 +46,12 @@ export const TOOL_FLOOR = {
   update_sprint: 'master',
   update_task: 'master',
   // TierStructural: a member or above.
+  create_integration: 'member',
+  delete_integration: 'member',
   remove_column: 'member',
+  rotate_integration_secret: 'member',
   update_column: 'member',
+  update_integration: 'member',
   // TierAdmin.
   add_member: 'admin',
   remove_member: 'admin',
