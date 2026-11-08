@@ -1432,6 +1432,10 @@ this section's headings in CHANGELOG.md, are all part of it.
   each Remove (named by member), the "Require review step" switch (named by its caption) and your
   ticket token limit. On-call's project select is named "On-call project", apart from the
   sidebar's "Project". Screen readers announced them without a name (P-433).
+- Settings and On-call work on the project selected in the sidebar, and picking a project in
+  their own picker selects it in the sidebar: one selection, not three. While the sidebar says "All
+  projects" they take the first project, as before, and select it in the sidebar. Each kept its own
+  pick, so the sidebar could name one project while Settings configured another (P-434).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.

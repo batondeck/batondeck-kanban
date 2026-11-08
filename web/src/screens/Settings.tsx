@@ -15,6 +15,7 @@ import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
 import { roleAtLeast, useMyProjectRole } from '../displayNames.js';
+import { useSingleProject } from '../projectContext.js';
 
 const STATUS_COLOR: Record<Status, string> = {
   TODO: 'var(--ready)',
@@ -498,9 +499,8 @@ function CliTokens() {
 
 export function Settings() {
   const qc = useQueryClient();
-  const projects = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
-  const [selected, setSelected] = useState('');
-  const projectId = selected || projects.data?.projects[0]?.projectId || '';
+  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  const { projectId, setProjectId, projects } = useSingleProject();
 
   const projQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId), enabled: !!projectId });
   const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
@@ -509,6 +509,8 @@ export function Settings() {
   // screen beneath the name — two accounts may legitimately render the same name.
   const memberDisplay = projQ.data?.memberDisplay ?? {};
   const [selBoard, setSelBoard] = useState('');
+  // Whichever picker changed the project, the board picked in the last one no longer applies.
+  useEffect(() => setSelBoard(''), [projectId]);
   const board = boardsQ.data?.boards.find((b) => b.id === selBoard) ?? boardsQ.data?.boards[0];
 
   /**
@@ -660,8 +662,8 @@ export function Settings() {
         {/* Captioned like the board picker, and named apart from the sidebar's "Project" (P-433). */}
         <label className="picker-labelled">
           <span className="picker-caption">Project</span>
-          <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => { setSelected(e.target.value); setSelBoard(''); }}>
-            {projects.data?.projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
+          <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            {projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
           </select>
         </label>
       </div>

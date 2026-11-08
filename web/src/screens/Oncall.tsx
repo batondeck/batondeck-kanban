@@ -10,10 +10,10 @@
  */
 import { useMemo, useState } from 'react';
 import { useMayReadIntegrations } from '../displayNames.js';
+import { useSingleProject } from '../projectContext.js';
 import { Icon } from '../icons.js';
 import { useQuery } from '@tanstack/react-query';
 import * as oncallApi from '../api/oncall.js';
-import * as projectsApi from '../api/projects.js';
 import type { Delivery, Integration } from '../types.js';
 import { Cluster, Empty, Note, Panel, Stack, Tile, Tiles } from '../ui.js';
 import { EmptyState, PageHeader, timeAgo } from '../components.js';
@@ -59,15 +59,8 @@ function Health({ projectId, integration }: { projectId: string; integration: In
 
 export default function Oncall() {
   const [setupOpen, setSetupOpen] = useState(false);
-  const projectsQ = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => projectsApi.listProjects(),
-    retry: false,
-  });
-  // `listProjects` returns membership rows (projectId + name + role), not full Project docs.
-  const projects = Array.isArray(projectsQ.data?.projects) ? projectsQ.data.projects : [];
-  const [projectId, setProjectId] = useState<string>('');
-  const activeProject = projectId || projects[0]?.projectId || '';
+  // The sidebar's selection, shared both ways (P-434); "All projects" becomes the first project.
+  const { projectId: activeProject, setProjectId, projects } = useSingleProject();
 
   const mayReadIntegrations = useMayReadIntegrations(activeProject);
   const integrationsQ = useQuery({
