@@ -153,7 +153,7 @@ export function ReviewPanel({ d }: P) {
         {task.review.reviewer ? (
           <>
             <Avatar id={task.review.reviewer} />
-            <span style={{ fontSize: 14 }}><strong>{task.review.reviewer}</strong> owns this review</span>
+            <span style={{ fontSize: 14 }}><strong>{personName(task.review.reviewer, names)}</strong> owns this review</span>
           </>
         ) : (
           <span style={{ fontSize: 14, color: 'var(--progress)' }}>Nobody owns this review — assign a reviewer.</span>

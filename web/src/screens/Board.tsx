@@ -1343,7 +1343,11 @@ export function Board() {
                       </AnimatePresence>
                       {colTasks.length === 0 && (
                         <div className="muted" style={{ fontSize: 12, padding: '8px 4px' }}>
-                          No tasks — press <span className="kbd">c</span>
+                          {canCreate ? (
+                            <>No tasks — press <span className="kbd">c</span></>
+                          ) : (
+                            'No tasks'
+                          )}
                         </div>
                       )}
                     </SortableContext>
