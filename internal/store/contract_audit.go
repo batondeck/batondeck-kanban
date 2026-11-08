@@ -31,14 +31,17 @@ type AuditRow struct {
 }
 
 // AuditFilter narrows a listing: each non-empty field must match exactly, Since and Until bound TS
-// (inclusive, 0 is unbounded). The zero filter is every row.
+// (inclusive, 0 is unbounded). The zero filter is every row. SubjectAlias is read only with Subject: a
+// row whose subject is either matches (list_audit_log passes an identity's canonical form,
+// domain.CanonIdentity, because identity subjects are stored that way).
 type AuditFilter struct {
-	ProjectID string
-	Actor     string
-	Action    string
-	Subject   string
-	Since     int64
-	Until     int64
+	ProjectID    string
+	Actor        string
+	Action       string
+	Subject      string
+	SubjectAlias string
+	Since        int64
+	Until        int64
 }
 
 // AuditPage is one page of rows; NextCursor is "" on the last page.

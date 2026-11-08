@@ -1426,6 +1426,10 @@ this section's headings in CHANGELOG.md, are all part of it.
   after it. Its store after a read, on a stalled tick or after its seed could land after the stop
   and rewind `Bus.Frontier()`, which the wake directory reads. Every store is now made under the
   bus's lock and only while that tail is live. (P-427)
+- `list_audit_log`'s `subject` filter, and `/api/audit?subject=`, find an identity's rows by the id
+  as the server hands it out (`U-…`). The rows store an identity subject trimmed and lower-cased, and
+  the filter compared it exactly, so the handed-out id found nothing. The filter now matches the
+  subject as given or in that stored form; a project or task id still matches exactly. (P-435)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -89,7 +90,8 @@ func listAuditLog(ctx context.Context, e engine, f AuditFilter, cursor string, l
 		until = math.MaxInt64
 	}
 	rows, err := e.queries(false).ListAuditLog(ctx, sqlitedb.ListAuditLogParams{
-		ProjectID: f.ProjectID, Actor: f.Actor, Action: f.Action, Subject: f.Subject, Since: since, Until: until,
+		ProjectID: f.ProjectID, Actor: f.Actor, Action: f.Action, Subject: f.Subject, SubjectAlias: cmp.Or(f.SubjectAlias, f.Subject),
+		Since: since, Until: until,
 		AfterTs: afterTs, AfterID: afterID, PageLimit: int64(limit + 1),
 	})
 	if err != nil {

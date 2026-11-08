@@ -94,11 +94,18 @@ func str(args map[string]any, key string) string {
 	return s
 }
 
-// canonID canonicalises an identity-valued subject as the handlers do (trimmed, lower-cased), so the
-// row matches a query by the identity the tool actually acted on. Project and task ids are opaque and
-// case-significant and go through str instead.
+// canonID canonicalises an identity-valued subject (CanonIdentity), so the row matches a query by the
+// identity the tool actually acted on. Project and task ids are opaque and case-significant and go
+// through str instead.
 func canonID(args map[string]any, key string) string {
-	return strings.ToLower(strings.TrimSpace(str(args, key)))
+	return CanonIdentity(str(args, key))
+}
+
+// CanonIdentity is the form an identity-valued audit subject is stored in: trimmed, lower-cased. The
+// ids the API hands out are "U-…", so list_audit_log matches its subject filter both as given and in
+// this form (a project or task id keeps its upper-case prefix, so its canonical form matches no project or task row).
+func CanonIdentity(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
 }
 
 // pick copies only the named arguments that are present (a JSON null counts as present).

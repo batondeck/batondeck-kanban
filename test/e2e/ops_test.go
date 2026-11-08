@@ -87,8 +87,9 @@ func meSettings(t *testing.T, e *env) {
 }
 
 // The audit log records the sensitive calls: the project admin's member additions and a grant, and
-// the master's task deletion, each found by action, actor and subject. Only the workspace admin
-// reads it, and days past 365 is refused.
+// the master's task deletion, each found by action, actor and subject. The subject filter takes an
+// identity id as the API hands it out ("U-…"), though the row stores it lower-cased. Only the
+// workspace admin reads it, and days past 365 is refused.
 func auditLog(t *testing.T, e *env) {
 	p := e.project(t, "Audited")
 	e.admin.Call(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"deny": []any{"add_comment"}}})
@@ -105,30 +106,24 @@ func auditLog(t *testing.T, e *env) {
 		}
 		return out
 	}
-	// data is the curated payload as a JSON string (the contract's type). The subject is matched
-	// case-blind and never used as a filter: the server stores an identity subject lower-cased
-	// ("u-…") while the ids it hands out are "U-…", so a subject filter by the id finds nothing
-	// (reported).
+	// data is the curated payload as a JSON string (the contract's type). An identity subject reads
+	// back lower-cased, the form the server stores it in.
 	dataOf := func(en any) M {
 		var m M
 		_ = json.Unmarshal([]byte(S(en, "data")), &m)
 		return m
 	}
-	bySubject := func(list []any, subject string) []any {
-		var out []any
-		for _, en := range list {
-			if strings.EqualFold(S(en, "subject"), subject) {
-				out = append(out, en)
-			}
-		}
-		return out
-	}
-	added := bySubject(find(M{"action": "member.added", "actor": e.srv.ids["admin"]}), e.srv.ids["viewer"])
-	want(t, len(added) == 1 && S(dataOf(added[0]), "role") == "viewer" && S(added[0], "result") == "ok" && S(added[0], "agent") == "e2e-admin",
-		"list_audit_log member.added for the viewer: %s", js(added))
-	granted := bySubject(find(M{"action": "capabilities.granted"}), e.srv.ids["worker2"])
-	want(t, len(granted) == 1 && S(dataOf(granted[0]), "scope.deny.0") == "add_comment", "list_audit_log capabilities.granted: %s", js(granted))
-	deleted := find(M{"action": "task.deleted", "actor": e.srv.ids["master"]})
+	viewer, worker2 := e.srv.ids["viewer"], e.srv.ids["worker2"]
+	want(t, strings.HasPrefix(viewer, "U-") && strings.HasPrefix(worker2, "U-"), "the ids handed out are not U-…: %q, %q", viewer, worker2)
+	added := find(M{"action": "member.added", "actor": e.srv.ids["admin"], "subject": viewer})
+	want(t, len(added) == 1 && S(added[0], "subject") == strings.ToLower(viewer) && S(dataOf(added[0]), "role") == "viewer" &&
+		S(added[0], "result") == "ok" && S(added[0], "agent") == "e2e-admin", "list_audit_log member.added by subject %s: %s", viewer, js(added))
+	granted := find(M{"action": "capabilities.granted", "subject": worker2})
+	want(t, len(granted) == 1 && S(dataOf(granted[0]), "scope.deny.0") == "add_comment", "list_audit_log capabilities.granted by subject %s: %s", worker2, js(granted))
+	// The stored form finds the same row; a task id stays exact.
+	stored := find(M{"action": "capabilities.granted", "subject": strings.ToLower(worker2)})
+	want(t, len(stored) == 1, "list_audit_log capabilities.granted by subject %s: %s", strings.ToLower(worker2), js(stored))
+	deleted := find(M{"action": "task.deleted", "actor": e.srv.ids["master"], "subject": id})
 	want(t, len(deleted) == 1 && S(deleted[0], "subject") == id && S(deleted[0], "agent") == "e2e-master", "list_audit_log task.deleted: %s", js(deleted))
 	all := find(M{"days": 1})
 	want(t, len(all) >= 6, "list_audit_log days 1 holds %d rows for the project, want the 4 additions, the grant and the deletion", len(all))
