@@ -109,9 +109,11 @@ export default function Oncall() {
       {projects.length > 1 && (
         <Cluster gap={8}>
           <label htmlFor="oncall-project">Project</label>
+          {/* Named apart from the sidebar's "Project" select, which is on the same screen (P-433). */}
           <select
             id="oncall-project"
             className="input"
+            aria-label="On-call project"
             value={activeProject}
             onChange={(e) => setProjectId(e.target.value)}
           >

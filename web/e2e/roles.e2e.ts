@@ -87,7 +87,7 @@ test.describe('as a viewer', () => {
     const worker = runState().accounts.worker;
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Board Configuration' })).toBeVisible();
-    await page.locator('.topbar select').selectOption({ label: b.projectName });
+    await page.getByLabel('Project to configure').selectOption({ label: b.projectName });
     await expect(page.locator('#cli-tokens')).toBeVisible();
     await expect(page.locator('#users')).toHaveCount(0);
 
@@ -96,10 +96,10 @@ test.describe('as a viewer', () => {
     await expect(addMember).toBeDisabled();
     await expect(page.getByText('Only a project admin can add or remove members.')).toBeVisible();
     await expect(addMember).toHaveAccessibleDescription('Only a project admin can add or remove members.');
-    await expect(page.getByPlaceholder('teammate@example.com')).toBeDisabled();
+    await expect(page.getByLabel('New member login')).toBeDisabled();
     await expect(page.getByRole('button', { name: '+ Add Column' })).toBeDisabled();
     await expect(page.getByText('A viewer cannot change columns.')).toBeVisible();
-    await expect(page.getByRole('switch')).toBeDisabled();
+    await expect(page.getByRole('switch', { name: 'Require review step' })).toBeDisabled();
     await expect(page.getByText('Only a project admin can change workflow settings.')).toBeVisible();
     const { project } = await new McpClient('admin').call<{ project: { members: Record<string, string> } }>('get_project', {
       projectId: b.projectId,

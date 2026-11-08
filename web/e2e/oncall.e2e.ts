@@ -18,7 +18,7 @@ test.describe('on-call', () => {
     await expect(tile('Integrations')).toBeVisible();
     // On-call has a project picker of its own, shown only when the account holds more than one
     // project (a run of this spec alone has just the one).
-    const picker = page.locator('#oncall-project');
+    const picker = page.getByLabel('On-call project');
     if ((await picker.count()) > 0) await picker.selectOption({ label: b.projectName });
     await expect(tile('Integrations')).toHaveText('0');
     await atRoute(page, '/oncall', 'no integrations');

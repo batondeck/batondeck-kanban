@@ -26,11 +26,12 @@ const STATUS_COLOR: Record<Status, string> = {
 
 /** A small bordered card used as a settings panel. */
 /** Pill toggle switch matching the mockup. */
-function Toggle({ checked, onChange, disabled, title, describedBy }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string; describedBy?: string }) {
+function Toggle({ checked, onChange, disabled, title, labelledBy, describedBy }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string; labelledBy: string; describedBy?: string }) {
   return (
     <button
       role="switch"
       aria-checked={checked}
+      aria-labelledby={labelledBy}
       disabled={disabled}
       title={title}
       aria-describedby={describedBy}
@@ -117,7 +118,7 @@ function MyTokenBudget() {
       <Panel pad>
         <Stack gap={16}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Your ticket token limit</div>
+            <div id="my-token-limit-label" style={{ fontSize: 14, fontWeight: 600 }}>Your ticket token limit</div>
             <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
               Leave empty to use the project&apos;s limit. You can set a <strong>lower</strong> limit for
               yourself; a higher one has no effect, because a project&apos;s limit is a ceiling you cannot raise.
@@ -127,6 +128,7 @@ function MyTokenBudget() {
                 className="input"
                 type="number"
                 min={100}
+                aria-labelledby="my-token-limit-label"
                 placeholder={`Project default (${s.defaults.maxTicketTokens.toLocaleString()})`}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -655,9 +657,13 @@ export function Settings() {
       <div className="topbar">
         <h1 style={{ fontSize: 16, margin: 0 }}>Settings</h1>
         <div style={{ flex: 1 }} />
-        <select className="input" value={projectId} onChange={(e) => { setSelected(e.target.value); setSelBoard(''); }}>
-          {projects.data?.projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
-        </select>
+        {/* Captioned like the board picker, and named apart from the sidebar's "Project" (P-433). */}
+        <label className="picker-labelled">
+          <span className="picker-caption">Project</span>
+          <select className="input" aria-label="Project to configure" value={projectId} onChange={(e) => { setSelected(e.target.value); setSelBoard(''); }}>
+            {projects.data?.projects.map((p) => <option key={p.projectId} value={p.projectId}>{p.name}</option>)}
+          </select>
+        </label>
       </div>
       <div className="page" style={{ maxWidth: 820 }}>
         <header style={{ marginBottom: 24 }}>
@@ -693,6 +699,7 @@ export function Settings() {
                       className="input"
                       style={{ width: '100%' }}
                       value={d.name}
+                      aria-label={`Name of column ${c.name}`}
                       disabled={!canEditColumns}
                       aria-describedby={columnsWhy ? 'columns-closed' : undefined}
                       onChange={(e) => setDrafts({ ...drafts, [c.id]: { ...d, name: e.target.value } })}
@@ -706,6 +713,7 @@ export function Settings() {
                       style={{ width: '100%', textAlign: 'right' }}
                       placeholder="∞"
                       value={d.wip}
+                      aria-label={`WIP limit of column ${c.name}`}
                       disabled={!canEditColumns}
                       aria-describedby={columnsWhy ? 'columns-closed' : undefined}
                       onChange={(e) => setDrafts({ ...drafts, [c.id]: { ...d, wip: e.target.value } })}
@@ -714,6 +722,7 @@ export function Settings() {
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px' }}
+                        aria-label={`Save column ${c.name}`}
                         disabled={!dirty || !canEditColumns}
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
@@ -727,6 +736,7 @@ export function Settings() {
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px', color: 'var(--text-muted)' }}
+                        aria-label={`Delete column ${c.name}`}
                         title={columnsWhy ?? 'Delete column'}
                         disabled={!canEditColumns}
                         aria-describedby={columnsWhy ? 'columns-closed' : undefined}
@@ -744,11 +754,12 @@ export function Settings() {
                   className="input"
                   style={{ flex: 1 }}
                   placeholder="New column name"
+                  aria-label="New column name"
                   value={col.name}
                   disabled={!canAddColumn}
                   onChange={(e) => setCol({ ...col, name: e.target.value })}
                 />
-                <select className="input" style={{ width: 160 }} value={col.status} disabled={!canAddColumn} onChange={(e) => setCol({ ...col, status: e.target.value as Status })}>
+                <select className="input" style={{ width: 160 }} aria-label="New column status" value={col.status} disabled={!canAddColumn} onChange={(e) => setCol({ ...col, status: e.target.value as Status })}>
                   {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
                 </select>
                 <input
@@ -756,6 +767,7 @@ export function Settings() {
                   style={{ width: 80, textAlign: 'right' }}
                   placeholder="∞"
                   value={col.wip}
+                  aria-label="New column WIP limit"
                   disabled={!canAddColumn}
                   onChange={(e) => setCol({ ...col, wip: e.target.value })}
                 />
@@ -820,6 +832,7 @@ export function Settings() {
                       <button
                         className="btn secondary"
                         style={{ padding: '5px 9px', color: 'var(--text-muted)' }}
+                        aria-label={`Remove ${name ?? id}`}
                         disabled={!canManageMembers}
                         title={membersWhy ?? undefined}
                         aria-describedby={membersWhy ? 'members-closed' : undefined}
@@ -839,11 +852,12 @@ export function Settings() {
                 style={{ flex: 1 }}
                 type="email"
                 placeholder="teammate@example.com"
+                aria-label="New member login"
                 value={member}
                 disabled={!canManageMembers}
                 onChange={(e) => setMember(e.target.value)}
               />
-              <select className="input" style={{ width: 130 }} value={role} disabled={!canManageMembers} onChange={(e) => setRole(e.target.value)}>
+              <select className="input" style={{ width: 130 }} aria-label="New member role" value={role} disabled={!canManageMembers} onChange={(e) => setRole(e.target.value)}>
                 {HUMAN_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
               <button
@@ -880,12 +894,13 @@ export function Settings() {
               <Panel pad>
                 <Cluster gap={16} align='flex-start' justify='space-between'>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
+                    <div id="review-step-label" style={{ fontSize: 14, fontWeight: 600 }}>Require review step</div>
                     <p className="muted" style={{ margin: '2px 0 0', fontSize: 12 }}>
                       When off, completing a task sends it straight to Done instead of Review. Useful for simple pipelines.
                     </p>
                   </div>
                   <Toggle
+                    labelledBy="review-step-label"
                     checked={settings.reviewEnabled}
                     disabled={!canChangeWorkflow}
                     title={workflowWhy ?? undefined}
