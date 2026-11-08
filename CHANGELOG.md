@@ -1455,7 +1455,9 @@ this section's headings in CHANGELOG.md, are all part of it.
   column, as its description's "and/or reorder it" says, under the same master tier, version and
   lease checks as any move. It was refused with VALIDATION "move_task requires toColumnId or
   toStatus". A call naming none of the three is still VALIDATION, now "requires toColumnId, toStatus
-  or order". The web UI's drag, which always names its column, is unchanged. (P-437)
+  or order". A capability grant that narrows statuses refuses the order-only form, as it refuses a
+  `toColumnId`-only move, since the call does not name where the task lands. The web UI's drag,
+  which always names its column, is unchanged. (P-437)
 - `grant_capabilities` refuses with VALIDATION a `deny` or `tools` entry that is no tool, or a tool
   no grant governs (an exempt read or self-scoped tool), as it already refused one that takes no
   `projectId`. The refusal names each entry, with `details.unknown`, `details.exempt` and
