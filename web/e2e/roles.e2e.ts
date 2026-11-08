@@ -80,6 +80,8 @@ test.describe('as a viewer', () => {
     await expect(page.getByText('A viewer cannot comment.')).toBeVisible();
     await expect(comment).toHaveAccessibleDescription('A viewer cannot comment.');
     expect(await commentBodies(task.id)).toEqual(commentsBefore);
+    // The page scrolls inside its own container, so a full-page shot shows only what is scrolled to.
+    await comment.scrollIntoViewIfNeeded();
     await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'viewer: comment closed');
   });
 
