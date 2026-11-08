@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -195,7 +196,8 @@ func rankOrchestrate(t *testing.T, e *env) {
 
 // The project admin denies worker2 add_comment: the next comment is refused, the grant reads back,
 // and clearing it with null restores the role's tools. The master may not grant, and a grant naming
-// a tool no grant can restrict (one that takes no projectId) is refused.
+// a tool no grant can restrict (one that takes no projectId, or an exempt read) or a name that is no
+// tool is refused, naming it, and leaves the grant in force as it was.
 func grantsNarrow(t *testing.T, e *env) {
 	p := e.project(t, "Grants")
 	id := S(e.task(t, p, "guarded", nil), "id")
@@ -210,6 +212,15 @@ func grantsNarrow(t *testing.T, e *env) {
 
 	e.master.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": nil}, "FORBIDDEN")
 	e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"deny": []any{"list_audit_log"}}}, "VALIDATION")
+	// A typo in tools, an allowlist, would have denied worker2 every governed tool; it is refused.
+	typo := e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"tools": []any{"no_such_tool"}}}, "VALIDATION")
+	want(t, typo.Details["field"] == "tools" && js(typo.Details["unknown"]) == `["no_such_tool"]` && strings.Contains(typo.Message, "no_such_tool"),
+		"grant_capabilities tools [no_such_tool] refused %s %v", typo.Message, typo.Details)
+	exempt := e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"deny": []any{"add_coment", "get_task"}}}, "VALIDATION")
+	want(t, exempt.Details["field"] == "deny" && js(exempt.Details["unknown"]) == `["add_coment"]` && js(exempt.Details["exempt"]) == `["get_task"]`,
+		"grant_capabilities deny [add_coment get_task] refused %s %v", exempt.Message, exempt.Details)
+	e.worker2.Refuse(t, "add_comment", M{"projectId": p.id, "taskId": id, "body": "the refused grants left the deny"}, "FORBIDDEN")
+	e.worker2.Call(t, "add_context_item", M{"projectId": p.id, "taskId": id, "kind": "note", "body": "and the rest allowed"})
 
 	cleared := e.admin.Call(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": nil})
 	want(t, cleared["grant"] == nil, "grant_capabilities null answered %s", js(cleared))

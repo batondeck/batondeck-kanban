@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // grant_capabilities on the real stack, every selected engine (R2.4's AC1-AC3): the tier and the
@@ -90,6 +92,92 @@ func TestGrantCapabilities(t *testing.T) {
 		// A grant on a project admin is stored and not enforced.
 		r.ada.call("grant_capabilities", map[string]any{"projectId": r.p, "identityId": "u-ada", "scope": only})
 		r.task("the admin's grant is not enforced", nil)
+	})
+}
+
+// TestGrantCapabilitiesToolNames (P-438): a deny or tools entry that is no served tool, or one a grant
+// cannot govern, is VALIDATION naming it and writes nothing; every tool the registry serves is either
+// accepted or refused as exempt or unscoped, never as unknown, and every governed project tool it
+// serves is accepted. A grant stored before the check with an unknown name still loads and decides.
+func TestGrantCapabilitiesToolNames(t *testing.T) {
+	raceStacks(t, func(t *testing.T, r *raceRig) {
+		ctx := context.Background()
+		grant := func(scope map[string]any) map[string]any {
+			return map[string]any{"projectId": r.p, "identityId": "u-grace", "scope": scope}
+		}
+		asSlice := func(v any) []any { a, _ := v.([]any); return a }
+		strs := func(v any) []string {
+			var out []string
+			for _, x := range asSlice(v) {
+				out = append(out, str(x))
+			}
+			return out
+		}
+
+		e := r.wantCode(r.ada, "grant_capabilities", grant(map[string]any{"tools": []any{"no_such_tool"}}), "VALIDATION")
+		d := obj(e["details"])
+		if d["field"] != "tools" || !slices.Equal(strs(d["tools"]), []string{"no_such_tool"}) || !slices.Equal(strs(d["unknown"]), []string{"no_such_tool"}) ||
+			!strings.Contains(str(e["message"]), "no_such_tool") {
+			t.Fatalf("tools [no_such_tool]: %v", e)
+		}
+		e = r.wantCode(r.ada, "grant_capabilities", grant(map[string]any{"deny": []any{"add_coment", "get_task"}}), "VALIDATION")
+		if d := obj(e["details"]); d["field"] != "deny" || !slices.Equal(strs(d["unknown"]), []string{"add_coment"}) || !slices.Equal(strs(d["exempt"]), []string{"get_task"}) {
+			t.Fatalf("deny [add_coment get_task]: %v", e)
+		}
+		if _, err := r.s.Store.GetGrant(ctx, r.p, "u-grace"); err == nil {
+			t.Fatal("a refused grant wrote a grant row")
+		}
+
+		// The registry as served: every name is a tool to the check.
+		served := toolNames(t, r.ada.cs)
+		all := make([]any, len(served))
+		for i, n := range served {
+			all[i] = n
+		}
+		e = r.wantCode(r.ada, "grant_capabilities", grant(map[string]any{"tools": all}), "VALIDATION")
+		d = obj(e["details"])
+		if d["unknown"] != nil {
+			t.Fatalf("served tools refused as unknown: %v", d["unknown"])
+		}
+		var governed []any
+		for _, n := range served {
+			p, _ := domain.ToolPosture(n)
+			refused := slices.Contains(strs(d["tools"]), n)
+			if want := p.GrantExempt || !p.TenantScoped; refused != want {
+				t.Errorf("%s (exempt %v, scoped %v): refused %v", n, p.GrantExempt, p.TenantScoped, refused)
+			}
+			if !refused {
+				governed = append(governed, n)
+			}
+		}
+		// ada is no workspace admin, so she is served every governed project tool but the admin-only ones.
+		want := 0
+		for _, n := range domain.ClassifiedTools() {
+			if p, _ := domain.ToolPosture(n); p.TenantScoped && !p.GrantExempt && p.AdminOnly != domain.AdminOnlyOnly {
+				want++
+			}
+		}
+		got := r.ada.call("grant_capabilities", grant(map[string]any{"tools": governed, "deny": []any{"add_comment"}}))
+		if g := obj(got["grant"]); len(asSlice(g["tools"])) != len(governed) || len(governed) != want {
+			t.Fatalf("every served governed project tool (%d, want %d): %v", len(governed), want, got)
+		}
+
+		// A stored grant holding an unknown name, written before the check: it loads, and grace is
+		// decided by the names it holds.
+		if _, err := r.s.Store.SetGrant(ctx, store.SetGrantInput{ProjectID: r.p, IdentityID: "u-grace",
+			Grant: domain.CapabilityGrant{Tools: []string{"claim_taks", "claim_task"}, Deny: []string{"add_coment"}}, UpdatedBy: "u-ada", Now: time.Now().UnixMilli()}); err != nil {
+			t.Fatal(err)
+		}
+		r.s.Core.InvalidateAccess(r.p, "u-grace")
+		id := r.task("legacy grant", nil)
+		e = r.wantCode(r.grace, "write_memory", map[string]any{"projectId": r.p, "taskId": id, "scope": "task", "key": "k", "value": "v"}, "FORBIDDEN")
+		if obj(e["details"])["requiredCapability"] != "tool:write_memory" {
+			t.Fatalf("write_memory under a stored {tools:[claim_taks claim_task]}: %v", e)
+		}
+		r.grace.call("claim_task", map[string]any{"projectId": r.p, "taskId": id})
+		if names := toolNames(t, r.grace.cs); !slices.Contains(names, "claim_task") {
+			t.Fatalf("grace's tools/list under the stored grant: %v", names)
+		}
 	})
 }
 

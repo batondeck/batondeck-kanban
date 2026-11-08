@@ -1437,6 +1437,12 @@ this section's headings in CHANGELOG.md, are all part of it.
   lease checks as any move. It was refused with VALIDATION "move_task requires toColumnId or
   toStatus". A call naming none of the three is still VALIDATION, now "requires toColumnId, toStatus
   or order". The web UI's drag, which always names its column, is unchanged. (P-437)
+- `grant_capabilities` refuses with VALIDATION a `deny` or `tools` entry that is no tool, or a tool
+  no grant governs (an exempt read or self-scoped tool), as it already refused one that takes no
+  `projectId`. The refusal names each entry, with `details.unknown`, `details.exempt` and
+  `details.unscoped`. Such names were stored, so a typo in `tools`, an allowlist, silently denied
+  that member every governed tool. A grant stored before this release that holds such a name still
+  loads and is enforced by the names it holds; writing it again needs the names corrected. (P-438)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an
