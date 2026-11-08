@@ -28,6 +28,8 @@ import { displayAgentName } from '../agentStatus.js';
 import { Button, Chip, Chips, Cluster, Empty, Note, Panel, Section, Stack, Tag } from '../ui.js';
 import { ChronicleBlockView, sameBlockText } from '../chronicleBlocks.js';
 import { useProject } from '../projectContext.js';
+import { useMyProjectRole } from '../displayNames.js';
+import { closedWhy, mayCall } from '../toolFloors.js';
 import { clearPalette, publishPalette } from '../palette.js';
 import { railsOf, sortByDate, type SortField } from '../chronicleSearch.js';
 import { CHRONICLE_KINDS, isAgent } from '../types.js';
@@ -202,6 +204,16 @@ const rowByline = (v: { author: string; agent: string | null }): string =>
 /** Index — browse every record in the project, or across every visible project at the "All" scope. */
 export function Chronicle() {
   const { projectId, projects, loading, setProjectId } = useProject();
+  // Writing a record is `create_chronicle_page`, tier write (P-440): below it "New record" and "Write
+  // the first record" are not offered, and the reason stands in their place.
+  const myRole = useMyProjectRole(projectId);
+  const canWrite = mayCall(myRole, 'create_chronicle_page');
+  const writeWhy = closedWhy(myRole, 'create_chronicle_page', 'write records');
+  const newRecord = canWrite ? (
+    <Link to="/chronicle/new">New record</Link>
+  ) : writeWhy ? (
+    <span className="muted" style={{ fontSize: 12 }}>{writeWhy}</span>
+  ) : undefined;
   /**
    * PAGED, and the paging is VISIBLE — see the `nextCursor` block below the list.
    *
@@ -273,7 +285,7 @@ export function Chronicle() {
       <PageHeader
         title="Chronicle"
         subtitle="Why this system is shaped the way it is — derived from the board, and written by hand where it needs to be."
-        actions={projectId ? <Link to="/chronicle/new">New record</Link> : undefined}
+        actions={projectId ? newRecord : undefined}
       />
       {q.isError && <Note>{(q.error as Error).message}</Note>}
       {/* The default "All projects" scope LISTS every visible project's records (T-429) — it used to
@@ -344,7 +356,7 @@ export function Chronicle() {
           hint="Records arrive when a sweep ingests them from the repo — or you can write one yourself."
           // An empty state with nothing to press is a dead end, and this one used to be exactly that:
           // it explained that a sweep would eventually produce something and offered no way to act.
-          action={<Link to="/chronicle/new">Write the first record</Link>}
+          action={canWrite ? <Link to="/chronicle/new">Write the first record</Link> : writeWhy}
         />
       )}
       {/* NAVIGATION, and it only exists because the sweep now hosts the topic and feature pages: the
@@ -488,6 +500,10 @@ const slugify = (title: string): string =>
 /** Write a record by hand. */
 export function ChronicleNew() {
   const { projectId, projects, loading } = useProject();
+  // `create_chronicle_page` is tier write (P-440): below it Create record is closed and says why.
+  const myRole = useMyProjectRole(projectId);
+  const canWrite = mayCall(myRole, 'create_chronicle_page');
+  const writeWhy = closedWhy(myRole, 'create_chronicle_page', 'write records');
   const nav = useNavigate();
   const qc = useQueryClient();
   const [title, setTitle] = useState('');
@@ -551,9 +567,16 @@ export function ChronicleNew() {
         actions={
           <Cluster gap={8}>
             <Link to="/chronicle">Cancel</Link>
-            <Button variant="primary" disabled={!ready || create.isPending} onClick={() => create.mutate()}>
+            <Button
+              variant="primary"
+              disabled={!canWrite || !ready || create.isPending}
+              title={canWrite ? undefined : writeWhy ?? 'Checking your role'}
+              aria-describedby={writeWhy ? 'chronicle-new-closed' : undefined}
+              onClick={() => create.mutate()}
+            >
               {create.isPending ? 'Creating…' : 'Create record'}
             </Button>
+            {writeWhy && <span id="chronicle-new-closed" className="muted" style={{ fontSize: 12 }}>{writeWhy}</span>}
           </Cluster>
         }
       />
@@ -607,6 +630,12 @@ export function ChronicleNew() {
 /** One page: read, edit inline, delete, reach its history. */
 export function ChroniclePageView() {
   const { projectId } = useProject();
+  // Edit and Land are `edit_chronicle_page`, Delete `delete_chronicle_page`, both tier write (P-440):
+  // below it they are closed and say why.
+  const myRole = useMyProjectRole(projectId);
+  const canEdit = mayCall(myRole, 'edit_chronicle_page');
+  const canDelete = mayCall(myRole, 'delete_chronicle_page');
+  const editWhy = closedWhy(myRole, 'edit_chronicle_page', 'edit or delete records');
   const { pageId = '' } = useParams();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -896,14 +925,32 @@ export function ChroniclePageView() {
             ) : (
               <>
                 {/* Pin the parent version HERE, at the moment the editor opens — see `editingFrom`. */}
-                {head && <Button onClick={() => openEditor(head)}>Edit</Button>}
+                {head && (
+                  <Button
+                    disabled={!canEdit}
+                    title={canEdit ? undefined : editWhy ?? 'Checking your role'}
+                    aria-describedby={!canEdit && editWhy ? 'chronicle-closed' : undefined}
+                    onClick={() => openEditor(head)}
+                  >
+                    Edit
+                  </Button>
+                )}
                 {/* HIDDEN WHILE EDITING, like the sweep-conflict panel and for the same reason: an
                     open editor holds the only copy of somebody's draft, and nothing may take the
                     screen out from under it — least of all the one action that cannot be undone. */}
                 {page && (
-                  <Button variant="danger" onClick={() => setConfirmDelete('')}>
+                  <Button
+                    variant="danger"
+                    disabled={!canDelete}
+                    title={canDelete ? undefined : editWhy ?? 'Checking your role'}
+                    aria-describedby={!canDelete && editWhy ? 'chronicle-closed' : undefined}
+                    onClick={() => setConfirmDelete('')}
+                  >
                     Delete
                   </Button>
+                )}
+                {(!canEdit || !canDelete) && editWhy && (
+                  <span id="chronicle-closed" className="muted" style={{ fontSize: 12 }}>{editWhy}</span>
                 )}
               </>
             )}
@@ -1090,7 +1137,9 @@ export function ChroniclePageView() {
             <Cluster gap={8} wrap>
               <Button
                 variant="primary"
-                disabled={land.isPending}
+                disabled={!canEdit || land.isPending}
+                title={canEdit ? undefined : editWhy ?? 'Checking your role'}
+                aria-describedby={!canEdit && editWhy ? 'chronicle-closed' : undefined}
                 onClick={() => land.mutate({ parent: head.id, blocks: composeResolution(head, sweepConflicts) })}
               >
                 {land.isPending ? 'Landing…' : 'Land the final version'}
@@ -1156,6 +1205,10 @@ export function ChroniclePageView() {
 /** History: version list, diff between any two, revert. */
 export function ChronicleHistory() {
   const { projectId } = useProject();
+  // A revert writes a new version: `edit_chronicle_page`, tier write (P-440).
+  const myRole = useMyProjectRole(projectId);
+  const canRevert = mayCall(myRole, 'edit_chronicle_page');
+  const revertWhy = closedWhy(myRole, 'edit_chronicle_page', 'revert records');
   const { pageId = '' } = useParams();
   const qc = useQueryClient();
 
@@ -1228,6 +1281,7 @@ export function ChronicleHistory() {
       {list.isError && <Note>{(list.error as Error).message}</Note>}
       {revert.isError && <Note>{(revert.error as Error).message}</Note>}
 
+      {revertWhy && <p id="revert-closed" className="muted" style={{ fontSize: 12 }}>{revertWhy}</p>}
       <Panel title="Versions" right={versions.length} scroll>
         {!versions.length && <Empty>No versions yet.</Empty>}
         {versions.map((v) => (
@@ -1244,7 +1298,13 @@ export function ChronicleHistory() {
                   Compare with latest
                 </Button>
                 {/* A revert WRITES A NEW VERSION — nothing is destroyed, so it needs no confirmation. */}
-                <Button size="sm" onClick={() => revert.mutate(v.id)} disabled={revert.isPending}>
+                <Button
+                  size="sm"
+                  onClick={() => revert.mutate(v.id)}
+                  disabled={!canRevert || revert.isPending}
+                  title={canRevert ? undefined : revertWhy ?? 'Checking your role'}
+                  aria-describedby={revertWhy ? 'revert-closed' : undefined}
+                >
                   Revert to this
                 </Button>
               </Cluster>

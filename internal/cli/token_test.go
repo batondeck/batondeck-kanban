@@ -128,8 +128,9 @@ func TestTokenSubcommandIsAudited(t *testing.T) {
 	for _, r := range page.Rows {
 		got = append(got, r.Action+" "+r.Actor+">"+strings.SplitN(r.Subject, "-", 2)[0]+" "+string(r.Data))
 	}
-	want := `cli_token.revoked host>U {"label":"ci","tokenId":"` + id + `","via":"cli"}` + "\n" +
-		`cli_token.minted host>U {"label":"ci","tokenId":"` + id + `","via":"cli"}`
+	// The subject is the identity stored canonical, lower-cased (P-441).
+	want := `cli_token.revoked host>u {"label":"ci","tokenId":"` + id + `","via":"cli"}` + "\n" +
+		`cli_token.minted host>u {"label":"ci","tokenId":"` + id + `","via":"cli"}`
 	if strings.Join(got, "\n") != want {
 		t.Fatalf("audit rows:\n%s\nwant\n%s", strings.Join(got, "\n"), want)
 	}

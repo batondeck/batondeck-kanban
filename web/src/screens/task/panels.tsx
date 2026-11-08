@@ -64,16 +64,34 @@ export function DepChip({ id, linked, onOpen }: { id: string; linked?: Task; onO
   );
 }
 
+/* ---- closed controls (P-440) ------------------------------------------------------------------ */
+
+/**
+ * The title and description a control closed to this caller carries: its reason as the title (or
+ * "Checking your role" while the role loads) and `aria-describedby` pointing at the visible reason,
+ * once there is one. An open control gets neither. Disabling is the caller's: most of these controls
+ * are also disabled while their input is empty.
+ */
+function closedAttrs(can: boolean, why: string | undefined, id: string): { title?: string; 'aria-describedby'?: string } {
+  if (can) return {};
+  return { title: why ?? 'Checking your role', ...(why ? { 'aria-describedby': id } : {}) };
+}
+
+/** The visible reason a panel's controls are closed, shown once under them. */
+function ClosedWhy({ id, why }: { id: string; why: string | undefined }) {
+  return why ? <p id={id} className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>{why}</p> : null;
+}
+
 /* ---- description + digest ------------------------------------------------------------------ */
 
 export function DescriptionPanel({ d }: P) {
-  const { task, projectId, taskId, editing, setEditing, draft, setDraft, startEdit, run } = d;
+  const { task, projectId, taskId, editing, setEditing, draft, setDraft, startEdit, run, canEdit } = d;
   return (
     <Panel title="Description" right={<span className="mono">markdown · updated {timeAgo(task.updatedAt)}</span>} pad>
       {editing ? (
         <>
           <textarea className="input" maxLength={LIMITS.description} style={{ width: '100%', minHeight: 100 }} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-          <Button style={{ marginTop: 8 }} variant="primary" onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
+          <Button style={{ marginTop: 8 }} variant="primary" disabled={!canEdit} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
         </>
       ) : task.description ? (
         // Agents write markdown briefs — render them (same .md styling as comments) instead of raw text.
@@ -82,7 +100,7 @@ export function DescriptionPanel({ d }: P) {
         </div>
       ) : (
         <p className="muted" style={{ margin: 0, fontSize: 14 }} onDoubleClick={startEdit}>
-          No description — click Edit (or double-click) to add the brief agents will work from.
+          {canEdit ? 'No description — click Edit (or double-click) to add the brief agents will work from.' : 'No description.'}
         </p>
       )}
     </Panel>
@@ -91,20 +109,28 @@ export function DescriptionPanel({ d }: P) {
 
 /** The agent-written rolling summary (`set_summary`). Editable in place. */
 export function DigestPanel({ d }: P) {
-  const { task, projectId, taskId, ctx, run } = d;
+  const { task, projectId, taskId, ctx, run, canSummarise, why } = d;
   const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
+  // `set_summary` is tier write (P-440): below it double-click opens nothing, and the empty digest
+  // says why instead of inviting the double-click.
+  const summaryWhy = why('set_summary', 'edit the digest');
   return (
     <Panel title="Agent digest" pad>
-      <div onDoubleClick={() => summaryDraft === null && setSummaryDraft(task.contextSummary)}>
+      <div onDoubleClick={() => canSummarise && summaryDraft === null && setSummaryDraft(task.contextSummary)}>
         {summaryDraft === null ? (
           <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: 'var(--text-2)' }}>
-            {ctx?.summary || task.contextSummary || <span className="muted">No digest yet — agents post a rolling summary here as they work (via <span className="mono">set_summary</span>). Double-click to add one.</span>}
+            {ctx?.summary || task.contextSummary || (
+              <span className="muted">
+                No digest yet — agents post a rolling summary here as they work (via <span className="mono">set_summary</span>).{' '}
+                {canSummarise ? 'Double-click to add one.' : summaryWhy}
+              </span>
+            )}
           </p>
         ) : (
           <>
             <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft} onChange={(e) => setSummaryDraft(e.target.value)} />
             <Cluster gap={4} style={{ marginTop: 6 }}>
-              <Button variant="primary" onClick={() => void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
+              <Button variant="primary" disabled={!canSummarise} onClick={() => void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
               <Button onClick={() => setSummaryDraft(null)}>Cancel</Button>
             </Cluster>
           </>
@@ -180,8 +206,11 @@ export function DeliveredPanel({ d }: P) {
 /* ---- graph ----------------------------------------------------------------------------------- */
 
 export function DependenciesPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, blockedByEdges, blocksEdges, relatesEdges, taskById } = d;
+  const { projectId, taskId, run, blockedByEdges, blocksEdges, relatesEdges, taskById, canLink, why } = d;
   const [depId, setDepId] = useState('');
+  // `add_dependency` and `remove_dependency` are tier master (P-440).
+  const linkWhy = why('add_dependency', 'add or remove dependencies');
+  const linkAttrs = closedAttrs(canLink, linkWhy, 'deps-closed');
   return (
     <Panel title="Dependencies" right={<span className="mono">blocks {blocksEdges.length} · blocked by {blockedByEdges.length}</span>} pad>
       <Stack gap={12}>
@@ -194,7 +223,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
               {blockedByEdges.map((e) => (
                 <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <DepChip id={e.fromTaskId} linked={taskById.get(e.fromTaskId)} onOpen={onOpenTask} />
-                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
+                  <Button title="remove" style={{ padding: '2px 8px' }} disabled={!canLink} {...linkAttrs} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
                 </span>
               ))}
             </Cluster>
@@ -219,24 +248,29 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
               {blocksEdges.map((e) => (
                 <span key={e.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <DepChip id={e.toTaskId} linked={taskById.get(e.toTaskId)} onOpen={onOpenTask} />
-                  <Button title="remove" style={{ padding: '2px 8px' }} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
+                  <Button title="remove" style={{ padding: '2px 8px' }} disabled={!canLink} {...linkAttrs} onClick={() => void run(contextApi.removeDependency(projectId, e.id))}>×</Button>
                 </span>
               ))}
             </Cluster>
           )}
         </div>
         <Cluster gap={4}>
-          <input className="input" style={{ flex: 1 }} placeholder="blocked by task id (e.g. T-3)" value={depId} onChange={(e) => setDepId(e.target.value)} />
-          <Button disabled={!depId} onClick={() => void run(contextApi.addDependency(projectId, depId, taskId), () => setDepId(''))}>Add</Button>
+          <input className="input" style={{ flex: 1 }} placeholder="blocked by task id (e.g. T-3)" value={depId} disabled={!canLink} {...linkAttrs} onChange={(e) => setDepId(e.target.value)} />
+          <Button disabled={!canLink || !depId} {...linkAttrs} onClick={() => void run(contextApi.addDependency(projectId, depId, taskId), () => setDepId(''))}>Add</Button>
         </Cluster>
+        <ClosedWhy id="deps-closed" why={linkWhy} />
       </Stack>
     </Panel>
   );
 }
 
 export function SubtasksPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, subs, subsDone, subsPct } = d;
+  const { projectId, taskId, run, subs, subsDone, subsPct, canMove, canAddSubtask, why } = d;
   const [subTitle, setSubTitle] = useState('');
+  // A subtask's checkbox is `move_task`, Add is `add_subtask`; both tier master (P-440).
+  const subWhy = why('add_subtask', 'add subtasks or mark them done');
+  const checkAttrs = closedAttrs(canMove, subWhy, 'subtasks-closed');
+  const addAttrs = closedAttrs(canAddSubtask, subWhy, 'subtasks-closed');
   return (
     <Panel title="Subtasks" right={subs.length > 0 ? <span className="mono">{subsDone} of {subs.length} complete</span> : undefined} pad>
       {subs.length > 0 && (
@@ -256,7 +290,9 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
                 type="checkbox"
                 checked={done}
                 aria-label={`Mark ${s.id} ${done ? 'not done' : 'done'}`}
-                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: canMove ? 'pointer' : 'default' }}
+                disabled={!canMove}
+                {...checkAttrs}
                 onChange={() => void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: done ? 'IN_PROGRESS' : 'DONE' }))}
               />
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, minWidth: 0 }}>
@@ -280,9 +316,10 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
         })}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 10 }}>
-        <input className="input" style={{ flex: 1 }} placeholder="New subtask" value={subTitle} onChange={(e) => setSubTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subTitle) void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle('')); }} />
-        <Button disabled={!subTitle} onClick={() => void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle(''))}>Add</Button>
+        <input className="input" style={{ flex: 1 }} placeholder="New subtask" value={subTitle} disabled={!canAddSubtask} {...addAttrs} onChange={(e) => setSubTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && subTitle && canAddSubtask) void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle('')); }} />
+        <Button disabled={!canAddSubtask || !subTitle} {...addAttrs} onClick={() => void run(contextApi.addSubtask(projectId, taskId, subTitle), () => setSubTitle(''))}>Add</Button>
       </Cluster>
+      <ClosedWhy id="subtasks-closed" why={subWhy} />
     </Panel>
   );
 }
@@ -291,8 +328,11 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
 
 /** Notes / decisions / fields. Link-kind items render in LinksPanel. */
 export function ContextPanel({ d }: P) {
-  const { projectId, taskId, task, ctx, run } = d;
+  const { projectId, taskId, task, ctx, run, canAnnotate, why } = d;
   const [note, setNote] = useState('');
+  // A note is `add_context_item`, tier write (P-440).
+  const noteWhy = why('add_context_item', 'add notes');
+  const noteAttrs = closedAttrs(canAnnotate, noteWhy, 'context-closed');
   // THE INCIDENT BRIEF IS SHOWN BY `IncidentPanel`, SO IT IS EXCLUDED HERE. It was rendered twice —
   // once formatted above, once as raw text in this list — which reads as duplicated data on the one
   // ticket type where a reader is scanning for the alert's detail.
@@ -321,17 +361,21 @@ export function ContextPanel({ d }: P) {
         ))}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 8 }}>
-        <input className="input" style={{ flex: 1 }} placeholder="Add a note…" value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && note) void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote('')); }} />
-        <Button disabled={!note} onClick={() => void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote(''))}>Add</Button>
+        <input className="input" style={{ flex: 1 }} placeholder="Add a note…" value={note} disabled={!canAnnotate} {...noteAttrs} onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && note && canAnnotate) void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote('')); }} />
+        <Button disabled={!canAnnotate || !note} {...noteAttrs} onClick={() => void run(contextApi.addContextItem(projectId, taskId, 'note', note), () => setNote(''))}>Add</Button>
       </Cluster>
+      <ClosedWhy id="context-closed" why={noteWhy} />
     </Panel>
   );
 }
 
 /** External artifacts (Lucid, Google Docs, Figma, …) as smart link cards. */
 export function LinksPanel({ d }: P) {
-  const { projectId, taskId, ctx, run } = d;
+  const { projectId, taskId, ctx, run, canAnnotate, why } = d;
   const [link, setLink] = useState('');
+  // A link is a context item too: `add_context_item`, tier write (P-440).
+  const linkWhy = why('add_context_item', 'attach links');
+  const linkAttrs = closedAttrs(canAnnotate, linkWhy, 'links-closed');
   const links = (ctx?.items ?? []).filter((i) => i.kind === 'link');
   return (
     <Panel title="Links" right={<span className="mono">{links.length}</span>} pad>
@@ -346,11 +390,14 @@ export function LinksPanel({ d }: P) {
           style={{ flex: 1 }}
           placeholder="Paste a link (Lucid, Google Docs, Figma…)"
           value={link}
+          disabled={!canAnnotate}
+          {...linkAttrs}
           onChange={(e) => setLink(e.target.value)}
-          onKeyDown={(e) => { const u = normalizeLink(link); if (e.key === 'Enter' && u) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}
+          onKeyDown={(e) => { const u = normalizeLink(link); if (e.key === 'Enter' && u && canAnnotate) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}
         />
-        <Button disabled={!normalizeLink(link)} onClick={() => { const u = normalizeLink(link); if (u) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}>Attach</Button>
+        <Button disabled={!canAnnotate || !normalizeLink(link)} {...linkAttrs} onClick={() => { const u = normalizeLink(link); if (u) void run(contextApi.addContextItem(projectId, taskId, 'link', u), () => setLink('')); }}>Attach</Button>
       </Cluster>
+      <ClosedWhy id="links-closed" why={linkWhy} />
       {link.trim().length > 0 && !normalizeLink(link) && (
         <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>Not a valid URL — paste a full http(s) link.</p>
       )}
@@ -359,7 +406,10 @@ export function LinksPanel({ d }: P) {
 }
 
 export function MemoryPanel({ d }: P) {
-  const { projectId, taskId, memQ, run } = d;
+  const { projectId, taskId, memQ, run, canWriteMemory, why } = d;
+  // `write_memory` is tier write (P-440).
+  const memWhy = why('write_memory', 'write memory');
+  const memAttrs = closedAttrs(canWriteMemory, memWhy, 'memory-closed');
   const [memKey, setMemKey] = useState('');
   const [memVal, setMemVal] = useState('');
   const entries = memQ.data?.entries ?? [];
@@ -378,10 +428,11 @@ export function MemoryPanel({ d }: P) {
         {entries.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No memory entries.</p>}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 10 }}>
-        <input className="input" style={{ width: 90 }} placeholder="key" value={memKey} onChange={(e) => setMemKey(e.target.value)} />
-        <input className="input" style={{ flex: 1 }} placeholder="value" value={memVal} onChange={(e) => setMemVal(e.target.value)} />
-        <Button disabled={!memKey} onClick={() => void run(contextApi.writeMemory(projectId, taskId, 'shared', memKey, memVal), () => { setMemKey(''); setMemVal(''); })}>Save</Button>
+        <input className="input" style={{ width: 90 }} placeholder="key" value={memKey} disabled={!canWriteMemory} {...memAttrs} onChange={(e) => setMemKey(e.target.value)} />
+        <input className="input" style={{ flex: 1 }} placeholder="value" value={memVal} disabled={!canWriteMemory} {...memAttrs} onChange={(e) => setMemVal(e.target.value)} />
+        <Button disabled={!canWriteMemory || !memKey} {...memAttrs} onClick={() => void run(contextApi.writeMemory(projectId, taskId, 'shared', memKey, memVal), () => { setMemKey(''); setMemVal(''); })}>Save</Button>
       </Cluster>
+      <ClosedWhy id="memory-closed" why={memWhy} />
     </Panel>
   );
 }
@@ -390,7 +441,7 @@ export function MemoryPanel({ d }: P) {
 
 /** Comments + follow-ups. Both already own their headings, so the panel only supplies the record rule. */
 export function DiscussionPanel({ d }: P) {
-  const { projectId, taskId, task, identity, mentionCandidates, myRole, canComment } = d;
+  const { projectId, taskId, task, identity, mentionCandidates, canComment, canFollowUp, canAck, why } = d;
   return (
     <Panel title="Discussion" pad>
       <Stack gap={16}>
@@ -399,9 +450,17 @@ export function DiscussionPanel({ d }: P) {
           taskId={taskId}
           mentionCandidates={mentionCandidates}
           canComment={canComment}
-          closedWhy={!canComment && myRole !== undefined ? 'A viewer cannot comment.' : undefined}
+          closedWhy={why('add_comment', 'comment')}
         />
-        <FollowUps projectId={projectId} task={task} identity={identity} />
+        <FollowUps
+          projectId={projectId}
+          task={task}
+          identity={identity}
+          canFollowUp={canFollowUp}
+          closedWhy={why('add_follow_up', 'send follow-ups')}
+          canAck={canAck}
+          ackClosedWhy={why('ack_follow_up', 'acknowledge follow-ups')}
+        />
       </Stack>
     </Panel>
   );
@@ -430,8 +489,11 @@ const fmtBytes = (b: number): string => (b >= 1048576 ? `${(b / 1048576).toFixed
 
 /** Bound artifacts (the evidence) + uploaded attachments (the files), per mock task.html. */
 export function FilesPanel({ d }: P) {
-  const { task, attQ, uploadFile } = d;
+  const { task, attQ, uploadFile, canAttach, why } = d;
   const [dragOver, setDragOver] = useState(false);
+  // An upload is `attach_file`, tier write (P-440): below it the drop zone is disabled, takes no drop,
+  // and says why.
+  const attachWhy = why('attach_file', 'attach files');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const artifacts = task.artifacts ?? [];
   const attachments = attQ.data?.attachments ?? [];
@@ -482,17 +544,20 @@ export function FilesPanel({ d }: P) {
       />
       <button
         type="button"
+        disabled={!canAttach}
+        {...closedAttrs(canAttach, attachWhy, 'files-closed')}
         onClick={() => fileInputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragOver={(e) => { if (!canAttach) return; e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
+          if (!canAttach) return;
           const file = e.dataTransfer.files?.[0];
           if (file) uploadFile(file);
         }}
         style={{
-          marginTop: 10, width: '100%', cursor: 'pointer', textAlign: 'center',
+          marginTop: 10, width: '100%', cursor: canAttach ? 'pointer' : 'not-allowed', textAlign: 'center', opacity: canAttach ? 1 : 0.6,
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
           padding: '20px 16px', font: 'inherit',
           border: `1.5px dashed ${dragOver ? 'var(--accent)' : 'var(--outline-variant)'}`,
@@ -509,6 +574,7 @@ export function FilesPanel({ d }: P) {
         </span>
         <span className="mono" style={{ fontSize: 10, color: 'var(--text-2)' }}>images, audio, video & docs</span>
       </button>
+      <ClosedWhy id="files-closed" why={attachWhy} />
     </Panel>
   );
 }
@@ -631,10 +697,16 @@ function ChipField({
   values,
   placeholder,
   onChange,
+  label,
+  closed,
 }: {
   values: string[];
   placeholder: string;
   onChange: (next: string[]) => void;
+  /** The field's accessible name. */
+  label: string;
+  /** Closed to this caller (P-440): no ✕, no input, and these attributes on what stays. */
+  closed?: { title?: string; 'aria-describedby'?: string } | null;
 }) {
   const [draft, setDraft] = useState('');
   const commit = (raw: string): void => {
@@ -655,6 +727,8 @@ function ChipField({
           <button
             type="button"
             aria-label={`Remove ${v}`}
+            disabled={!!closed}
+            {...(closed ?? {})}
             onClick={() => onChange(values.filter((x) => x !== v))}
             style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', font: 'inherit', lineHeight: 1, padding: 0 }}
           >
@@ -663,7 +737,10 @@ function ChipField({
         </span>
       ))}
       <input
+        aria-label={label}
         value={draft}
+        disabled={!!closed}
+        {...(closed ?? {})}
         placeholder={values.length ? '' : placeholder}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
@@ -678,8 +755,13 @@ function ChipField({
 }
 
 export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: boolean }) {
-  const { task, projectId, taskId, run, agentsQ, histQ } = d;
+  const { task, projectId, taskId, run, agentsQ, histQ, canEdit, why } = d;
   const [cf, setCf] = useState({ k: '', v: '' });
+  // Every field here is `update_task`, tier master (P-440): below it each is disabled and the panel says
+  // why once, at its top.
+  const detailsWhy = why('update_task', 'edit details');
+  const ro = closedAttrs(canEdit, detailsWhy, 'details-closed');
+  const closed = canEdit ? null : ro;
   // These inputs save on blur, and the drawer's Escape handler blurs the focused field — without this
   // reset, Escape would COMMIT the pending edit instead of canceling it.
   const escapeResets = (original: string) => (e: React.KeyboardEvent<HTMLInputElement>): void => {
@@ -687,15 +769,17 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
   };
   return (
     <Panel title="Details" right={<span className="mono">v{task.version}</span>} pad collapsible defaultOpen={defaultOpen}>
+      {detailsWhy && <p id="details-closed" className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>{detailsWhy}</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 10px', alignItems: 'center', fontSize: 14 }}>
         <span className="muted">Priority</span>
-        <select className="input" value={task.priority}
+        <select className="input" aria-label="Priority" value={task.priority} disabled={!canEdit} {...ro}
           onChange={(e) => void run(tasksApi.updateTask(projectId, taskId, task.version, { priority: e.target.value }))}>
           {['low', 'normal', 'high', 'urgent'].map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <span className="muted">Assignee</span>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           <input className="input" list="agent-names" key={`as${task.version}`} defaultValue={task.assignee ?? ''} placeholder="agent name, email, or SA"
+            aria-label="Assignee" disabled={!canEdit} {...ro}
             onKeyDown={escapeResets(task.assignee ?? '')}
             onBlur={(e) => { const v = e.target.value.trim(); if (v !== (task.assignee ?? '')) void run(tasksApi.updateTask(projectId, taskId, task.version, { assignee: v || null })); }} />
           <datalist id="agent-names">
@@ -705,10 +789,11 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
               ...((histQ.data?.events ?? []).map((e) => e.agent).filter(Boolean) as string[]),
             ])].sort().map((n) => <option key={n} value={n} />)}
           </datalist>
-          <span className="muted" style={{ fontSize: 11 }}>Pick an agent to route this ticket to its work loop.</span>
+          {canEdit && <span className="muted" style={{ fontSize: 11 }}>Pick an agent to route this ticket to its work loop.</span>}
         </div>
         <span className="muted">Due</span>
         <input className="input" type="date" key={`due${task.version}`} defaultValue={task.dueAt ? task.dueAt.slice(0, 10) : ''}
+          aria-label="Due" disabled={!canEdit} {...ro}
           onKeyDown={escapeResets(task.dueAt ? task.dueAt.slice(0, 10) : '')}
           onBlur={(e) => {
             // Compare the DAY the input shows, not the re-serialized ISO: a dueAt that carries a
@@ -721,18 +806,23 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
           }} />
         <span className="muted">Estimate</span>
         <input className="input" type="number" key={`est${task.version}`} defaultValue={task.estimate ?? ''}
+          aria-label="Estimate" disabled={!canEdit} {...ro}
           onKeyDown={escapeResets(task.estimate != null ? String(task.estimate) : '')}
           onBlur={(e) => { const v = e.target.value.trim(); const n = v ? Number(v) : null; if (n !== null && !Number.isFinite(n)) return; if (n !== task.estimate) void run(tasksApi.updateTask(projectId, taskId, task.version, { estimate: n })); }} />
         <span className="muted">Labels</span>
         <ChipField
           values={task.labels}
           placeholder="add a label"
+          label="Labels"
+          closed={closed}
           onChange={(labels) => void run(tasksApi.updateTask(projectId, taskId, task.version, { labels }))}
         />
         <span className="muted">Capabilities</span>
         <ChipField
           values={task.requiredCapabilities}
           placeholder="add a capability"
+          label="Capabilities"
+          closed={closed}
           onChange={(requiredCapabilities) => void run(tasksApi.updateTask(projectId, taskId, task.version, { requiredCapabilities }))}
         />
       </div>
@@ -758,6 +848,8 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
                       title={`Remove ${k}`}
                       className="btn secondary"
                       style={{ padding: '0 8px', lineHeight: '22px' }}
+                      disabled={!canEdit}
+                      {...(canEdit ? {} : { 'aria-describedby': ro['aria-describedby'] })}
                       onClick={() => { const next = { ...task.customFields }; delete next[k]; void run(tasksApi.updateTask(projectId, taskId, task.version, { customFields: next })); }}
                     >
                       ×
@@ -767,9 +859,9 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
               </div>
             )}
             <Cluster gap={4}>
-              <input className="input" style={{ width: 110 }} placeholder="field" value={cf.k} onChange={(e) => setCf({ ...cf, k: e.target.value })} />
-              <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="value" value={cf.v} onChange={(e) => setCf({ ...cf, v: e.target.value })} />
-              <Button disabled={!cf.k} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { customFields: { ...task.customFields, [cf.k]: cf.v } }), () => setCf({ k: '', v: '' }))}>Add</Button>
+              <input className="input" style={{ width: 110 }} placeholder="field" value={cf.k} disabled={!canEdit} {...ro} onChange={(e) => setCf({ ...cf, k: e.target.value })} />
+              <input className="input" style={{ flex: 1, minWidth: 80 }} placeholder="value" value={cf.v} disabled={!canEdit} {...ro} onChange={(e) => setCf({ ...cf, v: e.target.value })} />
+              <Button disabled={!canEdit || !cf.k} {...ro} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { customFields: { ...task.customFields, [cf.k]: cf.v } }), () => setCf({ k: '', v: '' }))}>Add</Button>
             </Cluster>
           </div>
         );

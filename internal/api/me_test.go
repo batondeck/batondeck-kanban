@@ -94,8 +94,9 @@ func TestMeAgentsAuditRoutesOnTheStack(t *testing.T) {
 		if code, body := h.do("GET", "/api/audit", "", nil); code != http.StatusForbidden || codeOf(t, body) != "FORBIDDEN" {
 			t.Fatalf("GET audit as a member: %d %s", code, body)
 		}
-		// No subject filter here: domain.DescribeAudit lowercases an identity subject (canonID), so
-		// agent.disconnected names "u-…" where the token rows name the account id as it is.
+		// Filtered by actor: the identity is the actor of all three rows, as given, while each row's
+		// subject is that identity stored canonical, lower-cased (DescribeAudit's canonID for
+		// agent.disconnected, P-441 for the token rows).
 		rows := decode(admin.do("GET", "/api/audit?days=1&limit=10&actor="+h.userID, "", nil))["entries"].([]any)
 		var actions []string
 		for _, r := range rows {

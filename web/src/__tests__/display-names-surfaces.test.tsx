@@ -459,7 +459,7 @@ describe('follow-ups', () => {
   it("name the author, the target and the composer's holder", async () => {
     const fu: FollowUp = { id: 'f1', taskId: 'T-1', projectId: 'p1', body: 'please rebase', author: ALICE, target: BOB, status: 'open', reopened: false, ts: TS };
     byPath({ '/api/projects/p1': project, '/api/projects/p1/tasks/T-1/follow-ups': { followUps: [fu] } });
-    wrap(<FollowUps projectId="p1" task={{ ...task, assignee: BOB }} identity={null} />);
+    wrap(<FollowUps projectId="p1" task={{ ...task, assignee: BOB }} identity={null} canFollowUp canAck />);
     await screen.findByText('Alice Doe');
     expect(screen.getByText('→ bob')).toBeInTheDocument();
     expect(screen.getByTitle('directed at bob')).toBeInTheDocument();

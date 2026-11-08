@@ -20,6 +20,7 @@ import { publicConfig } from '../api/session.js';
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  localStorage.clear();
 });
 
 // Assembled so this file is not itself a hit for the lexical guard below.
@@ -61,14 +62,14 @@ function renderSignIn(noUsers: boolean): void {
   );
 }
 
-async function mountApp(path: string, admin: boolean): Promise<void> {
+async function mountApp(path: string, admin: boolean, projects: unknown[] = []): Promise<void> {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const p = String(input).split('?')[0]!;
     if (p === '/api/session') {
       return json({ identity: 'U-1', csrfToken: 'c', isAdmin: admin, permissions: admin ? ['batondeck:superadmin'] : [], subscriptionsEnabled: false, uiSettings: {} });
     }
     if (p === '/api/me/settings') return json({ maxTicketTokens: null, tokenPolicy: null, starredAssets: [], defaults: { maxTicketTokens: 50000, tokenPolicy: 'warn', charsPerToken: 4 }, estimated: true });
-    return json({ projects: [], boards: [], sessions: [], tokens: [], users: [], events: [], tasks: [] });
+    return json({ projects, boards: [], sessions: [], tokens: [], users: [], events: [], tasks: [] });
   }));
   render(
     <QueryClientProvider client={seeded({ oauth: false, noUsers: false })}>
@@ -173,7 +174,9 @@ describe('Projects: the empty workspace', () => {
 
 describe('Settings order', () => {
   it('Columns, Members and CLI tokens come before every other section, and none is gone', async () => {
-    await mountApp('/settings', true);
+    // The project sections need a project chosen; on "All projects" Settings asks for one (P-442).
+    localStorage.setItem('bd.projectId', 'p1');
+    await mountApp('/settings', true, [{ projectId: 'p1', name: 'Roadmap', role: 'admin' }]);
     await screen.findByRole('heading', { name: 'Your settings' }, FIRST_SCREEN);
     await waitFor(() => expect(document.getElementById('users')).not.toBeNull(), FIRST_SCREEN);
     const order = [
@@ -188,5 +191,15 @@ describe('Settings order', () => {
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `section ${i}`).toBeTruthy();
     }
+  }, FULL_APP_TEST_MS);
+
+  it('with no project chosen, the prompt stands where Columns and Members were, still ahead of CLI tokens', async () => {
+    await mountApp('/settings', true, [{ projectId: 'p1', name: 'Roadmap', role: 'admin' }]);
+    await screen.findByRole('heading', { name: 'Your settings' }, FIRST_SCREEN);
+    const prompt = await screen.findByRole('heading', { name: 'Pick a project to configure' }, FIRST_SCREEN);
+    expect(prompt.compareDocumentPosition(document.getElementById('cli-tokens')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Columns' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Workflow Settings' })).toBeNull();
+    expect(document.getElementById('sessions')).not.toBeNull();
   }, FULL_APP_TEST_MS);
 });

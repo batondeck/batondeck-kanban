@@ -14,7 +14,8 @@
  * `GET /api/oncall/sources`, so adding a telemetry source needs no edit in this package at all.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMayReadIntegrations } from '../../displayNames.js';
+import { useMayReadIntegrations, useMyProjectRole } from '../../displayNames.js';
+import { closedWhy, mayCall } from '../../toolFloors.js';
 import { Icon } from '../../icons.js';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as oncallApi from '../../api/oncall.js';
@@ -418,6 +419,13 @@ export function OncallSetup({
   const sourceOf = (id: string): OncallSource | undefined => sources.find((s) => s.id === id);
 
   const mayReadIntegrations = useMayReadIntegrations(projectId);
+  // P-440: reading integrations needs a workspace admin who is a project master, but changing one
+  // (create, update, enable or disable, rotate, delete) is TierStructural, a member or above. A master
+  // here reads them; the write controls are closed with the reason.
+  const myRole = useMyProjectRole(projectId);
+  const mayConfigure = mayCall(myRole, 'update_integration');
+  const configureWhy = closedWhy(myRole, 'update_integration', 'change integrations');
+  const configureClosed = mayConfigure ? {} : { title: configureWhy ?? 'Checking your role', 'aria-describedby': 'oncall-configure-closed' };
   const deletedQ = useQuery({
     queryKey: ['oncall-integrations-all', projectId],
     queryFn: () => oncallApi.listIntegrations(projectId, true),
@@ -576,6 +584,11 @@ export function OncallSetup({
             </button>
           </Cluster>
 
+          {!mayConfigure && (
+            <p id="oncall-configure-closed" className="muted" style={{ margin: 0 }}>
+              {configureWhy ?? 'Checking your role'}
+            </p>
+          )}
           {error && <Note>{error}</Note>}
 
           {shownSecret && (
@@ -744,7 +757,8 @@ export function OncallSetup({
               <Cluster gap={8}>
                 <button
                   className="btn"
-                  disabled={create.isPending || problems.length > 0}
+                  disabled={!mayConfigure || create.isPending || problems.length > 0}
+                  {...configureClosed}
                   onClick={() => {
                     // Held in a ref BEFORE the call: the server never returns it, so if it is not
                     // captured here it can never be shown.
@@ -784,7 +798,7 @@ export function OncallSetup({
                     >
                       {editing ? 'Close editor' : 'Edit configuration'}
                     </button>
-                    <button className="btn secondary" onClick={() => toggle.mutate(active)}>
+                    <button className="btn secondary" disabled={!mayConfigure} {...configureClosed} onClick={() => toggle.mutate(active)}>
                       {active.enabled ? 'Disable' : 'Enable'}
                     </button>
                     {active.auth.mode === 'hmac' &&
@@ -794,11 +808,11 @@ export function OncallSetup({
                       // for it put the operator most likely to click it (whose PD integration is
                       // already misbehaving) one click from a dead integration.
                       (active.auth.externallyIssued ? (
-                        <button className="btn secondary" onClick={() => setRotating((v) => !v)}>
+                        <button className="btn secondary" disabled={!mayConfigure} {...configureClosed} onClick={() => setRotating((v) => !v)}>
                           {rotating ? 'Cancel rotation' : 'Rotate secret'}
                         </button>
                       ) : (
-                        <button className="btn secondary" onClick={() => rotate.mutate({ i: active })}>
+                        <button className="btn secondary" disabled={!mayConfigure} {...configureClosed} onClick={() => rotate.mutate({ i: active })}>
                           Rotate secret
                         </button>
                       ))}
@@ -815,6 +829,9 @@ export function OncallSetup({
                       label="Delete"
                       confirmLabel="Delete for good"
                       className="btn secondary"
+                      disabled={!mayConfigure}
+                      title={mayConfigure ? undefined : (configureWhy ?? 'Checking your role')}
+                      describedBy={mayConfigure ? undefined : 'oncall-configure-closed'}
                       onConfirm={() => remove.mutate(active)}
                     />
                   </Cluster>
@@ -836,7 +853,7 @@ export function OncallSetup({
                         />
                         <button
                           className="btn"
-                          disabled={rotate.isPending || rotateSecret.trim().length < 8}
+                          disabled={!mayConfigure || rotate.isPending || rotateSecret.trim().length < 8}
                           onClick={() => rotate.mutate({ i: active, externalSecret: rotateSecret.trim() })}
                         >
                           {rotate.isPending ? 'Rotating…' : 'Rotate'}
@@ -873,7 +890,8 @@ export function OncallSetup({
                   <Cluster gap={8}>
                     <button
                       className="btn"
-                      disabled={save.isPending || problems.length > 0}
+                      disabled={!mayConfigure || save.isPending || problems.length > 0}
+                      {...configureClosed}
                       onClick={() => {
                         mintedApiKey.current = null;
                         save.mutate({

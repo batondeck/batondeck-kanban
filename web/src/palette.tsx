@@ -14,6 +14,7 @@ import { defaultBoardName } from './api/boards.js';
 import { fire } from './toast.js';
 import { useProject } from './projectContext.js';
 import { useShortcuts } from './shortcuts.js';
+import { mayCall } from './toolFloors.js';
 import { searchChronicle, searchValue } from './chronicleSearch.js';
 import type { ChroniclePage } from './types.js';
 
@@ -27,6 +28,11 @@ export interface PaletteAction {
   run?: () => void;
   /** When present, selecting the action opens a sub-page of these options. */
   children?: Array<{ label: string; run: () => void }>;
+  /**
+   * Why the caller may not take this action (P-440): it is listed, disabled, with this beside it, and
+   * runs nothing. A screen sets it from `closedWhy` in toolFloors.ts and leaves out `run` and `children`.
+   */
+  closedWhy?: string;
 }
 export interface PaletteContext {
   projectId?: string;
@@ -112,7 +118,7 @@ export function CommandPalette() {
   const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects(), enabled: open });
 
   // Ticket search: global project selection (works on any screen), query debounced ~250ms.
-  const { projectId } = useProject();
+  const { projectId, setProjectId } = useProject();
   const [debounced, setDebounced] = useState('');
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query), 250);
@@ -184,13 +190,21 @@ export function CommandPalette() {
               <>
                 {pctx.actions.length > 0 && (
                   <Command.Group heading="Task">
-                    {pctx.actions.map((a) => (
-                      <Command.Item key={a.id} onSelect={() => (a.children ? (setPage(a), setQuery('')) : pick(a.run))}>
-                        {a.label}
-                        {a.children ? <span style={{ color: 'var(--text-muted)' }}>›</span> : null}
-                        {a.kbd && <span className="kbd">{a.kbd}</span>}
-                      </Command.Item>
-                    ))}
+                    {pctx.actions.map((a) =>
+                      a.closedWhy ? (
+                        <Command.Item key={a.id} value={a.label} disabled aria-describedby={`palette-closed-${a.id}`}>
+                          {a.label}
+                          <span id={`palette-closed-${a.id}`} className="muted" style={{ fontSize: 12 }}>{a.closedWhy}</span>
+                          {a.kbd && <span className="kbd">{a.kbd}</span>}
+                        </Command.Item>
+                      ) : (
+                        <Command.Item key={a.id} onSelect={() => (a.children ? (setPage(a), setQuery('')) : pick(a.run))}>
+                          {a.label}
+                          {a.children ? <span style={{ color: 'var(--text-muted)' }}>›</span> : null}
+                          {a.kbd && <span className="kbd">{a.kbd}</span>}
+                        </Command.Item>
+                      ),
+                    )}
                   </Command.Group>
                 )}
 
@@ -202,7 +216,7 @@ export function CommandPalette() {
                     </Command.Item>
                   ))}
                   {(projectsQ.data?.projects ?? []).map((p) => (
-                    <Command.Item key={p.projectId} onSelect={() => pick(() => fire(openProject(p.projectId, nav, p.name)))}>
+                    <Command.Item key={p.projectId} onSelect={() => pick(() => fire(openProject(p.projectId, nav, p.name, mayCall(p.role, 'create_board'), setProjectId)))}>
                       Open project: {p.name}
                     </Command.Item>
                   ))}
@@ -246,8 +260,23 @@ export function CommandPalette() {
   );
 }
 
-async function openProject(projectId: string, nav: (to: string) => void, projectName?: string): Promise<void> {
+/**
+ * Opens the project's first board, creating one when it has none. Creating is `create_board`, tier write
+ * (P-440): a caller below it is taken to the project's (empty) board list instead, which says why.
+ */
+async function openProject(
+  projectId: string,
+  nav: (to: string) => void,
+  projectName: string | undefined,
+  mayCreateBoard: boolean,
+  select: (projectId: string) => void,
+): Promise<void> {
   const { boards } = await boardsApi.listBoards(projectId);
+  if (!boards[0] && !mayCreateBoard) {
+    select(projectId);
+    nav('/projects');
+    return;
+  }
   const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
   nav(`/projects/${projectId}/boards/${board.id}`);
 }

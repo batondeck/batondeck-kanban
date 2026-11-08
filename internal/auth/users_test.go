@@ -44,7 +44,7 @@ func TestAddNormalizesAndRefusesADuplicateLogin(t *testing.T) {
 	ctx := context.Background()
 	// The password has a space, which base64 never holds: "the hash does not contain the password"
 	// cannot then pass or fail by chance on a random salt and digest (a two-letter "pw" appears in
-	// about one hash in sixty).
+	// about one hash in fifty).
 	const password = "pw secret"
 	u, err := f.svc.Accounts.Add(ctx, "  Alice@Example.Test ", "", password, false)
 	if err != nil {

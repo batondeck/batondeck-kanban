@@ -19,7 +19,8 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
-import { roleAtLeast, useDisplayNames } from '../../displayNames.js';
+import { useDisplayNames, useMyProjectRole } from '../../displayNames.js';
+import { closedWhy, mayCall, type GatedTool } from '../../toolFloors.js';
 import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
@@ -212,21 +213,39 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
-  // What the caller's role lets them do here (P-209). The server decides; these only keep a caller
-  // from being offered a refusal. Both fail closed while the session or the project is loading.
-  //  - `move_task` is tier master (`internal/domain/grants.go`), so changing the status, and the
-  //    requeue of a poisoned task (BLOCKED → TODO, plan §Fold 1), which is the same call, need master
-  //    or one of the two roles above it.
-  //  - `claim_task` is tier write: a worker or above.
-  //  - `add_comment` is tier write too, so a viewer's composer is closed with its reason (P-432).
-  const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
-  const canMove = roleAtLeast(myRole, 'master');
+  // What the caller's role lets them do here (P-209, P-440). The server decides; these only keep a
+  // caller from being offered a refusal. Every one fails closed while the role is loading. The floors
+  // are the tools' tiers, from the one table in toolFloors.ts (which points at grants.go):
+  //  - `move_task` (master): the status, the requeue of a poisoned task (BLOCKED → TODO, plan §Fold 1),
+  //    which is the same call, and a subtask's checkbox.
+  //  - `update_task` (master): Edit (title, description) and every field in Details.
+  //  - `claim_task`, `add_comment`, `add_context_item` (note, link), `write_memory`, `attach_file`,
+  //    `set_summary`, `ack_follow_up` (write: a worker or above).
+  //  - `add_dependency`/`remove_dependency`, `add_subtask`, `add_follow_up`, and the race tools (master).
+  // The role is the caller's in this project from the roster `ProjectProvider` holds (`useMyProjectRole`),
+  // the source every screen gates on. Where the roster has no row for it (a surface rendered with no
+  // provider) the project's own member list, already read here for names, says the same thing.
+  const rosterRole = useMyProjectRole(projectId);
+  const myRole = rosterRole ?? (identity ? projectQ.data?.project.members[identity] : undefined);
+  const canMove = mayCall(myRole, 'move_task');
   const canRequeue = canMove;
-  const canClaim = roleAtLeast(myRole, 'worker');
-  const canComment = roleAtLeast(myRole, 'worker');
+  const canClaim = mayCall(myRole, 'claim_task');
+  const canComment = mayCall(myRole, 'add_comment');
+  const canEdit = mayCall(myRole, 'update_task');
+  const canSummarise = mayCall(myRole, 'set_summary');
+  const canLink = mayCall(myRole, 'add_dependency') && mayCall(myRole, 'remove_dependency');
+  const canAddSubtask = mayCall(myRole, 'add_subtask');
+  const canAnnotate = mayCall(myRole, 'add_context_item');
+  const canWriteMemory = mayCall(myRole, 'write_memory');
+  const canAttach = mayCall(myRole, 'attach_file');
+  const canFollowUp = mayCall(myRole, 'add_follow_up');
+  const canAck = mayCall(myRole, 'ack_follow_up');
+  const canRace = mayCall(myRole, 'start_runs');
+  /** The reason a control calling `tool` is closed to this caller, or `undefined` (open, or loading). */
+  const why = (tool: GatedTool, what: string): string | undefined => closedWhy(myRole, tool, what);
 
   const startEdit = (): void => {
-    if (!task) return;
+    if (!task || !canEdit) return;
     setEditing(true);
     setDraft({ title: task.title, description: task.description });
   };
@@ -238,6 +257,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
     colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
+    canEdit, canSummarise, canLink, canAddSubtask, canAnnotate, canWriteMemory, canAttach, canFollowUp, canAck, canRace, why,
   };
 }
 
