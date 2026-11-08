@@ -133,7 +133,10 @@ test.describe('as a worker', () => {
     await newTask.click();
     await page.getByLabel('Task title').fill('Filed by a master');
     await page.getByRole('button', { name: 'Add task' }).click();
-    await expect(page.locator('.card[data-task-id]').filter({ hasText: 'Filed by a master' })).toBeVisible();
+    // The optimistic card animates out as the stored one replaces it: one card once that is done.
+    const filed = page.locator('.card[data-task-id]').filter({ hasText: 'Filed by a master' });
+    await expect(filed).toHaveCount(1);
+    await expect(filed).toBeVisible();
     await expect
       .poll(async () => {
         const r = await new McpClient('admin').call<{ tasks: Array<{ title: string }> }>('list_tasks', { projectId: led.projectId, boardId: led.boardId });
