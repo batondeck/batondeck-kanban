@@ -82,7 +82,7 @@ describe('comments', () => {
         ],
       },
     });
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} canComment />);
     await screen.findByText('Alice Doe');
     expect(screen.getByText(GHOST_SHORT)).toBeInTheDocument();
     expect(screen.getByTitle('mentioned bob')).toBeInTheDocument();
@@ -138,7 +138,7 @@ describe('the comment composer and comment bodies', () => {
   };
   const draft = async (proj: unknown, candidates: string[]) => {
     const posts = routed([], proj);
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={candidates} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={candidates} canComment />);
     const ta = (await screen.findByPlaceholderText(/@mention a teammate/)) as HTMLTextAreaElement;
     await waitFor(() => expect(screen.queryByText('No comments yet.')).toBeInTheDocument());
     const send = async (): Promise<unknown> => {
@@ -156,7 +156,7 @@ describe('the comment composer and comment bodies', () => {
 
   it('suggests people by name, and a picked name posts a mention the server resolves', async () => {
     const posts = routed([]);
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[ALICE, BOB, GHOST]} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[ALICE, BOB, GHOST]} canComment />);
     const ta = (await screen.findByPlaceholderText(/@mention a teammate/)) as HTMLTextAreaElement;
     await waitFor(() => expect(screen.queryByText('No comments yet.')).toBeInTheDocument());
     // The names load with the project read; by name is how a person is found.
@@ -386,7 +386,7 @@ describe('the comment composer and comment bodies', () => {
 
   it("render a body's account-id mentions by name, and shorten an unnamed one", async () => {
     routed([{ id: 'c1', taskId: 'T-1', author: BOB, body: `@${ALICE} please look, and @${GHOST} too`, parentCommentId: null, mentions: [ALICE, GHOST], ts: TS }]);
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} canComment />);
     await screen.findByText(/please look/);
     await waitFor(() => expect(screen.getByText(/please look/).textContent).toBe(`@Alice Doe please look, and @${GHOST_SHORT} too`));
     noRawIds(document.body);
@@ -398,7 +398,7 @@ describe('the comment composer and comment bodies', () => {
     const display = { ...memberDisplay, [MO]: 'Mo *ops* [link](http://evil.example)', [HAL]: '<i>Hal</i> <script>x</script>' };
     routed([{ id: 'c1', taskId: 'T-1', author: BOB, body: `ping @${MO} and @${HAL} now`, parentCommentId: null, mentions: [MO, HAL], ts: TS }],
       { ...project, memberDisplay: display });
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} canComment />);
     const md = await waitFor(() => {
       const el = document.querySelector('.md')!;
       expect(el.textContent).toBe('ping @Mo *ops* [link](http://evil.example) and @<i>Hal</i> <script>x</script> now');
@@ -416,7 +416,7 @@ describe('the comment composer and comment bodies', () => {
       '```',
     ].join('\n');
     routed([{ id: 'c1', taskId: 'T-1', author: BOB, body, parentCommentId: null, mentions: [ALICE], ts: TS }]);
-    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} />);
+    wrap(<Comments projectId="p1" taskId="T-1" mentionCandidates={[]} canComment />);
     const md = await waitFor(() => {
       const el = document.querySelector('.md')!;
       expect(el.querySelector('pre')).not.toBeNull();

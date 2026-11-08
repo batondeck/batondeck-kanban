@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useDisplayNames } from '../displayNames.js';
+import { roleAtLeast, useDisplayNames, useMyProjectRole } from '../displayNames.js';
 import { Icon } from '../icons.js';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -611,6 +611,13 @@ export function Board() {
   };
   const newTaskRef = useRef<HTMLInputElement>(null);
   const newTaskBtnRef = useRef<HTMLButtonElement>(null);
+  // `create_task` is tier master (`internal/domain/grants.go`), so below master "+ New task" and its
+  // `c` shortcut are closed and say why, the way the task's Status and Claim do (P-432). The role is
+  // the caller's in this project, from the roster; while it loads the button is closed with no reason
+  // shown yet. Hiding is not enforcing: the server still refuses.
+  const myRole = useMyProjectRole(projectId);
+  const canCreate = roleAtLeast(myRole, 'master');
+  const createClosedWhy = !canCreate && myRole !== undefined ? 'Only a master can create tasks.' : null;
   // Close the create row and return focus to the trigger (keyboard/SR users aren't dropped to <body>).
   const closeCreate = (): void => { setCreating(false); setTimeout(() => newTaskBtnRef.current?.focus(), 0); };
 
@@ -1000,11 +1007,11 @@ export function Board() {
     { keys: 'ArrowDown', label: '', run: () => (openTask ? false : moveSelection(1)) },
     { keys: 'ArrowUp', label: '', run: () => (openTask ? false : moveSelection(-1)) },
     { keys: 'Enter', label: 'Open selected task', run: () => (selectedId && !openTask ? setOpenTask(selectedId) : false) },
-    { keys: 'c', label: 'New task', run: () => { setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } },
+    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
     { keys: 's', label: 'Set status (selection)', run: () => (selectedId ? openPalette('status') : false) },
     { keys: 'p', label: 'Set priority (selection)', run: () => (selectedId ? openPalette('priority') : false) },
     { keys: 'Escape', label: '', run: () => (openTask ? false : selectedId ? setSelectedId(null) : false) },
-  ], [selectedId, openTask, visibleOrder]);
+  ], [selectedId, openTask, visibleOrder, canCreate]);
 
   // drawer-scope j/k = previous/next task while the drawer is open (the board owns the order)
   useShortcuts('drawer', [
@@ -1084,7 +1091,18 @@ export function Board() {
             )}
             <AgentPresence agents={agentList} />
             <button className="btn secondary" onClick={() => { setNewBoardOpen((v) => !v); setTimeout(() => newBoardRef.current?.focus(), 0); }} aria-expanded={newBoardOpen} title="Create a new board in this project">+ New board</button>
-            <button ref={newTaskBtnRef} className="btn" onClick={() => { setCreating((v) => !v); setTimeout(() => newTaskRef.current?.focus(), 0); }} aria-expanded={creating}>+ New task</button>
+            <button
+              ref={newTaskBtnRef}
+              className="btn"
+              disabled={!canCreate}
+              title={createClosedWhy ?? (canCreate ? undefined : 'Checking your role')}
+              aria-describedby={createClosedWhy ? 'new-task-closed' : undefined}
+              onClick={() => { setCreating((v) => !v); setTimeout(() => newTaskRef.current?.focus(), 0); }}
+              aria-expanded={canCreate && creating}
+            >
+              + New task
+            </button>
+            {createClosedWhy && <span id="new-task-closed" className="muted" style={{ fontSize: 12 }}>{createClosedWhy}</span>}
             <button className="btn secondary" onClick={toggleSprintRail} title="Toggle the sprints rail">{sprintRailOpen ? 'Hide sprints' : 'Sprints'}</button>
             <button className="btn secondary" onClick={toggleRail} title="Toggle the activity feed">{railOpen ? 'Hide activity' : 'Activity'}</button>
           </>
@@ -1113,7 +1131,7 @@ export function Board() {
       )}
 
       {/* Create row — only shown when adding, so it never clutters the bar (opens on the "c" shortcut too) */}
-      {creating && (
+      {creating && canCreate && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 12px', borderBottom: '1px solid var(--border)', background: 'var(--surface-low)' }}>
           <input
             ref={newTaskRef}

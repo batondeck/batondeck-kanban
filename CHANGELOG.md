@@ -1420,6 +1420,12 @@ this section's headings in CHANGELOG.md, are all part of it.
 - The task page's Review panel names who completed the task, the way the rest of the ticket names
   a person: the member's name, else their login, else the shortened id when nothing names the
   account. It printed the stored account id ("completed by U-4e68…") (P-431).
+- A role below an action's tier is shown that action closed, with its reason, as Status and Claim
+  already were: the board's "+ New task" and its `c` shortcut below master, a task's Comment and
+  Reply for a viewer, and in Settings "+ Add Member" and Remove below project admin, the column
+  edits below member (adding one below worker) and the review-step switch below project admin.
+  Before, a viewer was offered them and learnt of the refusal only from the server's error. The
+  server's checks are unchanged (P-432).
 - The change bus no longer hands a change to a subscription made after its tail stopped. When the
   last subscription closed during a read, that read could deliver what it found to the next
   subscription, which is served from the end of the log, and set the frontier under the new tail.

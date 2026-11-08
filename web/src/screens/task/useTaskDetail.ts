@@ -218,10 +218,12 @@ export function useTaskDetail(projectId: string, taskId: string) {
   //    requeue of a poisoned task (BLOCKED → TODO, plan §Fold 1), which is the same call, need master
   //    or one of the two roles above it.
   //  - `claim_task` is tier write: a worker or above.
+  //  - `add_comment` is tier write too, so a viewer's composer is closed with its reason (P-432).
   const myRole = identity ? projectQ.data?.project.members[identity] : undefined;
   const canMove = roleAtLeast(myRole, 'master');
   const canRequeue = canMove;
   const canClaim = roleAtLeast(myRole, 'worker');
+  const canComment = roleAtLeast(myRole, 'worker');
 
   const startEdit = (): void => {
     if (!task) return;
@@ -235,7 +237,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, names,
+    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
   };
 }
 

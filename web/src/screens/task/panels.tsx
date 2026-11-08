@@ -390,11 +390,17 @@ export function MemoryPanel({ d }: P) {
 
 /** Comments + follow-ups. Both already own their headings, so the panel only supplies the record rule. */
 export function DiscussionPanel({ d }: P) {
-  const { projectId, taskId, task, identity, mentionCandidates } = d;
+  const { projectId, taskId, task, identity, mentionCandidates, myRole, canComment } = d;
   return (
     <Panel title="Discussion" pad>
       <Stack gap={16}>
-        <Comments projectId={projectId} taskId={taskId} mentionCandidates={mentionCandidates} />
+        <Comments
+          projectId={projectId}
+          taskId={taskId}
+          mentionCandidates={mentionCandidates}
+          canComment={canComment}
+          closedWhy={!canComment && myRole !== undefined ? 'A viewer cannot comment.' : undefined}
+        />
         <FollowUps projectId={projectId} task={task} identity={identity} />
       </Stack>
     </Panel>
