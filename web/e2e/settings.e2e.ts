@@ -1,6 +1,7 @@
 // Settings, as the workspace admin: a column added to the board, a member added and removed, the
 // review step switched off, a CLI token minted (shown once) and revoked, and a local user added
-// with its initial password shown once. Each change is read back from the server over MCP.
+// with its initial password shown once. Each change is read back from the server over MCP. Settings
+// works on the sidebar's selected project, and its own picker moves the sidebar's (P-434).
 import type { Locator, Page } from '@playwright/test';
 import { McpClient, seedProject, type SeededBoard } from './support/mcp.js';
 import { runState } from './support/state.js';
@@ -12,8 +13,36 @@ const section = (page: Page, title: string): Locator =>
 
 test.describe('settings', () => {
   let b: SeededBoard;
+  let other: SeededBoard;
   test.beforeAll(async () => {
     b = await seedProject('Settings');
+    // A second project, so there is a selection to follow whichever spec runs first.
+    other = await seedProject('Settings other');
+  });
+
+  test('Settings follows the sidebar project, and its picker moves the sidebar', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByRole('heading', { name: 'Board Configuration' })).toBeVisible();
+    const sidebar = page.getByRole('combobox', { name: 'Project', exact: true });
+    const picker = page.getByLabel('Project to configure');
+    // "All projects" has no meaning here: Settings takes the first project and the sidebar names it.
+    await expect(sidebar).not.toHaveValue('');
+    await expect(picker).toHaveValue(await sidebar.inputValue());
+
+    // Sidebar -> Settings.
+    await sidebar.selectOption({ label: b.projectName });
+    await expect(picker).toHaveValue(b.projectId);
+    await expect(page.getByLabel('Board to configure')).toHaveValue(b.boardId);
+    await atRoute(page, '/settings', 'follows the sidebar project');
+    await sidebar.selectOption({ label: other.projectName });
+    await expect(picker).toHaveValue(other.projectId);
+    await expect(page.getByLabel('Board to configure')).toHaveValue(other.boardId);
+
+    // Settings -> sidebar.
+    await picker.selectOption({ label: b.projectName });
+    await expect(sidebar).toHaveValue(b.projectId);
+    await expect(page.getByLabel('Board to configure')).toHaveValue(b.boardId);
+    await atRoute(page, '/settings', 'its picker moved the sidebar');
   });
 
   test('columns, members, workflow, CLI tokens and users', async ({ page }) => {
@@ -21,19 +50,22 @@ test.describe('settings', () => {
     const viewer = runState().accounts.viewer;
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Board Configuration' })).toBeVisible();
-    // Settings has a project picker of its own in the top bar (it has no accessible name).
-    await page.locator('.topbar select').selectOption({ label: b.projectName });
+    // Settings' own project picker, in the top bar, is named apart from the sidebar's (P-433).
+    await page.getByLabel('Project to configure').selectOption({ label: b.projectName });
     await expect(page.getByLabel('Board to configure')).toHaveValue(b.boardId);
+    await expect(page.getByLabel('Name of column To do')).toHaveValue('To do');
+    // Every control on the screen has an accessible name, so none has to be reached by structure.
+    const controls = page.locator('.topbar, .page').locator('input, select, textarea, button, [role="switch"]');
+    expect(await controls.count()).toBeGreaterThan(20);
+    for (let i = 0; i < (await controls.count()); i++) await expect(controls.nth(i)).toHaveAccessibleName(/\S/);
     await atRoute(page, '/settings', 'project picked');
 
     // Columns: a sixth column, mapped to Review.
-    const columns = section(page, 'Columns');
-    await columns.getByPlaceholder('New column name').fill('QA');
-    await columns.locator('select').last().selectOption('REVIEW');
-    await columns.getByRole('button', { name: '+ Add Column' }).click();
-    await expect
-      .poll(() => columns.locator('input.input:not([placeholder])').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value)))
-      .toContain('QA');
+    await page.getByLabel('New column name').fill('QA');
+    await page.getByLabel('New column status').selectOption('REVIEW');
+    await page.getByRole('button', { name: '+ Add Column' }).click();
+    await expect(page.getByLabel('Name of column QA')).toHaveValue('QA');
+    await expect(page.getByLabel('WIP limit of column QA')).toHaveValue('');
     await expect
       .poll(async () => {
         const r = await mcp.call<{ board: { columns: Array<{ name: string; status: string }> } }>('get_board', {
@@ -46,23 +78,22 @@ test.describe('settings', () => {
 
     // Members: add the viewer account as a viewer, then remove it.
     const members = section(page, 'Members');
-    await members.getByPlaceholder('teammate@example.com').fill(viewer.login);
-    await members.locator('select').selectOption('viewer');
-    await members.getByRole('button', { name: '+ Add Member' }).click();
+    await page.getByLabel('New member login').fill(viewer.login);
+    await page.getByLabel('New member role').selectOption('viewer');
+    await page.getByRole('button', { name: '+ Add Member' }).click();
     const row = members.locator('tbody tr').filter({ hasText: viewer.id });
     await expect(row).toBeVisible();
     await expect(row.locator('.role-badge')).toHaveText('viewer');
     await expect(row).toContainText(viewer.name);
     await atRoute(page, '/settings', 'column and member added');
-    await row.getByRole('button', { name: 'Remove' }).click();
+    await page.getByRole('button', { name: `Remove ${viewer.name}` }).click();
     await expect(row).toHaveCount(0);
     await expect
       .poll(async () => Object.keys((await mcp.call<{ project: { members: Record<string, string> } }>('get_project', { projectId: b.projectId })).project.members))
       .not.toContain(viewer.id);
 
-    // Workflow: switch the review step off. The switch has no accessible name of its own; it is the
-    // one in the "Require review step" panel.
-    const review = page.locator('.record').filter({ hasText: 'Require review step' }).getByRole('switch');
+    // Workflow: switch the review step off. The switch is named by its caption (P-433).
+    const review = page.getByRole('switch', { name: 'Require review step' });
     await expect(review).toHaveAttribute('aria-checked', 'true');
     await review.click();
     await expect(review).toHaveAttribute('aria-checked', 'false');

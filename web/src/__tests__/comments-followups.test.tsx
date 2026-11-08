@@ -47,7 +47,7 @@ describe('Comments', () => {
       },
       [`POST ${base}/comments`]: { comment: { id: 'CM-3', taskId: 'T-1', author: 'u-will', body: 'New', parentCommentId: null, mentions: [], ts } },
     });
-    wrap(<Comments projectId="P-1" taskId="T-1" mentionCandidates={[]} />);
+    wrap(<Comments projectId="P-1" taskId="T-1" mentionCandidates={[]} canComment />);
     expect(await screen.findByText('First pass is in')).toBeInTheDocument();
     expect(screen.getByText('Reply from will')).toBeInTheDocument();
     // The first read of the thread (the names read, P-314, is `GET /api/projects/P-1`).

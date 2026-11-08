@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -30,8 +31,9 @@ func notificationsAbout(t *testing.T, c *Client, p *project, task, typ string) (
 }
 
 // A mention and a follow-up notify worker2, newest first, unread; marking one by id lowers the
-// unread count by one, another identity's mark and a second mark of it count nothing, and all:true
-// clears the rest. A limit past 200 and an empty id are refused.
+// unread count by one, another identity's mark and a second mark of it count nothing, a mark naming
+// neither ids nor all:true is refused and marks nothing, and all:true clears the rest. A limit past
+// 200 and an empty id are refused.
 func notificationsListAndMark(t *testing.T, e *env) {
 	p := e.project(t, "Notifications")
 	id := S(e.task(t, p, "noisy", nil), "id")
@@ -54,7 +56,14 @@ func notificationsListAndMark(t *testing.T, e *env) {
 	want(t, unread2 == unread-1 && B(after[0], "read") && !B(after[1], "read"), "after marking one: %s (unread %v, was %v)", js(after), unread2, unread)
 	again := e.worker2.Call(t, "mark_notifications_read", M{"ids": []any{S(notes[0], "id")}})
 	want(t, N(again, "updated") == 0, "a second mark of the same notification answered %s", js(again))
-	e.worker2.Call(t, "mark_notifications_read", M{"all": true})
+	for _, args := range []M{{}, {"all": false}, {"ids": []any{}}} {
+		refused := e.worker2.Refuse(t, "mark_notifications_read", args, "VALIDATION")
+		want(t, refused.Details["field"] == "ids", "mark_notifications_read %v refused %s %v", args, refused.Message, refused.Details)
+	}
+	still, unreadStill := notificationsAbout(t, e.worker2, p, id, "")
+	want(t, unreadStill == unread2 && !B(still[1], "read"), "a refused mark changed the unread count to %v (was %v): %s", unreadStill, unread2, js(still))
+	all := e.worker2.Call(t, "mark_notifications_read", M{"all": true})
+	want(t, N(all, "updated") >= 1, "mark_notifications_read all:true answered %s", js(all))
 	_, unread3 := notificationsAbout(t, e.worker2, p, id, "")
 	want(t, unread3 == 0, "unread after all:true is %v", unread3)
 
@@ -195,7 +204,8 @@ func rankOrchestrate(t *testing.T, e *env) {
 
 // The project admin denies worker2 add_comment: the next comment is refused, the grant reads back,
 // and clearing it with null restores the role's tools. The master may not grant, and a grant naming
-// a tool no grant can restrict (one that takes no projectId) is refused.
+// a tool no grant can restrict (one that takes no projectId, or an exempt read) or a name that is no
+// tool is refused, naming it, and leaves the grant in force as it was.
 func grantsNarrow(t *testing.T, e *env) {
 	p := e.project(t, "Grants")
 	id := S(e.task(t, p, "guarded", nil), "id")
@@ -210,6 +220,15 @@ func grantsNarrow(t *testing.T, e *env) {
 
 	e.master.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": nil}, "FORBIDDEN")
 	e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"deny": []any{"list_audit_log"}}}, "VALIDATION")
+	// A typo in tools, an allowlist, would have denied worker2 every governed tool; it is refused.
+	typo := e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"tools": []any{"no_such_tool"}}}, "VALIDATION")
+	want(t, typo.Details["field"] == "tools" && js(typo.Details["unknown"]) == `["no_such_tool"]` && strings.Contains(typo.Message, "no_such_tool"),
+		"grant_capabilities tools [no_such_tool] refused %s %v", typo.Message, typo.Details)
+	exempt := e.admin.Refuse(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": M{"deny": []any{"add_coment", "get_task"}}}, "VALIDATION")
+	want(t, exempt.Details["field"] == "deny" && js(exempt.Details["unknown"]) == `["add_coment"]` && js(exempt.Details["exempt"]) == `["get_task"]`,
+		"grant_capabilities deny [add_coment get_task] refused %s %v", exempt.Message, exempt.Details)
+	e.worker2.Refuse(t, "add_comment", M{"projectId": p.id, "taskId": id, "body": "the refused grants left the deny"}, "FORBIDDEN")
+	e.worker2.Call(t, "add_context_item", M{"projectId": p.id, "taskId": id, "kind": "note", "body": "and the rest allowed"})
 
 	cleared := e.admin.Call(t, "grant_capabilities", M{"projectId": p.id, "identityId": e.srv.ids["worker2"], "scope": nil})
 	want(t, cleared["grant"] == nil, "grant_capabilities null answered %s", js(cleared))

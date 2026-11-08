@@ -238,5 +238,19 @@ func TestListAuditLogTool(t *testing.T) {
 		wantCode(t, root.cs, "list_audit_log", map[string]any{"days": 366}, "VALIDATION")
 		wantCode(t, root.cs, "list_audit_log", map[string]any{"limit": 501}, "VALIDATION")
 		wantCode(t, root.cs, "list_audit_log", map[string]any{"projectId": p}, "VALIDATION")
+
+		// P-435: an identity subject is stored lower-cased, and the filter finds it by the id as the
+		// API hands it out ("U-…") and as stored; a task id stays exact, so its lower-cased form finds
+		// nothing.
+		ada.call("add_member", map[string]any{"projectId": p, "identityId": "U-5eed0435", "role": "worker"})
+		for _, subject := range []string{"U-5eed0435", "u-5eed0435", " U-5EED0435 "} {
+			rows := root.call("list_audit_log", map[string]any{"subject": subject})["entries"].([]any)
+			if len(rows) != 1 || obj(rows[0])["action"] != "member.added" || obj(rows[0])["subject"] != "u-5eed0435" {
+				t.Fatalf("subject %q: %v, want the one member.added row with subject u-5eed0435", subject, rows)
+			}
+		}
+		if n := len(root.call("list_audit_log", map[string]any{"subject": strings.ToLower(str(task["id"]))})["entries"].([]any)); n != 0 {
+			t.Fatalf("subject %q (a task id lower-cased): %d rows, want 0", strings.ToLower(str(task["id"])), n)
+		}
 	})
 }

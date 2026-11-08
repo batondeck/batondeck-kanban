@@ -45,3 +45,20 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 export function useProject(): ProjectCtx {
   return useContext(Ctx);
 }
+
+/**
+ * THE ONE PROJECT A SCREEN THAT NEEDS EXACTLY ONE WORKS ON (P-434). Settings and On-call configure a
+ * single project, so they cannot show "All projects". They read and write the sidebar's selection
+ * instead of keeping their own: picking a project in the sidebar changes theirs, and their picker
+ * changes the sidebar's. While the sidebar says "All projects" they take the first project, as they
+ * always have, and make it the shared selection so the sidebar names the project on screen.
+ */
+export function useSingleProject(): ProjectCtx {
+  const ctx = useProject();
+  const first = ctx.projects[0]?.projectId ?? '';
+  const { projectId: shared, setProjectId } = ctx;
+  useEffect(() => {
+    if (!shared && first) setProjectId(first);
+  }, [shared, first, setProjectId]);
+  return { ...ctx, projectId: shared || first };
+}

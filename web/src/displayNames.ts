@@ -56,6 +56,16 @@ export function roleAtLeast(role: string | undefined, floor: 'viewer' | 'worker'
   return role !== undefined && (ROLE_RANK[role] ?? -1) >= ROLE_RANK[floor];
 }
 
+/**
+ * The caller's role in `projectId`, as `list_projects` gives it on the roster `ProjectProvider` holds
+ * (no request of its own). `undefined` while the roster loads or when the caller is not a member, which
+ * `roleAtLeast` reads as passing no floor: a screen gating a write on it fails closed (P-432).
+ */
+export function useMyProjectRole(projectId: string | undefined): string | undefined {
+  const { projects } = useProject();
+  return projectId ? projects.find((p) => p.projectId === projectId)?.role : undefined;
+}
+
 /** Long: names change far more slowly than a feed does, and a stale label is harmless. */
 const STALE_MS = 300_000;
 

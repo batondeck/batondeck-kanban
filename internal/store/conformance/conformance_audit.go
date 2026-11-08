@@ -83,6 +83,9 @@ func auditLog(t *testing.T, newStore Factory) {
 				{"actor", store.AuditFilter{Actor: "alice"}, []string{"task.deleted", "member.removed", "member.added"}},
 				{"action", store.AuditFilter{Action: "member.added"}, []string{"member.added", "member.added"}},
 				{"subject", store.AuditFilter{Subject: "bob"}, []string{"member.removed", "member.added"}},
+				{"subject-alias", store.AuditFilter{Subject: "BOB", SubjectAlias: "bob"}, []string{"member.removed", "member.added"}},
+				{"subject-exact-without-alias", store.AuditFilter{Subject: "BOB"}, nil},
+				{"subject-or-alias", store.AuditFilter{Subject: "T-1", SubjectAlias: "dan"}, []string{"task.deleted", "member.added"}},
 				{"since-until", store.AuditFilter{Since: 200, Until: 300}, []string{"member.added", "member.removed"}},
 			} {
 				if got := list(c.f); !slices.Equal(got, c.want) {

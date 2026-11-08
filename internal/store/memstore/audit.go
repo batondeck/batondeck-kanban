@@ -60,7 +60,7 @@ func auditMatches(f store.AuditFilter, r store.AuditRow) bool {
 	return (f.ProjectID == "" || r.ProjectID == f.ProjectID) &&
 		(f.Actor == "" || r.Actor == f.Actor) &&
 		(f.Action == "" || r.Action == f.Action) &&
-		(f.Subject == "" || r.Subject == f.Subject) &&
+		(f.Subject == "" || r.Subject == f.Subject || (f.SubjectAlias != "" && r.Subject == f.SubjectAlias)) &&
 		(f.Since == 0 || r.TS >= f.Since) &&
 		(f.Until == 0 || r.TS <= f.Until)
 }

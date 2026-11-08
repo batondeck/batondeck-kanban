@@ -132,6 +132,13 @@ func TestNotificationFeed(t *testing.T) {
 		}
 		r.wantCode(r.grace, "mark_notifications_read", map[string]any{"ids": ids}, "VALIDATION")
 		r.wantCode(r.grace, "mark_notifications_read", map[string]any{"ids": []any{""}}, "VALIDATION")
+		// P-439: naming neither ids nor all: true is refused, not answered updated 0.
+		for _, args := range []map[string]any{{}, {"all": false}, {"ids": []any{}}, {"ids": []any{}, "all": false}} {
+			if e := r.wantCode(r.grace, "mark_notifications_read", args, "VALIDATION"); obj(e["details"])["field"] != "ids" ||
+				!strings.Contains(str(e["message"]), "ids or all: true") {
+				t.Fatalf("mark_notifications_read %v: %v", args, e)
+			}
+		}
 	})
 }
 

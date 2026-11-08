@@ -1,13 +1,35 @@
 // On-call, as the workspace admin: Setup opens on the source list, a Grafana integration is
 // created with a generated key (shown once), a test event is sent through it, and the screen's tiles
-// and delivery health count it.
+// and delivery health count it. On-call works on the sidebar's selected project, and its own picker
+// moves the sidebar's (P-434).
 import { McpClient, seedProject, type SeededBoard } from './support/mcp.js';
 import { atRoute, expect, test } from './support/test.js';
 
 test.describe('on-call', () => {
   let b: SeededBoard;
+  let other: SeededBoard;
   test.beforeAll(async () => {
     b = await seedProject('Oncall');
+    // A second project, so On-call shows its picker and there is a selection to follow.
+    other = await seedProject('Oncall other');
+  });
+
+  test('On-call follows the sidebar project, and its picker moves the sidebar', async ({ page }) => {
+    await page.goto('/oncall');
+    await expect(page.getByRole('heading', { name: 'On-call' })).toBeVisible();
+    const sidebar = page.getByRole('combobox', { name: 'Project', exact: true });
+    const picker = page.getByLabel('On-call project');
+    // "All projects" has no meaning here: On-call takes the first project and the sidebar names it.
+    await expect(sidebar).not.toHaveValue('');
+    await expect(picker).toHaveValue(await sidebar.inputValue());
+
+    await sidebar.selectOption({ label: b.projectName });
+    await expect(picker).toHaveValue(b.projectId);
+    await atRoute(page, '/oncall', 'follows the sidebar project');
+
+    await picker.selectOption({ label: other.projectName });
+    await expect(sidebar).toHaveValue(other.projectId);
+    await atRoute(page, '/oncall', 'its picker moved the sidebar');
   });
 
   test('create an integration in Setup, send a test event, and see it counted', async ({ page }) => {
@@ -16,10 +38,8 @@ test.describe('on-call', () => {
     await expect(page.getByRole('heading', { name: 'On-call' })).toBeVisible();
     const tile = (label: string) => page.locator('.tile').filter({ has: page.locator('.tile-k', { hasText: new RegExp(`^${label}$`) }) }).locator('.tile-v');
     await expect(tile('Integrations')).toBeVisible();
-    // On-call has a project picker of its own, shown only when the account holds more than one
-    // project (a run of this spec alone has just the one).
-    const picker = page.locator('#oncall-project');
-    if ((await picker.count()) > 0) await picker.selectOption({ label: b.projectName });
+    // On-call has a project picker of its own, shown when the account holds more than one project.
+    await page.getByLabel('On-call project').selectOption({ label: b.projectName });
     await expect(tile('Integrations')).toHaveText('0');
     await atRoute(page, '/oncall', 'no integrations');
 

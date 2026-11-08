@@ -16,7 +16,9 @@ func (c *Core) Grants() Grants { return grantsSvc{c} }
 type grantsSvc struct{ c *Core }
 
 // Grant is grant_capabilities. The identity resolves as add_member's does; one that is not a member
-// is VALIDATION (conductor's), a deny or tools entry no grant can enforce is VALIDATION. After the
+// is VALIDATION (conductor's), a deny or tools entry that is no tool, or one no grant can enforce, is
+// VALIDATION naming it (domain.CheckGrantEnforceable; a grant stored before that check still loads
+// and is enforced by the names it holds). After the
 // commit the member's cached access and tools/list narrowing are dropped, so the grant holds on their
 // next call and their next request is told its tool list changed.
 func (g grantsSvc) Grant(ctx context.Context, caller domain.Caller, req GrantCapabilitiesReq) (GrantCapabilitiesResp, error) {
