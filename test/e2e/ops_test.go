@@ -123,6 +123,14 @@ func auditLog(t *testing.T, e *env) {
 	// The stored form finds the same row; a task id stays exact.
 	stored := find(M{"action": "capabilities.granted", "subject": strings.ToLower(worker2)})
 	want(t, len(stored) == 1, "list_audit_log capabilities.granted by subject %s: %s", strings.ToLower(worker2), js(stored))
+	// Token rows (P-441): the harness's `token create` for the viewer is found by the id as handed out
+	// and by its stored form, and reads back lower-cased like every identity subject. They name no
+	// project, so they are read without find's project filter.
+	for _, subject := range []string{viewer, strings.ToLower(viewer)} {
+		minted := A(e.admin.Call(t, "list_audit_log", M{"action": "cli_token.minted", "subject": subject, "limit": 500}), "entries")
+		want(t, len(minted) >= 1 && S(minted[0], "subject") == strings.ToLower(viewer) && S(minted[0], "actor") == "host",
+			"list_audit_log cli_token.minted by subject %s: %s", subject, js(minted))
+	}
 	deleted := find(M{"action": "task.deleted", "actor": e.srv.ids["master"], "subject": id})
 	want(t, len(deleted) == 1 && S(deleted[0], "subject") == id && S(deleted[0], "agent") == "e2e-master", "list_audit_log task.deleted: %s", js(deleted))
 	all := find(M{"days": 1})

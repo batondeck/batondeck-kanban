@@ -162,12 +162,22 @@ func TestMintAndRevokeOwnedAreAudited(t *testing.T) {
 	for _, r := range page.Rows {
 		got = append(got, r.Action+" "+r.Actor+">"+r.Subject+" "+string(r.Data))
 	}
+	// The subject is stored canonical, as every identity subject is (P-441); the actor is as given.
+	subject := domain.CanonIdentity(alice.ID)
 	want := []string{
-		AuditTokenRevoked + " " + alice.ID + ">" + alice.ID + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
-		AuditTokenMinted + " " + alice.ID + ">" + alice.ID + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
+		AuditTokenRevoked + " " + alice.ID + ">" + subject + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
+		AuditTokenMinted + " " + alice.ID + ">" + subject + ` {"label":"laptop","tokenId":"` + info.ID + `","via":"settings"}`,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("audit rows (newest first):\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if subject == alice.ID {
+		t.Fatalf("alice's id %q is already canonical; the case above proves nothing", alice.ID)
+	}
+	// Filtered by the stored form, the store finds both token rows.
+	byStored, err := f.st.ListAuditLog(ctx, store.AuditFilter{Subject: subject}, "", 0)
+	if err != nil || len(byStored.Rows) != 2 {
+		t.Fatalf("token rows by subject %q: %+v, %v", subject, byStored.Rows, err)
 	}
 
 	bare := &TokenService{Store: f.st, Now: f.clk.now}

@@ -302,12 +302,14 @@ func (t *TokenService) RevokeOwned(ctx context.Context, actor, via, owner, id st
 	return info, t.audit(ctx, AuditTokenRevoked, actor, info, via)
 }
 
+// audit records a token row. Its subject is the identity in the form every identity-valued audit
+// subject is stored in (domain.CanonIdentity), so list_audit_log finds token rows like the rest (P-441).
 func (t *TokenService) audit(ctx context.Context, action, actor string, info TokenInfo, via string) error {
 	data, err := json.Marshal(map[string]string{"tokenId": info.ID, "label": info.Label, "via": via})
 	if err != nil {
 		return err
 	}
-	_, err = t.Audit.AppendAudit(ctx, store.AuditRow{TS: t.now().UnixMilli(), Action: action, Actor: actor, Subject: info.IdentityID,
+	_, err = t.Audit.AppendAudit(ctx, store.AuditRow{TS: t.now().UnixMilli(), Action: action, Actor: actor, Subject: domain.CanonIdentity(info.IdentityID),
 		Result: store.AuditOK, Data: data})
 	return err
 }

@@ -1468,6 +1468,10 @@ this section's headings in CHANGELOG.md, are all part of it.
   nor `all: true` (`{}`, `{all: false}`, `{ids: []}`) with VALIDATION, `details.field` `ids`, as the
   tool's description requires. It answered `updated: 0`. The web UI, which always sends one id or
   `all: true`, is unchanged. (P-439)
+- The audit log stores a CLI token's `cli_token.minted` and `cli_token.revoked` rows with the identity
+  subject lower-cased, as it stores every other identity subject, so `list_audit_log` filtered by the
+  stored form finds them too. Rows written before keep their `U-…` subject, which the id as handed
+  out still finds. (P-441)
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an
