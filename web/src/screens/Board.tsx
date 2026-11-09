@@ -6,7 +6,7 @@
  *  - framer-motion card enter/leave; skeleton loading; optimistic create/move
  *  - one motion vocabulary (--ease/--t-1..3 in index.css) — extend it, don't invent alongside it
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
@@ -1129,6 +1129,26 @@ export function Board() {
   const dragTask = dragId ? allTasks.find((t) => t.id === dragId) : null;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
+  // WHERE THE COLUMNS START, measured (P-446). Their height fills the viewport below that point, so the
+  // horizontal scroll track sits on the viewport floor. A fixed `calc(100vh - 140px)` assumed a one-row
+  // header; the header now wraps its actions onto a second row when they do not fit, and the reasons
+  // and messages above the columns vary too. Re-measured after every render and on resize; the state
+  // only changes when the offset does, so this settles in one pass.
+  const columnsRef = useRef<HTMLDivElement>(null);
+  const [columnsTop, setColumnsTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      const el = columnsRef.current;
+      if (!el) return;
+      const scroller = el.closest('.main');
+      const top = Math.round(el.getBoundingClientRect().top + (scroller?.scrollTop ?? 0));
+      setColumnsTop((prev) => (prev === top ? prev : top));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  });
+
   return (
     <>
       {/* Board header — identity + the two primary affordances (create, activity) */}
@@ -1387,7 +1407,11 @@ export function Board() {
           >
             {/* minWidth:0 lets this flex item shrink and scroll internally (columns are flex-basis
                 300px, shrink 0 in CSS) — the rail never crushes columns, the board pans instead. */}
-            <div className="columns" style={{ flex: 1, minWidth: 0 }}>
+            <div
+              ref={columnsRef}
+              className="columns"
+              style={{ flex: 1, minWidth: 0, ...(columnsTop !== null ? ({ '--columns-top': `${columnsTop}px` } as React.CSSProperties) : {}) }}
+            >
               {board?.columns.map((col) => {
                 const colTasks = tasks
                   .filter((t) => columnIdOf(board, t) === col.id)

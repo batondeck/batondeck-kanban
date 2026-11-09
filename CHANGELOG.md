@@ -1502,9 +1502,11 @@ this section's headings in CHANGELOG.md, are all part of it.
   not a member of this project, so its board cannot be shown. A project admin can add you."), as the
   closed controls above it do. It said only "Couldn't load this board.", which other failures still
   say (P-445).
-- A page title no longer breaks mid-word beside closed controls and their reasons: the header's
-  actions wrap onto a second row, each closed button with its reason, and the title keeps at least
-  16 characters. "Board" read "Boar / d" for a caller who is not a member (P-446).
+- A page title no longer breaks mid-word beside closed controls and their reasons. The title keeps at
+  least 16 characters and wraps between words; actions that do not fit beside it move to the next
+  row, each closed button with its reason. "Board" read "Boar / d" for a caller who is not a member.
+  The board's columns are sized from where they start, not a fixed 140 px, so their scroll track
+  stays on the bottom of the window when the header takes more than one row (P-446).
 - `serve` stops at once when a client holds a connection it has not sent a request on yet (an HTTP
   client's spare one). `http.Server.Shutdown` keeps such a connection until it is 5 s old, so the
   stop took 5 s or more; serve now closes them while it shuts down, as it closes idle keep-alive
