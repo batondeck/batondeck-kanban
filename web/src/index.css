@@ -911,8 +911,12 @@ th { color: var(--text-muted); font-weight: 700; font-size: 11px; text-transform
    letter's width, and "Board" broke as "Boar / d". The heading grows from a 16-character basis and
    keeps at least that (a short name stays whole; a long one wraps between words beside the actions),
    and actions that do not fit beside it move to the next row, each closed button with its reason. */
-.topbar { flex-wrap: wrap; }
+.topbar { flex-wrap: wrap; justify-content: flex-end; }
 .topbar-action { display: inline-flex; align-items: center; gap: 12px; }
+/* A wrapped row sits right-aligned, as the actions of a one-row header do, and a closed control's
+   reason wraps within 20 characters, so the actions pack into fewer rows (P-447): at 1024 px a
+   viewer's header took three rows, Activity alone on the third. */
+.topbar-action > .muted { max-width: 20ch; line-height: 1.3; }
 
 /* *** THE BOARD SELECTOR IS FIXED-WIDTH IN THE TOPBAR. ***
    `.proj-switch` is `width: 100%` for the sidebar, where it should fill. In the topbar that made it

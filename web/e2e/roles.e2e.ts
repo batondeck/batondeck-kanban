@@ -97,6 +97,20 @@ test.describe('as a viewer', () => {
     await expect(page.getByRole('combobox', { name: 'Switch board' })).toBeVisible();
     await expect(page.getByText('One task')).toBeVisible();
     await titleOnOneLine(page);
+    // The actions pack into at most two rows, the wrapped one right-aligned (P-447): each control's
+    // vertical centre, clustered, gives the rows; Activity, the last, ends at the header's right edge.
+    const header = page.locator('.main > .topbar');
+    const rows = await header.evaluate((h) => {
+      const centres = [...h.querySelectorAll('button, select, .topbar-heading')].map((e) => {
+        const r = e.getBoundingClientRect();
+        return r.top + r.height / 2;
+      }).sort((a, b) => a - b);
+      return centres.reduce<number[]>((acc, c) => (acc.length && c - acc[acc.length - 1]! < 20 ? acc : [...acc, c]), []).length;
+    });
+    expect(rows, 'header rows at 1024 px').toBeLessThanOrEqual(2);
+    const right = await header.evaluate((h) => h.getBoundingClientRect().right - parseFloat(getComputedStyle(h).paddingRight));
+    const activity = await page.getByRole('button', { name: 'Activity', exact: true }).boundingBox();
+    expect(Math.abs(activity!.x + activity!.width - right), 'Activity ends at the header’s right edge').toBeLessThan(2);
     const cols = await page.locator('.columns').last().boundingBox();
     expect(cols, 'the columns are laid out').not.toBeNull();
     const bottom = cols!.y + cols!.height;
