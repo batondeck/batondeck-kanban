@@ -208,6 +208,35 @@ test.describe('as a viewer', () => {
   });
 });
 
+// The follow-up's holder is the task's assignee; a viewer may hold one but not ack it (ack_follow_up is
+// tier write). Ack is closed with its reason shown beside it and describing it, as every control P-440
+// closes, not a hover title only (P-444). The follow-up stays open.
+test.describe('as a viewer holding a follow-up', () => {
+  test.use({ role: 'viewer' });
+
+  test('Ack is closed, its reason shown and describing it, and the follow-up stays open (P-444)', async ({ page }) => {
+    const { accounts } = runState();
+    const task = await seedTask(b, 'Answer the auditor');
+    const admin = new McpClient('admin');
+    await admin.call('update_task', { projectId: b.projectId, taskId: task.id, version: task.version, patch: { assignee: accounts.viewer.id } });
+    await admin.call('add_follow_up', { projectId: b.projectId, taskId: task.id, body: 'Cite the key rotation log.' });
+    const status = async (): Promise<string[]> =>
+      (await admin.call<{ followUps: Array<{ status: string }> }>('list_follow_ups', { projectId: b.projectId, taskId: task.id })).followUps.map((f) => f.status);
+    expect(await status()).toEqual(['open']);
+
+    await page.goto(taskPath(task.id));
+    await expect(page.getByText('Cite the key rotation log.')).toBeVisible();
+    const ack = page.getByRole('button', { name: 'Ack', exact: true });
+    const why = 'A viewer cannot acknowledge follow-ups.';
+    await expect(ack).toBeDisabled();
+    await expect(ack).toHaveAccessibleDescription(why);
+    await expect(page.getByText(why)).toBeVisible();
+    await ack.click({ force: true });
+    await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'viewer: ack closed, says why');
+    expect(await status()).toEqual(['open']);
+  });
+});
+
 test.describe('as a worker', () => {
   test.use({ role: 'worker' });
 
@@ -302,5 +331,35 @@ test.describe('as a worker', () => {
     await expect(completed).toContainText(`completed by ${worker.name}`);
     await expect(completed).not.toContainText(worker.id.slice(0, 6));
     await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'worker: completed, in Review');
+  });
+});
+
+// A workspace admin opening, by URL, a project they are not a member of (P-443). `list_projects`
+// answers the caller's own projects, so the roster has no row for it and the server refuses every
+// read and write there. The controls the board still draws are closed and say why ("not a member"),
+// where before they stayed on "Checking your role" for good. Nothing is written.
+test.describe('as a workspace admin who is not a member of the project', () => {
+  test('the board says "not a member" on every closed control, never "Checking your role", and nothing is written', async ({ page }) => {
+    const worker = new McpClient('worker');
+    const { projectId } = await worker.call<{ projectId: string }>('create_project', { name: `Not mine ${Date.now().toString(36)}` });
+    const { board } = await worker.call<{ board: { id: string } }>('create_board', { projectId, name: 'Worker board' });
+    const boards = async (): Promise<string[]> =>
+      (await worker.call<{ boards: Array<{ id: string }> }>('list_boards', { projectId })).boards.map((x) => x.id);
+    const before = await boards();
+
+    await page.goto(`/projects/${projectId}/boards/${board.id}`);
+    const why = (what: string): string => `You are not a member of this project, so you cannot ${what}.`;
+    const newBoard = page.getByRole('button', { name: '+ New board' });
+    await expect(page.getByText(why('create boards'))).toBeVisible();
+    await expect(newBoard).toBeDisabled();
+    await expect(newBoard).toHaveAccessibleDescription(why('create boards'));
+    await expect(page.getByRole('button', { name: '+ New task' })).toBeDisabled();
+    await expect(page.getByText(why('create tasks'))).toBeVisible();
+    await expect(page.getByText(why('assign, move or reprioritise tasks'))).toBeVisible();
+    await expect(page.getByText(/Checking your role/)).toHaveCount(0);
+    await expect(page.locator('[title="Checking your role"]')).toHaveCount(0);
+    await newBoard.click({ force: true });
+    await atRoute(page, '/projects/:projectId/boards/:boardId', 'admin, not a member: closed, says why');
+    expect(await boards()).toEqual(before);
   });
 });

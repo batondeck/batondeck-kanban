@@ -19,7 +19,7 @@ import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
-import { useDisplayNames, useMyProjectRole } from '../../displayNames.js';
+import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../../displayNames.js';
 import { closedWhy, mayCall, type GatedTool } from '../../toolFloors.js';
 import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
@@ -225,8 +225,14 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // The role is the caller's in this project from the roster `ProjectProvider` holds (`useMyProjectRole`),
   // the source every screen gates on. Where the roster has no row for it (a surface rendered with no
   // provider) the project's own member list, already read here for names, says the same thing.
+  // A roster that has loaded without a row (`NOT_A_MEMBER`, P-443) defers to the member map too, so a
+  // roster read before the caller was added does not close their controls; it stands once the project
+  // read has answered without them.
   const rosterRole = useMyProjectRole(projectId);
-  const myRole = rosterRole ?? (identity ? projectQ.data?.project.members[identity] : undefined);
+  const memberRole = identity ? projectQ.data?.project.members[identity] : undefined;
+  const myRole = rosterRole !== undefined && rosterRole !== NOT_A_MEMBER
+    ? rosterRole
+    : memberRole ?? (rosterRole === NOT_A_MEMBER && !projectQ.isLoading ? NOT_A_MEMBER : undefined);
   const canMove = mayCall(myRole, 'move_task');
   const canRequeue = canMove;
   const canClaim = mayCall(myRole, 'claim_task');
