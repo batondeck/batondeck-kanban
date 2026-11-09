@@ -1149,10 +1149,11 @@ export function Board() {
   });
   useEffect(() => {
     window.addEventListener('resize', measureColumns);
-    // The header is this screen's PageHeader, a direct child of the app's `.main`.
-    const header = document.querySelector('.main > .topbar');
-    const observer = header && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measureColumns()) : null;
-    if (header && observer) observer.observe(header);
+    // Everything this screen renders into the app's `.main` (its header first, then the filter bar,
+    // the reasons and messages above the columns, and the body), so a height change in any of them
+    // re-measures. A change below the columns' top leaves the offset as it is, so nothing loops.
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measureColumns()) : null;
+    for (const child of Array.from(document.querySelector('.main')?.children ?? [])) observer?.observe(child);
     return () => {
       window.removeEventListener('resize', measureColumns);
       observer?.disconnect();

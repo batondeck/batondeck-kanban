@@ -12,9 +12,8 @@ Include what you can of:
 - what an attacker can do, and what they need first (a token, a project role, network access);
 - the steps or a request that shows it.
 
-You will get an answer on the report. A confirmed issue is fixed in a release, and the report is
-published as a GitHub security advisory once that release is out, with credit to you unless you
-ask otherwise.
+A confirmed issue is fixed in a release, and may be published as a GitHub security advisory once
+that release is out.
 
 ## Supported versions
 
