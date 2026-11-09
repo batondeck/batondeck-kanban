@@ -902,8 +902,14 @@ th { color: var(--text-muted); font-weight: 700; font-size: 11px; text-transform
 
 /* Title + task count stack, so a long board name gets the whole cell instead of sharing it with
    "5 tasks". `min-width: 0` lets the cell shrink so the actions never get pushed off the row. */
-.topbar-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.topbar-heading h1 { overflow-wrap: anywhere; }
+.topbar-heading { display: flex; flex-direction: column; gap: 2px; min-width: min(16ch, 100%); }
+.topbar-heading h1 { overflow-wrap: break-word; }
+/* The actions WRAP onto a second row rather than squeeze the title (P-446). With `min-width: 0` and
+   `overflow-wrap: anywhere` a row of closed controls with their reasons shrank the heading to a
+   letter's width, and "Board" broke as "Boar / d". The heading keeps at least 16 characters (a short
+   name stays whole; a long one wraps between words), and what does not fit beside it moves down. */
+.topbar { flex-wrap: wrap; }
+.topbar-action { display: inline-flex; align-items: center; gap: 12px; }
 
 /* *** THE BOARD SELECTOR IS FIXED-WIDTH IN THE TOPBAR. ***
    `.proj-switch` is `width: 100%` for the sidebar, where it should fill. In the topbar that made it

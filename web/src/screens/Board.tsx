@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useDisplayNames, useMyProjectRole } from '../displayNames.js';
+import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { Icon } from '../icons.js';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
@@ -25,7 +25,7 @@ import * as mediaApi from '../api/media.js';
 import * as sprintsApi from '../api/sprints.js';
 import * as streamApi from '../api/stream.js';
 import * as tasksApi from '../api/tasks.js';
-import { isLocalEdit } from '../api/http.js';
+import { ApiError, isLocalEdit } from '../api/http.js';
 import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
@@ -1149,6 +1149,8 @@ export function Board() {
               </select>
             )}
             <AgentPresence agents={agentList} />
+            {/* Each closed button and its reason are one group, so they wrap onto the next row together. */}
+            <span className="topbar-action">
             <button
               className="btn secondary"
               disabled={!canNewBoard}
@@ -1160,6 +1162,8 @@ export function Board() {
               + New board
             </button>
             {newBoardWhy && <span id="new-board-closed" className="muted" style={{ fontSize: 12 }}>{newBoardWhy}</span>}
+            </span>
+            <span className="topbar-action">
             <button
               ref={newTaskBtnRef}
               className="btn"
@@ -1172,6 +1176,7 @@ export function Board() {
               + New task
             </button>
             {createClosedWhy && <span id="new-task-closed" className="muted" style={{ fontSize: 12 }}>{createClosedWhy}</span>}
+            </span>
             <button className="btn secondary" onClick={toggleSprintRail} title="Toggle the sprints rail">{sprintRailOpen ? 'Hide sprints' : 'Sprints'}</button>
             <button className="btn secondary" onClick={toggleRail} title="Toggle the activity feed">{railOpen ? 'Hide activity' : 'Activity'}</button>
           </>
@@ -1263,7 +1268,15 @@ export function Board() {
         {tasksQ.data?.nextCursor && <button className="btn secondary" onClick={() => setLimit((l) => l + 200)}>Load more</button>}
       </div>
 
-      {boardQ.isError && <p className="error" style={{ fontSize: 12, margin: '0 12px' }}>Couldn’t load this board.</p>}
+      {/* A refusal because the caller is not a member says so, as the closed controls above do (P-445).
+          The server answers FORBIDDEN "Not a member of project …"; the roster may say it first. */}
+      {boardQ.isError && (
+        <p className="error" style={{ fontSize: 12, margin: '0 12px' }}>
+          {myRole === NOT_A_MEMBER || (boardQ.error instanceof ApiError && boardQ.error.status === 403 && /^Not a member\b/.test(boardQ.error.message))
+            ? 'You are not a member of this project, so its board cannot be shown. A project admin can add you.'
+            : 'Couldn’t load this board.'}
+        </p>
+      )}
       {moveErr && <p className="error" style={{ fontSize: 12, margin: '0 12px' }}>{moveErr}</p>}
       {/* One reason for every card's closed assign chip and drag (P-440), referenced by each chip. */}
       {cardsWhy && <p id="cards-closed" className="muted" style={{ fontSize: 12, margin: '6px 12px 0' }}>{cardsWhy}</p>}
