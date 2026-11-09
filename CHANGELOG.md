@@ -1498,6 +1498,15 @@ this section's headings in CHANGELOG.md, are all part of it.
 - A follow-up's closed Ack button shows its reason beside it and is described by it, like every other
   closed control. The reason was a hover title only, which neither a touch screen nor a screen
   reader shows (P-444).
+- A board that cannot be shown because the caller is not a member of its project says so ("You are
+  not a member of this project, so its board cannot be shown. A project admin can add you."), as the
+  closed controls above it do. It said only "Couldn't load this board.", which other failures still
+  say (P-445).
+- A page title no longer breaks mid-word beside closed controls and their reasons. The title keeps at
+  least 16 characters and wraps between words; actions that do not fit beside it move to the next
+  row, each closed button with its reason. "Board" read "Boar / d" for a caller who is not a member.
+  The board's columns are sized from where they start, not a fixed 140 px, so their scroll track
+  stays on the bottom of the window when the header takes more than one row (P-446).
 - `serve` stops at once when a client holds a connection it has not sent a request on yet (an HTTP
   client's spare one). `http.Server.Shutdown` keeps such a connection until it is 5 s old, so the
   stop took 5 s or more; serve now closes them while it shuts down, as it closes idle keep-alive
