@@ -1507,6 +1507,14 @@ this section's headings in CHANGELOG.md, are all part of it.
   row, each closed button with its reason. "Board" read "Boar / d" for a caller who is not a member.
   The board's columns are sized from where they start, not a fixed 140 px, so their scroll track
   stays on the bottom of the window when the header takes more than one row (P-446).
+- A full board header packs its wrapped actions: the wrapped row is right-aligned, as a one-row
+  header's actions are, and a closed control's reason wraps within 20 characters. At 1024 px a
+  viewer's header took three rows, with Activity alone on the third (P-447).
+- The board's columns are re-measured when the header changes height without a render or a window
+  resize (a web font arriving late), through a ResizeObserver on the header (P-448).
+- `SECURITY.md` (report a vulnerability privately through GitHub's private vulnerability reporting)
+  and `CONTRIBUTING.md` (build, test, pull requests, contributions under Apache-2.0), linked from the
+  README (P-449).
 - `serve` stops at once when a client holds a connection it has not sent a request on yet (an HTTP
   client's spare one). `http.Server.Shutdown` keeps such a connection until it is 5 s old, so the
   stop took 5 s or more; serve now closes them while it shuts down, as it closes idle keep-alive

@@ -1132,22 +1132,32 @@ export function Board() {
   // WHERE THE COLUMNS START, measured (P-446). Their height fills the viewport below that point, so the
   // horizontal scroll track sits on the viewport floor. A fixed `calc(100vh - 140px)` assumed a one-row
   // header; the header now wraps its actions onto a second row when they do not fit, and the reasons
-  // and messages above the columns vary too. Re-measured after every render and on resize; the state
-  // only changes when the offset does, so this settles in one pass.
+  // and messages above the columns vary too. Re-measured after every render, on window resize, and
+  // when the header changes height without either (a web font arriving late, P-448); the state only
+  // changes when the offset does, so this settles in one pass.
   const columnsRef = useRef<HTMLDivElement>(null);
   const [columnsTop, setColumnsTop] = useState<number | null>(null);
+  const measureColumns = useCallback((): void => {
+    const el = columnsRef.current;
+    if (!el) return;
+    const scroller = el.closest('.main');
+    const top = Math.round(el.getBoundingClientRect().top + (scroller?.scrollTop ?? 0));
+    setColumnsTop((prev) => (prev === top ? prev : top));
+  }, []);
   useLayoutEffect(() => {
-    const measure = (): void => {
-      const el = columnsRef.current;
-      if (!el) return;
-      const scroller = el.closest('.main');
-      const top = Math.round(el.getBoundingClientRect().top + (scroller?.scrollTop ?? 0));
-      setColumnsTop((prev) => (prev === top ? prev : top));
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    measureColumns();
   });
+  useEffect(() => {
+    window.addEventListener('resize', measureColumns);
+    // The header is this screen's PageHeader, a direct child of the app's `.main`.
+    const header = document.querySelector('.main > .topbar');
+    const observer = header && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measureColumns()) : null;
+    if (header && observer) observer.observe(header);
+    return () => {
+      window.removeEventListener('resize', measureColumns);
+      observer?.disconnect();
+    };
+  }, [measureColumns]);
 
   return (
     <>

@@ -309,4 +309,9 @@ Measured by `make bench` on Mac14,5: Apple M2 Max, 12 cores, 32 GiB, macOS 27.0.
 The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (32.4 ms).
 <!-- bench:end -->
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to build, test and send a change. Report a vulnerability
+privately, as [SECURITY.md](SECURITY.md) describes, not in a public issue.
+
 License: Apache-2.0 (`LICENSE`, `NOTICE`).
