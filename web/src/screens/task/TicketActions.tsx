@@ -50,7 +50,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
   const notMember = myRole === NOT_A_MEMBER;
   const locked = stuck || !canMove;
   const lockedWhy = !canMove
-    ? (notMember ? 'You are not a member of this project, so you cannot change the status' : roleKnown ? 'Only a master can change the status' : 'Checking your role')
+    ? (notMember ? notMemberWhy('change the status').slice(0, -1) : roleKnown ? 'Only a master can change the status' : 'Checking your role')
     : 'No moves available from here';
 
   return (

@@ -24,7 +24,7 @@ interface ProjectCtx {
    * The roster has been read (P-443). `useMyProjectRole` answers "not a member" only then: while it
    * loads, or after it failed, a missing row says nothing about membership.
    */
-  ready?: boolean;
+  ready: boolean;
 }
 
 const KEY = 'bd.projectId';

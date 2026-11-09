@@ -33,13 +33,15 @@ function MiniBadge({ tone, children }: { tone: 'open' | 'acked'; children: React
   );
 }
 
-function FollowUpItem({ fu, isHolder, onAck, names, ackClosedWhy }: {
+function FollowUpItem({ fu, isHolder, onAck, names, ackClosedWhy, ackPending }: {
   fu: FollowUp;
   isHolder: boolean;
   onAck: () => void;
   names: DisplayNames;
   /** Ack is `ack_follow_up`, tier write (P-440): set when the holder's role is below it. */
   ackClosedWhy?: string | null;
+  /** The role is still loading: Ack is closed with no reason yet, a title only, as P-432 does. */
+  ackPending?: boolean;
 }) {
   const open = fu.status === 'open';
   // Both ends are account ids (or an agent label for the target): named, never printed raw (P-314).
@@ -79,8 +81,8 @@ function FollowUpItem({ fu, isHolder, onAck, names, ackClosedWhy }: {
               <button
                 className="btn secondary"
                 style={{ padding: '1px 8px', fontSize: 11 }}
-                disabled={!!ackClosedWhy}
-                title={ackClosedWhy ?? undefined}
+                disabled={!!ackClosedWhy || ackPending}
+                title={ackClosedWhy ?? (ackPending ? 'Checking your role' : undefined)}
                 aria-describedby={ackClosedWhy ? `ack-closed-${fu.id}` : undefined}
                 onClick={onAck}
               >
@@ -195,7 +197,8 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
             isHolder={isHolder}
             onAck={() => void ack(fu.id)}
             names={names}
-            ackClosedWhy={canAck ? null : ackClosedWhy ?? 'Checking your role'}
+            ackClosedWhy={canAck ? null : ackClosedWhy ?? null}
+            ackPending={!canAck && !ackClosedWhy}
           />
         ))}
       </Stack>

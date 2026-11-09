@@ -88,10 +88,27 @@ describe('FollowUps', () => {
     wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp={false} canAck={false} ackClosedWhy={why} />);
     const ack = await screen.findByRole('button', { name: 'Ack' });
     expect(ack).toBeDisabled();
+    // The title alone would give this description too: the describedby link and the visible text are
+    // what P-444 adds.
     expect(ack).toHaveAccessibleDescription(why);
+    expect(ack).toHaveAttribute('aria-describedby', 'ack-closed-FU-1');
     expect(screen.getByText(why)).toBeVisible();
     fireEvent.click(ack);
     expect(calls.filter((c) => !c.startsWith('GET '))).toEqual([]);
+  });
+
+  it('while the role loads, Ack is closed with a title only: no visible reason and no description link', async () => {
+    stub({
+      [`GET ${base}/follow-ups`]: {
+        followUps: [{ id: 'FU-1', taskId: 'T-1', projectId: 'P-1', body: 'Add a regression test', author: 'u-mona', target: 'u-will', status: 'open', reopened: false, ts }],
+      },
+    });
+    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp={false} canAck={false} />);
+    const ack = await screen.findByRole('button', { name: 'Ack' });
+    expect(ack).toBeDisabled();
+    expect(ack).toHaveAttribute('title', 'Checking your role');
+    expect(ack).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Checking your role')).toBeNull();
   });
 
   it('POSITIVE CONTROL: a holder who may ack sees no reason, and Ack posts', async () => {
