@@ -105,3 +105,28 @@ func TestTakeEndingWithoutAMark(t *testing.T) {
 		t.Fatal("an end marked by a request no longer in hand was parked")
 	}
 }
+
+// Every request leaves the requests in hand as it found them: one with no Mcp-Session-Id (an
+// initialize), one on a session, and one whose handler panics. A mark left behind would grow the
+// table for the life of the process.
+func TestCloseEndingForgetsEveryRequest(t *testing.T) {
+	s := &Server{sessions: &sessionTable{live: map[string]*mcp.ServerSession{}, ending: map[string]string{}, inflight: map[string]struct{}{}}}
+	h := s.closeEnding(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Test-Panic") != "" {
+			panic(http.ErrAbortHandler)
+		}
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/mcp", nil))
+	onSession := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	onSession.Header.Set("Mcp-Session-Id", "S-test")
+	h.ServeHTTP(httptest.NewRecorder(), onSession)
+	panicking := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	panicking.Header.Set("X-Test-Panic", "1")
+	func() {
+		defer func() { _ = recover() }()
+		h.ServeHTTP(httptest.NewRecorder(), panicking)
+	}()
+	if n := len(s.sessions.inflight); n != 0 {
+		t.Fatalf("%d request marks left in hand after their requests returned", n)
+	}
+}

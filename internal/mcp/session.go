@@ -305,10 +305,13 @@ func (s *Server) closeEnding(next http.Handler) http.Handler {
 		mark := rand.Text()
 		r.Header.Set(requestMarkHeader, mark)
 		s.sessions.begin(mark)
+		// takeEnding also drops the mark from the requests in hand, so it runs for every request,
+		// a panicking one included.
+		defer func() {
+			if ss := s.sessions.takeEnding(r.Header.Get("Mcp-Session-Id"), mark); ss != nil {
+				go func() { _ = ss.Close() }()
+			}
+		}()
 		next.ServeHTTP(w, r)
-		// takeEnding also drops the mark from the requests in hand, so it runs for every request.
-		if ss := s.sessions.takeEnding(r.Header.Get("Mcp-Session-Id"), mark); ss != nil {
-			go func() { _ = ss.Close() }()
-		}
 	})
 }
