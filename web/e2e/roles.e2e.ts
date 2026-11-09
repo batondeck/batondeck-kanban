@@ -52,6 +52,17 @@ async function written(taskId: string): Promise<unknown> {
   };
 }
 
+/** The page title reads on one line (P-446): it was squeezed to a letter's width beside closed reasons. */
+async function titleOnOneLine(page: Page): Promise<void> {
+  const h1 = page.locator('.topbar-heading h1');
+  const [height, line] = await h1.evaluate((e) => {
+    const cs = getComputedStyle(e);
+    const lh = parseFloat(cs.lineHeight);
+    return [e.getBoundingClientRect().height, Number.isFinite(lh) ? lh : 1.4 * parseFloat(cs.fontSize)];
+  });
+  expect(height, `title "${await h1.innerText()}" is ${height}px tall, one line is ${line}px`).toBeLessThan(line * 1.5);
+}
+
 /** On-call is a workspace-admin screen: no nav link, and the route itself says it is refused. */
 async function oncallRefused(page: Page, who: string): Promise<void> {
   await page.goto('/projects');
@@ -70,6 +81,28 @@ test.describe('as a viewer', () => {
 
   test('On-call is refused', async ({ page }) => {
     await oncallRefused(page, 'viewer');
+  });
+
+  test('a full header wraps its actions, not the title, and the columns still end at the viewport floor (P-446)', async ({ page }) => {
+    // Two boards (so the board switcher shows) and a 1024 px window: the actions do not fit beside the
+    // title. Before, the title shrank to a letter's width; now the actions wrap to a second row and
+    // the columns, measured from where they start, still end at the bottom of the window.
+    const p = await seedProject('Wrap', { members: { viewer: 'viewer' } });
+    await new McpClient('admin').call('create_board', { projectId: p.projectId, name: 'Second board' });
+    await seedTask(p, 'One task');
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto(`/projects/${p.projectId}/boards/${p.boardId}`);
+    await expect(page.getByRole('heading', { name: p.boardName })).toBeVisible();
+    await expect(page.getByText('A viewer cannot create boards.')).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Switch board' })).toBeVisible();
+    await expect(page.getByText('One task')).toBeVisible();
+    await titleOnOneLine(page);
+    const cols = await page.locator('.columns').last().boundingBox();
+    expect(cols, 'the columns are laid out').not.toBeNull();
+    const bottom = cols!.y + cols!.height;
+    expect(bottom, `the columns end at ${bottom}px in a 768px window`).toBeLessThanOrEqual(768);
+    expect(bottom, `the columns end at ${bottom}px in a 768px window`).toBeGreaterThan(768 - 40);
+    await atRoute(page, '/projects/:projectId/boards/:boardId', 'viewer at 1024: header wraps, title whole');
   });
 
   test('the board and the task are read-only: status, claim, new task and comment are closed', async ({ page }) => {
@@ -131,6 +164,7 @@ test.describe('as a viewer', () => {
     const assign = card.getByRole('button', { name: 'assign', exact: true });
     await expect(assign).toBeDisabled();
     await expect(assign).toHaveAccessibleDescription(cardsWhy);
+    await titleOnOneLine(page);
     await atRoute(page, '/projects/:projectId/boards/:boardId', 'viewer: new board and assign closed');
 
     // The palette lists Set status and Set priority, disabled, each beside its reason; `s` opens no list.
@@ -359,6 +393,11 @@ test.describe('as a workspace admin who is not a member of the project', () => {
     await expect(page.getByText(/Checking your role/)).toHaveCount(0);
     await expect(page.locator('[title="Checking your role"]')).toHaveCount(0);
     await newBoard.click({ force: true });
+    // The board body names membership too, not "Couldn't load this board." (P-445), and the title
+    // stays whole beside the header's two reasons (P-446).
+    await expect(page.getByText('You are not a member of this project, so its board cannot be shown. A project admin can add you.')).toBeVisible();
+    await expect(page.getByText('Couldn’t load this board.')).toHaveCount(0);
+    await titleOnOneLine(page);
     await atRoute(page, '/projects/:projectId/boards/:boardId', 'admin, not a member: closed, says why');
     expect(await boards()).toEqual(before);
   });

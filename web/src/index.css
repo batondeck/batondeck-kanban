@@ -495,12 +495,14 @@ select:disabled { cursor: default; opacity: 0.6; }
    scroll track at the bottom of the CONTENT (~47px of dead space beneath it) instead of at the bottom
    of the page, so reaching it meant aiming at a bar floating mid-screen. Same `calc(100vh - 140px)`
    the columns themselves use, so the track lands on the viewport floor.
-   `align-items: flex-start` is what stops the columns stretching to fill this new height. */
+   `align-items: flex-start` is what stops the columns stretching to fill this new height.
+   `--columns-top` is where the columns start, measured by Board (P-446): the header can wrap to a
+   second row, so a fixed 140px no longer holds. Unmeasured (the skeleton), it is the old 124px + 16. */
 .columns {
   display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding: 4px;
-  height: calc(100vh - 140px);
+  height: calc(100vh - var(--columns-top, 124px) - 16px);
 }
-.column { background: var(--surface-low); border: 1px solid var(--border); border-radius: var(--r-3); width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; max-height: calc(100vh - 140px); }
+.column { background: var(--surface-low); border: 1px solid var(--border); border-radius: var(--r-3); width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; max-height: 100%; }
 .column > header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--band); border-radius: var(--r-3) var(--r-3) 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: var(--caps-track); text-transform: uppercase; font-weight: 600; }
 .wip { font-family: var(--mono); font-size: 11px; color: var(--text-2); border: 1px solid var(--border); border-radius: var(--r-1); padding: 2px 8px; }
 .wip.over { color: var(--blocked); border-color: var(--blocked); }
@@ -901,9 +903,16 @@ th { color: var(--text-muted); font-weight: 700; font-size: 11px; text-transform
 .proj-switch:hover { border-color: var(--outline-variant); }
 
 /* Title + task count stack, so a long board name gets the whole cell instead of sharing it with
-   "5 tasks". `min-width: 0` lets the cell shrink so the actions never get pushed off the row. */
-.topbar-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.topbar-heading h1 { overflow-wrap: anywhere; }
+   "5 tasks". */
+.topbar-heading { display: flex; flex-direction: column; gap: 2px; flex: 1 1 16ch; min-width: min(16ch, 100%); }
+.topbar-heading h1 { overflow-wrap: break-word; }
+/* The actions WRAP onto a second row rather than squeeze the title (P-446). With `min-width: 0` and
+   `overflow-wrap: anywhere` a row of closed controls with their reasons shrank the heading to a
+   letter's width, and "Board" broke as "Boar / d". The heading grows from a 16-character basis and
+   keeps at least that (a short name stays whole; a long one wraps between words beside the actions),
+   and actions that do not fit beside it move to the next row, each closed button with its reason. */
+.topbar { flex-wrap: wrap; }
+.topbar-action { display: inline-flex; align-items: center; gap: 12px; }
 
 /* *** THE BOARD SELECTOR IS FIXED-WIDTH IN THE TOPBAR. ***
    `.proj-switch` is `width: 100%` for the sidebar, where it should fill. In the topbar that made it

@@ -178,3 +178,77 @@ describe('a workspace admin on a project they are not a member of', () => {
     expect(screen.queryByText(/not a member of this project/)).toBeNull();
   });
 });
+
+/* ---- P-445: the board body says why it is empty -------------------------------------------------- */
+
+async function boardWithError(roster: Array<{ projectId: string; name: string; role: string }>, status: number, body: unknown): Promise<void> {
+  vi.stubGlobal('EventSource', FakeES);
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (/\/api\/projects$/.test(url)) return json({ projects: roster });
+    if (/\/boards\/b1$/.test(url) || /\/boards\/b1\/tasks\?/.test(url) || /\/boards$/.test(url)) {
+      return { ok: false, status, statusText: 'x', json: async () => body } as Response;
+    }
+    return json({});
+  }));
+  render(
+    <QueryClientProvider client={newClient()}>
+      <ProjectProvider>
+        <ShortcutProvider>
+          <MemoryRouter initialEntries={['/projects/p1/boards/b1']}>
+            <Routes>
+              <Route path="/projects/:projectId/boards/:boardId" element={<Board />} />
+            </Routes>
+          </MemoryRouter>
+        </ShortcutProvider>
+      </ProjectProvider>
+    </QueryClientProvider>,
+  );
+  await settle();
+}
+
+const NOT_MEMBER_BOARD = 'You are not a member of this project, so its board cannot be shown. A project admin can add you.';
+
+describe('the board body when the board cannot be read (P-445)', () => {
+  it('a non-member, refused FORBIDDEN "Not a member of project …", is told so, not "Couldn’t load this board."', async () => {
+    await boardWithError([{ projectId: 'mine', name: 'Mine', role: 'admin' }], 403, { code: 'FORBIDDEN', message: 'Not a member of project p1' });
+    expect(await screen.findByText(NOT_MEMBER_BOARD)).toBeInTheDocument();
+    expect(screen.queryByText('Couldn’t load this board.')).toBeNull();
+  });
+
+  it('the server\'s refusal alone says it too, while the roster still loads', async () => {
+    // A roster that never answers: the role is unknown, the board read's refusal names membership.
+    vi.stubGlobal('EventSource', FakeES);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (/\/api\/projects$/.test(url)) return new Promise<Response>(() => {});
+      if (/\/boards\/b1$/.test(url)) return { ok: false, status: 403, statusText: 'x', json: async () => ({ code: 'FORBIDDEN', message: 'Not a member of project p1' }) } as Response;
+      return json({});
+    }));
+    render(
+      <QueryClientProvider client={newClient()}>
+        <ProjectProvider>
+          <ShortcutProvider>
+            <MemoryRouter initialEntries={['/projects/p1/boards/b1']}>
+              <Routes>
+                <Route path="/projects/:projectId/boards/:boardId" element={<Board />} />
+              </Routes>
+            </MemoryRouter>
+          </ShortcutProvider>
+        </ProjectProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(NOT_MEMBER_BOARD)).toBeInTheDocument();
+  });
+
+  it('POSITIVE CONTROL: a member whose board read fails for another reason keeps "Couldn’t load this board."', async () => {
+    await boardWithError([{ projectId: 'p1', name: 'P1', role: 'master' }], 500, { code: 'INTERNAL', message: 'boom' });
+    expect(await screen.findByText('Couldn’t load this board.')).toBeInTheDocument();
+    expect(screen.queryByText(NOT_MEMBER_BOARD)).toBeNull();
+  });
+
+  it('POSITIVE CONTROL: another FORBIDDEN (not membership) keeps "Couldn’t load this board."', async () => {
+    await boardWithError([{ projectId: 'p1', name: 'P1', role: 'viewer' }], 403, { code: 'FORBIDDEN', message: 'Role viewer cannot call get_board' });
+    expect(await screen.findByText('Couldn’t load this board.')).toBeInTheDocument();
+  });
+});
