@@ -179,7 +179,7 @@ prints `batondeck-kanban 1.2.3`), and the release notes carry the manifest diges
 under. The image is not reproducible byte for byte: of the `Dockerfile`'s two base images only the
 Go one is named by digest; `gcr.io/distroless/static-debian12:nonroot` is named by tag, so a rebuild
 later may start from other bytes. What ties it to the tag is that it was built by `make image` from
-that commit, in a fresh clone or in the `release-draft` workflow's checkout of the candidate.
+the tag's commit, in a fresh clone or in the `release-draft` workflow's checkout of the candidate.
 
 **SBOM:** `sbom.cdx.json` (CycloneDX 1.6) lists the Go modules `cmd/batondeck-kanban` links
 (`cyclonedx-gomod app`).
@@ -187,5 +187,6 @@ that commit, in a fresh clone or in the `release-draft` workflow's checkout of t
 ## What this does not prove
 
 There is no build-provenance or SBOM attestation: whether a release is built on a maintainer's
-machine or by the `release-draft` workflow, nothing signed binds a binary to that build. A matching rebuild says only that the artifact matches
-this repository at that commit — nothing about whether the code is correct or the design sound.
+machine or by the `release-draft` workflow, nothing signed binds a binary to that build. A matching
+rebuild says only that the artifact matches this repository at that commit — nothing about whether
+the code is correct or the design sound.
