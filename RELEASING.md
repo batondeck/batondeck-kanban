@@ -6,12 +6,13 @@ without the gate. batondeck-kanban holds a team's tasks and
 its agents' credentials, so "download this binary" has to be checkable: the checksums are published,
 and anyone can rebuild a tag and compare. One binary ships; there is no sidecar.
 
-No release has been cut yet. This is the sequence for v0.1.0, line by line; a later release runs
-the same lines with its own version. Steps 1, 4, 5 and 6 also run on demand as the
+v0.1.0 is released. This is the sequence it was cut by, line by line; a later release runs the
+same lines with its own version. A published release is not replaced: a fix ships as the next patch
+version (0.1.1), with its own tag. Steps 1, 4, 5 and 6 also run on demand as the
 `release-draft` workflow (`.github/workflows/release-draft.yml`, `workflow_dispatch` with the
 candidate's full SHA), with step 3's tag made locally in the runner only: it ends in a draft release
 with the assets and the pushed image, and a maintainer publishes the draft, which creates the tag at
-the candidate; the `release-publish` workflow (`.github/workflows/release-publish.yml`) does that
+the candidate (a lightweight tag, where step 3 makes an annotated one); the `release-publish` workflow (`.github/workflows/release-publish.yml`) does that
 publish on demand too, after checking the draft targets the candidate and carries the seven assets.
 The draft workflow runs no gate (`make check`) and no `docker run … version` smoke, so the
 candidate must be a commit whose tree the gate has passed (every commit on `main` lands through a
@@ -144,9 +145,9 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
    platform in the Makefile's `PLATFORMS`; `make notices-check`, in the gate, holds it to that list
    and to `go.sum`.
 
-7. **Visibility is the organisation owner's, not this sequence's.** The repository is private until
-   the owner makes it public at v0.1.0 (the README's download URLs and `git clone` need that), and
-   the package's visibility is set on its page on ghcr.io after the first push.
+7. **Visibility is the organisation owner's, not this sequence's.** The repository's and the image
+   package's visibility (the README's download URLs, `git clone` and an anonymous `docker pull` need
+   both public) are set by the owner, the package's on its page on ghcr.io.
 
 ## Verifying a release you downloaded
 
