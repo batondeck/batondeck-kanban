@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/api"
@@ -352,6 +353,48 @@ func awaitDirectory(ctx context.Context, a *app, logger *log.Logger) {
 	}
 }
 
+// unusedConns is every accepted connection that has sent no request yet (http.StateNew): an HTTP
+// client's spare one, which net/http's Transport keeps in its idle pool when a dial it started is no
+// longer needed. http.Server's Shutdown leaves such a connection open until it is 5 s old, so one
+// held every stop of serve to 5 s or more (a slow CI runner's MCP client did, past the test's
+// window). serveUntil closes them while Shutdown runs, as Shutdown closes idle keep-alive ones: a
+// connection that has sent nothing has no request to lose.
+type unusedConns struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+// track is the server's ConnState hook: a connection is unused from accept until its first request.
+func (u *unusedConns) track(c net.Conn, s http.ConnState) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if s == http.StateNew {
+		u.conns[c] = struct{}{}
+	} else {
+		delete(u.conns, c)
+	}
+}
+
+// closeUntil closes every unused connection now and every 50 ms after (one accepted before
+// Shutdown closed the listeners may arrive late) until done is closed.
+func (u *unusedConns) closeUntil(done <-chan struct{}) {
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		u.mu.Lock()
+		for c := range u.conns {
+			_ = c.Close()
+			delete(u.conns, c)
+		}
+		u.mu.Unlock()
+		select {
+		case <-done:
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 // serveUntil serves one handler on every listener, with the retention sweep running beside it, until
 // ctx ends or one fails, then stops in order: the sweep (it returns before the store can close), the
 // MCP sessions (an attached client's open GET stream would otherwise hold Shutdown to its
@@ -379,7 +422,9 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	go func() { defer close(swept); a.sweep.Run(sweepCtx, a.sweepEvery) }()
 	// No WriteTimeout: a write deadline would cut /api/stream, the MCP GET stream and a large blob
 	// GET to a slow reader. No IdleTimeout: net/http then bounds an idle keep-alive by ReadTimeout.
-	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: requestReadTimeout, ConnContext: core.ConnContext}
+	unused := &unusedConns{conns: map[net.Conn]struct{}{}}
+	srv := &http.Server{Handler: a.handler(version), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: requestReadTimeout, ConnContext: core.ConnContext,
+		ConnState: unused.track}
 	errc := make(chan error, len(lns))
 	for _, ln := range lns {
 		go func() { errc <- srv.Serve(ln) }()
@@ -400,7 +445,11 @@ func serveUntil(ctx context.Context, lns []net.Listener, a *app, version string,
 	}
 	a.bus.Close()
 	awaitDirectory(shutdown, a, logger)
-	if err := srv.Shutdown(shutdown); err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
+	shutDown := make(chan struct{})
+	go unused.closeUntil(shutDown)
+	err = srv.Shutdown(shutdown)
+	close(shutDown)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) && failed == nil {
 		failed = fmt.Errorf("http shutdown: %w", err)
 	}
 	flush, cancelFlush := context.WithTimeout(context.Background(), flushBudget)

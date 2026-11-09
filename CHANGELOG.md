@@ -1498,6 +1498,10 @@ this section's headings in CHANGELOG.md, are all part of it.
 - A follow-up's closed Ack button shows its reason beside it and is described by it, like every other
   closed control. The reason was a hover title only, which neither a touch screen nor a screen
   reader shows (P-444).
+- `serve` stops at once when a client holds a connection it has not sent a request on yet (an HTTP
+  client's spare one). `http.Server.Shutdown` keeps such a connection until it is 5 s old, so the
+  stop took 5 s or more; serve now closes them while it shuts down, as it closes idle keep-alive
+  ones. Found when `TestRunServerStopsWithAnAttachedSession` failed on a slow CI runner.
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an
