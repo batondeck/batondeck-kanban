@@ -70,8 +70,22 @@ function FollowUpItem({ fu, isHolder, onAck, names, ackClosedWhy }: {
           {fu.reopened && <span className="chip" title="this follow-up reopened the task">↩ reopened</span>}
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             {open ? <MiniBadge tone="open">Open</MiniBadge> : <MiniBadge tone="acked"><Icon name="check" size={11} /> Acked</MiniBadge>}
+            {/* Closed below its tier with the reason shown and the button described by it, as every other
+                control P-440 closes (P-444): a title alone reaches neither a touch screen nor a reader. */}
+            {open && isHolder && ackClosedWhy && (
+              <span id={`ack-closed-${fu.id}`} className="muted" style={{ fontSize: 11 }}>{ackClosedWhy}</span>
+            )}
             {open && isHolder && (
-              <button className="btn secondary" style={{ padding: '1px 8px', fontSize: 11 }} disabled={!!ackClosedWhy} title={ackClosedWhy ?? undefined} onClick={onAck}>Ack</button>
+              <button
+                className="btn secondary"
+                style={{ padding: '1px 8px', fontSize: 11 }}
+                disabled={!!ackClosedWhy}
+                title={ackClosedWhy ?? undefined}
+                aria-describedby={ackClosedWhy ? `ack-closed-${fu.id}` : undefined}
+                onClick={onAck}
+              >
+                Ack
+              </button>
             )}
           </span>
         </div>

@@ -1490,6 +1490,14 @@ this section's headings in CHANGELOG.md, are all part of it.
   and picking one sets the shared selection as before. They took the first project and stored it,
   which configured a project nobody chose and left the sidebar off "All projects" after leaving
   Settings (P-442, replacing P-434's fallback).
+- A caller who opens, by URL, a project they are not a member of (a workspace admin, say) sees its
+  closed controls say "You are not a member of this project, so you cannot …". They said "Checking
+  your role" for good, because the project roster lists only the caller's own projects. While the
+  roster loads they still give no reason, and a task's own member list still wins over a roster read
+  before the caller was added. The server's checks are unchanged (P-443).
+- A follow-up's closed Ack button shows its reason beside it and is described by it, like every other
+  closed control. The reason was a hover title only, which neither a touch screen nor a screen
+  reader shows (P-444).
 - The README's compose quickstart and restore steps, and `compose.yaml`'s header, start the stack
   with `docker compose up -d --wait`, and the board's service has a 5 s health check. A plain
   `up -d` returns before the server listens, so the `curl …/healthz` pasted right after it got an

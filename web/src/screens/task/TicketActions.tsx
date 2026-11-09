@@ -23,6 +23,8 @@ import { AgentSelect } from '../../AgentSelect.js';
 import { Button, Cluster, Panel, Stack } from '../../ui.js';
 import { Icon } from '../../icons.js';
 import type { Status } from '../../types.js';
+import { NOT_A_MEMBER } from '../../displayNames.js';
+import { notMemberWhy } from '../../toolFloors.js';
 import { statusDot } from './panels.js';
 import type { LoadedTaskDetail } from './useTaskDetail.js';
 
@@ -44,8 +46,12 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
   // hidden, for the same reason as `stuck` below. While the role is loading it is closed too (fail
   // closed), but no reason is shown yet: the reader may well be a master.
   const roleKnown = myRole !== undefined;
+  // Not a member of the project (P-443): every control is closed and each says so, not "a viewer".
+  const notMember = myRole === NOT_A_MEMBER;
   const locked = stuck || !canMove;
-  const lockedWhy = !canMove ? (roleKnown ? 'Only a master can change the status' : 'Checking your role') : 'No moves available from here';
+  const lockedWhy = !canMove
+    ? (notMember ? 'You are not a member of this project, so you cannot change the status' : roleKnown ? 'Only a master can change the status' : 'Checking your role')
+    : 'No moves available from here';
 
   return (
     <Panel title="Actions" pad footnote="Claiming locks the ticket to you, so two tools never collide.">
@@ -110,7 +116,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
           <span style={{ ...label, display: 'block', marginBottom: 7 }}>Work the task</span>
           {task.status === 'TODO' && !task.claim && roleKnown && !canClaim && (
             // `claim_task` is tier write (P-209): a viewer is told, not offered a refusal.
-            <span className="muted" style={{ fontSize: 12 }}>A viewer cannot claim tasks.</span>
+            <span className="muted" style={{ fontSize: 12 }}>{notMember ? notMemberWhy('claim tasks') : 'A viewer cannot claim tasks.'}</span>
           )}
           {task.status === 'TODO' && !task.claim && canClaim && (
             <Cluster gap={8} wrap>
@@ -143,7 +149,9 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
           )}
           {task.status !== 'TODO' && !task.claim && (
             <span className="muted" style={{ fontSize: 12 }}>
-              {canMove || !roleKnown ? (
+              {notMember ? (
+                notMemberWhy('work this task')
+              ) : canMove || !roleKnown ? (
                 <>Move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong> to claim it.</>
               ) : (
                 <>A master can move this task to <strong style={{ color: 'var(--text-2)' }}>{readyName}</strong>; then it can be claimed.</>
