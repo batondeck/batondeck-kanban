@@ -12,6 +12,7 @@ so the approach can be agreed before you spend time on it.
 
 - Go (the version in `go.mod`'s `toolchain` line; `GOTOOLCHAIN=auto` fetches it).
 - Node.js 22 (what CI uses) and npm, for the web UI under `web/`.
+- Python 3, for the pre-commit hook's secret scan and two of `make check`'s checks.
 - Docker, for the Postgres half of the tests. The pre-push hook starts a `postgres:16-alpine`
   container and points `make check` at it; it refuses the push when Docker is not running.
 
@@ -20,7 +21,7 @@ so the approach can be agreed before you spend time on it.
 ```
 make hooks    # once per clone: the pre-commit, commit-msg and pre-push hooks under githooks/
 make build    # the binary, with the web UI embedded from web/dist
-make check    # everything a pull request must pass
+make check    # the gate; CI also runs make e2e and make e2e-ui on every pull request
 ```
 
 Run by hand, `make check` tests the Postgres engine only when `BATONDECK_TEST_POSTGRES_DSN` names

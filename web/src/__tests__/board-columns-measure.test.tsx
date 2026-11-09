@@ -1,9 +1,11 @@
 /**
- * THE BOARD RE-MEASURES WHERE ITS COLUMNS START WHEN THE HEADER CHANGES HEIGHT (P-448).
+ * THE BOARD RE-MEASURES WHERE ITS COLUMNS START WHEN WHAT IS ABOVE THEM CHANGES HEIGHT (P-448).
  *
  * P-446 sized the columns from where they start (`--columns-top`), measured after each render and on
  * window resize. A header that changes height with neither (a web font arriving late) left them
- * mis-sized. A ResizeObserver on the header now re-measures, and is disconnected on unmount.
+ * mis-sized. A ResizeObserver on everything the board has rendered into `.main` when it mounts (the
+ * header first) now re-measures, and is disconnected on unmount; this test drives it through the
+ * header.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
