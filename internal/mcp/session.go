@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,7 +25,7 @@ type sessionTable struct {
 	live   map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
 	agents map[string]int                // agent-session key -> its live MCP sessions
 	keys   map[string]string             // MCP session id -> its agent-session key
-	ending map[string]bool               // sessions to close once the request in hand is answered
+	ending map[string]string             // sessions to close once a request is answered: id -> that request's mark
 	ends   sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
@@ -63,18 +64,24 @@ func (t *sessionTable) release(id string) {
 	delete(t.ending, id)
 }
 
-// endAfter marks ss to be closed once the HTTP request in hand has its answer.
-func (t *sessionTable) endAfter(ss *mcp.ServerSession) {
+// endAfter marks session id to be closed once the HTTP request whose mark is mark has its answer
+// (P-450). mark is "" for a request that carries none (no HTTP transport): then the next request on
+// the session to finish closes it, as before.
+func (t *sessionTable) endAfter(id, mark string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.ending[ss.ID()] = true
+	t.ending[id] = mark
 }
 
-// takeEnding is the live session id marked by endAfter, unmarked, or nil.
-func (t *sessionTable) takeEnding(id string) *mcp.ServerSession {
+// takeEnding is the live session id marked by endAfter, unmarked, or nil. A mark set by one HTTP
+// request is taken only by that request (P-450): another request on the same session that finishes
+// first (the client's standalone GET, a second call) must not close the transport under the first
+// one's answer, which a self-disconnect then lost (it answered 200 with an empty body).
+func (t *sessionTable) takeEnding(id, mark string) *mcp.ServerSession {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.ending[id] {
+	want, ok := t.ending[id]
+	if !ok || (want != "" && want != mark) {
 		return nil
 	}
 	delete(t.ending, id)
@@ -155,6 +162,9 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		}
 		caller, _ := CallerFrom(ctx)
 		ctx = context.WithValue(ctx, sessionIDKey{}, ss.ID())
+		if ex := req.GetExtra(); ex != nil && ex.Header != nil {
+			ctx = context.WithValue(ctx, requestMarkKey{}, ex.Header.Get(requestMarkHeader))
+		}
 		switch {
 		case method == "initialize":
 			return s.initialize(ctx, ss, caller, method, req, next)
@@ -222,6 +232,14 @@ func agentName(c domain.Caller, p *mcp.InitializeParams) string {
 // EndAgentSessions can tell the calling session from the others.
 type sessionIDKey struct{}
 
+// requestMarkHeader carries a mark closeEnding gives each HTTP request, server-side, so a
+// self-disconnect closes its session after its own answer and no other's (P-450). go-sdk hands the
+// request's headers to the handler (RequestExtra.Header); sessionMiddleware moves the mark into the
+// context under requestMarkKey. A client's value for it is replaced, never trusted.
+const requestMarkHeader = "X-Batondeck-Request-Mark"
+
+type requestMarkKey struct{}
+
 // endWait bounds how long EndAgentSessions waits for another session to close: a close waits for
 // that session's in-flight handlers to return.
 const endWait = 5 * time.Second
@@ -234,11 +252,12 @@ const endWait = 5 * time.Second
 // lost with the transport. The end of each runs the usual bookkeeping (initialize's goroutine).
 func (s *Server) EndAgentSessions(ctx context.Context, identityID, agentID string) int {
 	self, _ := ctx.Value(sessionIDKey{}).(string)
+	mark, _ := ctx.Value(requestMarkKey{}).(string)
 	live := s.sessions.of(service.SessionKey(identityID, agentID))
 	var others sync.WaitGroup
 	for _, ss := range live {
 		if ss.ID() == self {
-			s.sessions.endAfter(ss)
+			s.sessions.endAfter(ss.ID(), mark)
 			continue
 		}
 		others.Go(func() { _ = ss.Close() })
@@ -257,12 +276,15 @@ func (s *Server) EndAgentSessions(ctx context.Context, identityID, agentID strin
 var _ service.AgentSessionEnder = (*Server)(nil)
 
 // closeEnding closes a session EndAgentSessions marked from inside its own request, once that
-// request's HTTP answer is written (next has returned).
+// request's HTTP answer is written (next has returned). Each request gets its own mark first, so only
+// the request that made the mark closes the session (P-450).
 func (s *Server) closeEnding(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mark := rand.Text()
+		r.Header.Set(requestMarkHeader, mark)
 		next.ServeHTTP(w, r)
 		if id := r.Header.Get("Mcp-Session-Id"); id != "" {
-			if ss := s.sessions.takeEnding(id); ss != nil {
+			if ss := s.sessions.takeEnding(id, mark); ss != nil {
 				go func() { _ = ss.Close() }()
 			}
 		}
