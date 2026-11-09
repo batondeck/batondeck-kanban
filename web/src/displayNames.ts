@@ -57,13 +57,25 @@ export function roleAtLeast(role: string | undefined, floor: 'viewer' | 'worker'
 }
 
 /**
+ * The role `useMyProjectRole` answers once the roster has loaded and has no row for the project: the
+ * caller is not a member of it (P-443). A workspace admin can open such a project's pages by URL, and
+ * the server refuses their writes there; before this the controls said "Checking your role" for good.
+ * It is no role `ROLE_RANK` knows, so `roleAtLeast` ranks it -1 and it passes no floor.
+ */
+export const NOT_A_MEMBER = 'not-a-member';
+
+/**
  * The caller's role in `projectId`, as `list_projects` gives it on the roster `ProjectProvider` holds
- * (no request of its own). `undefined` while the roster loads or when the caller is not a member, which
- * `roleAtLeast` reads as passing no floor: a screen gating a write on it fails closed (P-432).
+ * (no request of its own). `undefined` while the roster loads (or when it failed), and `NOT_A_MEMBER`
+ * once it has loaded without a row for the project (P-443). Both pass no floor in `roleAtLeast`: a
+ * screen gating a write on it fails closed (P-432); `closedWhy` gives the second its reason.
  */
 export function useMyProjectRole(projectId: string | undefined): string | undefined {
-  const { projects } = useProject();
-  return projectId ? projects.find((p) => p.projectId === projectId)?.role : undefined;
+  const { projects, ready } = useProject();
+  if (!projectId) return undefined;
+  const row = projects.find((p) => p.projectId === projectId);
+  if (row) return row.role;
+  return ready ? NOT_A_MEMBER : undefined;
 }
 
 /** Long: names change far more slowly than a feed does, and a stale label is harmless. */

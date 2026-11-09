@@ -218,6 +218,58 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	}
 }
 
+// A connection that was accepted but has sent no request yet (an HTTP client's spare one: net/http's
+// Transport keeps a dial it no longer needs in its idle pool) does not hold the stop. http.Server's
+// Shutdown leaves such a connection open until it is 5 s old, so the stop took 5 s or more; it is
+// how TestRunServerStopsWithAnAttachedSession failed on a slow CI runner with the client's own spare
+// connection.
+func TestRunServerStopsWithAnUnusedConnection(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := memstore.New()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}, nil)
+	}()
+	// A served request first, so the server is accepting; then a connection that sends nothing.
+	r, err := http.Get("http://" + ln.Addr().String() + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Body.Close()
+	unused, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unused.Close()
+	time.Sleep(100 * time.Millisecond) // accepted by now
+
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServer returned %v, want nil", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("runServer still stopping 3s after the stop, behind a connection that sent no request")
+	}
+	t.Logf("stopped in %s", time.Since(start))
+	// The server closed it: a read ends.
+	_ = unused.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := unused.Read(make([]byte, 1)); err == nil {
+		t.Errorf("the unused connection is still open after the stop")
+	}
+}
+
 // served starts serveUntil over st with a probe tool and a client attached as a fresh account;
 // park, when non-nil, is the tool's body. It returns the client, the stop, runServer's result and
 // the server's log.

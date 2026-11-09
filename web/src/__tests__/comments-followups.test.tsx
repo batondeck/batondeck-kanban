@@ -77,4 +77,51 @@ describe('FollowUps', () => {
     expect(screen.getByText(/back to TODO/)).toBeInTheDocument();
     expect(calls.find((c) => c.startsWith(`GET ${base}/`))).toBe(`GET ${base}/follow-ups`);
   });
+
+  it('a holder below ack_follow_up\'s tier sees Ack closed, its reason shown and describing it, and a click sends nothing (P-444)', async () => {
+    stub({
+      [`GET ${base}/follow-ups`]: {
+        followUps: [{ id: 'FU-1', taskId: 'T-1', projectId: 'P-1', body: 'Add a regression test', author: 'u-mona', target: 'u-will', status: 'open', reopened: false, ts }],
+      },
+    });
+    const why = 'A viewer cannot acknowledge follow-ups.';
+    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp={false} canAck={false} ackClosedWhy={why} />);
+    const ack = await screen.findByRole('button', { name: 'Ack' });
+    expect(ack).toBeDisabled();
+    // The title alone would give this description too: the describedby link and the visible text are
+    // what P-444 adds.
+    expect(ack).toHaveAccessibleDescription(why);
+    expect(ack).toHaveAttribute('aria-describedby', 'ack-closed-FU-1');
+    expect(screen.getByText(why)).toBeVisible();
+    fireEvent.click(ack);
+    expect(calls.filter((c) => !c.startsWith('GET '))).toEqual([]);
+  });
+
+  it('while the role loads, Ack is closed with a title only: no visible reason and no description link', async () => {
+    stub({
+      [`GET ${base}/follow-ups`]: {
+        followUps: [{ id: 'FU-1', taskId: 'T-1', projectId: 'P-1', body: 'Add a regression test', author: 'u-mona', target: 'u-will', status: 'open', reopened: false, ts }],
+      },
+    });
+    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp={false} canAck={false} />);
+    const ack = await screen.findByRole('button', { name: 'Ack' });
+    expect(ack).toBeDisabled();
+    expect(ack).toHaveAttribute('title', 'Checking your role');
+    expect(ack).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText('Checking your role')).toBeNull();
+  });
+
+  it('POSITIVE CONTROL: a holder who may ack sees no reason, and Ack posts', async () => {
+    stub({
+      [`GET ${base}/follow-ups`]: {
+        followUps: [{ id: 'FU-1', taskId: 'T-1', projectId: 'P-1', body: 'Add a regression test', author: 'u-mona', target: 'u-will', status: 'open', reopened: false, ts }],
+      },
+    });
+    wrap(<FollowUps projectId="P-1" task={task} identity="u-will" canFollowUp canAck />);
+    const ack = await screen.findByRole('button', { name: 'Ack' });
+    expect(ack).toBeEnabled();
+    expect(ack).not.toHaveAttribute('aria-describedby');
+    fireEvent.click(ack);
+    await vi.waitFor(() => expect(calls.some((c) => c.startsWith('POST ') && c.includes('FU-1'))).toBe(true));
+  });
 });

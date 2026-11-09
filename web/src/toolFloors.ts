@@ -14,7 +14,7 @@
  *
  * Closing a control is not enforcing it: the server still decides, and still refuses.
  */
-import { roleAtLeast } from './displayNames.js';
+import { NOT_A_MEMBER, roleAtLeast } from './displayNames.js';
 
 export type Floor = 'viewer' | 'worker' | 'master' | 'member' | 'admin';
 
@@ -68,10 +68,12 @@ export function mayCall(role: string | undefined, tool: GatedTool): boolean {
 /**
  * Why a control that calls `tool` is closed to `role`, as one sentence ending "… `what`.", or
  * `undefined` when it is open or while the role is still loading (the control is closed then too, with
- * no reason yet, as P-432 does). `what` is the action in the reader's words: "assign tasks".
+ * no reason yet, as P-432 does). `what` is the action in the reader's words: "assign tasks". A caller
+ * who is not a member of the project (`NOT_A_MEMBER`, P-443) is told so, whatever the tool's tier.
  */
 export function closedWhy(role: string | undefined, tool: GatedTool, what: string): string | undefined {
   if (role === undefined || mayCall(role, tool)) return undefined;
+  if (role === NOT_A_MEMBER) return notMemberWhy(what);
   switch (TOOL_FLOOR[tool]) {
     case 'worker':
       return role === 'viewer' ? `A viewer cannot ${what}.` : `Your role cannot ${what}.`;
@@ -84,4 +86,9 @@ export function closedWhy(role: string | undefined, tool: GatedTool, what: strin
     default:
       return `Your role cannot ${what}.`;
   }
+}
+
+/** The reason for a caller who is not a member of the project (P-443): "… cannot `what`." */
+export function notMemberWhy(what: string): string {
+  return `You are not a member of this project, so you cannot ${what}.`;
 }

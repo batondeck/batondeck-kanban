@@ -20,10 +20,15 @@ interface ProjectCtx {
   setProjectId: (id: string) => void;
   projects: ProjectInfo[];
   loading: boolean;
+  /**
+   * The roster has been read (P-443). `useMyProjectRole` answers "not a member" only then: while it
+   * loads, or after it failed, a missing row says nothing about membership.
+   */
+  ready: boolean;
 }
 
 const KEY = 'bd.projectId';
-const Ctx = createContext<ProjectCtx>({ projectId: '', setProjectId: () => {}, projects: [], loading: true });
+const Ctx = createContext<ProjectCtx>({ projectId: '', setProjectId: () => {}, projects: [], loading: true, ready: false });
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const q = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.listProjects() });
@@ -39,7 +44,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(KEY, id);
     setStored(id);
   };
-  return <Ctx.Provider value={{ projectId, setProjectId, projects, loading: q.isLoading }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ projectId, setProjectId, projects, loading: q.isLoading, ready: q.isSuccess }}>{children}</Ctx.Provider>;
 }
 
 export function useProject(): ProjectCtx {
