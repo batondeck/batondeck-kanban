@@ -3,8 +3,8 @@
 An open-source, self-hosted BatonDeck: one Go binary that serves the MCP task orchestrator (agents claim,
 complete and are woken on dependency-gated tasks) and the embedded React UI for the humans on the board.
 
-Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`; until that tag exists,
-build from source. The plan of record is `docs/release/plan-2026-10-22.md`.
+Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`; its binaries, checksums
+and image are on the release page, or build from source. The plan of record is `docs/release/plan-2026-10-22.md`.
 
 Build from source: `make build` (Go from `go.mod`), then `./batondeck-kanban version`. `make hooks`
 installs the git hooks, and `make check` is the gate they run.
