@@ -74,8 +74,9 @@ func TestCloseEndingWaitsForTheMarkingRequest(t *testing.T) {
 	}
 }
 
-// A request that carries no mark (no HTTP transport in front) keeps the old rule: the next request
-// on the session to finish closes it.
+// The table's rules: an unmarked end (no HTTP transport in front, a fallback) is taken by the next
+// request to finish; a marked one only by its own request; and one marked by a request no longer in
+// hand is handed back to close at once.
 func TestTakeEndingWithoutAMark(t *testing.T) {
 	ss, _ := liveServerSession(t)
 	const id = "S-test"
@@ -87,11 +88,20 @@ func TestTakeEndingWithoutAMark(t *testing.T) {
 	if got := tb.takeEnding(id, "any"); got != nil {
 		t.Fatal("an end was taken twice")
 	}
+	tb.begin("m1")
 	tb.endAfter(id, "m1")
 	if got := tb.takeEnding(id, "m2"); got != nil {
 		t.Fatal("another request's mark took the end")
 	}
 	if got := tb.takeEnding(id, "m1"); got != ss {
 		t.Fatal("the marking request did not take its end")
+	}
+	// A marking request already over (its client gave up before the tool ran): the end is not
+	// left for a request that will never come; endAfter hands the session back to close now.
+	if got := tb.endAfter(id, "gone"); got != ss {
+		t.Fatal("an end marked by a request no longer in hand was parked")
+	}
+	if _, parked := tb.ending[id]; parked {
+		t.Fatal("an end marked by a request no longer in hand was parked")
 	}
 }

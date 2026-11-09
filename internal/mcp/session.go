@@ -19,14 +19,15 @@ import (
 // collects a session idle past Options.SessionIdle (StreamableHTTPOptions.SessionTimeout) and then
 // answers its id with 404 "session not found", the client's cue to initialise again.
 type sessionTable struct {
-	mu     sync.Mutex
-	max    int
-	closed bool                          // Server.Close ran: no session is admitted again
-	live   map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
-	agents map[string]int                // agent-session key -> its live MCP sessions
-	keys   map[string]string             // MCP session id -> its agent-session key
-	ending map[string]string             // sessions to close once a request is answered: id -> that request's mark
-	ends   sync.WaitGroup                // one per admitted session, done when its end is recorded
+	mu       sync.Mutex
+	max      int
+	closed   bool                          // Server.Close ran: no session is admitted again
+	live     map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
+	agents   map[string]int                // agent-session key -> its live MCP sessions
+	keys     map[string]string             // MCP session id -> its agent-session key
+	ending   map[string]string             // sessions to close once a request is answered: id -> that request's mark
+	inflight map[string]struct{}           // marks of the HTTP requests closeEnding has not seen return
+	ends     sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
 // reserve admits ss, or refuses when the table is full or closed. fresh is false for an id
@@ -65,12 +66,28 @@ func (t *sessionTable) release(id string) {
 }
 
 // endAfter marks session id to be closed once the HTTP request whose mark is mark has its answer
-// (P-450). mark is "" for a request that carries none (no HTTP transport): then the next request on
-// the session to finish closes it, as before.
-func (t *sessionTable) endAfter(id, mark string) {
+// (P-450), or, when that request is already over (its client gave up before the tool ran), returns
+// the session for the caller to close now: nothing is left to answer, and no later request carries
+// the mark. mark is "" only for a request with no HTTP transport in front, a fallback no request
+// through Handler takes: then the next request on the session to finish closes it, as before.
+func (t *sessionTable) endAfter(id, mark string) *mcp.ServerSession {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, inHand := t.inflight[mark]; mark != "" && !inHand {
+		return t.live[id]
+	}
 	t.ending[id] = mark
+	return nil
+}
+
+// begin records mark as an HTTP request in hand, until takeEnding sees it return.
+func (t *sessionTable) begin(mark string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.inflight == nil {
+		t.inflight = map[string]struct{}{}
+	}
+	t.inflight[mark] = struct{}{}
 }
 
 // takeEnding is the live session id marked by endAfter, unmarked, or nil. A mark set by one HTTP
@@ -80,6 +97,7 @@ func (t *sessionTable) endAfter(id, mark string) {
 func (t *sessionTable) takeEnding(id, mark string) *mcp.ServerSession {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	delete(t.inflight, mark)
 	want, ok := t.ending[id]
 	if !ok || (want != "" && want != mark) {
 		return nil
@@ -234,8 +252,10 @@ type sessionIDKey struct{}
 
 // requestMarkHeader carries a mark closeEnding gives each HTTP request, server-side, so a
 // self-disconnect closes its session after its own answer and no other's (P-450). go-sdk hands the
-// request's headers to the handler (RequestExtra.Header); sessionMiddleware moves the mark into the
-// context under requestMarkKey. A client's value for it is replaced, never trusted.
+// request's headers to the handler (RequestExtra.Header is the request's own header map, which
+// closeEnding writes before calling it); sessionMiddleware moves the mark into the context under
+// requestMarkKey. A client's value for it is replaced, never trusted, and it is never written to a
+// response or logged. TestSelfDisconnectUnderOtherRequests guards the whole path.
 const requestMarkHeader = "X-Batondeck-Request-Mark"
 
 type requestMarkKey struct{}
@@ -257,7 +277,9 @@ func (s *Server) EndAgentSessions(ctx context.Context, identityID, agentID strin
 	var others sync.WaitGroup
 	for _, ss := range live {
 		if ss.ID() == self {
-			s.sessions.endAfter(ss.ID(), mark)
+			if gone := s.sessions.endAfter(ss.ID(), mark); gone != nil {
+				go func() { _ = gone.Close() }()
+			}
 			continue
 		}
 		others.Go(func() { _ = ss.Close() })
@@ -282,11 +304,11 @@ func (s *Server) closeEnding(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mark := rand.Text()
 		r.Header.Set(requestMarkHeader, mark)
+		s.sessions.begin(mark)
 		next.ServeHTTP(w, r)
-		if id := r.Header.Get("Mcp-Session-Id"); id != "" {
-			if ss := s.sessions.takeEnding(id, mark); ss != nil {
-				go func() { _ = ss.Close() }()
-			}
+		// takeEnding also drops the mark from the requests in hand, so it runs for every request.
+		if ss := s.sessions.takeEnding(r.Header.Get("Mcp-Session-Id"), mark); ss != nil {
+			go func() { _ = ss.Close() }()
 		}
 	})
 }

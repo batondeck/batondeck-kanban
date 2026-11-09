@@ -1512,12 +1512,13 @@ this section's headings in CHANGELOG.md, are all part of it.
   viewer's header took three rows, with Activity alone on the third (P-447).
 - The board's columns are re-measured when anything above them changes height without a render or
   a window resize (a web font arriving late), through a ResizeObserver on everything the board
-  renders into the page: its header, the filter bar, the reasons and messages, and the body (P-448).
+  renders into the page when it mounts: its header, the filter bar, the reasons and messages, and
+  the body; what appears later is measured when it renders (P-448).
 - A session that disconnects itself (`disconnect_agent` on its own agent) gets its answer whole. The
   session was closed when any request on it finished after the disconnect, so another request
   finishing first (the client's standalone stream, a second call) could close it under the answer,
-  which then arrived as an empty 200. Only the request that made the disconnect closes it now
-  (P-450).
+  which then arrived as an empty 200. Only the request that made the disconnect closes it now, and
+  at once when that request's client has already gone (P-450).
 - `SECURITY.md` (report a vulnerability privately through GitHub's private vulnerability reporting)
   and `CONTRIBUTING.md` (build, test, pull requests, contributions under Apache-2.0), linked from the
   README (P-449).
