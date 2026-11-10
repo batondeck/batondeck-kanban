@@ -367,6 +367,14 @@ export function IntegrationForm({
 
           {form.authMode === 'jwt' && (
             <Stack gap={12}>
+              {/* The stored jwt block is never shown back, so an edit cannot prefill it: what is
+                  saved here replaces it whole, pins included. */}
+              {!isCreate && (
+                <Note>
+                  The JWT settings are not shown back. Filling them in replaces all of them, so
+                  re-enter the pins too: a blank pin removes the one stored.
+                </Note>
+              )}
               <TextField
                 id="oc-jwt-iss"
                 label="Issuer"

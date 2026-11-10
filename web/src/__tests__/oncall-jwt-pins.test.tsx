@@ -23,7 +23,7 @@ const WEBHOOK: OncallSource = {
 afterEach(cleanup);
 
 let latest: FormState;
-function Harness() {
+function Harness({ isCreate = true }: { isCreate?: boolean }) {
   const [form, setForm] = useState<FormState>({ ...blankForm(WEBHOOK), authMode: 'jwt' });
   latest = form;
   return (
@@ -31,7 +31,7 @@ function Harness() {
       source={WEBHOOK}
       form={form}
       set={(p) => setForm((f) => ({ ...f, ...p }))}
-      isCreate
+      isCreate={isCreate}
       onGenerateKey={() => {}}
     />
   );
@@ -56,6 +56,16 @@ describe('the jwt auth fields', () => {
         email: 'monitoring@example.iam.gserviceaccount.com',
       },
     });
+  });
+
+  // The stored jwt block is never shown back, so an edit re-enters it whole and replaces it: a pin
+  // left blank there removes the stored one, and the form says so before the save.
+  it('say on an edit that the settings are replaced whole and a blank pin removes the stored one', () => {
+    render(<Harness isCreate={false} />);
+    expect(screen.getByText(/a blank pin removes the one stored/i)).toBeTruthy();
+    cleanup();
+    render(<Harness />);
+    expect(screen.queryByText(/a blank pin removes the one stored/i), 'a new integration has nothing stored').toBeNull();
   });
 
   it('send no pin that was left blank (control)', () => {
