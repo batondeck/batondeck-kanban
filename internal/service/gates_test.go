@@ -455,3 +455,34 @@ func TestNextTaskCarriesTheResume(t *testing.T) {
 		}
 	})
 }
+
+// useProfile and strategy score judge more than the frontier's first 200 tasks: a task the caller's
+// profile covers, behind 200 it does not, is claimed and previewed. Before, claim_next {useProfile}
+// answered null ("no work") and next_task never saw it.
+func TestAProfilesTaskBehindTheFirstPageIsFound(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		if _, err := e.c.Profiles().Register(e.ctx, e.alice, RegisterAgentProfileReq{ProjectID: e.project, Capabilities: []string{"go"}}); err != nil {
+			t.Fatal(err)
+		}
+		for range frontierPage {
+			e.capTask(t, "design")
+		}
+		goTask, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "go",
+			Status: domain.Todo, OrderKey: "z0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli(), RequiredCapabilities: []string{"go"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lc := e.c.Lifecycle()
+		for _, strategy := range []NextStrategy{"", "score"} {
+			n, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true, Strategy: strategy})
+			if err != nil || taskID(n.Task) != goTask.ID {
+				t.Fatalf("next_task {useProfile, strategy %q} = %s (err %v), want %s behind %d others", strategy, taskID(n.Task), err, goTask.ID, frontierPage)
+			}
+		}
+		r, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, UseProfile: true})
+		t.Logf("claim_next {useProfile: [go]} behind %d design tasks: %s (err %v)", frontierPage, taskID(r.Task), err)
+		if err != nil || taskID(r.Task) != goTask.ID {
+			t.Fatalf("claim_next {useProfile} = %s (err %v), want %s", taskID(r.Task), err, goTask.ID)
+		}
+	})
+}

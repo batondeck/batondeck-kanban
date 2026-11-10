@@ -273,6 +273,7 @@ func previewFrontier(ctx context.Context, e engine, fq FrontierQuery, limit int)
 	rows, err := e.queries(false).PreviewFrontier(ctx, sqlitedb.PreviewFrontierParams{
 		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee), Caller: fq.Caller,
 		Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID, OnlyIds: idsParam(fq.TaskIDs), PageLimit: int64(clamp(limit, 50, 200)),
+		PageOffset: int64(max(fq.Offset, 0)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: frontier: %w", err)

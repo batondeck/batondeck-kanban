@@ -29,7 +29,8 @@ type ClaimInput struct {
 // (SprintIDs holds it; P-239), and with TaskIDs not nil only the tasks it names (an empty TaskIDs
 // matches none; P-258). The frontier is best first: Score descending, then
 // priority (urgent, high, normal, low), then order key, then id, the two keys compared as bytes
-// (Postgres: COLLATE "C"), so T-10 comes before T-9.
+// (Postgres: COLLATE "C"), so T-10 comes before T-9. Offset skips the frontier's first Offset tasks
+// in PreviewFrontier (a page after the first); ClaimNext ignores it.
 type FrontierQuery struct {
 	ProjectID    string
 	BoardID      string
@@ -39,6 +40,7 @@ type FrontierQuery struct {
 	SprintID     string
 	TaskIDs      []string
 	Now          int64
+	Offset       int
 }
 
 // Claims is the lease area: who works a task, until when. Keys: (project_id, task_id). A claim
@@ -75,8 +77,8 @@ type Claims interface {
 	// holding a lease expired at now, the oldest expiry first (then id, as bytes). A limit <= 0 is 50 and
 	// above 200 is 200.
 	ListExpiredLeases(ctx context.Context, projectID, boardID string, now int64, limit int) ([]Task, error)
-	// PreviewFrontier is the first limit tasks of the frontier, best first, claiming nothing. A
-	// limit <= 0 is 50 and above 200 is 200.
+	// PreviewFrontier is the first limit tasks of the frontier after its first q.Offset, best first,
+	// claiming nothing. A limit <= 0 is 50 and above 200 is 200.
 	PreviewFrontier(ctx context.Context, q FrontierQuery, limit int) ([]Task, error)
 }
 

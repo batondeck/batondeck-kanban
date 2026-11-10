@@ -406,7 +406,8 @@ func (l lifecycle) claimOnce(ctx context.Context, caller domain.Caller, a access
 // claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
 // Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); useProfile to the
 // tasks the caller's own registered profile covers (claimNext; the project, the profile and its
-// stats are three more reads, plus the frontier page each attempt; no profile falls back to
+// stats are three more reads, plus a frontier page each attempt, more when the first 200 tasks hold
+// none it covers (frontierScan, at most five); no profile falls back to
 // capabilities); shard lanes and maxConcurrency are refused, not ignored.
 func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_next", domain.GrantSubject{BoardID: req.BoardID}, false)
@@ -476,22 +477,25 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	return resp, err
 }
 
-// claimNext is one claim attempt. With a profile, the frontier's first frontierPage tasks that it
-// covers become q.TaskIDs, so the store's one claim statement takes the best of them and re-checks
-// every frontier condition at the claim; none covered is an empty frontier.
+// claimNext is one claim attempt. With a profile, the tasks it covers in the first frontier page
+// that holds any (frontierScan) become q.TaskIDs, so the store's one claim statement takes the best
+// of them and re-checks every frontier condition at the claim; none covered is an empty frontier.
 func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access, req ClaimNextReq, q store.FrontierQuery, sc scorer, board store.Board, secs int64) (ClaimNextResp, error) {
 	if sc.profile != nil {
 		q.Now = l.c.nowMs()
-		pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+		covered := []string{}
+		err := l.frontierScan(ctx, q, func(pool []store.Task) bool {
+			for _, t := range pool {
+				if sc.covers(t) {
+					covered = append(covered, t.ID)
+				}
+			}
+			return len(covered) > 0
+		})
 		if err != nil {
 			return ClaimNextResp{}, l.c.mapErr("claim_next", err)
 		}
-		q.TaskIDs = []string{}
-		for _, t := range pool {
-			if sc.covers(t) {
-				q.TaskIDs = append(q.TaskIDs, t.ID)
-			}
-		}
+		q.TaskIDs = covered
 	}
 	leaseID := newLeaseID()
 	resp, err := mutate(ctx, l.c, caller, mutation{
@@ -841,7 +845,7 @@ func (l lifecycle) leaseArgs(ctx context.Context, caller domain.Caller, tool, pr
 // and writes nothing: an expired lease is reaped by claim_next's lazy recovery or
 // reap_stale_leases, never by a preview, which would write as a viewer. includeInbox adds two
 // (REVIEW, then BLOCKED split into blocked and poisoned).
-// strategy "score" ranks the frontier's first frontierPage tasks with the scorer rank_tasks uses
+// strategy "score" ranks the frontier (frontierScan: up to 1000 tasks) with the scorer rank_tasks uses
 // (scorer.rank: the project's selectionWeights and agingCeilingMs) and previews the best; explain,
 // which needs it, adds the top task's factors and the runner-up. useProfile judges eligibility by
 // the caller's own registered profile instead of capabilities (FORBIDDEN under another agent's
@@ -926,13 +930,34 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	return resp, nil
 }
 
-// frontierPage is how much of the frontier the score and profile paths judge: PreviewFrontier's
-// largest page.
-const frontierPage = 200
+// frontierPage is a page of the frontier the score and profile paths judge: PreviewFrontier's
+// largest. frontierPages bounds how many they read (frontierScan): 1000 tasks.
+const (
+	frontierPage  = 200
+	frontierPages = 5
+)
+
+// frontierScan reads q's frontier best first, frontierPage tasks a page (q.Offset), handing each
+// page to visit until visit answers true, a page is short (the frontier's end) or frontierPages pages
+// are read. A frontier that fits one page costs one statement, as before; a profile whose tasks sit
+// behind the first 200 is no longer told there is no work.
+func (l lifecycle) frontierScan(ctx context.Context, q store.FrontierQuery, visit func([]store.Task) bool) error {
+	for page := range frontierPages {
+		q.Offset = page * frontierPage
+		pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+		if err != nil {
+			return err
+		}
+		if visit(pool) || len(pool) < frontierPage {
+			return nil
+		}
+	}
+	return nil
+}
 
 // nextHead is next_task's choice, best first: the fifo frontier's head (one row), or with score
-// the first frontierPage tasks ranked by sc, or with a profile and no score the first of them in
-// frontier order that the profile covers.
+// the frontier ranked by sc (frontierScan's pages), or with a profile and no score the first task
+// in frontier order that the profile covers.
 func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc scorer, score bool) ([]ranked, error) {
 	now := l.c.now()
 	q.Now = now.UnixMilli()
@@ -943,7 +968,21 @@ func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc score
 		}
 		return []ranked{{task: head[0]}}, nil
 	}
-	pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+	var pool []store.Task
+	var head []ranked
+	err := l.frontierScan(ctx, q, func(page []store.Task) bool {
+		if score {
+			pool = append(pool, page...)
+			return false
+		}
+		for _, t := range page {
+			if sc.covers(t) {
+				head = []ranked{{task: t}}
+				return true
+			}
+		}
+		return false
+	})
 	if err != nil {
 		return nil, l.c.mapErr("next_task", err)
 	}
@@ -951,12 +990,7 @@ func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc score
 		// The frontier already holds capabilities' tasks only; the profile, when there is one, filters.
 		return sc.rank(pool, now, nil), nil
 	}
-	for _, t := range pool {
-		if sc.covers(t) {
-			return []ranked{{task: t}}, nil
-		}
-	}
-	return nil, nil
+	return head, nil
 }
 
 // inbox is next_task's inbox: the board's REVIEW and BLOCKED tasks (of assignee, when given), the

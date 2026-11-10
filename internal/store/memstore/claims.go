@@ -260,6 +260,7 @@ func (s *Store) PreviewFrontier(ctx context.Context, q store.FrontierQuery, limi
 	limit = clamp(limit, 50, 200)
 	return get(ctx, s, func(st *state) ([]store.Task, error) {
 		f := st.frontier(q)
+		f = f[min(max(q.Offset, 0), len(f)):]
 		if len(f) > limit {
 			f = f[:limit]
 		}
