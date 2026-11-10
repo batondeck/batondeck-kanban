@@ -556,14 +556,15 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 	return q, nil
 }
 
-// sprintBrief is a claim's sprint {id, name, goal, status}: the sprint the claimed task belongs to
-// (one at most, sprints being exclusive), or nil. It reads the sprint only for a task that has one,
-// so a claim outside a sprint makes no extra statement (P-239).
+// sprintBrief is a claim's sprint {id, name, goal, status}: the sprint the claimed task belongs to,
+// its newest (sprints being exclusive among those that have not ended, every earlier one is CLOSED
+// or ABANDONED and kept for history), or nil. It reads the sprint only for a task that has one, so a
+// claim outside a sprint makes no extra statement (P-239).
 func sprintBrief(ctx context.Context, tx store.Store, task store.Task) (*Sprint, error) {
 	if len(task.SprintIDs) == 0 {
 		return nil, nil
 	}
-	sp, err := tx.GetSprint(ctx, task.ProjectID, task.SprintIDs[0])
+	sp, err := tx.GetSprint(ctx, task.ProjectID, task.SprintIDs[len(task.SprintIDs)-1])
 	if err != nil {
 		return nil, err
 	}

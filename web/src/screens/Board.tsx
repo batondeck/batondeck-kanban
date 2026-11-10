@@ -226,11 +226,15 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true, canAss
   );
 }
 
+/** The sprint a task is in now: the LAST of its sprintIds. A member carried out of a CLOSED or
+ *  ABANDONED sprint keeps that sprint first, for history, and only one sprint is open at a time. */
+export const currentSprintId = (t: Task): string | undefined => t.sprintIds?.at(-1);
+
 export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy }: {
   t: Task;
   col: { status: Status };
   sub?: { done: number; total: number };
-  /** Name of the task's sprint (first of sprintIds); null/undefined → fall back to the raw id. */
+  /** Name of the task's sprint (currentSprintId); null/undefined → fall back to the raw id. */
   sprintName?: string | null;
   selected: boolean;
   /** Something (an agent, another human) changed this task under you — flash the ack ring. */
@@ -303,8 +307,8 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
           {isPoisoned(t) ? <PoisonBadge task={t} /> : (t.status === 'BLOCKED' || t.blockedBy.length > 0) && <span className="badge blocked">Blocked</span>}
           {t.racing && <span className="badge racing" title="racing — N runs open"><Icon name="finish" size={11} /> Racing</span>}
           {(t.sprintIds?.length ?? 0) > 0 && (
-            <span className="badge sprint" title={`Sprint: ${sprintName ?? t.sprintIds![0]!}`}>
-              <Icon name="flag" size={11} /> {sprintName ?? t.sprintIds![0]!}
+            <span className="badge sprint" title={`Sprint: ${sprintName ?? currentSprintId(t)}`}>
+              <Icon name="flag" size={11} /> {sprintName ?? currentSprintId(t)}
             </span>
           )}
           {t.modelHint?.effort && <span className="badge effort" title={t.modelHint.model}>{t.modelHint.effort}</span>}
@@ -779,7 +783,7 @@ export function Board() {
   });
   const sprints = useMemo(() => sprintsQ.data?.sprints ?? [], [sprintsQ.data]);
   const sprintNameOf = useCallback(
-    (t: Task): string | null => sprints.find((s) => s.id === t.sprintIds?.[0])?.name ?? null,
+    (t: Task): string | null => sprints.find((s) => s.id === currentSprintId(t))?.name ?? null,
     [sprints],
   );
   // Connected agents in this workspace (available/busy/offline/connecting).

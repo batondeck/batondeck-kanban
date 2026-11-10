@@ -248,7 +248,7 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 				}
 			}
 			if len(open) > 0 {
-				resp.Warnings = []string{fmt.Sprintf("%d member(s) not DONE at close: %s — they keep their sprintIds for history; descope or carry them to a successor sprint.",
+				resp.Warnings = []string{fmt.Sprintf("%d member(s) not DONE at close: %s — they stay members of this sprint for history; set_sprint add carries each to a successor sprint.",
 					len(open), strings.Join(open, ", "))}
 			}
 		}
@@ -311,7 +311,8 @@ func samePtr(a, b *string) bool {
 // Set is set_sprint (conductor sprints.ts:183-237, in-memory-store.ts:1731-1782): an add of a task on
 // another board is VALIDATION; an add of a member, or a remove of a non-member, returns the task
 // unchanged before the version check (retry-safe); otherwise the task is version-checked, the
-// membership is judged (domain.CheckSprintMembership, exclusive), and the task's sprintIds and the
+// membership is judged (domain.CheckSprintMembership, exclusive among the sprints that have not
+// ended: endedSprints), and the task's sprintIds and the
 // sprint's member count move together, with sprint.task_added or sprint.task_removed on the task.
 // It runs under the project lock, as update_sprint does: under Postgres READ COMMITTED a close that
 // committed after this call read the sprint ACTIVE would otherwise let the task join a CLOSED sprint
@@ -359,8 +360,15 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 			if task.Version != req.Version {
 				return SetSprintResp{}, domain.Stale(req.Version, task.Version)
 			}
+			var ended []string
+			if add {
+				if ended, err = t.endedSprints(task.SprintIDs, sprint.ID); err != nil {
+					return SetSprintResp{}, err
+				}
+			}
 			if err := domain.CheckSprintMembership(domain.SprintMembership{SprintID: sprint.ID, SprintStatus: sprint.Status,
-				MemberCount: sprint.MemberCount, Add: add, TaskID: task.ID, TaskSprints: task.SprintIDs, Exclusive: sprintExclusive}); err != nil {
+				MemberCount: sprint.MemberCount, Add: add, TaskID: task.ID, TaskSprints: task.SprintIDs, EndedSprints: ended,
+				Exclusive: sprintExclusive}); err != nil {
 				return SetSprintResp{}, err
 			}
 			ids, delta, typ := append(slices.Clone(task.SprintIDs), sprint.ID), int64(1), domain.EventSprintTaskAdded
@@ -385,6 +393,30 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 		}
 		return SetSprintResp{Task: out}, nil
 	})
+}
+
+// endedSprints is the ids of sprintIDs, but except, whose sprint is CLOSED or ABANDONED (or gone):
+// they stay in the task's sprintIds for history and hold it out of no other sprint
+// (domain.CheckSprintMembership). One read per id; a task carries at most SprintIDsMax.
+func (t *txn) endedSprints(sprintIDs []string, except string) ([]string, error) {
+	var out []string
+	for _, id := range sprintIDs {
+		if id == except {
+			continue
+		}
+		sp, err := t.Tx.GetSprint(t.ctx, t.ProjectID, id)
+		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+			out = append(out, id)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if sp.Status == domain.SprintClosed || sp.Status == domain.SprintAbandoned {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // Get is get_sprint (conductor sprints.ts:239-408): the sprint, its members (one read of at most
