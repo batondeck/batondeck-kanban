@@ -33,6 +33,15 @@ ALTER TABLE tasks ADD COLUMN search tsvector GENERATED ALWAYS AS (
     to_tsvector('simple', regexp_replace(title || ' ' || description || ' ' || search_tokens, '[!-/:-@[-`{-~]+', ' ', 'g'))) STORED;
 CREATE INDEX tasks_search ON tasks USING gin (search);
 
+-- Each sprint's member count, recounted from the tasks that name it as ListSprintMembers reads them
+-- (the sprint's board): deleting a member did not lower it before the delete cascade did, so a
+-- sprint could refuse new members with SPRINT_MAX_TASKS while holding fewer. The down keeps the
+-- true counts.
+UPDATE sprints SET member_count = (
+    SELECT COUNT(*) FROM tasks t
+    WHERE t.project_id = sprints.project_id AND t.board_id = sprints.board_id
+      AND t.sprint_ids::jsonb @> jsonb_build_array(sprints.id));
+
 -- +goose Down
 DROP INDEX tasks_search;
 ALTER TABLE tasks DROP COLUMN search;
