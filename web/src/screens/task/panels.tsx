@@ -144,7 +144,7 @@ export function DigestPanel({ d }: P) {
 
 /** Who holds the ticket and for how much longer. Renders only while a claim is live. */
 export function LeasePanel({ d }: P) {
-  const { task, countdown, names } = d;
+  const { task, countdown, names, claimIsMine } = d;
   if (!task.claim) return null;
   return (
     <Panel title="Lease" right={<span className="mono">held · {countdown.expired ? 'expired' : `${countdown.label} left`}</span>}>
@@ -154,12 +154,11 @@ export function LeasePanel({ d }: P) {
       <KV k="holder">
         <Cluster gap={4}>
           <Avatar id={task.claim.agent || task.claim.owner} active />
-          <span>{task.claim.agent || task.claim.owner}</span>
+          <span>{claimIsMine ? 'you' : task.claim.agent || task.claim.owner}</span>
           {/* The account behind the agent, by name, never its raw id (P-314, P-457). */}
           {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted" title={task.claim.owner}>· for {personName(task.claim.owner, names)}</span>}
         </Cluster>
       </KV>
-      <KV k="leaseId"><span className="mono">{task.claim.leaseId}</span></KV>
       <KV k="on expiry">returns to <span className="role ready">To do</span>, unclaimed</KV>
     </Panel>
   );

@@ -9,6 +9,7 @@ import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-li
 import { TaskDrawer } from '../screens/TaskDrawer.js';
 import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
+import { resetLeaseMemory } from '../screens/task/leases.js';
 import type { Task } from '../types.js';
 
 const now = Date.now();
@@ -591,5 +592,64 @@ describe('subtask checkbox follows the transition table', () => {
     fireEvent.click(box);
     await waitFor(() => expect(moves(fetchMock)).toHaveLength(1));
     expect(JSON.parse(String((moves(fetchMock)[0]![1] as RequestInit).body))).toMatchObject({ toStatus: 'IN_PROGRESS' });
+  });
+});
+
+/**
+ * A claim made in the web outlives the drawer. The server never sends a lease id on `task.claim`
+ * (only the claim's own answer carries it), and the drawer kept it in component state, so after
+ * closing and reopening the ticket (or j/k, or a reload) its holder had no Mark complete, Block,
+ * Hand off or Release: the task sat until the lease lapsed and the reap counted a failed attempt.
+ */
+describe('a web claim survives the drawer remounting', () => {
+  const future = (): string => new Date(Date.now() + 3_600_000).toISOString();
+  function claimingFetch() {
+    let claimed = false;
+    const base = routeFetch();
+    const claimedTask = (): Task => ({ ...task, status: 'IN_PROGRESS', version: 4, claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] });
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (url.endsWith('/tasks/T-1/claim')) { claimed = true; return json({ leaseId: 'L-abc', task: claimedTask() }); }
+      if (url.endsWith('/tasks/T-1/complete')) { claimed = false; return json({ task: { ...task, status: 'REVIEW', version: 5 } }); }
+      if (claimed && /\/tasks\/T-1$/.test(url)) return json({ task: claimedTask() });
+      return base(input, init);
+    });
+    return fm;
+  }
+  const bodyOf = (fm: ReturnType<typeof vi.fn>, suffix: string) => {
+    const call = fm.mock.calls.find(([u]) => String(u).endsWith(suffix));
+    return call ? JSON.parse(String((call[1] as RequestInit).body)) : undefined;
+  };
+  beforeEach(() => { try { localStorage.clear(); } catch { /* none */ } });
+  afterEach(() => { try { localStorage.clear(); } catch { /* none */ } });
+
+  it('reopened, the holder can still complete with the lease the claim returned', async () => {
+    const fm = claimingFetch();
+    vi.stubGlobal('fetch', fm);
+    const first = renderDrawer();
+    fireEvent.click(await screen.findByRole('button', { name: /Claim to work/ }));
+    await screen.findByRole('button', { name: /Mark complete/ });
+    // A browser claim holds an hour: the REST surface cannot heartbeat it.
+    expect(bodyOf(fm, '/tasks/T-1/claim')).toEqual({ leaseSeconds: 3600 });
+    first.unmount();
+    resetLeaseMemory(); // as a reload would: the lease comes back from storage
+
+    // A fresh mount (the drawer is keyed per task; a reload is a fresh cache as well).
+    renderDrawer();
+    const complete = await screen.findByRole('button', { name: /Mark complete/ });
+    expect(screen.getByRole('button', { name: /Release claim/ })).toBeInTheDocument();
+    fireEvent.click(complete);
+    await waitFor(() => expect(bodyOf(fm, '/tasks/T-1/complete')).toEqual({ leaseId: 'L-abc' }));
+  });
+
+  it('a claim of mine with no lease in this browser says so instead of showing nothing', async () => {
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    expect(await screen.findByText(/You hold this claim from another browser or session/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Mark complete/ })).not.toBeInTheDocument();
+    // The Lease panel prints no empty lease-id row: the server never sends one.
+    expect(screen.queryByText('leaseId')).not.toBeInTheDocument();
   });
 });

@@ -5,7 +5,7 @@
  * derived state they would drift — different move targets, different lease maths, two caches. So the
  * data path is defined once here and both screens render the same panels (`./panels.tsx`) off it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../../api/agents.js';
 import * as boardsApi from '../../api/boards.js';
@@ -15,6 +15,7 @@ import * as mediaApi from '../../api/media.js';
 import * as projectsApi from '../../api/projects.js';
 import * as streamApi from '../../api/stream.js';
 import * as tasksApi from '../../api/tasks.js';
+import { ApiError } from '../../api/http.js';
 import { useAuth } from '../../auth.js';
 import { boardTasksKey, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
@@ -24,6 +25,7 @@ import { closedWhy, mayCall, type GatedTool } from '../../toolFloors.js';
 import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
+import { forgetLease, recallLease, rememberLease } from './leases.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -60,7 +62,17 @@ function useLeaseCountdown(expiresAt: string | null | undefined): { label: strin
 export function useTaskDetail(projectId: string, taskId: string) {
   const qc = useQueryClient();
   const { identity } = useAuth();
-  const [lease, setLease] = useState<string | null>(null);
+  // The lease id this browser's claim was given (see ./leases.ts): kept outside the component, so
+  // closing the drawer, j/k or a reload does not strand the claim's holder. Read on every render, so
+  // the page following a link to another ticket reads that ticket's entry, not this one's.
+  const [, leaseChanged] = useReducer((n: number) => n + 1, 0);
+  const leaseEntry = identity ? recallLease(identity, projectId, taskId) : null;
+  const setLease = (leaseId: string | null): void => {
+    if (!identity) return;
+    if (leaseId) rememberLease(identity, projectId, taskId, leaseId);
+    else forgetLease(identity, projectId, taskId);
+    leaseChanged();
+  };
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<{ title: string; description: string }>({ title: '', description: '' });
@@ -158,7 +170,11 @@ export function useTaskDetail(projectId: string, taskId: string) {
     // Every detail write (labels, fields, summary, subtasks, memory, deps, claim/release/complete/
     // block/handoff) is marked as a local edit inside req() (api/http.ts), so the board's "changed under you"
     // ring keeps meaning "someone ELSE touched this" rather than firing on your own typing.
-    return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => { setErr(String(e instanceof Error ? e.message : e)); });
+    return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => {
+      // Only a lease outcome answers LEASE_EXPIRED: the remembered lease is spent, so stop offering it.
+      if (e instanceof ApiError && e.code === 'LEASE_EXPIRED') setLease(null);
+      setErr(String(e instanceof Error ? e.message : e));
+    });
   };
 
   // Shared upload path for the attachments dropzone (click-to-browse and drag-drop both call this).
@@ -183,10 +199,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   const countdown = useLeaseCountdown(task?.claim?.expiresAt);
 
-  // The leaseId survives a reload via task.claim: if the signed-in human owns the live claim, they can
-  // act on it even though the in-session `lease` state was reset. (lease covers the just-claimed case.)
-  const myLease = lease ?? (task?.claim && task.claim.owner === identity ? task.claim.leaseId : null);
-  const heldByOther = !!task?.claim && task.claim.owner !== identity && !lease;
+  // The remembered lease is offered only while the live claim is this identity's with no agent named
+  // (a claim that names an agent is that agent's, even under this identity's token: P-320). A claim
+  // with no lease here is someone else's, or this identity's from another browser or session.
+  const claimIsMine = !!task?.claim && !!identity && task.claim.owner === identity && !task.claim.agent;
+  const myLease = claimIsMine && leaseEntry ? leaseEntry.leaseId : null;
+  const heldByOther = !!task?.claim && !myLease;
+  // Drop a remembered lease once a read of the task made after the claim shows the claim gone or not
+  // this browser's (released, completed or reaped elsewhere), so storage does not collect them.
+  const staleLease = !!leaseEntry && !!task && !claimIsMine && taskQ.dataUpdatedAt > leaseEntry.at;
+  useEffect(() => {
+    if (staleLease && identity) { forgetLease(identity, projectId, taskId); leaseChanged(); }
+  }, [staleLease, identity, projectId, taskId]);
 
   const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
   const subs = subQ.data?.tasks ?? [];
@@ -260,7 +284,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
 
   return {
     projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, memQ, attQ,
-    err, setErr, run, uploadFile, move, countdown, myLease, heldByOther, setLease,
+    err, setErr, run, uploadFile, move, countdown, myLease, claimIsMine, heldByOther, setLease,
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,

@@ -23,7 +23,8 @@ export interface Claim {
   owner: string;
   /** Display name of the agent holding the lease (preferred over owner in the UI); null for human claims. */
   agent?: string | null;
-  leaseId: string;
+  // No lease id: the server never sends it here, only in the claim's own answer (see
+  // screens/task/leases.ts, which keeps it for this browser's claims).
   expiresAt: string;
 }
 export interface Task {

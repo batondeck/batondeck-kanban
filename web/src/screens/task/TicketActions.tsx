@@ -37,7 +37,7 @@ const label = {
 };
 
 export function TicketActions({ d }: { d: LoadedTaskDetail }) {
-  const { task, projectId, taskId, run, move, myLease, heldByOther, setLease, colFor, moveTargets, agentList, myRole, canMove, canClaim } = d;
+  const { task, projectId, taskId, run, move, myLease, claimIsMine, heldByOther, setLease, colFor, moveTargets, agentList, myRole, canMove, canClaim } = d;
   const [handoff, setHandoff] = useState<{ to: string; note: string } | null>(null);
   const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
   const readyName = colFor('TODO')?.name ?? 'To do';
@@ -142,11 +142,17 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
               <Button onClick={() => void run(lifecycleApi.releaseTask(projectId, taskId, myLease), () => setLease(null))}>Release claim</Button>
             </Cluster>
           )}
-          {heldByOther && (
+          {heldByOther && (claimIsMine ? (
+            // This identity's claim, but its lease id is not in this browser (claimed from another
+            // browser, or by a caller of this identity that names no agent): the outcomes need it.
+            <span className="muted" style={{ fontSize: 12 }}>
+              You hold this claim from another browser or session: finish or release it there, or let the lease lapse.
+            </span>
+          ) : (
             <span className="muted" style={{ fontSize: 12 }}>
               Held by <strong style={{ color: 'var(--text-2)' }}>{task.claim?.agent || task.claim?.owner}</strong> — wait for release to claim it.
             </span>
-          )}
+          ))}
           {task.status !== 'TODO' && !task.claim && (
             <span className="muted" style={{ fontSize: 12 }}>
               {notMember ? (
