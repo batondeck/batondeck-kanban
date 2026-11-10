@@ -486,3 +486,20 @@ func TestALooseSQLiteFileModeIsWarnedOf(t *testing.T) {
 		t.Fatalf("doctor on a 0644 file: %d %q", code, out)
 	}
 }
+
+// serve, migrate, doctor, healthcheck and version take no positional argument: one (a config file
+// named without -config, say) is a usage error, exit 2 with the usage on stderr, not a run against
+// the defaults. The config here would fail the run, so a command that ignored the argument exits 1.
+func TestCommandsRefuseAPositionalArgument(t *testing.T) {
+	t.Setenv("BATONDECK_DATABASE_URL", "mysql://h/db")
+	for _, args := range [][]string{{"serve", "prod.json"}, {"serve", "prod.json", "-config", "other.json"}, {"migrate", "prod.json"},
+		{"doctor", "extra"}, {"healthcheck", "extra"}, {"version", "extra"}, {"licenses", "extra"}} {
+		code, out, errs := run(args...)
+		if code != 2 || out != "" || !strings.Contains(errs, args[0]+": unexpected argument "+fmt.Sprintf("%q", args[1])) || !strings.Contains(errs, "usage") {
+			t.Errorf("%v: %d %q %q, want 2 and the refusal and usage on stderr", args, code, out, errs)
+		}
+	}
+	if code, out, _ := run("version", "-h"); code != 0 || !strings.Contains(out, "usage: batondeck-kanban version") {
+		t.Errorf("version -h: %d %q", code, out)
+	}
+}

@@ -21,6 +21,9 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
 	}
+	if !noArgs(fs) {
+		return 2
+	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL config       %v\n", err)

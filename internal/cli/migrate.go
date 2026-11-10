@@ -18,8 +18,12 @@ import (
 func migrate(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("migrate", &cfgPath, stderr)
+	serverHelp(fs, "Runs the store's migrations on the engine database.url selects (serve also runs them as it starts).")
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
+	}
+	if !noArgs(fs) {
+		return 2
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {

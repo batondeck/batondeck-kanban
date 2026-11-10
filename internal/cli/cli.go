@@ -50,8 +50,7 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 	}
 	switch cmd {
 	case "version":
-		fmt.Fprintln(stdout, "batondeck-kanban "+version)
-		return 0
+		return printVersion(rest, version, stdout, stderr)
 	case "serve":
 		return serve(rest, version, stdout, stderr)
 	case "healthcheck":
@@ -106,9 +105,7 @@ func licenses(args []string, stdout, stderr io.Writer) int {
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "licenses: unexpected argument %q\n", fs.Arg(0))
-		fs.Usage()
+	if !noArgs(fs) {
 		return 2
 	}
 	rule := strings.Repeat("=", 80)
@@ -118,6 +115,35 @@ func licenses(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s\n%s\n%s\n\n%s\n\n", rule, f.name, rule, strings.TrimRight(f.text, "\n"))
 	}
 	return 0
+}
+
+// printVersion is `batondeck-kanban version`: the build-stamped version on stdout.
+func printVersion(args []string, version string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(fs.Output(), "usage: batondeck-kanban version\n\nprints the version.\n") }
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
+	}
+	if !noArgs(fs) {
+		return 2
+	}
+	fmt.Fprintln(stdout, "batondeck-kanban "+version)
+	return 0
+}
+
+// noArgs reports whether fs, parsed, was given no positional argument; when it was, it prints the
+// refusal and fs's usage on fs's output, the command's stderr, and the command returns 2. A command
+// that takes none would otherwise run against the defaults: `migrate prod.json` (the file named
+// without -config) migrated the default SQLite file, and flag parsing stops at the first
+// positional, so the flags after it were dropped too.
+func noArgs(fs *flag.FlagSet) bool {
+	if fs.NArg() == 0 {
+		return true
+	}
+	fmt.Fprintf(fs.Output(), "%s: unexpected argument %q\n", fs.Name(), fs.Arg(0))
+	fs.Usage()
+	return false
 }
 
 // isHelp reports whether arg, in a command's or a subcommand's place, asks for the usage.
@@ -242,6 +268,9 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 	serverHelp(fs, "Migrates the store, then serves /healthz, the MCP server at /mcp and the web UI.")
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
+	}
+	if !noArgs(fs) {
+		return 2
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
@@ -382,8 +411,12 @@ func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (code int, ok
 func healthcheck(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("healthcheck", &cfgPath, stderr)
+	serverHelp(fs, "Probes /healthz on the first listen address; exits 0 if it answers 200 (the container HEALTHCHECK).")
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
+	}
+	if !noArgs(fs) {
+		return 2
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
