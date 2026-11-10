@@ -78,7 +78,10 @@ func TestEverySourceHasAConnector(t *testing.T) {
 func TestAlertmanager(t *testing.T) {
 	evs, id := run(t, "alertmanager", nil)
 	want(t, "events", len(evs), 2)
-	want(t, "delivery id", id, `{}:{alertname="HighLatency"}`)
+	// groupKey names the group, the same on every notification of it: each event carries its own key.
+	want(t, "delivery id (none: groupKey repeats)", id, "")
+	want(t, "firing key", evs[0].DeliveryKey, "firing@2026-10-24T08:00:00.000Z")
+	want(t, "resolved key", evs[1].DeliveryKey, "resolved@2026-10-24T07:00:00.000Z..2026-10-24T07:45:00.000Z")
 	e := evs[0]
 	want(t, "fingerprint", e.Fingerprint, "a1b2c3d4e5f60718")
 	want(t, "status", e.Status, "firing")
@@ -98,6 +101,7 @@ func TestGrafana(t *testing.T) {
 	want(t, "events", len(evs), 1)
 	want(t, "delivery id (none: groupKey repeats)", id, "")
 	e := evs[0]
+	want(t, "no per-event key (the body's hash, which changes with the values)", e.DeliveryKey, "")
 	want(t, "fingerprint", e.Fingerprint, "5f0c2d1e9a8b7c6d")
 	want(t, "title", e.Title, "CPU above 90% on web-1")
 	want(t, "severity", e.Severity, "high")

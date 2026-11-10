@@ -569,6 +569,59 @@ func TestHookRecordsUnparsableDeliveries(t *testing.T) {
 	}
 }
 
+// alertmanagerBody is an Alertmanager webhook_config delivery of one group, groupKey g, holding one
+// alert (fingerprint fp) in status, started at startsAt and, resolved, ended at endsAt.
+func alertmanagerBody(g, fp, status, startsAt, endsAt string) []byte {
+	if endsAt == "" {
+		endsAt = "0001-01-01T00:00:00Z"
+	}
+	b, _ := json.Marshal(map[string]any{"version": "4", "groupKey": g, "status": status, "receiver": "batondeck",
+		"alerts": []any{map[string]any{"status": status, "labels": map[string]string{"alertname": "HighLatency", "severity": "critical"},
+			"annotations": map[string]string{"summary": "p99 latency above 2s"}, "startsAt": startsAt, "endsAt": endsAt, "fingerprint": fp}}})
+	return b
+}
+
+// Alertmanager's groupKey names the aggregation group, the same on every notification of it, so it
+// is no delivery id: one alert of one group fires (filed), resolves (closed under autoclose,
+// annotated under correlate) and fires again the next day (filed again); a repeat notification of
+// one state of the alert, and a sender's retry, still replay.
+func TestHookAlertmanagerResolveAndRefireAreNewDeliveries(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+	for _, lifecycle := range []string{"autoclose", "correlate"} {
+		iid := f.integration(t, root, CreateIntegrationReq{Name: lifecycle, Source: "alertmanager", Lifecycle: IntegrationLifecycle(lifecycle),
+			Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"}}).Integration.ID
+		send := func(body []byte) HookResult {
+			t.Helper()
+			out := f.hook(t, iid, HookRequest{Header: key, Body: body})
+			if out.Refusal != "" || len(out.Results) != 1 {
+				t.Fatalf("%s: %+v", lifecycle, out)
+			}
+			f.clock.advance(time.Minute)
+			return out.Results[0]
+		}
+		const g = `{}:{alertname="HighLatency"}`
+		firing := alertmanagerBody(g, "a1b2c3d4", "firing", "2026-10-24T08:00:00Z", "")
+		opened := send(firing)
+		if opened.Result != "created" || opened.Replayed {
+			t.Fatalf("%s: the firing: %+v", lifecycle, opened)
+		}
+		if r := send(firing); !r.Replayed || *r.TaskID != *opened.TaskID {
+			t.Fatalf("%s: a repeat notification of the firing: %+v, want it replayed", lifecycle, r)
+		}
+		wantResolve := map[string]string{"autoclose": "closed", "correlate": "annotated"}[lifecycle]
+		resolved := send(alertmanagerBody(g, "a1b2c3d4", "resolved", "2026-10-24T08:00:00Z", "2026-10-24T09:00:00Z"))
+		if resolved.Result != wantResolve || resolved.Replayed || *resolved.TaskID != *opened.TaskID {
+			t.Fatalf("%s: the resolve: %+v, want %s", lifecycle, resolved, wantResolve)
+		}
+		wantRefire := map[string]string{"autoclose": "created", "correlate": "appended"}[lifecycle]
+		refired := send(alertmanagerBody(g, "a1b2c3d4", "firing", "2026-10-25T08:00:00Z", ""))
+		if refired.Result != wantRefire || refired.Replayed {
+			t.Fatalf("%s: the next day's firing: %+v, want %s", lifecycle, refired, wantRefire)
+		}
+	}
+}
+
 // The ingest on both engines: a signed firing files the ticket, a repeat appends, the resolve under
 // autoclose deletes it and the delivery keeps its taskId. The Postgres leg skips without
 // BATONDECK_TEST_POSTGRES_DSN.
