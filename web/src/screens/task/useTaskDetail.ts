@@ -70,7 +70,12 @@ function useLeaseCountdown(expiresAt: string | null | undefined, since: number |
   return { label, frac: Math.max(0, Math.min(1, ms / total)), expired: false };
 }
 
-export function useTaskDetail(projectId: string, taskId: string) {
+/**
+ * `refreshBoard`: the caller has no Board mounted to refresh the board's own reads on a frame (the
+ * full ticket page), so the hook refreshes them too. The drawer leaves it off: its Board does that,
+ * and a second invalidation could refetch the board's task list twice.
+ */
+export function useTaskDetail(projectId: string, taskId: string, { refreshBoard = false }: { refreshBoard?: boolean } = {}) {
   const qc = useQueryClient();
   const { identity } = useAuth();
   // The lease id this browser's claim was given (see ./leases.ts): kept outside the component, so
@@ -132,9 +137,13 @@ export function useTaskDetail(projectId: string, taskId: string) {
         void qc.invalidateQueries({ queryKey: [k, projectId, taskId] }, { cancelRefetch: false });
       }
       void qc.invalidateQueries({ queryKey: ['hist', projectId, streamBoardId, taskId] }, { cancelRefetch: false });
+      if (refreshBoard) {
+        void qc.invalidateQueries({ queryKey: ['board', projectId, streamBoardId] }, { cancelRefetch: false });
+        void qc.invalidateQueries({ queryKey: ['tasks', projectId, streamBoardId] }, { cancelRefetch: false });
+      }
     };
     return streamApi.stream(projectId, streamBoardId, onUpdate, undefined, onPresence);
-  }, [qc, projectId, streamBoardId, taskId]);
+  }, [qc, projectId, streamBoardId, taskId, refreshBoard]);
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [
       { queryKey: ['ctx', projectId, taskId], queryFn: () => contextApi.taskContext(projectId, taskId) },

@@ -58,7 +58,11 @@ describe('the ticket page follows the board stream', () => {
     );
     await screen.findAllByText('Ship the parser');
     await waitFor(() => expect(reads(/\/tasks\/T-1\/comments/)).toBeGreaterThan(0));
-    const before = { comments: reads(/\/tasks\/T-1\/comments/), ctx: reads(/\/tasks\/T-1\/context$/), subs: reads(/\/tasks\/T-1\/subtasks$/) };
+    await waitFor(() => expect(reads(/\/boards\/b1\/tasks(\?|$)/)).toBeGreaterThan(0));
+    const before = {
+      comments: reads(/\/tasks\/T-1\/comments/), ctx: reads(/\/tasks\/T-1\/context$/), subs: reads(/\/tasks\/T-1\/subtasks$/),
+      boardTasks: reads(/\/boards\/b1\/tasks(\?|$)/),
+    };
     // The page joined the stream scoped to the ticket's board…
     await waitFor(() => expect(boardUpdates.some((s) => s.projectId === 'p1' && s.boardId === 'b1')).toBe(true));
     // …and a frame for it refreshes the ticket's reads.
@@ -66,5 +70,8 @@ describe('the ticket page follows the board stream', () => {
     await waitFor(() => expect(reads(/\/tasks\/T-1\/comments/)).toBeGreaterThan(before.comments));
     await waitFor(() => expect(reads(/\/tasks\/T-1\/context$/)).toBeGreaterThan(before.ctx));
     await waitFor(() => expect(reads(/\/tasks\/T-1\/subtasks$/)).toBeGreaterThan(before.subs));
+    // No Board is mounted on the page, so the board's tasks (the dependency chips' statuses, the busy
+    // agents) are the page's to refresh too.
+    await waitFor(() => expect(reads(/\/boards\/b1\/tasks(\?|$)/)).toBeGreaterThan(before.boardTasks));
   });
 });
