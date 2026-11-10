@@ -444,7 +444,7 @@ function CliTokens() {
               aria-label="Token label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim()) mint.mutate(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim() && !mint.isPending) mint.mutate(); }}
               style={{ minWidth: 260 }}
             />
             <button className="btn" disabled={!label.trim() || mint.isPending} onClick={() => mint.mutate()}>
@@ -806,7 +806,7 @@ export function Settings() {
                 />
                 <button
                   className="btn"
-                  disabled={!canAddColumn || !col.name}
+                  disabled={!canAddColumn || !col.name || addColumn.isPending}
                   title={!canAddColumn && columnsWhy ? columnsWhy : undefined}
                   aria-describedby={!canAddColumn && columnsWhy ? 'columns-closed' : undefined}
                   onClick={() => addColumn.mutate()}

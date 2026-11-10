@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
@@ -108,15 +108,24 @@ export function Projects() {
     },
   });
 
+  // The projects being opened right now. A double click ran `open` twice: both runs found no board
+  // and both created one, so a new project started with two identical boards.
+  const opening = useRef(new Set<string>());
   async function open(projectId: string): Promise<void> {
-    const projectName = list.find((p) => p.projectId === projectId)?.name;
-    const { boards } = await boardsApi.listBoards(projectId);
-    if (!boards[0] && !mayCall(roster.find((p) => p.projectId === projectId)?.role, 'create_board')) {
-      setProjectId(projectId);
-      return;
+    if (opening.current.has(projectId)) return;
+    opening.current.add(projectId);
+    try {
+      const projectName = list.find((p) => p.projectId === projectId)?.name;
+      const { boards } = await boardsApi.listBoards(projectId);
+      if (!boards[0] && !mayCall(roster.find((p) => p.projectId === projectId)?.role, 'create_board')) {
+        setProjectId(projectId);
+        return;
+      }
+      const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
+      nav(`/projects/${projectId}/boards/${board.id}`);
+    } finally {
+      opening.current.delete(projectId);
     }
-    const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
-    nav(`/projects/${projectId}/boards/${board.id}`);
   }
 
   return (
