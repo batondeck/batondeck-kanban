@@ -428,6 +428,10 @@ func (f *fake) DeleteExpiredAlertStates(_ context.Context, _ int64, limit int) (
 	return f.del("alert states", limit)
 }
 
+func (f *fake) DeleteStalePendingAttachments(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("pending attachments", limit)
+}
+
 func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
 	return nil, nil
 }
@@ -438,7 +442,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || got.PendingAttachments != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
@@ -551,6 +555,78 @@ func TestASweepCollectsTheUnreferencedBlobs(t *testing.T) {
 			sw.Now, sw.CollectBlobs = func() time.Time { return now }, nil
 			if swept := sw.Sweep(ctx); swept.Blobs != 0 {
 				t.Fatalf("with no CollectBlobs: swept %+v", swept)
+			}
+		})
+	}
+}
+
+// The blob-file step: a sweep hands SweepBlobFiles its time less BlobGrace and counts what it
+// removed; with no SweepBlobFiles nothing is called.
+func TestASweepSweepsTheBlobFiles(t *testing.T) {
+	s := backends[0].open(t)
+	now := time.UnixMilli(5_000_000_000)
+	var asked []time.Time
+	sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+		Report:         func(step string, err error) { t.Errorf("%s: %v", step, err) },
+		SweepBlobFiles: func(_ context.Context, olderThan time.Time) int64 { asked = append(asked, olderThan); return 3 }}
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 3 || len(asked) != 1 || !asked[0].Equal(now.Add(-BlobGrace)) {
+		t.Fatalf("swept %+v, asked %v, want 3 files older than %v", swept, asked, now.Add(-BlobGrace))
+	}
+	sw.SweepBlobFiles = nil
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 0 {
+		t.Fatalf("with no SweepBlobFiles: swept %+v", swept)
+	}
+}
+
+// api-http#7: a sweep deletes the attachments still pending PendingAttachmentAge after they were
+// created (an upload that never came, whose URL no call can sign again: the idempotency key that
+// re-signs it lives a day), on memstore and both engines, and keeps a younger pending one and a
+// ready one however old.
+func TestASweepDeletesTheStalePendingAttachments(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bd, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "B", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := s.CreateTask(ctx, store.CreateTaskInput{ProjectID: p.ID, BoardID: bd.ID, ColumnID: bd.Columns[0].ID, Status: bd.Columns[0].Status, Title: "t", OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attach := func() store.Attachment {
+				a, err := s.CreateAttachment(ctx, store.CreateAttachmentInput{ProjectID: p.ID, TaskID: task.ID, MimeType: "text/plain", Bytes: 1, Kind: store.AttachmentFile, CreatedBy: "alice"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return a
+			}
+			ready, pending := attach(), attach()
+			sha := strings.Repeat("c", 64)
+			if _, err := s.PutBlob(ctx, sha, 1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetAttachmentReady(ctx, p.ID, task.ID, ready.ID, sha); err != nil {
+				t.Fatal(err)
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			sw.Now = func() time.Time { return time.Now().Add(PendingAttachmentAge - time.Minute) }
+			if swept := sw.Sweep(ctx); swept.PendingAttachments != 0 {
+				t.Fatalf("inside the age: swept %+v", swept)
+			}
+			sw.Now = func() time.Time { return time.Now().Add(PendingAttachmentAge + time.Minute) }
+			swept := sw.Sweep(ctx)
+			list, err := s.ListAttachments(ctx, p.ID, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if swept.PendingAttachments != 1 || len(list) != 1 || list[0].ID != ready.ID {
+				t.Fatalf("past the age: swept %+v, left %+v; want %s gone and the ready %s kept", swept, list, pending.ID, ready.ID)
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +186,72 @@ func TestLockSerialisesOneHash(t *testing.T) {
 	}
 	if len(s.locks) != 0 {
 		t.Fatalf("locks left: %v", s.locks)
+	}
+}
+
+// TestWalkAndSweepTmp: Walk yields each committed file once, with its hash and modification time,
+// and skips what is not a blob file at its hash's path (tmp, a stray file, a hash under the wrong
+// prefix); SweepTmp removes only the upload temp files last written before its time.
+func TestWalkAndSweepTmp(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	var want []string
+	for _, b := range []string{"one", "two"} {
+		st, err := s.Stage(strings.NewReader(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Commit(st); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, st.SHA256)
+	}
+	slices.Sort(want)
+	if err := os.Chtimes(filepath.Join(dir, want[0][:2], want[0]), old, old); err != nil {
+		t.Fatal(err)
+	}
+	misplaced := "ff" + want[0][2:]
+	if err := os.MkdirAll(filepath.Join(dir, want[1][:2]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(dir, "stray"), filepath.Join(dir, want[1][:2], misplaced), filepath.Join(dir, want[1][:2], "notes.txt")} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	mods := map[string]time.Time{}
+	if err := s.Walk(func(sha string, mod time.Time) error { got = append(got, sha); mods[sha] = mod; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) || !mods[want[0]].Equal(old) {
+		t.Fatalf("Walk %v (mod %v), want %v (the first at %v)", got, mods[want[0]], want, old)
+	}
+
+	for _, b := range []string{"stale", "live"} {
+		if _, err := s.Stage(strings.NewReader(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := filepath.Join(dir, "tmp", "not-an-upload")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tmps, _ := filepath.Glob(filepath.Join(dir, "tmp", tmpPrefix+"*"))
+	for _, p := range []string{tmps[0], other} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.SweepTmp(time.Now().Add(-time.Hour)); err != nil || n != 1 {
+		t.Fatalf("SweepTmp: %d, %v; want 1 removed", n, err)
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, "tmp", "*"))
+	if !slices.Equal(left, []string{other, tmps[1]}) && !slices.Equal(left, []string{tmps[1], other}) {
+		t.Fatalf("tmp holds %v, want %s and %s", left, other, tmps[1])
 	}
 }

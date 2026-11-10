@@ -189,3 +189,33 @@ func TestASecondConcurrentUploadOfOneIDIsRefused(t *testing.T) {
 		t.Fatalf("CompleteUpload called %d times, want 3", r.up.calls())
 	}
 }
+
+// api-http#8: an id is logged before any credential passes, so a refusal quotes it and cuts it to 80
+// runes, as the hook routes do: a newline in the id cannot forge a second log line, and a long id
+// cannot flood the log.
+func TestABlobRefusalLogsItsIDQuotedAndCut(t *testing.T) {
+	r := newBlobRig(t)
+	forged := "x\n2026/11/10 03:00:00 auth: admin@example.com signed in from 10.0.0.9"
+	long := strings.Repeat("y", 500)
+	for _, id := range []string{forged, long} {
+		req, _ := http.NewRequest(http.MethodPut, r.srv.URL+"/blobs/"+url.PathEscape(id)+"?exp=1&sig=00", strings.NewReader("abc"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("PUT %q: %d, want 403", id, resp.StatusCode)
+		}
+	}
+	lines := strings.Split(strings.TrimSuffix(r.log(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("two refusals wrote %d log lines, want 2:\n%s", len(lines), r.log())
+	}
+	if want := `api: blob PUT "x\n2026/11/10 03:00:00 auth: admin@example.com signed in from 10.0.0.9" refused: bad signature`; lines[0] != want {
+		t.Fatalf("log line %q, want %q", lines[0], want)
+	}
+	if want := `api: blob PUT "` + strings.Repeat("y", 80) + `…" refused: bad signature`; lines[1] != want {
+		t.Fatalf("log line %q, want %q", lines[1], want)
+	}
+}

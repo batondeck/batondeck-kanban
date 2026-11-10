@@ -97,8 +97,10 @@ type Core struct {
 	sealer  Sealer
 	blobGC  BlobGC
 	media   MediaOptions
-	devices atomic.Pointer[DeviceSessions]
-	enders  atomic.Pointer[AgentSessionEnder]
+	// blobSweep is where SweepBlobFiles goes on from.
+	blobSweep blobSweep
+	devices   atomic.Pointer[DeviceSessions]
+	enders    atomic.Pointer[AgentSessionEnder]
 	// limiter is the per-integration ingest budget: POST /hooks, send_test_event and
 	// replay_delivery all draw on it (Core.ingest).
 	limiter *oncall.RateLimiter

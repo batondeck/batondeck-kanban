@@ -156,7 +156,15 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 ```
 
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
-client reached the server at, so behind a proxy that rewrites the Host header, set it.
+client reached the server at, so behind a proxy that rewrites the Host header, set it. The web UI
+uploads and shows attachments at whatever address it was opened at, `public_url` or not.
+
+The web UI's live board is a server-sent event stream, `/api/stream`, with a `ping` every 20 s. The
+server asks nginx not to buffer it (`X-Accel-Buffering: no`); behind another proxy, turn response
+buffering off for `/api/stream` and keep its read timeout above 20 s, or the board stops updating
+live and keeps reconnecting. Each tab on screen holds one such stream; a tab hidden for 10 s gives
+its stream back until it is shown again, since over plain HTTP a browser holds at most six
+connections to one server.
 
 Have the proxy forward the original `Host` and send `X-Forwarded-Proto: https` and
 `X-Forwarded-For`; nginx's bare `proxy_pass` sends none of them, so add
@@ -299,6 +307,10 @@ docker compose up -d --wait
 
 `curl -fsS http://127.0.0.1:8080/healthz` then answers, and the board has its tasks and their
 attachments back.
+
+Either way, start the board only once its database is back, and only against its own. Its hourly
+sweep removes blob files over an hour old that no row in the database names. It keeps them all when
+most of the files it checks have no row, but do not lean on that.
 
 ## Performance
 

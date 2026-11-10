@@ -1736,6 +1736,20 @@
         "type": "string"
       },
       "why": "Pre-public review (2026-11-10): on a shared issuer (Google, GitHub Actions) anyone with an account can mint a correctly signed token for a chosen audience, so issuer and audience alone do not identify the sender; an optional subject pin is matched against the token's sub exactly. No migration: the stored jwt block is JSON."
+    },
+    {
+      "pointer": "/tools/list_attachments/output/properties/attachments/items/properties/fileName",
+      "required": true,
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/attachments/items/properties/fileName",
+      "required": true,
+      "schema": {
+        "type": "string"
+      }
     }
   ],
   "errorDeltas": [

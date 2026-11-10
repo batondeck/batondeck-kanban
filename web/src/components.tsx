@@ -7,15 +7,18 @@ import type { Priority, Status, Task } from './types.js';
 import { isAgent } from './types.js';
 import { Icon } from './icons.js';
 import { ToolLogo, toolKey, type ToolKey } from './ToolLogo.js';
+import { onOwnOrigin } from './api/media.js';
 
 /** ReactMarkdown overrides for rendered task/comment markdown: links open in a new tab — a same-tab
- * navigation would dump the SPA (and any drafts) onto the linked site. */
+ * navigation would dump the SPA (and any drafts) onto the linked site. An embedded attachment (a
+ * signed /blobs URL) loads from this page's own origin, which the CSP's img-src allows (onOwnOrigin). */
 export const mdComponents: Components = {
   a: ({ children, ...props }) => (
     <a {...props} target="_blank" rel="noreferrer">
       {children}
     </a>
   ),
+  img: ({ src, node: _node, ...props }) => <img {...props} src={typeof src === 'string' ? onOwnOrigin(src) : src} />,
 };
 
 /**
