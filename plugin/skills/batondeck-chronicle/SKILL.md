@@ -1,6 +1,6 @@
 ---
 name: batondeck-chronicle
-description: "Sweep a batondeck-kanban board's DONE tasks into Chronicle decision records: read the cursor from project memory, list the tasks that reached DONE since it, pull each task's description, deliverable, checkpoints and artifacts, lay them out as cited blocks and ingest each page with ingest_chronicle_page, then advance the cursor only after every page of the batch is ingested. Invoked by /batondeck-kanban:chronicle."
+description: "Sweep a batondeck-kanban board's DONE tasks into Chronicle decision records: read the cursor from project memory, list the tasks that reached DONE since it (every page, following nextCursor to the end), pull each task's description, deliverable, checkpoints and artifacts, lay them out as cited blocks and ingest each page with ingest_chronicle_page, then advance the cursor once, after the whole window is ingested. Invoked by /batondeck-kanban:chronicle."
 ---
 
 # batondeck-kanban chronicle
@@ -30,9 +30,14 @@ No entry means genesis. It lives in project memory, not a file, so two checkouts
 list_tasks { projectId, boardId, status: "DONE", updatedSince: "<cursor>", limit: 50 }
 ```
 
-Genesis: the same call without `updatedSince`. Page with the returned `nextCursor`; **one page is one
-batch**. The filter is inclusive at the boundary, so re-reading your own instant costs one duplicate
-task, which ingests as unchanged. Nothing new → stop and say so, having written nothing.
+Genesis: the same call without `updatedSince`. **The window is every page, not the first one.**
+`list_tasks` pages in board order, not by time, and applies `updatedSince` to each page after paging,
+so a page can come back short or even empty while `nextCursor` is still set, and the most recently
+finished task can sit on any page. Keep calling with `cursor: "<nextCursor>"` until a response carries
+no `nextCursor`, taking steps 3 to 5 for the tasks of each page as it comes, and keep the newest
+`updatedAt` among every task you listed. The filter is inclusive at the boundary, so re-reading your
+own instant costs one duplicate task, which ingests as unchanged. Only when the whole window listed
+no task at all: stop and say so, having written nothing.
 
 ## 3. Pull each task's evidence: two calls, and it has to be two
 
@@ -77,14 +82,17 @@ resolve. Report conflicts; do not resolve them. `unchanged: true` means nothing 
 ## 6. Advance the cursor last
 
 ```
-write_memory { projectId, scope: "project", key: "chronicle.cursor", value: "<newest updatedAt you processed>" }
+write_memory { projectId, scope: "project", key: "chronicle.cursor", value: "<newest updatedAt of the whole window>" }
 ```
 
-Only after **every page of the batch** ingested. A sweep that dies mid-batch leaves the cursor where the
-last completed batch put it, and the next run re-derives the rest; the slug is a function of the task,
-so the failure mode is a repeated sweep, never a skipped task. Then take the next page, or stop.
+Once, after the **last page** of the window is listed and every task on every page ingested. Never
+after one page, and never when the sweep stops early: the pages are in board order, so a cursor
+written mid-window passes over every task on the pages not yet read, for good. A sweep that stops or
+dies before the end leaves the cursor where the last complete sweep put it, and the next run lists
+the whole window again; the slug is a function of the task, so the failure mode is a repeated ingest
+(unchanged), never a skipped task.
 
 ## Report
 
 One line per page (task id, slug, block count, which sections it had), the cursor you wrote or why you
-did not, any conflicts, and how many tasks remain if you stopped early.
+did not, any conflicts, and, if you stopped before the last page, that the cursor did not move.

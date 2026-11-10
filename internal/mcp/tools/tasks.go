@@ -23,7 +23,7 @@ func RegisterTasks(s *mcp.Server, svc service.Services) {
 		"Move a task to a column or status and/or reorder it (`order` alone: in its column; master role; version-checked). Fixed status table (get_board). Another's live lease or a full IN_PROGRESS refuses it.",
 		t.Move)
 	mcp.Tool(s, "tasks", "list_tasks",
-		"List a board's tasks with optional filters, a page at a time: `limit` 1 to 200 (default 50), then `nextCursor` as `cursor`. `assignee: null` lists the unassigned.",
+		"List a board's tasks a page at a time: `limit` 1-200 (default 50), then `nextCursor` as `cursor`; `assignee: null` lists the unassigned. A filtered page can be short or empty yet carry `nextCursor`.",
 		t.List)
 	mcp.Tool(s, "tasks", "delete_task",
 		"Delete a task with its subtasks and runs, their context, memory and attachments. Irreversible. Needs the master role; version-checked.",
