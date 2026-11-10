@@ -627,6 +627,28 @@ func tasks(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// move_task once stored any key OrderBetween accepted, control bytes included ("a0\n<b>"); the
+	// cursor list_tasks mints at such a task is its own, and the next page reads past it.
+	t.Run("ListTasksPagesPastAStoredKeyHoldingAControlByte", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		legacy := f.add(t, "legacy", nil)
+		f.add(t, "after", func(in *store.CreateTaskInput) { in.OrderKey = "a1" })
+		_, err := f.s.SetOrderKey(ctx, f.project, legacy.ID, legacy.Version, "a0\n<b>", "", "bob", taskClock+1)
+		mustOK(t, err)
+		first, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, "", 1)
+		mustOK(t, err)
+		if len(first.Tasks) != 1 || first.Tasks[0].ID != legacy.ID || first.NextCursor == "" {
+			t.Fatalf("first page %v next %q, want [%s] and a cursor", taskIDs(first.Tasks), first.NextCursor, legacy.ID)
+		}
+		next, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, first.NextCursor, 1)
+		if err != nil {
+			t.Fatalf("the page after %s, through the cursor the store minted: %v", legacy.ID, err)
+		}
+		if len(next.Tasks) != 1 || next.Tasks[0].ID != "T-2" {
+			t.Fatalf("the page after %s: %v, want [T-2]", legacy.ID, taskIDs(next.Tasks))
+		}
+	})
+
 	t.Run("ListTasksAndCountTasksRefusals", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		_, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: "B-missing"}, "", 10)

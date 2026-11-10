@@ -20,9 +20,10 @@ func EncodeCursor(order, id string) string {
 }
 
 // DecodeCursor reads a cursor EncodeCursor minted. Anything else, a well-formed JSON value of
-// another shape included, is VALIDATION: the value is the caller's. A field holding a control
-// character (U+0000 among them, which Postgres cannot bind as text) is one no engine minted, and is
-// refused alike on every engine rather than reaching a statement.
+// another shape included, is VALIDATION: the value is the caller's. A field holding U+0000, which
+// Postgres cannot bind as text (so no Postgres row holds it), is refused alike on every engine rather
+// than reaching a statement. Other control characters pass: order keys stored before move_task
+// checked the key alphabet can hold them, and a cursor minted at such a task must read on.
 func DecodeCursor(cursor string) (order, id string, err error) {
 	invalid := domain.Validation("Invalid cursor", nil)
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
@@ -33,12 +34,8 @@ func DecodeCursor(cursor string) (order, id string, err error) {
 		Order *string `json:"order"`
 		ID    *string `json:"id"`
 	}
-	if json.Unmarshal(raw, &c) != nil || c.Order == nil || c.ID == nil || hasControl(*c.Order) || hasControl(*c.ID) {
+	if json.Unmarshal(raw, &c) != nil || c.Order == nil || c.ID == nil || strings.ContainsRune(*c.Order, 0) || strings.ContainsRune(*c.ID, 0) {
 		return "", "", invalid
 	}
 	return *c.Order, *c.ID, nil
-}
-
-func hasControl(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
