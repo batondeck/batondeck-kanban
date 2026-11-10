@@ -228,6 +228,50 @@ func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 	}
 }
 
+// A refusal is on the delivery log as it happens. An operator re-posting one sample body sees a
+// new row when the reason changes (a wrong key, then the body itself), and a sender stuck retrying
+// one body shows a row each hour, not one from weeks ago; one body refused again for the same
+// reason within the hour is still one row.
+func TestHookRefusalsOfOneBodyStayVisible(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	iid := f.integration(t, root, CreateIntegrationReq{Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"}}).Integration.ID
+	body := []byte(`{"fingerprint":"f","status":"firing","severity":"s","title":"t","titel":"x"}`)
+	post := func(key string) HookOutcome {
+		h := http.Header{}
+		h.Set(HeaderAPIKey, key)
+		return f.hook(t, iid, HookRequest{Header: h.Get, Body: body})
+	}
+	refusals := func() []string {
+		t.Helper()
+		var out []string
+		for _, d := range f.deliveries(t, iid) {
+			out = append(out, *d.Error)
+		}
+		return out
+	}
+	if out := post("key-wrong-0123"); out.Refusal != HookUnauthorized {
+		t.Fatalf("a wrong key: %+v", out)
+	}
+	f.clock.advance(time.Minute)
+	if out := post("key-0123456789"); out.Refusal != HookBadRequest {
+		t.Fatalf("the right key: %+v", out)
+	}
+	got := refusals()
+	if len(got) != 2 || got[0] != "unrecognized_payload: generic payload: unknown keys: titel" || got[1] != "api_key_mismatch" {
+		t.Fatalf("the refusals after the key was fixed: %q, want the new reason on top of the old", got)
+	}
+	f.clock.advance(time.Minute)
+	post("key-0123456789")
+	if n := len(refusals()); n != 2 {
+		t.Fatalf("the same refusal again within the hour: %d rows, want 2", n)
+	}
+	f.clock.advance(time.Hour)
+	post("key-0123456789")
+	if got := refusals(); len(got) != 3 || got[0] != "unrecognized_payload: generic payload: unknown keys: titel" {
+		t.Fatalf("the same refusal an hour later: %q, want a new row", got)
+	}
+}
+
 // The race half of a replay: an ingest that finds its delivery id recorded only inside its
 // transaction (another took the project lock first) marks the mutation NoChange, and mutate writes
 // nothing for it; NoChange beside a recorded write is INTERNAL.

@@ -337,11 +337,13 @@ func (c *Core) hookSecrets(integration store.Integration, a oncall.Auth, now tim
 // reject records a refused delivery (kind and result rejected, the reason its error, without NULs
 // since it may quote the payload), already paid by Hook's charge ahead of verification (P-231), so
 // it charges nothing itself. The raw body (its first 64 KiB) is kept for the raw-body window while
-// the integration's hourly budget of oncall.RejectionsPerHour lasts. Its id is the body's hash, so a
-// sender repeating one body is recorded once.
+// the integration's hourly budget of oncall.RejectionsPerHour lasts. Its id is the hash of the
+// reason and the body, qualified by the hour: a sender repeating one body for one reason is recorded
+// once an hour, and a new reason for it (the key fixed, the body still wrong) at once.
 func (c *Core) reject(ctx context.Context, integration store.Integration, body []byte, reason string, now time.Time) error {
 	reason = connectors.StripNUL(reason)
-	deliveryID := connectors.Sha256Hex(body)[:32] + rejectionIDSuffix
+	hashed := append([]byte(reason+"\n"), body...)
+	deliveryID := connectors.Sha256Hex(hashed)[:32] + "@h" + strconv.FormatInt(now.Unix()/3600, 10) + rejectionIDSuffix
 	err := c.store.Atomically(ctx, func(tx store.Store) error {
 		_, inserted, err := tx.InsertDelivery(ctx, store.Delivery{
 			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: now.UnixMilli(),
