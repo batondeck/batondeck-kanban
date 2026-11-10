@@ -1,8 +1,8 @@
 /**
  * Smart external-artifact links (Jira-style "integrations"): recognize the app behind a pasted URL
- * and render a branded link card. The icon is the site's favicon (via Google's favicon proxy — no
- * per-app SVG maintenance, and it covers the long tail of apps automatically); the label is a
- * curated pretty-name for known apps, falling back to the hostname.
+ * and render a branded link card. The label is a curated pretty-name for known apps, falling back to
+ * the hostname. The icon is a generic link glyph: the favicon lookup (Google's favicon service) is
+ * off, because it would tell a third party every host a team links to (settings.ts `linkFavicons`).
  */
 import { useState } from 'react';
 import { Icon } from './icons.js';
@@ -88,7 +88,7 @@ export function normalizeLink(raw: string): string | null {
 
 function FavIcon({ host }: { host: string }) {
   const [failed, setFailed] = useState(false);
-  // linkFavicons off (admin privacy setting) → no external request, generic icon.
+  // linkFavicons off (the default, and nothing here turns it on) → no external request, generic icon.
   if (failed || !uiSettings().linkFavicons) return <Icon name="link" size={14} />;
   return (
     <img

@@ -1,9 +1,8 @@
 /**
- * Admin-tunable UI runtime settings. Defaults live HERE (the single source); the workspace stores only
- * overrides (workspace/settings.ui via get/set_feature_flags), delivered on /api/session and hydrated
- * once at boot. Non-React code (agentStatus) reads the module store synchronously via uiSettings();
- * React code re-renders through the AuthContext copy. Admins edit these in /admin — changes apply on
- * each client's next session load (~page load / auth refresh), like the core's ~60s flag cache.
+ * UI runtime settings. Defaults live HERE (the single source). `/api/session` carries a `uiSettings`
+ * object of overrides, hydrated on every session load; this server always sends it empty, so the
+ * defaults below are what every client runs with. Non-React code (agentStatus) reads the module store
+ * synchronously via uiSettings(); React code re-renders through the AuthContext copy.
  */
 export interface UiSettings {
   /** Results shown per PAGE of ticket search ("Show more" pages through the rest; the fetch always uses the server cap 50). */
@@ -20,7 +19,11 @@ export interface UiSettings {
   presenceOfflineAfterMs: number;
   /** "Who's around now" window for presence lists/pickers. */
   presenceWindowMs: number;
-  /** Fetch link-card icons from the Google favicon proxy (off → generic icon, no external request). */
+  /**
+   * Fetch link-card icons from Google's favicon service. OFF: on, every viewer's browser sends each
+   * linked hostname (an internal CI or wiki host included) to Google, and nothing in this server turns
+   * it on or off. Off is a generic icon and no external request; the AppCSP admits no such host.
+   */
   linkFavicons: boolean;
 }
 
@@ -32,7 +35,7 @@ export const UI_DEFAULTS: UiSettings = {
   sessionsLimit: 100,
   presenceOfflineAfterMs: 75000,
   presenceWindowMs: 600000,
-  linkFavicons: true,
+  linkFavicons: false,
 };
 
 let current: UiSettings = UI_DEFAULTS;

@@ -8,6 +8,12 @@ import { pushToast } from './toast.js';
 import { App } from './App.js';
 import { ErrorBoundary, installClientErrorReporting } from './errors.js';
 import { initTheme } from './theme.js';
+// The three families, served from this origin rather than Google Fonts: a self-hosted board's pages
+// make no request to a third party (the AppCSP names none). Variable files, one per subset, so a
+// browser fetches only the subsets a page uses. Family names are in index.css's --sans/--mono/--serif.
+import '@fontsource-variable/inter/wght.css';
+import '@fontsource-variable/jetbrains-mono/wght.css';
+import '@fontsource-variable/newsreader/opsz.css';
 import './index.css';
 
 const queryClient = new QueryClient({
