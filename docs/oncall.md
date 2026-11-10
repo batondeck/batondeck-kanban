@@ -58,8 +58,9 @@ Send the body with `--data-binary` (or your client's raw-bytes option) so it rea
 exactly as signed. The form is the same whether the secret was minted or supplied.
 
 **Rotation.** `rotate_integration_secret` (or **Rotate secret** in the drawer) mints a new secret,
-shown once; the previous one keeps verifying for 24 hours so the sender can switch over, unless
-`revokePrevious` ends it at once.
+shown once, or uses the `externalSecret` you pass it; for an integration whose secret you
+supplied, the drawer asks you to paste the new one. Either way the previous secret keeps verifying
+for 24 hours so the sender can switch over, unless `revokePrevious` ends it at once.
 
 ### `hmac`: PagerDuty
 
@@ -102,7 +103,8 @@ On a shared issuer (Google, GitHub Actions and the like) anyone with an account 
 correctly signed token for an audience they choose, so issuer and audience alone do not identify
 the sender. Pin the sender with `subject` (the token's `sub` must equal it exactly, for example a
 service account's unique id or a GitHub Actions `repo:owner/name:ref:refs/heads/main` subject)
-and/or `email` (the token's `email` must equal it exactly and `email_verified` must be true).
+and/or `email` (the token's `email` must equal it exactly, letter case included, and
+`email_verified` must be true).
 
 ## Payloads
 
@@ -195,7 +197,7 @@ cannot evaluate is refused when the mapping is saved.
 | 401 | `{"code":"UNAUTHENTICATED"}` | the signature, key or bearer did not verify; the reason is on the integration's delivery log, never in the answer | no: fix the credential |
 | 404 | `{"code":"NOT_FOUND"}` | no such integration, or it is disabled or deleted | no |
 | 413 | `{"code":"too_large"}` | the body is over the integration's cap | no |
-| 503 | `{"code":"RATE_LIMITED","retryable":true}` | over the integration's rate budget; `Retry-After` says when a token is back | yes, after `Retry-After` |
+| 503 | `{"code":"RATE_LIMITED","retryable":true,"results":[…]}` | over the integration's rate budget; `Retry-After` says when a token is back, and the alerts of a grouped delivery that landed before the budget ran out are in `results` | yes, after `Retry-After`: a retry replays them free and lands the rest |
 | 503 | `{"code":"STALE" or "INTERNAL","retryable":true,"results":[…]}` | a retryable failure; the alerts before it in `results` landed | yes: a retry replays them and lands the rest |
 | 500 | `{"code":"INTERNAL","retryable":true}` | a server fault before any alert landed | yes |
 
@@ -206,7 +208,8 @@ worth retrying is a 503.
 
 Each alert in a delivery gets the delivery id `<source id>#<fingerprint>`: the source id is the
 sender's own (`deliveryId`, Alertmanager's `groupKey`, PagerDuty's event id, Cloud Monitoring's
-`<incident_id>:<state>`), or the body's SHA-256 when the source has none; the fingerprint is the
+`<incident_id>:<state>`, the first event's value at a Custom webhook mapping's
+`extract.dedupKey`), or the body's SHA-256 when the source has none; the fingerprint is the
 alert's, or its position in the delivery. A part longer than 200 bytes is replaced by
 `sha256:<32 hex>` of it. A delivery id that was already recorded answers its recorded outcome with
 `replayed: true` and files nothing, so a sender's retry is safe.
@@ -234,8 +237,10 @@ deliveries that verified and parsed.
   fetch a `jwt` integration's JWKS past the budget. The consequence: anyone who holds the URL,
   with no credential, can spend the budget and make the real sender's deliveries answer 503 until
   they stop. If that happens, delete the integration and create a new one (a new URL), and give
-  the new id only to the sender. A coarser pre-check of 30 requests (refilled at 120 a second) per
-  URL bounds a flood before the integration is even looked up.
+  the new id only to the sender. The relief lasts only while the new id stays private: it is
+  named again on every ticket the integration files (`createdBy` is `ingest:<id>`), so every
+  project member who can read those tickets can see it. A coarser pre-check of 30 requests
+  (refilled at 120 a second) per URL bounds a flood before the integration is even looked up.
 - **The JWKS fetch** is the one outbound call ingest makes. It is https only, to a host whose every
   address is public (private, loopback, link-local, carrier-grade NAT and other reserved ranges are
   refused), with no redirects, at most 64 KiB and 5 seconds, and is logged as
