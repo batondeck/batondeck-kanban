@@ -136,7 +136,14 @@ Have the proxy forward the original `Host` and send `X-Forwarded-Proto: https` a
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. With an https `public_url` the
 sign-in cookies are `Secure` whatever the proxy sends; without one they are `Secure` only on a
 request that arrived over TLS or says `X-Forwarded-Proto: https`, and otherwise a later plain-http
-request would carry the session in clear.
+request would carry the session in clear. Once `public_url` is https, reach the board through the
+proxy only: a browser keeps no `Secure` cookie sent over plain http (localhost aside), so signing in
+at `http://<lan-address>:8080` directly brings you back to the sign-in page.
+
+If signing in answers **cross-site request refused** (403), the server judged the browser's
+`Origin` to be another site's: the proxy rewrote `Host` (nginx's bare `proxy_pass` sends its
+upstream's) or the scheme. Forward `Host` and `X-Forwarded-Proto` as above, or set `public_url`
+to the address the browser uses.
 
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
