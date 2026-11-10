@@ -168,6 +168,15 @@ func (s *SQLite) ServerVersion(ctx context.Context) (string, error) {
 	return "SQLite " + v, nil
 }
 
+// HoldsSealedValues reads holdsSealedSQL from a read connection.
+func (s *SQLite) HoldsSealedValues(ctx context.Context) (bool, error) {
+	var held bool
+	if err := s.r.QueryRowContext(ctx, holdsSealedSQL).Scan(&held); err != nil {
+		return false, fmt.Errorf("store: sqlite: sealed values: %w", err)
+	}
+	return held, nil
+}
+
 // Atomically runs fn on a copy of this store whose statements all go through one transaction on
 // the write connection, begun IMMEDIATE (_txlock): it holds the write lock from BEGIN to the
 // commit, against every connection and every process.

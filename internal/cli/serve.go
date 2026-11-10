@@ -205,24 +205,35 @@ var requestReadTimeout = 30 * time.Second
 // source): core.OpenKeyring from
 // BATONDECK_MASTER_KEY, else from master.key beside the SQLite file, or on Postgres beside the
 // config file. On Postgres with neither, serve runs without one (an inbox token is then refused)
-// and says so once. A key file it creates is logged: a line beside a database this start made
-// (fresh), and a WARN beside one made before, whose sealed values, if it ran under another key,
-// no longer open.
-func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger, fresh bool) (*core.Keyring, error) {
+// and says so once. A key file it creates is logged: as a plain line when the store holds nothing
+// sealed (a new database, whether serve or `migrate` made its schema), and as a WARN when it holds
+// values sealed under an earlier key (store.Lifecycle.HoldsSealedValues), which the new one does not
+// open.
+func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger, st sealedHolder) (*core.Keyring, error) {
 	path, none := keyFilePath(cfg, cfgPath, lookup)
 	if none {
 		logger.Printf("serve: WARN no keyring: set %s (or run with -config) to register a wake session with an inbox token", core.MasterKeyEnv)
 		return nil, nil
 	}
 	keys, err := core.OpenKeyring(path, lookup)
-	switch {
-	case err != nil || !keys.Created():
-	case fresh:
-		logger.Printf("serve: created the master key %s; back it up with the database (README: Backup and restore)", path)
-	default:
-		logger.Printf("serve: WARN created a new master key %s for a database that was not new: if the database ran under an earlier key (a master.key not restored with it, or %s no longer set), the secrets sealed under that key (on-call integration secrets, wake-session inbox tokens) do not open, so every delivery to an HMAC-signed integration is refused 401, and the attachment links it signed are refused; stop serve and put the earlier key back, or rotate each integration's secret", path, core.MasterKeyEnv)
+	if err != nil || !keys.Created() {
+		return keys, err
 	}
-	return keys, err
+	held, herr := st.HoldsSealedValues(context.Background())
+	switch {
+	case herr != nil:
+		logger.Printf("serve: WARN created a new master key %s, and could not tell whether the database holds secrets sealed under an earlier key (%v); if it ran under one, put that master.key back; back the new one up with the database (README: Backup and restore)", path, herr)
+	case held:
+		logger.Printf("serve: WARN created a new master key %s, but the database holds secrets sealed under an earlier key (on-call integration secrets, wake-session inbox tokens): they do not open under this one, so every delivery to an HMAC-signed integration is refused 401; stop serve and put the earlier master.key back (or set %s as before), or rotate each integration's secret", path, core.MasterKeyEnv)
+	default:
+		logger.Printf("serve: created the master key %s; back it up with the database (README: Backup and restore)", path)
+	}
+	return keys, nil
+}
+
+// sealedHolder is what openKeyring asks of the store: whether it holds values sealed with a key.
+type sealedHolder interface {
+	HoldsSealedValues(ctx context.Context) (bool, error)
 }
 
 // keyFilePath is where serve's master key file is: beside the SQLite file, or on Postgres beside the

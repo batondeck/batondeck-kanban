@@ -188,8 +188,9 @@ seals the secrets the database holds (each on-call integration's signing secret,
 directory's inbox tokens) and signs the attachment links. Restored under another key, the board, its
 tasks and its attachments come back, but no sealed secret opens: every delivery to an HMAC-signed
 on-call integration is refused 401. Keep the key with the backup, and keep both where only you can read
-them. Stop the server first, so the database and the blobs are copied at the same moment: the binary
-has no online backup.
+them. `serve` makes a new key when it finds none and says so, as a warning when the database already
+holds secrets sealed under another key. Stop the server first, so the database and the blobs are
+copied at the same moment: the binary has no online backup.
 
 **The binary, on SQLite.** By default everything is in one directory, `$XDG_DATA_HOME/batondeck-kanban`
 (else `~/.local/share/batondeck-kanban`): the SQLite file `batondeck-kanban.db` (with `-wal` and

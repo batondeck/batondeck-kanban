@@ -73,6 +73,12 @@ type Lifecycle interface {
 	// ServerVersion is the engine and its version as the live connection reports them
 	// (`sqlite_version()`, Postgres's `version()`), never as the config names them.
 	ServerVersion(ctx context.Context) (string, error)
+	// HoldsSealedValues reports whether the store holds a value sealed with the keyring that a
+	// different key would not open: a live integration's secret (an oncall envelope, "enc1:...", in
+	// its auth block) or a wake session's inbox token or bearer. serve asks it when it has just made a
+	// master key, to tell a new database from one that ran under a key now gone. A read outside any
+	// transaction.
+	HoldsSealedValues(ctx context.Context) (bool, error)
 	// Atomically runs fn against a Store whose every statement is ONE transaction: all of it lands,
 	// or — if fn returns an error — none of it does, and Atomically returns fn's error. Called
 	// inside fn, it runs on the same transaction. fn must use the Store it is given.
@@ -90,10 +96,14 @@ type Migrated struct {
 	// Applied counts the migrations this call applied; Version is the schema version after it.
 	Applied int
 	Version int64
-	// Fresh is true when the schema was empty before this call: it applied every migration the
-	// binary carries.
-	Fresh bool
 }
+
+// holdsSealedSQL is HoldsSealedValues on both engines: a live integration whose auth block holds an
+// oncall envelope (a JSON string that starts "enc1:", oncall.EnvelopePrefix), or a wake session
+// with an inbox token or a bearer sealed. Tombstoned integrations take no delivery, so a key that
+// does not open theirs loses nothing.
+const holdsSealedSQL = `SELECT EXISTS (SELECT 1 FROM integrations WHERE deleted_at IS NULL AND auth LIKE '%"enc1:%')
+    OR EXISTS (SELECT 1 FROM wake_sessions WHERE socket_token_sealed IS NOT NULL OR bearer_sealed IS NOT NULL)`
 
 // migrator is one engine's migrations as goose sees them: the handle it runs on, the dialect, the
 // embedded directory, and the session locker (nil on SQLite, whose transactions already take turns
@@ -136,7 +146,7 @@ func (m migrator) up(ctx context.Context) (Migrated, error) {
 	if err != nil {
 		return Migrated{}, fmt.Errorf("store: schema version: %w", err)
 	}
-	return Migrated{Applied: len(res), Version: v, Fresh: len(res) > 0 && len(res) == len(p.ListSources())}, nil
+	return Migrated{Applied: len(res), Version: v}, nil
 }
 
 func (m migrator) downToZero(ctx context.Context) error {
