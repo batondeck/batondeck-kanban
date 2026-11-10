@@ -42,6 +42,8 @@ function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
   const last = items[items.length - 1]!;
   const active = document.activeElement;
   if (!root.contains(active)) {
+    // A dialog opened over this one (the command palette) keeps its own Tab.
+    if (active && active !== document.body && active.closest('[role="dialog"]')) return;
     e.preventDefault();
     first.focus();
   } else if (e.shiftKey && (active === first || active === root)) {
