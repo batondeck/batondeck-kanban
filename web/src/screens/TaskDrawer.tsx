@@ -26,6 +26,50 @@ import {
 import { TicketRail } from './task/TicketRail.js';
 import { SECTIONS, useSectionNav } from './task/TicketBody.js';
 
+/** What Tab can reach inside the dialog (a display:none element, the hidden file input, cannot). */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keep Tab inside the modal: past its last control to its first, Shift+Tab from its first (or from the
+ * dialog itself, focused on open) to its last, and from outside it to its first. Without this Tab walked
+ * out into the board under the overlay, where the keyboard user could no longer see what was focused.
+ */
+function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
+  if (!root) return;
+  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.closest('[style*="display: none"]'));
+  if (items.length === 0) return;
+  const first = items[0]!;
+  const last = items[items.length - 1]!;
+  const active = document.activeElement;
+  if (!root.contains(active)) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && (active === first || active === root)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+/**
+ * The overlay closes the drawer only on a press that both starts and ends on it. A drag that starts in
+ * the drawer (selecting text in a comment, right to left) and is released over the overlay is a click
+ * on the overlay to the browser, and closed the drawer with the draft in it.
+ */
+function useOverlayDismiss(onClose: () => void): { onMouseDown: (e: React.MouseEvent) => void; onClick: (e: React.MouseEvent) => void } {
+  const pressedHere = useRef(false);
+  return {
+    onMouseDown: (e) => { pressedHere.current = e.target === e.currentTarget; },
+    onClick: (e) => {
+      const close = pressedHere.current && e.target === e.currentTarget;
+      pressedHere.current = false;
+      if (close) onClose();
+    },
+  };
+}
+
 export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   projectId: string;
   taskId: string;
@@ -41,7 +85,18 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   // Section-nav anchors (Details / Discussion / Context / Files / Activity).
   const { refs, scrollTo } = useSectionNav();
 
-  // a11y: focus the dialog on open and close it on Escape (focus returns to the page underneath).
+  // Focus goes back where it was when the drawer closes (a j/k walk remounts it per task, and each
+  // mount hands on the same element). Defined before the focus effect below so it reads the opener,
+  // not the dialog.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      if (opener && opener !== document.body && opener.isConnected) opener.focus();
+    };
+  }, []);
+  const overlay = useOverlayDismiss(onClose);
+
+  // a11y: focus the dialog on open and close it on Escape (focus then returns to where it was).
   // While typing in a field, Escape only blurs that field — it must NOT nuke the drawer (and the
   // comment/follow-up draft with it); a second Escape then closes. onClose is read through a ref so
   // Board's inline closure (new identity every render — 10s presence poll, SSE invalidations) doesn't
@@ -57,6 +112,10 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   }, [loaded, taskId]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Tab') {
+        trapTab(e, dialogRef.current ?? errDialogRef.current);
+        return;
+      }
       if (e.key !== 'Escape') return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
@@ -81,7 +140,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
     // A bad deep link (?task=T-999) or a load failure must not strand the user on an infinite skeleton.
     if (taskQ.isError) {
       return (
-        <div className="drawer-overlay" onClick={onClose}>
+        <div className="drawer-overlay" {...overlay}>
           <div className="drawer" role="dialog" aria-modal="true" aria-label="Task not found" tabIndex={-1} ref={errDialogRef} onClick={(e) => e.stopPropagation()} style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Cluster justify='flex-end'>
               <button className="btn secondary icon" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
@@ -99,7 +158,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
       );
     }
     return (
-      <div className="drawer-overlay" onClick={onClose}>
+      <div className="drawer-overlay" {...overlay}>
         <div className="drawer" onClick={(e) => e.stopPropagation()} style={{ padding: 18 }}>
           <div className="skeleton" style={{ width: 90, height: 12, marginBottom: 14 }} />
           <div className="skeleton" style={{ width: '75%', height: 22, marginBottom: 12 }} />
@@ -116,7 +175,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   // tests that mount it outside a Router, and a full-page ticket link must work in both.
 
   return (
-    <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-overlay" {...overlay}>
       <motion.div
         className="drawer" role="dialog" aria-modal="true" aria-label={`Task ${task.id}`} tabIndex={-1} ref={dialogRef}
         onClick={(e) => e.stopPropagation()} style={{ padding: 0, display: 'flex', flexDirection: 'column' }}

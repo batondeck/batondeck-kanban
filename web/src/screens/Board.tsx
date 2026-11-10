@@ -1062,7 +1062,9 @@ export function Board() {
     { keys: 'ArrowDown', label: '', run: () => (openTask ? false : moveSelection(1)) },
     { keys: 'ArrowUp', label: '', run: () => (openTask ? false : moveSelection(-1)) },
     { keys: 'Enter', label: 'Open selected task', run: () => (selectedId && !openTask ? setOpenTask(selectedId) : false) },
-    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
+    // Inert behind the drawer, as j/k are: it would open the new-task row under the modal and move
+    // focus into it, where typing goes unseen.
+    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { if (openTask) return false; setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
     { keys: 's', label: 'Set status (selection)', run: () => (selectedId ? openPalette('status') : false) },
     { keys: 'p', label: 'Set priority (selection)', run: () => (selectedId ? openPalette('priority') : false) },
     { keys: 'Escape', label: '', run: () => (openTask ? false : selectedId ? setSelectedId(null) : false) },

@@ -777,3 +777,55 @@ describe("the Activity panel reads the ticket's own events", () => {
     expect(screen.queryByText('No activity yet.')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The drawer behaves as the modal it declares (aria-modal). A drag that starts inside it and is
+ * released over the overlay is a click on the overlay to the browser, which closed the drawer and
+ * lost the draft; Tab walked out of it into the board hidden under the overlay; and closing it left
+ * focus on <body> instead of where it was.
+ */
+describe('the drawer is a modal', () => {
+  it('a press that starts inside the drawer and is released over the overlay does not close it', async () => {
+    const { onClose } = renderDrawer();
+    await screen.findByText('Ship the parser');
+    const overlay = document.querySelector('.drawer-overlay') as HTMLElement;
+    const note = screen.getByPlaceholderText('Add a note…');
+    fireEvent.mouseDown(note);
+    fireEvent.mouseUp(overlay);
+    fireEvent.click(overlay); // what the browser dispatches on the common ancestor
+    expect(onClose).not.toHaveBeenCalled();
+    // A press and release both on the overlay still closes it.
+    fireEvent.mouseDown(overlay);
+    fireEvent.mouseUp(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Tab and Shift+Tab stay inside the dialog', async () => {
+    renderDrawer();
+    const dialog = await screen.findByRole('dialog', { name: 'Task T-1' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')]
+      .filter((el) => el.getAttribute('type') !== 'file' && el.style.display !== 'none');
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('closing it returns focus to what had it before', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'opener';
+    document.body.appendChild(opener);
+    opener.focus();
+    const { unmount } = renderDrawer();
+    const dialog = await screen.findByRole('dialog', { name: 'Task T-1' });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+});
