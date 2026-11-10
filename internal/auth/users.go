@@ -232,11 +232,12 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	if lim == nil {
 		lim = loginLimits
 	}
-	refund, err := lim.admit(addr, a.now())
+	known := lim.isKnown(addr, l, a.now())
+	refund, err := lim.admit(addr, known, a.now())
 	if err != nil {
 		return store.User{}, err
 	}
-	release, err := lim.acquire(ctx, lim.isKnown(addr, l, a.now()))
+	release, err := lim.acquire(ctx, known)
 	if err != nil {
 		return store.User{}, err
 	}

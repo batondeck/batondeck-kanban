@@ -13,11 +13,11 @@ import (
 
 // LoginLimits bounds password checks, each of which allocates argon2id's 64 MiB: at most Verifies of
 // them run at once, a caller waits up to Wait for a slot, and every attempt debits a token bucket of
-// its client address (an IPv6 address by its /64, and its /48 site as well) before it runs; a
-// success refunds it. There is no bucket per login: one would let a few addresses lock anyone out of
-// an account. A login that signed in from an address before (KnownFor) is served first when a slot
-// frees, so a flood from addresses that never signed in, however many, cannot keep an account's
-// owner out from where they sign in: a waiter behind the flood would give up after Wait.
+// its client address (an IPv6 address by its /64, and its /48 site as well unless the pair is known)
+// before it runs; a success refunds it. There is no bucket per login: one would let a few addresses
+// lock anyone out of an account. A login that signed in from an address before (KnownFor) is served
+// first when a slot frees, so a flood from addresses that never signed in, however many, cannot keep
+// an account's owner out from where they sign in: a waiter behind the flood would give up after Wait.
 type LoginLimits struct {
 	// Verifies is the most password checks at once; 0 means 2 (128 MiB), whatever the core count.
 	Verifies int
@@ -60,12 +60,16 @@ func orDefault(v, def int) int {
 	return v
 }
 
-// admit debits addr's bucket, and its site's first when it has one: RATE_LIMITED, with the wait,
-// when either is empty (a site's token is put back when the address refuses). The returned refund
-// puts the tokens back.
-func (l *LoginLimits) admit(addr string, now time.Time) (refund func(), err error) {
+// admit debits addr's bucket, and its site's first when it has one and the caller is not known:
+// RATE_LIMITED, with the wait, when either is empty (a site's token is put back when the address
+// refuses). A known pair (isKnown) skips the site's budget, so other /64s of its /48 cannot lock it
+// out; its own /64's budget still holds. The returned refund puts the tokens back.
+func (l *LoginLimits) admit(addr string, known bool, now time.Time) (refund func(), err error) {
 	l.init()
 	key, site := addrKey(addr), siteKey(addr)
+	if known {
+		site = ""
+	}
 	if site != "" {
 		if wait, ok := l.sites.take(site, now); !ok {
 			return nil, rateLimited(wait)

@@ -205,6 +205,38 @@ func TestFailedLoginsLimitedPerIPv6Site(t *testing.T) {
 	})
 }
 
+// A login that signed in from a /64 before counts only against that /64's budget, not its /48's, so
+// a flood from other /64s of the same site (a carrier pool, a campus, a cloud) cannot lock out the
+// people who share it from where they sign in. Only a sign-in that succeeded makes a pair known, so
+// the flood cannot use it.
+func TestKnownSignInSkipsTheSiteBudget(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "right")
+	if resp := f.loginFrom(t, "2001:db8:0:ffff::1", "alice", "right"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("first sign-in: status %d, want 204", resp.StatusCode)
+	}
+	for i := range 50 {
+		if resp := f.loginFrom(t, fmt.Sprintf("2001:db8:0:%x::1", i+1), "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status %d, want 401", i+1, resp.StatusCode)
+		}
+	}
+	wantRateLimited(t, f.loginFrom(t, "2001:db8:0:51::1", "alice", "wrong"))
+	if resp := f.loginFrom(t, "2001:db8:0:ffff::2", "alice", "right"); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("the owner, from the /64 she signed in from, once her /48's budget is spent: status %d, want 204", resp.StatusCode)
+	}
+	t.Run("Control", func(t *testing.T) {
+		// A /64 of the site that never signed in is refused, even with the right password.
+		wantRateLimited(t, f.loginFrom(t, "2001:db8:0:fffe::1", "alice", "right"))
+		// The known /64 still has its own budget.
+		for i := range 10 {
+			if resp := f.loginFrom(t, "2001:db8:0:ffff::3", "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("known /64, attempt %d: status %d, want 401", i+1, resp.StatusCode)
+			}
+		}
+		wantRateLimited(t, f.loginFrom(t, "2001:db8:0:ffff::3", "alice", "right"))
+	})
+}
+
 // flood keeps the verification slots busy with wrong passwords for alice, each check taking hold:
 // a new attempt every few milliseconds, each from its own address that never signed in, for as long
 // as the test runs (stop ends it and waits for every attempt). It returns once the queue has been
@@ -238,11 +270,14 @@ func flood(t *testing.T, f *fixture, hold, wait time.Duration) (stop func()) {
 func TestKnownSignInIsServedBeforeTheFlood(t *testing.T) {
 	f := newFixture(t)
 	f.addUser(t, "alice", "right")
-	f.svc.Accounts.Limits = &LoginLimits{Verifies: 1, Wait: 400 * time.Millisecond, PerAddr: 1000}
+	// The owner waits about one hold for her slot; Wait is fifteen holds, so a loaded runner does not
+	// time her out (TestSlotsServeKnownFirst pins the order without timing).
+	const hold, wait = 100 * time.Millisecond, 1500 * time.Millisecond
+	f.svc.Accounts.Limits = &LoginLimits{Verifies: 1, Wait: wait, PerAddr: 1000}
 	if _, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.50", "alice", "right"); err != nil {
 		t.Fatal(err)
 	}
-	stop := flood(t, f, 100*time.Millisecond, 400*time.Millisecond)
+	stop := flood(t, f, hold, wait)
 	defer stop()
 	for i := range 3 {
 		if _, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.50", "alice", "right"); err != nil {
