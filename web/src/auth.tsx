@@ -14,9 +14,10 @@ interface AuthState {
   /**
    * Is this caller a workspace admin? `/api/session` (`internal/api/session.go`) sets it from the
    * caller's `WorkspaceAdmin` and, from the same fact, puts `batondeck:superadmin` and
-   * `batondeck:oncall` in `permissions`, so the two always agree. Nothing in the SPA reads it any more:
-   * the routes, the nav and the screens that widen `/api/agents/sessions` read `permissions` through
-   * `can()`, the one oracle (see `permissions.ts`).
+   * `batondeck:oncall` in `permissions`, so the two always agree. The routes, the nav and the screens
+   * that widen `/api/agents/sessions` read `permissions` through `can()`, the one oracle (see
+   * `permissions.ts`). Two readers remain: `useMayReadIntegrations` (displayNames.ts), which gates the
+   * integrations read, and the Activity log, which shows the audit log to an admin.
    */
   isAdmin: boolean;
   /**
