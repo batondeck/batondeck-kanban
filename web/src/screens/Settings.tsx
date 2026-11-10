@@ -9,7 +9,8 @@ import * as projectsApi from '../api/projects.js';
 import * as usersApi from '../api/users.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar } from '../components.js';
-import type { Status } from '../types.js';
+import type { AgentSession, Status } from '../types.js';
+import { keepCachedDevices } from '../presenceMerge.js';
 import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
@@ -595,7 +596,15 @@ export function Settings() {
     return () => clearTimeout(t);
   }, []);
 
-  const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => agentsApi.agentSessions(100) });
+  // The entry Agents merges presence frames into: the list never carries `device:` rows, so the answer
+  // keeps the ones the cache holds when it lands, or a visit here would drop them from Agents (P-394).
+  const sessionsQ = useQuery({
+    queryKey: ['agentSessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(100);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentSessions'])?.sessions) };
+    },
+  });
   // MCP sessions only: the device rows a presence frame merges into the same cache (`device:<pid>`,
   // presenceMerge.ts) are processes on this machine, not sessions disconnect_agent can end.
   const mySessions = (sessionsQ.data?.sessions ?? []).filter((s) => !s.sessionKey.startsWith('device:'));

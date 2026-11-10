@@ -151,6 +151,14 @@ type Sub = { key: { projectId?: string; boardId?: string }; h: StreamHandlers };
 const subs = new Set<Sub>();
 let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
+/**
+ * The last `presence` and `notifications` payloads the CURRENT socket carried, for a subscriber that
+ * joins it later. The server sends both once on open and then only on a change, and the nav badge
+ * opens the socket at app mount, so a screen joining on the same URL (Agents with no board, the full
+ * task page) would otherwise see neither until the next change. Cleared whenever the socket is
+ * replaced or goes down: a rebuilt or reconnected socket sends its own on open.
+ */
+let lastFrames: { presence?: unknown; notifications?: unknown } = {};
 
 /** The board the shared socket should be scoped to: whichever subscriber named one. */
 function desiredUrl(): string {
@@ -179,16 +187,26 @@ function reconcile(): void {
   closeCurrent?.();
   closeCurrent = undefined;
   currentUrl = want;
+  lastFrames = {};
   if (!want) return;
   closeCurrent = sseConnect(
     want,
-    (live) => fanout('onLive', (h) => h.onLive?.(live)),
+    (live) => {
+      if (!live) lastFrames = {};
+      fanout('onLive', (h) => h.onLive?.(live));
+    },
     {
       updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
       board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
-      presence: (d) => fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
+      presence: (d) => {
+        lastFrames.presence = d;
+        fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString())));
+      },
       // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
-      notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
+      notifications: (d) => {
+        lastFrames.notifications = d;
+        fanout('onNotifications', (h) => h.onNotifications?.(d));
+      },
       resync: () => fanout('onResync', (h) => h.onResync?.()),
     },
     () => {
@@ -237,7 +255,27 @@ export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
 export function joinStream(key: { projectId?: string; boardId?: string }, h: StreamHandlers): () => void {
   const sub: Sub = { key, h };
   subs.add(sub);
+  const before = currentUrl;
   reconcile();
+  // Joined a socket that was already open: hand over what it carried on open (see `lastFrames`).
+  // Next microtask, so the frame lands after the caller's effect has returned; and only while this
+  // subscriber is still here and the frame is still the socket's last.
+  if (currentUrl === before) {
+    const replay = lastFrames;
+    queueMicrotask(() => {
+      if (!subs.has(sub)) return;
+      try {
+        if (replay.presence !== undefined && replay.presence === lastFrames.presence) {
+          h.onPresence?.(presenceSessions(replay.presence, new Date().toISOString()));
+        }
+        if (replay.notifications !== undefined && replay.notifications === lastFrames.notifications) {
+          h.onNotifications?.(replay.notifications);
+        }
+      } catch {
+        /* a bad subscriber must not break the join */
+      }
+    });
+  }
   return () => {
     subs.delete(sub);
     reconcile();
