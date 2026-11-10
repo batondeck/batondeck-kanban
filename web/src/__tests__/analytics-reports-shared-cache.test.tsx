@@ -15,10 +15,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, renderHook, screen, cleanup, waitFor, act } from '@testing-library/react';
 import { Analytics } from '../screens/Analytics.js';
 import { Reports } from '../screens/Reports.js';
-import { boardTasksKey, patchTaskCaches } from '../mutations.js';
+import { boardTasksKey, patchTaskCaches, useTaskAction } from '../mutations.js';
 import type { Task } from '../types.js';
 
 vi.mock('../projectContext.js', () => ({
@@ -99,6 +99,30 @@ describe('the Analytics census stays out of the board cache an optimistic write 
     }
     expect(() => patchTaskCaches(qc, 'p1', 'T-1', (t) => ({ ...t, status: 'REVIEW' }))).not.toThrow();
     expect(qc.getQueryData<{ tasks: Task[] }>(boardTasksKey('p1', 'b1', 200))!.tasks[0]!.status).toBe('REVIEW');
+  });
+});
+
+describe('a board write marks the census stale', () => {
+  // The census left the `['tasks', projectId]` prefix, and with it the invalidation every settled
+  // board write sends there. Without its own, Analytics reopened within the 30 s staleTime after a
+  // card move counted the board as it was before the move.
+  it('a settled task action invalidates the census of that project', async () => {
+    stub();
+    const qc = client();
+    const view = at(qc, '/analytics', <Analytics />);
+    await waitFor(() => expect(document.body.textContent).toMatch(/Total Tasks\s*2/));
+    view.unmount();
+    const census = () => qc.getQueryCache().find({ queryKey: ['task-census', 'p1', 'b1'] })!;
+    expect(census().state.isInvalidated).toBe(false);
+
+    const { result } = renderHook(
+      () => useTaskAction<'DONE'>('p1', (to, t) => ({ ...t, status: to }), async () => ({})),
+      { wrapper: ({ children }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider> },
+    );
+    await act(async () => {
+      await result.current.mutateAsync({ vars: 'DONE', task: mkTask(1) });
+    });
+    await waitFor(() => expect(census().state.isInvalidated, 'the census kept its pre-move count').toBe(true));
   });
 });
 

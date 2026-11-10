@@ -106,6 +106,9 @@ function reconcile(qc: QueryClient, projectId: string, taskId?: string): void {
   }
   void qc.invalidateQueries({ queryKey: ['hist', projectId] });
   void qc.invalidateQueries({ queryKey: ['board', projectId] });
+  // The Analytics/Reports census lives outside the `tasks` prefix (Analytics.tsx says why), so it
+  // needs its own: without it a reopened Analytics counted the board as it was before this write.
+  void qc.invalidateQueries({ queryKey: ['task-census', projectId] });
 }
 
 /**
