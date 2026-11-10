@@ -16,7 +16,7 @@ import * as projectsApi from '../../api/projects.js';
 import * as streamApi from '../../api/stream.js';
 import * as tasksApi from '../../api/tasks.js';
 import { useAuth } from '../../auth.js';
-import { boardTasksKey, useTaskAction } from '../../mutations.js';
+import { boardTasksKey, readBoardTasks, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
 import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../../displayNames.js';
@@ -119,8 +119,10 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const boardQ = useQuery({ queryKey: ['board', projectId, task?.boardId], queryFn: () => boardsApi.getBoard(projectId, task!.boardId), enabled: !!task });
   // The page size is IN the key (see `boardTasksKey`). At the default limit this is byte-identical to
   // Board's key, so opening the drawer from the board is still free; once the board has loaded more,
-  // the two get their own entries instead of fighting over one.
-  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => boardsApi.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
+  // the two get their own entries instead of fighting over one. Both read through `readBoardTasks`: the
+  // shared entry runs the read of whichever observer rendered last, and a raw read could put rows older
+  // than the board's last frame back on screen.
+  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => readBoardTasks(qc, projectId, task!.boardId, uiSettings().taskPageLimit), enabled: !!task });
   const busyKeys = useMemo(() => busyAgentKeys(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
   const agentList = useMemo(
     () => buildAgentList(

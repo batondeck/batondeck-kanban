@@ -59,6 +59,8 @@ let afterFirstPage: (() => void) | null = null;
 /** Holds the answer to the next task-list request (read at request time) until it resolves: a read
  *  still in flight. */
 let holdNextRead: Promise<void> | null = null;
+/** While set, EVERY task-list request waits for it: reads slower than the frames that land meanwhile. */
+let gate: Promise<void> | null = null;
 const json = (status: number, b: unknown) => ({ ok: status < 400, status, json: async () => b }) as Response;
 
 beforeEach(() => {
@@ -69,6 +71,7 @@ beforeEach(() => {
   taskUrls = [];
   afterFirstPage = null;
   holdNextRead = null;
+  gate = null;
   vi.stubGlobal('EventSource', FakeES);
   vi.stubGlobal(
     'fetch',
@@ -85,9 +88,20 @@ beforeEach(() => {
         const next = from + limit < all.length ? { nextCursor: String(from + limit) } : {};
         if (from === 0 && afterFirstPage) { afterFirstPage(); afterFirstPage = null; }
         if (holdNextRead) { const h = holdNextRead; holdNextRead = null; await h; }
+        if (gate) await gate;
         return json(200, { tasks: page, ...next });
       }
       const routes: Array<[RegExp, unknown]> = [
+        // The ticket drawer's reads, for the case that opens it.
+        [/\/tasks\/T-2$/, { task: all[1] }],
+        [/\/tasks\/T-2\/context$/, { summary: '', fields: {}, items: [], memory: [], deps: { blockedBy: [], blocks: [], edges: [] } }],
+        [/\/tasks\/T-2\/subtasks$/, { tasks: [] }],
+        [/\/tasks\/T-2\/memory$/, { entries: [] }],
+        [/\/tasks\/T-2\/attachments$/, { attachments: [] }],
+        [/\/tasks\/T-2\/comments$/, { comments: [] }],
+        [/\/tasks\/T-2\/follow-ups$/, { followUps: [] }],
+        [/\/tasks\/T-2\/runs$/, { runs: [] }],
+        [/\/projects\/p1$/, { project: { id: 'p1', name: 'P1', members: { 'alice@example.com': 'admin' }, settings: { reviewEnabled: true, quotaEnabled: false, txnCap: null } } }],
         [/\/boards\/b1\/feed$/, { events: [] }],
         [/\/boards\/b1$/, { board, taskCounts: { c1: all.length } }],
         [/\/boards$/, { boards: [board] }],
@@ -105,10 +119,10 @@ afterEach(() => {
 });
 
 const newClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
-function renderBoard(qc = newClient()) {
+function renderBoard(qc = newClient(), search = '') {
   render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/projects/p1/boards/b1']}>
+      <MemoryRouter initialEntries={[`/projects/p1/boards/b1${search}`]}>
         <Routes>
           <Route path="/projects/:projectId/boards/:boardId" element={<Board />} />
         </Routes>
@@ -222,6 +236,116 @@ describe('the board pages its task list with the cursor (limit stays within 1..2
     await waitFor(() => expect(cards()).toBe(25));
     await waitFor(() => expect(screen.getByText('Renamed')).toBeInTheDocument());
     expect(screen.queryByText('Task 1'), 'the older row came back').toBeNull();
+  });
+
+  // A busy board sends a frame every 100 ms (internal/api/stream.go StreamCoalesce). A read slower than
+  // that used to be cancelled and started again by every frame, one full list_tasks per frame that the
+  // server ran to the end (the read takes no abort signal) and the board never used.
+  const frame = (es: FakeES, tasks: Task[], nextCursor?: string) =>
+    act(() => {
+      es.emit('board', { board: { board, taskCounts: { c1: all.length } }, tasks: { tasks, ...(nextCursor ? { nextCursor } : {}) }, feed: { events: [] } });
+    });
+  const tick = (ms = 10) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
+
+  it('frames that land while a read is out start no read of their own, and the newest one is shown (one page)', async () => {
+    all = Array.from({ length: 15 }, (_, i) => mk(i + 1)); // the usual board: every row fits one page
+    const qc = renderBoard();
+    await waitFor(() => expect(cards()).toBe(15));
+    const es = FakeES.instances.at(-1)!;
+    act(() => { es.readyState = 1; es.emit('open'); });
+    let release!: () => void;
+    gate = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    void qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] }); // a settle refetch, slower than the frames
+    await waitFor(() => expect(taskUrls).toHaveLength(1));
+    for (let i = 1; i <= 5; i++) {
+      all = [{ ...all[0]!, title: `Renamed ${i}` }, ...all.slice(1)];
+      frame(es, all);
+      await tick();
+    }
+    expect(taskUrls, 'a frame started a read').toHaveLength(1);
+    gate = null;
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    // The read answered with the rows as they were when it began; the newest frame stays on screen.
+    expect(screen.getByText('Renamed 5')).toBeInTheDocument();
+    expect(screen.queryByText('Task 1'), 'the read put the older row back').toBeNull();
+    expect(cards()).toBe(15);
+    expect(taskUrls, 'one task-list read, whatever the number of frames').toHaveLength(1);
+  });
+
+  it('the stream’s first frame landing before the first read answers costs no second read', async () => {
+    all = Array.from({ length: 15 }, (_, i) => mk(i + 1));
+    let release!: () => void;
+    gate = new Promise<void>((r) => { release = r; });
+    renderBoard();
+    await waitFor(() => expect(taskUrls).toHaveLength(1));
+    const es = FakeES.instances.at(-1)!;
+    act(() => { es.readyState = 1; es.emit('open'); });
+    all = [{ ...all[0]!, title: 'Renamed' }, ...all.slice(1)];
+    frame(es, all);
+    await waitFor(() => expect(cards()).toBe(15));
+    gate = null;
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(screen.queryByText('Task 1')).toBeNull();
+    expect(taskUrls).toHaveLength(1);
+  });
+
+  it('on a list longer than a frame, frames during a read cost one read more, which brings the rows past the frame up to date', async () => {
+    const qc = renderBoard();
+    await waitFor(() => expect(cards()).toBe(20));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(cards()).toBe(25));
+    const es = FakeES.instances.at(-1)!;
+    act(() => { es.readyState = 1; es.emit('open'); });
+    let release!: () => void;
+    gate = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    void qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] });
+    await waitFor(() => expect(taskUrls).toHaveLength(1));
+    // T-23 is past the frame's page: no frame carries its change.
+    all = all.map((t) => (t.id === 'T-23' ? { ...t, title: 'Past page one' } : t));
+    for (let i = 1; i <= 5; i++) {
+      all = [{ ...all[0]!, title: `Renamed ${i}` }, ...all.slice(1)];
+      frame(es, all.slice(0, 20), '20');
+      await tick();
+    }
+    expect(taskUrls, 'a frame started a read').toHaveLength(1);
+    gate = null;
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    await waitFor(() => expect(screen.getByText('Past page one')).toBeInTheDocument());
+    expect(screen.getByText('Renamed 5')).toBeInTheDocument();
+    expect(screen.queryByText('Task 1'), 'the read put the older row back').toBeNull();
+    expect(cards()).toBe(25);
+    expect(taskUrls.length, 'reads for five frames').toBeLessThanOrEqual(2);
+  });
+
+  it('with the ticket drawer open (it reads the same list), a frame that lands during a read is kept', async () => {
+    all = Array.from({ length: 15 }, (_, i) => mk(i + 1));
+    const qc = renderBoard(newClient(), '?task=T-2');
+    await waitFor(() => expect(cards()).toBe(15));
+    await waitFor(() => expect(taskUrls.length).toBeGreaterThan(0));
+    await tick(50);
+    const es = FakeES.instances.at(-1)!;
+    act(() => { es.readyState = 1; es.emit('open'); });
+    let release!: () => void;
+    gate = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    // The entry runs the read of the observer that rendered last; when the drawer re-renders on its own
+    // (its reads answer, a draft is typed), that is the drawer's. Made so here without a render.
+    const entry = qc.getQueryCache().find({ queryKey: boardTasksKey('p1', 'b1', 20), exact: true })!;
+    expect(entry.observers).toHaveLength(2);
+    const drawer = entry.observers.find((o) => o.options.queryFn !== entry.options.queryFn) ?? entry.observers[0]!;
+    drawer.setOptions(drawer.options);
+    void qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] });
+    await waitFor(() => expect(taskUrls).toHaveLength(1));
+    all = [{ ...all[0]!, title: 'Renamed' }, ...all.slice(1)];
+    frame(es, all);
+    gate = null;
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    const t1 = () => document.querySelector('.card[data-task-id="T-1"]')?.textContent ?? '';
+    expect(t1()).toContain('Renamed');
+    expect(taskUrls).toHaveLength(1);
   });
 
   it('a Load more that fails says so, keeps the cards shown, and leaves later refetches working', async () => {

@@ -30,7 +30,7 @@ import { ApiError, isLocalEdit } from '../api/http.js';
 import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
-import { TEMP_TASK_ID, boardTasksKey, isTempTaskId, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
+import { TEMP_TASK_ID, boardTasksKey, isTempTaskId, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, readBoardTasks, recordBoardFrame, restore, useTaskAction, useTaskCreate } from '../mutations.js';
 import { TaskDrawer } from './TaskDrawer.js';
 import { type AgentEntry, STATE_META, agentKey, buildAgentList, busyAgentKeys, isLiveEntry } from '../agentStatus.js';
 import { uiSettings } from '../settings.js';
@@ -772,31 +772,25 @@ export function Board() {
   // socket down and up again to hand the handler a new `limit`.
   const limitRef = useRef(limit);
   limitRef.current = limit;
-  // Counts the task frames the stream has written. A frame that lands while "Load more" reads the longer
-  // list is written to the shorter list's key, so `loadMore` reads the longer one again after it.
-  const tasksFramesRef = useRef(0);
   // `limit` IS part of the key — see `boardTasksKey`. It used to be held out of it and forced through a
   // manual invalidate effect, which left one cache entry shared with TaskDrawer's differently-sized
   // observer.
   // `limit` is how many rows the board shows, NOT the `limit` of one request: `list_tasks` refuses more
-  // than 200, so `listTasksUpTo` reads the rows page by page with the cursor. "Load more" asked for
+  // than 200, so `readBoardTasks` reads the rows page by page with the cursor. "Load more" asked for
   // `limit=400` once, the server answered 400 VALIDATION, and every later refetch at that size failed.
   // "Load more" reads the bigger list BEFORE switching to its key (`loadMore` below), so the board never
   // renders a key with no data; `keepPreviousData` stays as the net for an entry collected meanwhile.
-  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, limit), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => readBoardTasks(qc, projectId, boardId, limit), refetchInterval: pollMs, placeholderData: keepPreviousData });
   const [moreErr, setMoreErr] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMore = async (): Promise<void> => {
     const next = limit + boardsApi.LIST_TASKS_MAX;
-    const nextKey = boardTasksKey(projectId, boardId, next);
-    const framesBefore = tasksFramesRef.current;
     setLoadingMore(true);
     try {
-      await qc.fetchQuery({ queryKey: nextKey, queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, next), retry: false });
+      // A frame that lands meanwhile goes to the list on screen; `readBoardTasks` lays it over this read.
+      await qc.fetchQuery({ queryKey: boardTasksKey(projectId, boardId, next), queryFn: () => readBoardTasks(qc, projectId, boardId, next, boardTasksKey(projectId, boardId, limitRef.current)), retry: false });
       setMoreErr(null);
       setLimit(next);
-      // The board changed while the longer list was read: what was read is older than what is shown.
-      if (tasksFramesRef.current !== framesBefore) void qc.invalidateQueries({ queryKey: nextKey, exact: true, refetchType: 'all' });
     } catch (e) {
       setMoreErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -903,18 +897,18 @@ export function Board() {
             //
             // THE FRAME IS THE FIRST PAGE ONLY (200 tasks). Over a list "Load more" grew, it stands for
             // that page and the rows past it are kept (`mergeFirstPage`); those rows are then re-read,
-            // since the frame says nothing about them. A read already in flight began before this
-            // change, so it is cancelled and started again (the default `cancelRefetch`): left to
-            // finish, it would put the older rows back. Otherwise a frame costs no read.
+            // since the frame says nothing about them, joining a read already out rather than
+            // restarting it (`cancelRefetch: false`). A read already out began before this change: it
+            // is not restarted either, `readBoardTasks` lays this frame over its answer. Otherwise a
+            // frame costs no read.
             const incoming = snap.tasks as { tasks: Task[]; nextCursor?: string };
-            tasksFramesRef.current += 1;
+            recordBoardFrame(projectId, boardId, incoming);
             const key = boardTasksKey(projectId, boardId, limitRef.current);
             const held = qc.getQueryData<{ tasks: Task[] }>(key)?.tasks.length ?? 0;
-            const inFlight = qc.isFetching({ queryKey: key, exact: true }) > 0;
             qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
               mergeSnapshotPreservingLocalEdits(old, mergeFirstPage(old, incoming), isLocalEdit),
             );
-            if (inFlight || (incoming.nextCursor && held > incoming.tasks.length)) void qc.invalidateQueries({ queryKey: key, exact: true });
+            if (incoming.nextCursor && held > incoming.tasks.length) void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
         },

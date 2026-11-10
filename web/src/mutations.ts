@@ -5,6 +5,7 @@
  */
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import * as boardsApi from './api/boards.js';
+import { isLocalEdit } from './api/http.js';
 import type { Task } from './types.js';
 
 type TaskPage = { tasks: Task[]; nextCursor?: string };
@@ -65,6 +66,44 @@ export function mergeFirstPage(old: TaskPage | undefined, frame: TaskPage): Task
   const rest = old.tasks.slice(frame.tasks.length).filter((t) => !inFrame.has(t.id));
   if (rest.length === 0) return frame;
   return { tasks: [...frame.tasks, ...rest], ...(old.nextCursor ? { nextCursor: old.nextCursor } : {}) };
+}
+
+/** The newest board frame's task page, per board, numbered across boards. */
+const boardFrames = new Map<string, { seq: number; page: TaskPage }>();
+let boardFrameSeq = 0;
+
+/** Note a board frame's task page, for `readBoardTasks` (Board.tsx calls it for every frame). */
+export function recordBoardFrame(projectId: string, boardId: string, page: TaskPage): void {
+  boardFrames.set(`${projectId}/${boardId}`, { seq: ++boardFrameSeq, page });
+}
+
+/**
+ * Read a board's task list (up to `want` rows, page by page), consistent with the stream's frames.
+ *
+ * A frame that lands while the read is out is newer than the read, which would put the older rows back
+ * when it answers. The read is NOT restarted for it: a board busier than a read is long then sent one
+ * full list_tasks per frame, each run to the end by the server, none of them used. Instead the answer
+ * gets the newest frame laid over it, as Board.tsx lays a frame over the cache, keeping my own in-flight
+ * edits from the list at `editsFrom` (default: the one being read). A frame holds the first page only, so
+ * when the answer runs past it, the rows past it may predate the change: the list is then read once
+ * more, after this read and never beside it.
+ *
+ * Every observer of a board list reads through this (Board, the ticket drawer): an entry runs the read
+ * of whichever observer rendered last.
+ */
+export async function readBoardTasks(qc: QueryClient, projectId: string, boardId: string, want: number, editsFrom?: readonly unknown[]): Promise<TaskPage> {
+  const board = `${projectId}/${boardId}`;
+  const before = boardFrames.get(board)?.seq ?? 0;
+  const read = await boardsApi.listTasksUpTo(projectId, boardId, want);
+  const last = boardFrames.get(board);
+  if (!last || last.seq === before) return read;
+  const key = boardTasksKey(projectId, boardId, want);
+  const out = mergeSnapshotPreservingLocalEdits(qc.getQueryData<TaskPage>(editsFrom ?? key), mergeFirstPage(read, last.page), isLocalEdit);
+  if (out.tasks.length > last.page.tasks.length) {
+    // Once this answer is written: an invalidate while the read is still out would be absorbed by it.
+    setTimeout(() => void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false }), 0);
+  }
+  return out;
 }
 
 /**
