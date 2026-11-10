@@ -14,7 +14,11 @@ plugin/SECURITY.md) unless a check says otherwise:
      contract/tools.json or admin-tools.json, not in expected.json), in any form;
   5. no file under plugin/ but TRIM.md names a retired term (the six-state names, the dropped wake
      paths) — TRIM.md is the record of what was dropped, so it is the one file that names them;
-  6. plugin/hooks/hooks.json registers exactly SessionStart and SessionEnd (ADR-0004).
+  6. plugin/hooks/hooks.json registers exactly SessionStart and SessionEnd (ADR-0004);
+  7. every field a file writes in backticks, as a lone camelCase word (`downloadUrl`) or as a
+     camelCase key (`blockedReason: "poison"`, `{ projectId, ... }` is not one), is a property somewhere
+     in contract/expected.json, or one of NOT_FIELDS: an instruction must not send an agent looking for
+     a field no tool carries.
 It also WARNS, without failing, about every tool the files name that is in expected.json but not
 registered by the server yet (the mcp.Tool(s, "<area>", "<name>" calls in internal/mcp/tools/*.go).
 Python 3 standard library only. Exit 1 with one line per problem.
@@ -34,6 +38,12 @@ EXEMPT = {os.path.join(PLUGIN, "TRIM.md")}
 # values of contract/expected.json (a memory scope such as agent_global) are not tools either.
 NOT_TOOLS = {"pick_up_next_task", "triage_inbox", "summarize_for_handoff", "decompose_into_subtasks"}
 
+# Backticked camelCase fields that are not tool properties, each with where it does live.
+NOT_FIELDS = {
+    "boardIds",             # the socket doorbell frame's (ADR-0004, amended 2026-10-28), not a tool's
+    "crossSessionInbound",  # a Claude Code setting (--settings), not the server's
+}
+
 # The words ADR-0004 and ADR-0005 retired (R3.4 AC2), case-sensitive as that grep is.
 RETIRED = re.compile(r"BACKLOG|READY|CANCELLED|DEAD_LETTER|requeue_task|get_transitions|Pub/Sub|channel"
                      r"|asyncRewake|stop-gate|wake-wait")
@@ -51,6 +61,18 @@ def enum_values(node):
         return out
     if isinstance(node, list):
         return set().union(*map(enum_values, node)) if node else set()
+    return set()
+
+
+def property_names(node):
+    """Every property name anywhere in a contract node: the fields its tools take and return."""
+    if isinstance(node, dict):
+        out = set(node.get("properties", {}) or {})
+        for v in node.values():
+            out |= property_names(v)
+        return out
+    if isinstance(node, list):
+        return set().union(*map(property_names, node)) if node else set()
     return set()
 
 
@@ -140,6 +162,21 @@ def main():
                     problems.append(f"{rel(p)}:{n}: names `{m.group(1)}`, a conductor tool this repository dropped")
                 for m in RETIRED.finditer(line):
                     problems.append(f"{rel(p)}:{n}: names `{m.group(0)}`, retired by ADR-0004/ADR-0005")
+
+    # 7. backticked fields are contract properties
+    props = property_names(json.load(open(os.path.join(ROOT, "contract", "expected.json"))))
+    span = re.compile(r"`([^`\n]+)`")
+    key = re.compile(r"\b([a-z]+[A-Z][A-Za-z0-9]*)\s*:")
+    lone = re.compile(r"[a-z]+[A-Z][A-Za-z0-9]*")
+    for d in docs:
+        for n, line in enumerate(open(d).read().splitlines(), 1):
+            for m in span.finditer(line):
+                code = m.group(1)
+                fields = set(key.findall(code))
+                if lone.fullmatch(code):
+                    fields.add(code)
+                for f in sorted(fields - props - NOT_FIELDS):
+                    problems.append(f"{rel(d)}:{n}: names the field `{f}`, which no tool of contract/expected.json takes or returns")
 
     # 6. the hook surface
     hooks_json = os.path.join(PLUGIN, "hooks", "hooks.json")

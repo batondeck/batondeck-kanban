@@ -41,9 +41,12 @@ Supervision, each turn the doorbell starts:
      back to TODO assigned to its completer, who is rung. Never approve a
      task you completed yourself.
    - DONE → check what the auto-unblock opened; assign or re-prioritise the new frontier.
-   - BLOCKED → read the reason; resolve it (answer as a follow-up, `remove_dependency`, reassign, or do
+   - BLOCKED → read the reason: its `blockedBy`, the blocker's note in `get_task_context`, or the
+     `task.blocked` event's `reason` in the board feed (`batondeck://{projectId}/board/{boardId}/feed`);
+     no task field carries it. Resolve it (answer as a follow-up, `remove_dependency`, reassign, or do
      it yourself).
-   - poisoned (BLOCKED, `blockedReason: "poison"`) → fix the brief, then `move_task { toStatus: "TODO" }`.
+   - poisoned (BLOCKED with the label `poisoned`, the inbox's `poisoned` bucket) → fix the brief, then
+     `move_task { toStatus: "TODO" }`.
    - Work nobody should do → `delete_task { projectId, taskId, version }`.
 3. **Quiet board** → a health pass: `reap_stale_leases { projectId, boardId }`, `rank_tasks` for the
    frontier, and if TODO work sits unclaimed with no live workers, claim a leaf and work it yourself.
