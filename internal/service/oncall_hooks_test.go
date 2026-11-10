@@ -91,7 +91,7 @@ func TestHookFilesAnIncidentFromASignedDelivery(t *testing.T) {
 	if out := f.hook(t, iid, tampered); out.Refusal != HookUnauthorized {
 		t.Fatalf("one byte changed: %+v, want unauthorized", out)
 	}
-	if want := "ingest: integration " + iid + " refused a delivery's signature: signature_mismatch"; !strings.Contains(f.logs.String(), want) {
+	if want := "ingest: integration " + iid + ` refused a delivery's signature: "signature_mismatch"`; !strings.Contains(f.logs.String(), want) {
 		t.Fatalf("no refusal line %q in %q", want, f.logs.String())
 	}
 	if f.taskCount(t) != before {
@@ -1293,5 +1293,251 @@ func TestHookChargesBeforeVerifying(t *testing.T) {
 				t.Fatalf("the good set was fetched %d times, want 1", count(good))
 			}
 		})
+	}
+}
+
+// The text an unverified or verified sender controls is bounded where it lands: a rejected
+// delivery's error is at most 500 characters whatever the refusal (a JWT header's alg or kid of
+// 100 KB, a generic body's unknown key), and none of it can start a line of its own in the server
+// log. Control: a short refusal is recorded and logged whole.
+func TestHookBoundsSenderTextInRejections(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k", "n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes())}}})
+	f := newFixture(t, Options{Sealer: oncallKeyring(t), JWKSFetch: func(context.Context, string) ([]byte, error) { return set, nil }})
+	root := f.alice
+	root.WorkspaceAdmin = true
+	const forged = "2026/11/10 03:00:00 auth: admin@example.com signed in from 203.0.113.9"
+	cfg := IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs"}
+	jwtInt := f.integration(t, root, CreateIntegrationReq{Name: "j", Source: "gcp", Auth: IntegrationAuthInput{Mode: "jwt", JWT: cfg}})
+	gcpBody := func(i int) []byte {
+		return fmt.Appendf(nil, `{"version":"1.2","incident":{"incident_id":"i-%d","state":"open","policy_name":"p","started_at":1729764000}}`, i)
+	}
+	for i, header := range []map[string]string{
+		{"alg": strings.Repeat("Z", 100000) + "\n" + forged},
+		{"alg": "RS256", "kid": strings.Repeat("K", 100000) + "\n" + forged},
+	} {
+		h, _ := json.Marshal(header)
+		hd := http.Header{}
+		hd.Set(HeaderAuthorize, "Bearer "+b64url(h)+".e30.AAAA")
+		if out := f.hook(t, jwtInt.Integration.ID, HookRequest{Header: hd.Get, Body: gcpBody(i)}); out.Refusal != HookUnauthorized {
+			t.Fatalf("junk bearer %d: %+v", i, out)
+		}
+	}
+	hm := f.integration(t, root, CreateIntegrationReq{Name: "h"})
+	unknown := fmt.Appendf(nil, `{"fingerprint":"f","status":"firing","severity":"s","title":"t",%q:"x"}`, strings.Repeat("u", 2000)+"\n"+forged)
+	if out := f.hook(t, hm.Integration.ID, signedHook(hm.Secret, f.clock.now(), unknown)); out.Refusal != HookBadRequest {
+		t.Fatalf("an unknown key: %+v", out)
+	}
+	// A short unknown key is kept whole by the cut, newline and all: only the refusal line's quoting
+	// keeps it off a line of its own.
+	shortUnknown := fmt.Appendf(nil, `{"fingerprint":"f","status":"firing","severity":"s","title":"t",%q:"x"}`, "u\n"+forged)
+	if out := f.hook(t, hm.Integration.ID, signedHook(hm.Secret, f.clock.now(), shortUnknown)); out.Refusal != HookBadRequest {
+		t.Fatalf("a short unknown key: %+v", out)
+	}
+	for _, iid := range []string{jwtInt.Integration.ID, hm.Integration.ID} {
+		for _, d := range f.deliveries(t, iid) {
+			if d.Error == nil {
+				t.Fatalf("a rejected delivery with no error: %+v", d)
+			}
+			if n := len([]rune(*d.Error)); n > 500 {
+				t.Errorf("a rejected delivery's error is %d characters (%.60q…), want at most 500", n, *d.Error)
+			}
+		}
+	}
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.HasPrefix(line, "2026/11/10") {
+			t.Errorf("the sender's text is a line of its own in the server log: %.120q", line)
+		}
+	}
+	// Control: a short refusal is recorded whole and named in the log.
+	tampered := signedHook(hm.Secret, f.clock.now(), genericBody("ok", "firing", "t"))
+	tampered.Header = signedHook("whsec_not-the-secret", f.clock.now(), genericBody("ok", "firing", "t")).Header
+	if out := f.hook(t, hm.Integration.ID, tampered); out.Refusal != HookUnauthorized {
+		t.Fatalf("a bad signature: %+v", out)
+	}
+	if !strings.Contains(f.logs.String(), "ingest: integration "+hm.Integration.ID+` refused a delivery's signature: "signature_mismatch"`) {
+		t.Errorf("no quoted signature_mismatch line in the log")
+	}
+}
+
+// A source's own delivery id (and fingerprint) is the sender's text: a part longer than 200 bytes
+// is replaced by its hash, so the delivery id stays short enough for replay_delivery and
+// read_delivery_raw (1024), and the same long id still dedups. A short one is kept as sent, so a
+// newline in it reaches every ingest log line that names a delivery (accepted, over the rate budget,
+// refused): none of them lets it start a line of its own. Control: a short id is kept as sent.
+func TestHookBoundsTheSourcesDeliveryID(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	created := f.integration(t, root, CreateIntegrationReq{Lifecycle: "per_event"})
+	iid := created.Integration.ID
+	const forged = "2026/11/10 00:00:00 auth: admin@example.com signed in from 10.0.0.1"
+	long := strings.Repeat("d", 200000) + "\n" + forged
+	body := genericBody(strings.Repeat("f", 300)+"\n"+forged, "firing", "t", "deliveryId", long)
+	first := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	if first.Refusal != "" || len(first.Results) != 1 {
+		t.Fatalf("a long delivery id: %+v", first)
+	}
+	id := first.Results[0].DeliveryID
+	if len(id) > 1024 || strings.ContainsAny(id, "\n\r") {
+		t.Fatalf("the delivery id is %d bytes (%.80q…), want at most 1024 and no line break", len(id), id)
+	}
+	again := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	if again.Refusal != "" || again.Results[0].DeliveryID != id || !again.Results[0].Replayed {
+		t.Fatalf("the same long id again: %+v, want a replay of %q", again, id)
+	}
+	if _, err := f.c.Oncall().ReplayDelivery(f.ctx, root, ReplayDeliveryReq{ProjectID: f.project.ID, IntegrationID: iid, DeliveryID: id}); err != nil {
+		t.Fatalf("replay_delivery of the long-id delivery: %v", err)
+	}
+	// A short id is kept as sent, newline and all, so each ingest line that names a delivery quotes
+	// it. The accepted line:
+	shortForged := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp\n"+forged, "firing", "t", "deliveryId", "d1\n"+forged)))
+	if shortForged.Refusal != "" || len(shortForged.Results) != 1 || shortForged.Results[0].DeliveryID != "d1\n"+forged+"#fp\n"+forged {
+		t.Fatalf("a short delivery id with a newline: %+v", shortForged)
+	}
+	// The rate-limit line ingest writes itself: a verified Alertmanager group of five alerts on a
+	// budget of four a minute (a burst of one) overruns it on its second alert, whose id is the group
+	// key and its fingerprint.
+	am := f.integration(t, root, CreateIntegrationReq{Name: "am", Source: "alertmanager", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+		Limits: IntegrationLimitsIn{RatePerMin: 4}})
+	var alerts []string
+	for i := range 5 {
+		alerts = append(alerts, fmt.Sprintf(`{"status":"firing","labels":{"alertname":"A%d","severity":"critical"},"annotations":{},"startsAt":"2026-10-24T08:00:00.000Z","fingerprint":"fp%d"}`, i, i))
+	}
+	group := fmt.Appendf(nil, `{"version":"4","groupKey":%q,"status":"firing","receiver":"b","groupLabels":{},"commonLabels":{},"commonAnnotations":{},"externalURL":"http://am","alerts":[%s]}`,
+		"g\n"+forged, strings.Join(alerts, ","))
+	amKey := http.Header{}
+	amKey.Set(HeaderAPIKey, "key-0123456789")
+	if out := f.hook(t, am.Integration.ID, HookRequest{Header: amKey.Get, Body: group}); out.Refusal != HookRateLimited || len(out.Results) != 1 {
+		t.Fatalf("a group of five on a burst of one: %+v, want one result and rate_limited", out)
+	}
+	// The per-event refusal line: the integration's column left TODO after it was set, so filing
+	// is refused.
+	board, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "B2", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := board.Columns[0].ID
+	moved := f.integration(t, root, CreateIntegrationReq{Name: "moved", BoardID: board.ID, ColumnID: todo})
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, root, UpdateColumnReq{ProjectID: f.project.ID, BoardID: board.ID, ColumnID: todo, Status: domain.InProgress}); err != nil {
+		t.Fatalf("update_column: %v", err)
+	}
+	if out := f.hook(t, moved.Integration.ID, signedHook(moved.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "d2\n"+forged))); out.Refusal != HookBadRequest {
+		t.Fatalf("a delivery to a column that left TODO: %+v, want bad_request", out)
+	}
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.HasPrefix(line, "2026/11/10") {
+			t.Errorf("the sender's text is a line of its own in the server log: %.120q", line)
+		}
+		if len(line) > 4096 {
+			t.Errorf("a %d-byte log line", len(line))
+		}
+	}
+	// Control: a short source id and fingerprint are kept as sent.
+	short := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "src-1")))
+	if short.Refusal != "" || short.Results[0].DeliveryID != "src-1#fp" {
+		t.Fatalf("a short delivery id: %+v", short)
+	}
+}
+
+// The signature form follows the source, not who issued the secret: a generic (or webhook) hmac
+// integration given its own externalSecret still verifies BatonDeck's timestamped v0 form, and the
+// untimestamped raw-body v1 form (PagerDuty's alone) is refused; a rotation that pastes an
+// externalSecret keeps the previous secret verifying in v0 form for the dual-accept window.
+// Control: PagerDuty's raw-body v1 is TestHookVerifiesEachMode's.
+func TestHookSignatureFormFollowsTheSource(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	rawV1 := func(secret string, body []byte) HookRequest {
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write(body)
+		h := http.Header{}
+		h.Set(HeaderSignature, "v1="+hex.EncodeToString(m.Sum(nil)))
+		return HookRequest{Header: h.Get, Body: body}
+	}
+	const own = "own-secret-0123456789"
+	for _, source := range []IntegrationSource{"generic", "webhook"} {
+		req := CreateIntegrationReq{Name: string(source), Source: source, Auth: IntegrationAuthInput{Mode: "hmac", ExternalSecret: own}}
+		if source == "webhook" {
+			req.Mapping.Extract = MappingExtract{Fingerprint: []string{"fingerprint"}, Title: []string{"title"}}
+		}
+		in := f.integration(t, root, req)
+		if !in.Integration.Auth.ExternallyIssued || in.Secret != "" {
+			t.Fatalf("%s with externalSecret: %+v", source, in)
+		}
+		body := genericBody("fp-"+string(source), "firing", "t")
+		if source == "webhook" {
+			body = []byte(`{"title":"t","fingerprint":"fp-webhook"}`)
+		}
+		if out := f.hook(t, in.Integration.ID, rawV1(own, body)); out.Refusal != HookUnauthorized {
+			t.Errorf("%s: an untimestamped raw-body v1 delivery: %+v, want unauthorized", source, out)
+		}
+		if out := f.hook(t, in.Integration.ID, signedHook(own, f.clock.now(), body)); out.Refusal != "" {
+			t.Errorf("%s: a v0 delivery signed with its own secret: %+v, want accepted", source, out)
+		}
+	}
+	minted := f.integration(t, root, CreateIntegrationReq{Name: "minted"})
+	rot, err := f.c.Oncall().RotateIntegrationSecret(f.ctx, root, RotateIntegrationSecretReq{ProjectID: f.project.ID, IntegrationID: minted.Integration.ID, Version: 1, ExternalSecret: own})
+	if err != nil || rot.Integration.Auth.DualAcceptUntil == nil {
+		t.Fatalf("rotate with an externalSecret: %+v, %v", rot, err)
+	}
+	if out := f.hook(t, minted.Integration.ID, signedHook(minted.Secret, f.clock.now(), genericBody("prev", "firing", "t"))); out.Refusal != "" {
+		t.Errorf("the previous secret in v0 form inside the window: %+v, want accepted", out)
+	}
+	if out := f.hook(t, minted.Integration.ID, signedHook(own, f.clock.now(), genericBody("next", "firing", "t"))); out.Refusal != "" {
+		t.Errorf("the pasted secret in v0 form: %+v, want accepted", out)
+	}
+}
+
+// A jwt integration's subject and email pins are kept on save and enforced on delivery: on Google's
+// issuer a token any other account minted for the same audience is refused, the pinned one passes;
+// a pin over 512 characters is refused on save. Control: TestHookVerifiesEachMode's unpinned jwt.
+func TestHookJWTPins(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k", "n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes())}}})
+	f := newFixture(t, Options{Sealer: oncallKeyring(t), JWKSFetch: func(context.Context, string) ([]byte, error) { return set, nil }})
+	root := f.alice
+	root.WorkspaceAdmin = true
+	const ours = "monitoring@operators-project.iam.gserviceaccount.com"
+	cfg := IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs", Email: ours, Subject: "1170"}
+	in := f.integration(t, root, CreateIntegrationReq{Name: "j", Source: "gcp", Auth: IntegrationAuthInput{Mode: "jwt", JWT: cfg}})
+	tok := func(sub, email string) func(string) string {
+		h, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k"})
+		c, _ := json.Marshal(map[string]any{"iss": cfg.Issuer, "aud": cfg.Audience, "exp": f.clock.now().Add(time.Hour).Unix(), "sub": sub, "email": email, "email_verified": true})
+		signing := b64url(h) + "." + b64url(c)
+		d := sha256.Sum256([]byte(signing))
+		sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+		hd := http.Header{}
+		hd.Set(HeaderAuthorize, "Bearer "+signing+"."+b64url(sig))
+		return hd.Get
+	}
+	body := func(i int) []byte {
+		return fmt.Appendf(nil, `{"version":"1.2","incident":{"incident_id":"i-%d","state":"open","policy_name":"p","started_at":1729764000}}`, i)
+	}
+	for i, c := range []struct {
+		sub, email, want string
+	}{
+		{"9999", "anything@attackers-own-project.iam.gserviceaccount.com", "verify_failed: subject"},
+		{"1170", "anything@attackers-own-project.iam.gserviceaccount.com", "verify_failed: email"},
+	} {
+		if out := f.hook(t, in.Integration.ID, HookRequest{Header: tok(c.sub, c.email), Body: body(i)}); out.Refusal != HookUnauthorized {
+			t.Errorf("a token for sub %s email %s: %+v, want unauthorized", c.sub, c.email, out)
+		}
+		if !strings.Contains(f.logs.String(), fmt.Sprintf("refused a delivery's signature: %q", c.want)) {
+			t.Errorf("no %q refusal in the log", c.want)
+		}
+	}
+	if out := f.hook(t, in.Integration.ID, HookRequest{Header: tok("1170", ours), Body: body(9)}); out.Refusal != "" {
+		t.Errorf("the pinned token: %+v, want accepted", out)
+	}
+	long := cfg
+	long.Email = strings.Repeat("e", 513)
+	_, err = f.c.Oncall().CreateIntegration(f.ctx, root, CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "long", Source: "gcp",
+		Auth: IntegrationAuthInput{Mode: "jwt", JWT: long}, Routing: IntegrationRouting{Mode: "broadcast"}})
+	if e := wantCode(t, err, domain.CodeValidation); e.Details["field"] != "auth.jwt.email" {
+		t.Errorf("a 513-character email pin: %+v", e)
 	}
 }

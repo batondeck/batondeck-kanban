@@ -143,8 +143,27 @@ func TestSafeFetchRefusesForbiddenAddresses(t *testing.T) {
 			t.Errorf("a host resolving to %s: %v", a, err)
 		}
 	}
-	if ForbiddenAddress(netip.MustParseAddr("142.250.70.78")) {
-		t.Error("a public address is forbidden (positive control)")
+	// The reserved ranges beyond private and link-local: carrier-grade NAT (where a tailnet's and
+	// some clouds' internal services live), IETF protocol assignments, benchmarking, the reserved
+	// class E and broadcast, the v6 prefixes that embed a v4 address (NAT64, 6to4, Teredo, the
+	// deprecated v4-compatible ::/96), and the deprecated site-local fec0::/10.
+	for _, a := range []string{"100.64.0.1", "100.100.100.200", "100.127.255.254", "192.0.0.170", "198.18.0.1", "198.19.255.255",
+		"240.0.0.1", "255.255.255.255", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1", "2001:0:4136:e378::1",
+		"::a9fe:a9fe", "::7f00:1", "fec0::1", "feff:ffff::1"} {
+		if !ForbiddenAddress(netip.MustParseAddr(a)) {
+			t.Errorf("reserved %s is not forbidden", a)
+		}
+	}
+	// Just outside ::/96 and fec0::/10, so the prefixes are no wider than they say.
+	for _, a := range []string{"::1:0:0:1", "fbff::1"} {
+		if ForbiddenAddress(netip.MustParseAddr(a)) {
+			t.Errorf("%s, outside ::/96 and fec0::/10, is forbidden", a)
+		}
+	}
+	for _, a := range []string{"142.250.70.78", "100.128.0.1", "100.63.255.255", "198.20.0.1", "2607:f8b0:4004:c07::64", "2001:4860:4860::8888"} {
+		if ForbiddenAddress(netip.MustParseAddr(a)) {
+			t.Errorf("public %s is forbidden (positive control)", a)
+		}
 	}
 	for _, u := range []string{"http://keys.example.com/jwks", "https://localhost/jwks", "https://metadata.google.internal/x"} {
 		if _, err := SafeFetch(context.Background(), u); err == nil {
@@ -221,5 +240,104 @@ func TestJWTNegativeCache(t *testing.T) {
 				t.Fatalf("an unknown kid against the fresh good set: %q, %d fetches", reason, fetches)
 			}
 		})
+	}
+}
+
+// A sender's JWT header is not trusted text: the alg and kid it names reach the refusal reason
+// (the delivery log's error, and the server log) cut and quoted, so a 100 KB alg is not stored at
+// length and a newline in one cannot start a line of its own.
+func TestJWTRefusalBoundsTheSendersHeader(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes())}}})
+	v := &Verifier{Fetch: func(context.Context, string) ([]byte, error) { return set, nil }, Now: func() time.Time { return now }}
+	cfg := JWT{Issuer: "https://issuer.example.com", Audience: "batondeck", JWKSURL: "https://issuer.example.com/jwks"}
+	forged := "\n2026/11/10 03:00:00 auth: admin@example.com signed in"
+	good := map[string]any{"iss": cfg.Issuer, "aud": cfg.Audience, "exp": now.Add(time.Minute).Unix()}
+	for name, header := range map[string]map[string]string{
+		"a long alg": {"alg": strings.Repeat("Z", 100000) + forged, "kid": "k1"},
+		"a long kid": {"alg": "RS256", "kid": strings.Repeat("K", 100000) + forged},
+	} {
+		h, _ := json.Marshal(header)
+		for _, tok := range []string{b64(h) + ".e30.AAAA", sign(t, key, header, good)} {
+			reason, ok := v.Verify(context.Background(), "Bearer "+tok, cfg, "I-1")
+			if ok || !strings.HasPrefix(reason, ReasonVerifyFailed) {
+				t.Fatalf("%s: %q, %v; want a verify_failed refusal", name, reason, ok)
+			}
+			if len(reason) > 128 || strings.ContainsAny(reason, "\n\r") {
+				t.Errorf("%s: a %d-byte reason %.80q…; want at most 128 bytes and no line break", name, len(reason), reason)
+			}
+		}
+	}
+	// Control: a short alg is still named, so the operator can read which one was sent.
+	hs, _ := json.Marshal(map[string]string{"alg": "HS256", "kid": "k1"})
+	if reason, _ := v.Verify(context.Background(), "Bearer "+b64(hs)+".e30.AAAA", cfg, "I-1"); !strings.Contains(reason, "HS256") {
+		t.Errorf("alg HS256: %q does not name it", reason)
+	}
+}
+
+// On a shared issuer (Google, GitHub Actions) anyone with an account there can mint a correctly
+// signed token for a chosen audience, so issuer and audience alone do not identify the sender. A
+// jwt block may pin the subject (sub, exactly) and the email (exactly, with email_verified true);
+// a token that misses a pin is refused naming it. Control: with no pins today's tokens pass.
+func TestJWTVerifyPins(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes())}}})
+	v := &Verifier{Fetch: func(context.Context, string) ([]byte, error) { return set, nil }, Now: func() time.Time { return now }}
+	base := JWT{Issuer: "https://accounts.google.com", Audience: "https://kanban.example.com/hooks/I-1", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs"}
+	rs := map[string]string{"alg": "RS256", "kid": "k1"}
+	claims := func(kv ...any) map[string]any {
+		c := map[string]any{"iss": base.Issuer, "aud": base.Audience, "exp": now.Add(time.Minute).Unix()}
+		for i := 0; i+1 < len(kv); i += 2 {
+			c[kv[i].(string)] = kv[i+1]
+		}
+		return c
+	}
+	ours := claims("sub", "1170", "email", "monitoring@operators-project.iam.gserviceaccount.com", "email_verified", true)
+	theirs := claims("sub", "9999", "email", "anything@attackers-own-project.iam.gserviceaccount.com", "email_verified", true)
+	bare := claims()
+	verify := func(cfg JWT, c map[string]any) (string, bool) {
+		return v.Verify(context.Background(), "Bearer "+sign(t, key, rs, c), cfg, "I-1")
+	}
+	for name, c := range map[string]map[string]any{"ours": ours, "theirs": theirs, "bare": bare} {
+		if reason, ok := verify(base, c); !ok {
+			t.Errorf("no pins, %s token: %q (control)", name, reason)
+		}
+	}
+	bySub := base
+	bySub.Subject = "1170"
+	byEmail := base
+	byEmail.Email = "monitoring@operators-project.iam.gserviceaccount.com"
+	for _, c := range []struct {
+		name   string
+		cfg    JWT
+		claims map[string]any
+		want   string
+	}{
+		{"subject pin, another sub", bySub, theirs, "verify_failed: subject"},
+		{"subject pin, no sub", bySub, bare, "verify_failed: subject"},
+		{"email pin, another email", byEmail, theirs, "verify_failed: email"},
+		{"email pin, no email", byEmail, bare, "verify_failed: email"},
+		{"email pin, unverified", byEmail, claims("email", byEmail.Email, "email_verified", false), "verify_failed: email"},
+		{"email pin, email_verified absent", byEmail, claims("email", byEmail.Email), "verify_failed: email"},
+	} {
+		if reason, ok := verify(c.cfg, c.claims); ok || reason != c.want {
+			t.Errorf("%s: %q, %v; want %q", c.name, reason, ok, c.want)
+		}
+	}
+	both := bySub
+	both.Email = byEmail.Email
+	for name, cfg := range map[string]JWT{"subject": bySub, "email": byEmail, "both": both} {
+		if reason, ok := verify(cfg, ours); !ok {
+			t.Errorf("%s pin, the pinned token: %q (control)", name, reason)
+		}
+	}
+	if reason, ok := verify(byEmail, claims("email", byEmail.Email, "email_verified", "true")); !ok {
+		t.Errorf("email pin, email_verified \"true\" (a string, as some issuers send it): %q", reason)
 	}
 }

@@ -23,6 +23,7 @@ import type { Delivery, Integration, OncallSource } from '../../types.js';
 import { Cluster, Empty, Note, Panel, Pill, Stack } from '../../ui.js';
 import { ConfirmButton, timeAgo } from '../../components.js';
 import { sourceLogo } from './logos.js';
+import { EndpointHelp, endpointUrl } from './EndpointHelp.js';
 import {
   IntegrationForm,
   blankForm,
@@ -609,7 +610,7 @@ export function OncallSetup({
                 </Note>
                 <code style={{ wordBreak: 'break-all' }}>{shownSecret.secret}</code>
                 <div>
-                  Endpoint path: <code>{shownSecret.path}</code>
+                  Endpoint URL: <code style={{ wordBreak: 'break-all' }}>{endpointUrl(shownSecret.path)}</code>
                 </div>
                 <button className="btn" onClick={() => setShownSecret(null)}>
                   I have stored it
@@ -780,14 +781,7 @@ export function OncallSetup({
             <>
               <Panel title={`${active.name} — endpoint`} pad>
                 <Stack gap={8}>
-                  <div>
-                    Path: <code>{active.endpointPath}</code>
-                  </div>
-                  <Note>
-                    Paste this path onto the ingest function&apos;s host in the source&apos;s webhook
-                    settings. Auth mode: <b>{active.auth.mode}</b>
-                    {active.auth.externallyIssued ? ' (the source issued the secret)' : ''}.
-                  </Note>
+                  <EndpointHelp integration={active} />
                   <Cluster gap={8} wrap>
                     <button
                       className="btn secondary"
@@ -837,10 +831,21 @@ export function OncallSetup({
                   </Cluster>
                   {rotating && active.auth.externallyIssued && (
                     <Stack gap={4}>
+                      {/* Only PagerDuty issues its own secret; any other source given one at setup
+                          signs the v0 form with whatever secret it holds, so the operator supplied it. */}
                       <Note>
-                        This source issued its own signing secret. Rotate it in the source&apos;s own
-                        console first, then paste the NEW value here — BatonDeck cannot mint one it
-                        would ever send.
+                        {active.source === 'pagerduty' ? (
+                          <>
+                            PagerDuty issued this integration&apos;s signing secret. Rotate it in
+                            PagerDuty first, then paste the NEW value here — BatonDeck cannot mint one
+                            it would ever send.
+                          </>
+                        ) : (
+                          <>
+                            You supplied this integration&apos;s signing secret. Paste the new one here,
+                            then give it to the sender; the previous one keeps verifying for 24 hours.
+                          </>
+                        )}
                       </Note>
                       <Cluster gap={8} wrap>
                         <input

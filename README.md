@@ -221,6 +221,14 @@ checks the config and names the engine the connection itself reports (`the conne
 SQLite 3.x`, or the Postgres server version), the store's location and the blob dir, and exits non-zero
 on a failure.
 
+### On-call webhooks
+
+A workspace admin can turn alerts from Grafana, Alertmanager, Datadog, Dynatrace, Google Cloud
+Monitoring, PagerDuty or any tool that can POST JSON into incident tickets: **On-call**, then
+**Setup**, in the web UI, or the `create_integration` tool. Each integration has its own URL,
+`<server>/hooks/<id>`. [docs/oncall.md](docs/oncall.md) says how a sender signs or authenticates a
+delivery, the payload each source sends, and the answers it gets back.
+
 ## Backup and restore
 
 A board's state is three things: the database, the attachment blobs, and the master key. The key
