@@ -145,11 +145,19 @@ func TestSafeFetchRefusesForbiddenAddresses(t *testing.T) {
 	}
 	// The reserved ranges beyond private and link-local: carrier-grade NAT (where a tailnet's and
 	// some clouds' internal services live), IETF protocol assignments, benchmarking, the reserved
-	// class E and broadcast, and the v6 prefixes that embed a v4 address (NAT64, 6to4, Teredo).
+	// class E and broadcast, the v6 prefixes that embed a v4 address (NAT64, 6to4, Teredo, the
+	// deprecated v4-compatible ::/96), and the deprecated site-local fec0::/10.
 	for _, a := range []string{"100.64.0.1", "100.100.100.200", "100.127.255.254", "192.0.0.170", "198.18.0.1", "198.19.255.255",
-		"240.0.0.1", "255.255.255.255", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1", "2001:0:4136:e378::1"} {
+		"240.0.0.1", "255.255.255.255", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "2002:a9fe:a9fe::1", "2001:0:4136:e378::1",
+		"::a9fe:a9fe", "::7f00:1", "fec0::1", "feff:ffff::1"} {
 		if !ForbiddenAddress(netip.MustParseAddr(a)) {
 			t.Errorf("reserved %s is not forbidden", a)
+		}
+	}
+	// Just outside ::/96 and fec0::/10, so the prefixes are no wider than they say.
+	for _, a := range []string{"::1:0:0:1", "fbff::1"} {
+		if ForbiddenAddress(netip.MustParseAddr(a)) {
+			t.Errorf("%s, outside ::/96 and fec0::/10, is forbidden", a)
 		}
 	}
 	for _, a := range []string{"142.250.70.78", "100.128.0.1", "100.63.255.255", "198.20.0.1", "2607:f8b0:4004:c07::64", "2001:4860:4860::8888"} {

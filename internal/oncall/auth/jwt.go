@@ -315,8 +315,9 @@ func parseJWKS(body []byte) (map[string]*rsa.PublicKey, error) {
 
 // reservedPrefixes are the ranges ForbiddenAddress refuses beyond the net/netip classes: 0.0.0.0/8,
 // carrier-grade NAT (a tailnet's and some clouds' internal services), IETF protocol assignments,
-// benchmarking, class E and broadcast, and the v6 prefixes that embed a v4 address and so can reach
-// any of the above (NAT64, local-use NAT64, 6to4, Teredo).
+// benchmarking, class E and broadcast, the v6 prefixes that embed a v4 address and so can reach
+// any of the above (NAT64, local-use NAT64, 6to4, Teredo, the deprecated v4-compatible ::/96), and
+// the deprecated site-local fec0::/10.
 var reservedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
@@ -327,6 +328,8 @@ var reservedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("fec0::/10"),
 }
 
 // ForbiddenAddress reports whether the fetch must never reach a: private, loopback, link-local,
