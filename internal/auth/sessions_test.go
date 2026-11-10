@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // login POSTs the form to the login handler (wrapped in CSRF, as it is mounted) and returns the
@@ -204,5 +207,62 @@ func TestLoginNextRedirectsOnlyToLocalPaths(t *testing.T) {
 		if r := post("pw-alice-1", next); r.StatusCode != http.StatusBadRequest || cookie(r, SessionCookie) != nil {
 			t.Fatalf("next %q: %d, want 400 and no session", next, r.StatusCode)
 		}
+	}
+}
+
+// oauthAccess stores a live OAuth access token of identity with scope, issued for the service's
+// resource, and returns its value.
+func (f *fixture) oauthAccess(t *testing.T, identity, scope string) string {
+	t.Helper()
+	ctx := t.Context()
+	f.svc.OAuth, f.svc.OAuthResource = f.st, "https://bd.test/mcp"
+	now := f.clk.now().UnixMilli()
+	client := "c-" + identity + "-" + scope
+	if err := f.st.CreateOAuthClient(ctx, store.OAuthClient{ClientID: client, ClientName: "connector", RedirectURIs: []string{"http://127.0.0.1/cb"}, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	fam := "F-" + client
+	if err := f.st.CreateOAuthFamily(ctx, store.OAuthFamily{ID: fam, ClientID: client, IdentityID: identity, Scope: scope, Resource: f.svc.OAuthResource, CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	v, h, err := MintOAuthValue(OAuthAccessPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.CreateOAuthToken(ctx, store.OAuthToken{TokenHash: h, Kind: store.OAuthAccess, FamilyID: fam, ClientID: client, IdentityID: identity,
+		Scope: scope, Resource: f.svc.OAuthResource, CreatedAt: now, ExpiresAt: now + time.Hour.Milliseconds()}); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// An OAuth access token is issued for the /mcp resource (RFC 8707) and capped at the role granted
+// at consent: the BFF (Authenticate, and Reauthenticate for /api/stream) is another resource and
+// refuses it as UNAUTHENTICATED, so a viewer-scoped connector cannot reach the REST routes that know
+// no cap (the CLI-token mint above all). ResolveCaller, which /mcp uses, still resolves it; an API
+// token still opens the BFF.
+func TestAnOAuthAccessTokenDoesNotOpenTheBFF(t *testing.T) {
+	f := newFixture(t)
+	alice := f.addUser(t, "alice", "pw")
+	access := f.oauthAccess(t, alice.ID, "viewer")
+	if c, err := f.svc.ResolveCaller(t.Context(), "Bearer "+access); err != nil || c.Role != "viewer" {
+		t.Fatalf("ResolveCaller (the /mcp path): %+v %v", c, err)
+	}
+	if w := f.post(req{bearer: access}); w.Code != http.StatusUnauthorized || w.Header().Get("X-Identity") != "" {
+		t.Fatalf("an OAuth access token at the BFF: %d %q, want 401", w.Code, w.Header().Get("X-Identity"))
+	}
+	r := httptest.NewRequest(http.MethodGet, "http://board.test/api/stream", nil)
+	r.Header.Set("Authorization", "Bearer "+access)
+	if _, err := f.svc.Reauthenticate(r); err == nil {
+		t.Fatal("Reauthenticate accepted an OAuth access token")
+	} else {
+		wantCode(t, err, domain.CodeUnauthenticated)
+	}
+	plain, _, err := f.svc.Tokens.Create(t.Context(), alice.ID, "alice", "ci", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.post(req{bearer: plain}); w.Code != http.StatusOK || w.Header().Get("X-Identity") != alice.ID {
+		t.Fatalf("an API token at the BFF: %d", w.Code)
 	}
 }

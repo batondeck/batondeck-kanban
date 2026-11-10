@@ -163,3 +163,41 @@ func TestOAuthTokenOnMCP(t *testing.T) {
 		t.Fatalf("/mcp at another resource with this token: %d, want 401", code)
 	}
 }
+
+// An OAuth access token is for /mcp alone (RFC 8707) and capped at the consented role: on the REST
+// BFF it is 401, so a connector cannot mint itself an uncapped API token at POST /api/me/cli-tokens,
+// list or revoke the user's tokens, or read /api/session. /mcp still takes it.
+func TestOAuthTokenDoesNotOpenTheBFF(t *testing.T) {
+	st, userID := oauthStore(t)
+	here := oauthServer(t, st)
+	_, access, _ := oauthGrant(t, here, "alice", "pw-alice")
+	call := func(method, path, body string) int {
+		t.Helper()
+		req, _ := http.NewRequest(method, here+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+access)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/me/cli-tokens", `{"label":"escalated","ttlSeconds":31536000}`},
+		{http.MethodGet, "/api/me/cli-tokens", ""},
+		{http.MethodPost, "/api/me/cli-tokens/bd_0000000000000000/revoke", ""},
+		{http.MethodGet, "/api/session", ""},
+		{http.MethodGet, "/api/me/settings", ""},
+	} {
+		if code := call(c.method, c.path, c.body); code != http.StatusUnauthorized {
+			t.Fatalf("%s %s with an OAuth access token: %d, want 401", c.method, c.path, code)
+		}
+	}
+	if infos, err := (&auth.TokenService{Store: st}).List(context.Background(), userID); err != nil || len(infos) != 0 {
+		t.Fatalf("API tokens after the refused mint: %v %v, want none", infos, err)
+	}
+	if code := statusOf(t, http.MethodPost, here+"/mcp", access); code != http.StatusOK {
+		t.Fatalf("/mcp with the token: %d", code)
+	}
+}

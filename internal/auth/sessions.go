@@ -223,8 +223,8 @@ func SessionFrom(ctx context.Context) (store.Session, bool) {
 	return sess, ok
 }
 
-// Authenticate requires a principal: an `Authorization: Bearer` token, else the session cookie.
-// Neither, or one that does not resolve, is 401. The bearer wins when both are present, and such a
+// Authenticate requires a principal: an `Authorization: Bearer` API token, else the session cookie.
+// Neither, or one that does not resolve, is 401; so is an OAuth access token (resolveRequest). The bearer wins when both are present, and such a
 // request is judged by CSRF as a non-browser one.
 func (s *Service) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -255,11 +255,17 @@ func (s *Service) Reauthenticate(r *http.Request) (domain.Caller, error) {
 }
 
 // resolveRequest is r's principal: the bearer when there is one, else the session cookie (with its
-// session); neither is UNAUTHENTICATED.
+// session); neither is UNAUTHENTICATED. An OAuth access token is UNAUTHENTICATED here too: it is
+// issued for the /mcp resource alone (RFC 8707, OAuthResource) and capped at the role granted at
+// consent, and the routes behind Authenticate are another resource, some of which know no cap (the
+// CLI-token mint would turn a viewer grant into an uncapped API token).
 func (s *Service) resolveRequest(r *http.Request) (domain.Caller, *store.Session, error) {
 	ctx := r.Context()
 	if h := r.Header.Get("Authorization"); h != "" {
 		c, err := s.ResolveCaller(ctx, h)
+		if err == nil && c.Via == domain.ViaOAuth {
+			return domain.Caller{}, nil, errUnauthenticated()
+		}
 		return c, nil, err
 	}
 	ck, err := r.Cookie(SessionCookie)
