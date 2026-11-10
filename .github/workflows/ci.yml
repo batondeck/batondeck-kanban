@@ -64,6 +64,14 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+      - name: npm audit
+        # An advisory of moderate or worse in what the web UI is built from (its dependencies) fails
+        # the gate; one in the dev tooling (vite, vitest, jsdom) is shown as a warning.
+        working-directory: web
+        run: |
+          npm audit --package-lock-only --omit=dev --audit-level=moderate
+          npm audit --package-lock-only || echo "::warning title=npm audit::a dev dependency of web/ has a published advisory (see above)"
+
       - name: make check, both engines
         # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.
         run: make check TEST_TIMEOUT=40m
