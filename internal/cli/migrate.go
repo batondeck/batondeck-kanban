@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,8 @@ import (
 // migrate runs goose on the engine database.url selects, from the binary's embedded
 // migrations/{sqlite,postgres}, and says what it did. goose's default refusal of an out-of-order
 // version stands. On SQLite it holds the data-dir lock alone while it migrates, waiting up to
-// core.ServeLockWait for another holder; Postgres serialises in goose's session lock.
+// core.ServeLockWait for another holder (and saying so), but failing at once beside a running serve,
+// whose lock does not come free; Postgres serialises in goose's session lock.
 func migrate(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("migrate", &cfgPath, stderr)
@@ -31,7 +33,7 @@ func migrate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if cfg.Engine() == core.EngineSQLite {
-		lock, err := lockSQLiteDir(cfg, acquireLockWaiting)
+		lock, err := lockSQLiteDir(cfg, func(dir string) (*core.Lock, error) { return acquireLockWaiting(dir, stderr) })
 		if err != nil {
 			fmt.Fprintln(stderr, "migrate:", err)
 			return 1
@@ -63,13 +65,25 @@ func lockSQLiteDir(cfg *core.Config, acquire func(string) (*core.Lock, error)) (
 }
 
 // acquireLockWaiting takes the data-dir lock alone, retrying for up to core.ServeLockWait while
-// another process holds it; then it returns core.AcquireLock's refusal, which names the data dir.
-func acquireLockWaiting(dir string) (*core.Lock, error) {
+// another process holds it alone (another migrate, or a serve migrating), and saying on stderr that
+// it waits; then it returns core.AcquireLock's refusal, which names the data dir. Held by a running
+// serve, it fails at once: that lock is held for the serve's lifetime, and the serve migrated the
+// store as it started.
+func acquireLockWaiting(dir string, stderr io.Writer) (*core.Lock, error) {
 	deadline := time.Now().Add(core.ServeLockWait)
+	waiting := false
 	for {
 		lock, err := core.AcquireLock(dir)
-		if err == nil || time.Now().After(deadline) {
-			return lock, err
+		switch {
+		case err == nil:
+			return lock, nil
+		case errors.Is(err, core.ErrServeRunning):
+			return nil, fmt.Errorf("a serve is running on data dir %s: serve migrates the store as it starts, so restart it to apply a new binary's migrations, or stop it to run migrate", dir)
+		case time.Now().After(deadline):
+			return nil, err
+		case !waiting:
+			fmt.Fprintf(stderr, "migrate: data dir %s is held by another batondeck-kanban process (a migrate, or a serve migrating); waiting up to %s\n", dir, core.ServeLockWait)
+			waiting = true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

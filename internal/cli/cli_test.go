@@ -575,3 +575,55 @@ func TestDoctorChecksWhatServeChecks(t *testing.T) {
 		t.Fatalf("doctor with a blob dir under a file: %d %q", code, out)
 	}
 }
+
+// migrate beside a running serve (the data-dir lock held shared, which only serve does) fails at
+// once, saying a serve holds the dir and that serve migrates as it starts: the lock can never come
+// free while it runs, and the wait was a minute of silence. Beside a holder that will let go (another
+// migrate), it says it is waiting, then runs.
+func TestMigrateBesideARunningServeFailsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BATONDECK_DATABASE_URL", filepath.Join(dir, "bk.db"))
+	serving, err := core.AcquireServeLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serving.Share(); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		code int
+		errs string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, _, errs := run("migrate")
+		done <- result{code, errs}
+	}()
+	select {
+	case r := <-done:
+		if r.code != 1 || !strings.Contains(r.errs, "a serve is running on data dir "+dir) || !strings.Contains(r.errs, "serve migrates the store as it starts") {
+			t.Fatalf("migrate beside a serve: %d %q", r.code, r.errs)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("migrate beside a running serve is still waiting after 5 s")
+	}
+	if err := serving.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	alone, err := core.AcquireLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		code, _, errs := run("migrate")
+		done <- result{code, errs}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := alone.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.code != 0 || !strings.Contains(r.errs, "migrate: data dir "+dir+" is held by another batondeck-kanban process") || !strings.Contains(r.errs, "waiting up to 1m0s") {
+		t.Fatalf("migrate beside another migrate: %d %q", r.code, r.errs)
+	}
+}
