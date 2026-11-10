@@ -20,7 +20,24 @@ CREATE INDEX memory_expiry ON memory(expires_at, id COLLATE "C") WHERE expires_a
 -- The idempotency keys past their window, for the retention sweep.
 CREATE INDEX idempotency_keys_expiry ON idempotency_keys(expires_at, project_id COLLATE "C", identity COLLATE "C", key COLLATE "C");
 
+-- search_tasks splits a body where its query splits (every character that is not a letter or a
+-- digit, store.SearchTerms) and where SQLite's FTS5 splits: the default text parser kept a path, a
+-- host, an e-mail address, a version or a signed number as ONE lexeme ("internal/store/tasks.go",
+-- "-123"), so no query term ever matched a word inside one. Every ASCII punctuation and symbol
+-- character becomes a space before the parser runs (code-point ranges, whatever the collation).
+-- Postgres 16 cannot change a generated column's expression, so the column (and its GIN index) is
+-- dropped and added again; every row's vector is computed afresh.
+DROP INDEX tasks_search;
+ALTER TABLE tasks DROP COLUMN search;
+ALTER TABLE tasks ADD COLUMN search tsvector GENERATED ALWAYS AS (
+    to_tsvector('simple', regexp_replace(title || ' ' || description || ' ' || search_tokens, '[!-/:-@[-`{-~]+', ' ', 'g'))) STORED;
+CREATE INDEX tasks_search ON tasks USING gin (search);
+
 -- +goose Down
+DROP INDEX tasks_search;
+ALTER TABLE tasks DROP COLUMN search;
+ALTER TABLE tasks ADD COLUMN search tsvector GENERATED ALWAYS AS (to_tsvector('simple', title || ' ' || description || ' ' || search_tokens)) STORED;
+CREATE INDEX tasks_search ON tasks USING gin (search);
 DROP INDEX idempotency_keys_expiry;
 DROP INDEX memory_expiry;
 DROP INDEX memory_task;
