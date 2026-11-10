@@ -21,6 +21,9 @@ import { Cluster, Panel, Stack, Tile, Tiles } from '../ui.js';
 import type { ActivityEvent, AgentSession, Task } from '../types.js';
 import { mergePresence, replaceDevicePresence } from '../presenceMerge.js';
 
+/** How often the aggregate refreshes when the project has boards the stream does not cover. */
+const AGGREGATE_POLL_MS = 30_000;
+
 export function Agents() {
   const { ui } = useAuth();
   const { projectId } = useProject();
@@ -37,6 +40,9 @@ export function Agents() {
   const data = useQuery({
     queryKey: ['agentsdata', projectId, boardIds.join(',')],
     enabled: !!projectId && !!boardsQ.data,
+    // The stream below covers ONE board (see there); past one, the others' claims and handoffs reach
+    // this page by a poll.
+    refetchInterval: boardIds.length > 1 ? AGGREGATE_POLL_MS : false,
     queryFn: async () => {
       const [p, perBoard] = await Promise.all([
         projectsApi.getProject(projectId),
@@ -94,14 +100,14 @@ export function Agents() {
   const topTools = (tc: Record<string, number>): string =>
     Object.entries(tc).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t, n]) => `${t}·${n}`).join('  ') || '—';
 
-  // Push-over-poll: refresh the aggregate on any board's SSE update instead of a 10s timer.
+  // Push for the first board: refresh the aggregate on its SSE update. ONE board, because the tab's
+  // shared socket is scoped to one board and the server sends only that board's changes
+  // (api/stream.ts); subscribing to the others opened nothing for them. They are polled (above).
+  const firstBoard = boardsQ.data?.boards[0]?.id;
   useEffect(() => {
-    if (!projectId) return;
-    const unsubs = (boardsQ.data?.boards ?? []).map((b) =>
-      streamApi.stream(projectId, b.id, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] })),
-    );
-    return () => { for (const u of unsubs) u(); };
-  }, [projectId, boardsQ.data, qc]);
+    if (!projectId || !firstBoard) return;
+    return streamApi.stream(projectId, firstBoard, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] }));
+  }, [projectId, firstBoard, qc]);
 
   const project = data.data?.project;
   const tasks = data.data?.tasks ?? [];
