@@ -24,6 +24,11 @@ func TestForeignCallsStayOutOfTheSummary(t *testing.T) {
 			_, _ = grace.CallTool(ctx, &sdk.CallToolParams{Name: "get_project", Arguments: map[string]any{"projectId": p}})
 		}
 		_, _ = grace.CallTool(ctx, &sdk.CallToolParams{Name: "BUY-CHEAP-PILLS-example.com", Arguments: map[string]any{"projectId": p}})
+		// Arguments refused before the service judged membership: an unknown key and a wrong type
+		// (go-sdk's input schema), and a NUL character (domain.CheckText).
+		_, _ = grace.CallTool(ctx, &sdk.CallToolParams{Name: "get_project", Arguments: map[string]any{"projectId": p, "zzz": 1}})
+		_, _ = grace.CallTool(ctx, &sdk.CallToolParams{Name: "get_task", Arguments: map[string]any{"projectId": p, "taskId": 5}})
+		_, _ = grace.CallTool(ctx, &sdk.CallToolParams{Name: "get_task", Arguments: map[string]any{"projectId": p, "taskId": "T-\x001"}})
 		ada.call("get_project", map[string]any{"projectId": p})
 		if err := s.Core.FlushToolCalls(ctx); err != nil {
 			t.Fatal(err)

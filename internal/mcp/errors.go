@@ -27,12 +27,14 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		start := time.Now()
+		note := &callNote{}
+		ctx = context.WithValue(ctx, callNoteKey{}, note)
 		defer func() {
 			if p := recover(); p != nil {
 				s.log.Printf("mcp: tool %s panicked: %v\n%s", toolName(req), p, debug.Stack())
 				res, err = errorResult(domain.NewError(domain.CodeInternal, "internal error", nil)), nil
 			}
-			s.record(ctx, req, res, err, time.Since(start))
+			s.record(ctx, req, res, err, time.Since(start), note.refused)
 		}()
 		res, err = next(ctx, method, req)
 		if err != nil {
@@ -50,6 +52,7 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		}
 		e, ok := domain.AsBatonDeckError(r.GetError())
 		if !ok {
+			note.refused = true
 			msg := "invalid arguments"
 			if cause := r.GetError(); cause != nil {
 				msg = cause.Error()
@@ -60,13 +63,29 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
+// callNote is what one tools/call's chain tells errorMiddleware about it: refused is set when its
+// arguments were refused before any service judged the caller (go-sdk's input schema, or
+// domain.CheckText in Tool), so no membership of the project they name was ever checked.
+type callNote struct{ refused bool }
+
+type callNoteKey struct{}
+
+// noteRefused marks the call in ctx as refused before the service.
+func noteRefused(ctx context.Context) {
+	if n, ok := ctx.Value(callNoteKey{}).(*callNote); ok {
+		n.refused = true
+	}
+}
+
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
 // client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
 // and the projectId the call named when countsInProject allows it, which the operations summary
-// groups by.
+// groups by. A call whose arguments were refused before the service (refused) carries no project:
+// the caller's membership of it was never checked, so a non-member could otherwise move any
+// project's summary with malformed calls naming it.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
-func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
+func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration, refused bool) {
 	defer func() {
 		if p := recover(); p != nil {
 			s.log.Printf("mcp: recording tool call %s panicked: %v\n%s", toolName(req), p, debug.Stack())
@@ -82,7 +101,7 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 			}
 		}
 	}
-	if s.countsInProject(row) {
+	if !refused && s.countsInProject(row) {
 		row.ProjectID = projectOf(req)
 	}
 	caller, _ := CallerFrom(ctx)

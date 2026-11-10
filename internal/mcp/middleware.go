@@ -67,6 +67,7 @@ func Tool[Req, Resp any](s *Server, area, name, description string, call Call[Re
 			return nil, zero, domain.NewError(domain.CodeUnauthenticated, "no caller on the request", nil)
 		}
 		if err := argumentsText(r); err != nil {
+			noteRefused(ctx)
 			return nil, zero, err
 		}
 		resp, err := call(ctx, caller, req)
