@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -245,7 +246,7 @@ func TestBlobRoutesOverTheEngines(t *testing.T) {
 				if code, got := do(t, http.MethodPut, c.url, bytes.NewReader(body), int64(len(body))); code != http.StatusForbidden {
 					t.Errorf("%s: %d %s, want 403", name, code, got)
 				}
-				if !strings.Contains(s.logs.String(), "api: blob PUT "+id+" refused: "+c.reason) {
+				if !strings.Contains(s.logs.String(), "api: blob PUT "+strconv.Quote(id)+" refused: "+c.reason) {
 					t.Errorf("%s: no log line naming %q in\n%s", name, c.reason, s.logs.String())
 				}
 			}
