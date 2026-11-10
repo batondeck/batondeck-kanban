@@ -85,7 +85,7 @@ func appendTaskEvent(ctx context.Context, e engine, in EventInput) (Event, error
 	}
 	q := e.queries(true)
 	row, err := q.AppendTaskEvent(ctx, sqlitedb.AppendTaskEventParams{
-		ID: newID("E-", 24), Actor: in.Actor, Agent: nullStr(in.Agent), Type: string(in.Type), Data: string(data), Ts: in.Ts,
+		ID: NewEventID(), Actor: in.Actor, Agent: nullStr(in.Agent), Type: string(in.Type), Data: string(data), Ts: in.Ts,
 		ProjectID: in.ProjectID, TaskID: in.TaskID, BoardID: in.BoardID,
 	})
 	switch {
@@ -109,7 +109,7 @@ func appendBoardEvent(ctx context.Context, e engine, in EventInput) (Event, erro
 		return Event{}, err
 	}
 	row, err := e.queries(true).AppendBoardEvent(ctx, sqlitedb.AppendBoardEventParams{
-		ID: newID("E-", 24), Actor: in.Actor, Agent: nullStr(in.Agent), Type: string(in.Type), Data: string(data), Ts: in.Ts,
+		ID: NewEventID(), Actor: in.Actor, Agent: nullStr(in.Agent), Type: string(in.Type), Data: string(data), Ts: in.Ts,
 		ProjectID: in.ProjectID, BoardID: in.BoardID,
 	})
 	if err != nil {

@@ -279,7 +279,7 @@ func dropChronicleBody(ctx context.Context, q sqlQueries, projectID, pageID stri
 
 func appendChronicleEvent(ctx context.Context, q sqlQueries, projectID, actor string, agent *string, typ domain.EventType, data map[string]any) error {
 	err := q.AppendChronicleEvent(ctx, sqlitedb.AppendChronicleEventParams{
-		ProjectID: projectID, ID: newID("E-", 24), Actor: actor, Agent: nullStr(agent), Type: string(typ), Data: jsonText(data), Ts: nowMillis(),
+		ProjectID: projectID, ID: NewEventID(), Actor: actor, Agent: nullStr(agent), Type: string(typ), Data: jsonText(data), Ts: nowMillis(),
 	})
 	if err != nil {
 		return fmt.Errorf("store: chronicle event: %w", err)

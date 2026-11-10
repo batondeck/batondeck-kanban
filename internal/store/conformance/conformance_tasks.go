@@ -392,6 +392,60 @@ func tasks(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeValidation, "")
 	})
 
+	t.Run("SetStatusIntoAnotherColumnLandsAtItsHeadWithAFreshKey", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "already there", func(in *store.CreateTaskInput) {
+			in.ColumnID, in.Status, in.OrderKey = f.col[domain.InProgress], domain.InProgress, "a5"
+		})
+		head := "a5"
+		seen := map[string]bool{head: true}
+		for i := range 3 {
+			task := f.add(t, fmt.Sprint("moved ", i), nil) // each at "a0", the key the one before carried away
+			got, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+			mustOK(t, err)
+			if !domain.IsValidOrder(got.OrderKey) || got.OrderKey >= head || seen[got.OrderKey] {
+				t.Fatalf("move %d landed at %q, want a fresh well-formed key before the column's head %q (keys so far %v)", i, got.OrderKey, head, seen)
+			}
+			head, seen[got.OrderKey] = got.OrderKey, true
+			if _, err := domain.OrderBetween(got.OrderKey, "a5"); err != nil {
+				t.Fatalf("no key fits between %q and a5: %v", got.OrderKey, err)
+			}
+		}
+		// A key the caller names is the key; a write that keeps the column keeps the key.
+		named := f.add(t, "named", nil)
+		got, err := f.s.SetStatus(ctx, f.project, named.ID, 1, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], OrderKey: ptr("a6"), UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+		mustOK(t, err)
+		kept, err := f.s.SetStatus(ctx, f.project, named.ID, 2, store.StatusChange{Status: domain.Blocked, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		mustOK(t, err)
+		if got.OrderKey != "a6" || kept.OrderKey != "a6" {
+			t.Fatalf("named key %q, then kept %q, want a6 both", got.OrderKey, kept.OrderKey)
+		}
+	})
+
+	t.Run("SetStatusLeavingDoneDropsTheCancelledLabel", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Labels = []string{"keep"} })
+		cancelled, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{
+			Status: domain.Done, ColumnID: f.col[domain.Done], Labels: domain.WithLabel(task.Labels, domain.LabelCancelled), UpdatedBy: "bob", UpdatedAt: taskClock + 1,
+		})
+		mustOK(t, err)
+		// A write that stays DONE (a reorder) keeps it.
+		reordered, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Done, OrderKey: ptr("a1"), UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		mustOK(t, err)
+		if !reflect.DeepEqual(cancelled.Labels, []string{"keep", domain.LabelCancelled}) || !reflect.DeepEqual(reordered.Labels, cancelled.Labels) {
+			t.Fatalf("cancelled %v, reordered %v, want [keep cancelled] both", cancelled.Labels, reordered.Labels)
+		}
+		// Leaving DONE is a reopen: the task is no longer abandoned, whoever writes it.
+		reopened, err := f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 3})
+		mustOK(t, err)
+		if !reflect.DeepEqual(reopened.Labels, []string{"keep"}) {
+			t.Fatalf("reopened labels %v, want [keep]", reopened.Labels)
+		}
+		got, err := f.s.GetTask(ctx, f.project, task.ID)
+		mustOK(t, err)
+		sameTask(t, got, reopened)
+	})
+
 	t.Run("SetStatusWritesTheHandoverFields", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Assignee = ptr("ann") })
@@ -573,6 +627,28 @@ func tasks(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// move_task once stored any key OrderBetween accepted, control bytes included ("a0\n<b>"); the
+	// cursor list_tasks mints at such a task is its own, and the next page reads past it.
+	t.Run("ListTasksPagesPastAStoredKeyHoldingAControlByte", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		legacy := f.add(t, "legacy", nil)
+		f.add(t, "after", func(in *store.CreateTaskInput) { in.OrderKey = "a1" })
+		_, err := f.s.SetOrderKey(ctx, f.project, legacy.ID, legacy.Version, "a0\n<b>", "", "bob", taskClock+1)
+		mustOK(t, err)
+		first, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, "", 1)
+		mustOK(t, err)
+		if len(first.Tasks) != 1 || first.Tasks[0].ID != legacy.ID || first.NextCursor == "" {
+			t.Fatalf("first page %v next %q, want [%s] and a cursor", taskIDs(first.Tasks), first.NextCursor, legacy.ID)
+		}
+		next, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, first.NextCursor, 1)
+		if err != nil {
+			t.Fatalf("the page after %s, through the cursor the store minted: %v", legacy.ID, err)
+		}
+		if len(next.Tasks) != 1 || next.Tasks[0].ID != "T-2" {
+			t.Fatalf("the page after %s: %v, want [T-2]", legacy.ID, taskIDs(next.Tasks))
+		}
+	})
+
 	t.Run("ListTasksAndCountTasksRefusals", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		_, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: "B-missing"}, "", 10)
@@ -587,7 +663,7 @@ func tasks(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeValidation, "")
 		_, err = f.s.CountTasks(ctx, f.project, store.TaskFilter{BoardID: f.board, Assignee: ptr("bob"), Unassigned: true})
 		wantCode(t, err, domain.CodeValidation, "")
-		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("a", "T-1")[:5]} {
+		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("a", "T-1")[:5], store.EncodeCursor("a0", "T-\x001"), store.EncodeCursor("a\x000", "T-1")} {
 			_, err = f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, bad, 10)
 			wantCode(t, err, domain.CodeValidation, "")
 		}
@@ -663,5 +739,33 @@ func tasks(t *testing.T, newStore Factory) {
 		// Positive control: an empty column goes.
 		_, err = f.s.RemoveColumn(ctx, f.project, f.board, f.col[domain.Blocked])
 		mustOK(t, err)
+	})
+
+	t.Run("UpdateColumnRefusesAStatusChangeWhileItHoldsTasks", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		done := f.add(t, "done", func(in *store.CreateTaskInput) { in.Status = domain.Done; in.ColumnID = f.col[domain.Done] })
+		// Its tasks would disagree with it: DONE work under a TODO column.
+		_, err := f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Status: ptr(domain.Todo)})
+		wantCode(t, err, domain.CodeValidation, "")
+		b, _, err := f.s.GetBoard(ctx, f.project, f.board)
+		mustOK(t, err)
+		for _, c := range b.Columns {
+			if c.ID == f.col[domain.Done] && c.Status != domain.Done {
+				t.Fatalf("a refused status change wrote %s", c.Status)
+			}
+		}
+		// A rename, or naming the status it has, is no status change.
+		_, err = f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Name: ptr("Shipped"), Status: ptr(domain.Done)})
+		mustOK(t, err)
+		// Emptied, it may change status.
+		_, err = f.s.SetStatus(ctx, f.project, done.ID, done.Version, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+		mustOK(t, err)
+		got, err := f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Status: ptr(domain.Review)})
+		mustOK(t, err)
+		for _, c := range got.Columns {
+			if c.ID == f.col[domain.Done] && (c.Status != domain.Review || c.Name != "Shipped") {
+				t.Fatalf("emptied column after the change: %+v", c)
+			}
+		}
 	})
 }

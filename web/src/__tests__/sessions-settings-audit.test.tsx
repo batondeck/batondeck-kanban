@@ -182,6 +182,21 @@ describe('Workspace Log: the audit panel', () => {
     expect(within(row).getByText('U-1 (claude)')).toBeInTheDocument();
   });
 
+  it('pages past the first rows: Load more asks for the nextCursor the route answered and appends what it returns', async () => {
+    const older = { days: 90, entries: [{ ...rows.entries[0]!, ts: '2026-10-20T08:00:00.000Z', action: 'token.revoked', subject: 'T-3' }] };
+    await mount('/activity', true, {
+      'GET /api/audit': () => (fetched.at(-1)!.includes('cursor=c1') ? older : { ...rows, nextCursor: 'c1' }),
+    });
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByTestId('audit-row')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(within(table).getAllByTestId('audit-row')).toHaveLength(2));
+    expect(within(table).getByText('token.revoked')).toBeInTheDocument();
+    expect(fetched.filter((f) => f.includes('/api/audit')).at(-1)).toContain('cursor=c1');
+    // The last page answered no nextCursor: nothing more to load.
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
   it('REFUSAL: a member sees no audit panel and never asks for it', async () => {
     await mount('/activity', false, { 'GET /api/audit': () => rows });
     await screen.findByRole('heading', { name: 'Workspace Log' });

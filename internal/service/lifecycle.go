@@ -422,7 +422,8 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 // inside mutate. An empty frontier writes nothing; it reaps the board's expired leases (lazy
 // recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
-// claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
+// claim (2: the IN_PROGRESS column's first order key, the claimed task landing before it, and the
+// claim statement) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
 // Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); useProfile to the
 // tasks the caller's own registered profile covers (claimNext; the project, the profile and its
 // stats are three more reads, plus the frontier page each attempt; no profile falls back to
@@ -1567,7 +1568,8 @@ func (t *txn) handoffTarget(to string) (*string, error) {
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note
 // context item, from any status (a server action, like auto-unblock, not a move through the fixed
-// table). The master role, or the holder of the task's live lease (its identity under the agent the
+// table); a poisoned task is un-poisoned on the way (its poisoned label dropped). A later write that
+// takes the task out of DONE drops cancelled again (store.StatusChange). The master role, or the holder of the task's live lease (its identity under the agent the
 // claim recorded, leaseAgent: P-320, P-399); a master is CONFLICT_LOCKED by a live lease that does
 // not yield to it (leaseYields: another identity's, or another agent's). Version-checked by mutate (STALE before any other judgement). As a
 // landing on DONE it runs the poison-aware unblock under the project lock. A task already DONE is
@@ -1628,10 +1630,14 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 		if err != nil {
 			return CancelTaskResp{}, err
 		}
-		after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, store.StatusChange{
-			Status: domain.Done, ColumnID: statusColumn(board, domain.Done), ClearClaim: true,
-			Labels: domain.WithLabel(nonNil(cur.Labels), domain.LabelCancelled), UpdatedBy: caller.Identity, UpdatedAt: now,
-		})
+		ch := store.StatusChange{Status: domain.Done, ColumnID: statusColumn(board, domain.Done), ClearClaim: true, UpdatedBy: caller.Identity, UpdatedAt: now}
+		labels := nonNil(cur.Labels)
+		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
+			// A cancelled task leaves the poison queue: the un-poison, as a master's move to TODO.
+			ch.Unpoison, labels = true, domain.Unpoison(labels).Labels
+		}
+		ch.Labels = domain.WithLabel(labels, domain.LabelCancelled)
+		after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, ch)
 		if err != nil {
 			return CancelTaskResp{}, err
 		}

@@ -164,6 +164,24 @@ func search(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// The words inside a path, a ticket reference, an e-mail address, a version or a hyphenated id
+		// are words like any other, on both engines: the query splits on punctuation, so the body
+		// does too.
+		t.Run("WordsInsidePunctuationAreFound", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			id, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: "Fix internal/store/tasks.go see T-123",
+				Description: "mail bob@example.com about v1.2.3, PR-42 and https://docs.example.org/main.go"})
+			noErr(t, err)
+			for _, q := range []string{"tasks", "tasks.go", "store", "internal/store", "T-123", "123", "PR-42", "42", "example",
+				"bob@example.com", "docs", "main.go", "v1.2.3", "https", "examp*"} {
+				page, err := s.SearchTasks(ctx, p, q, store.SearchFilter{}, "", 0)
+				noErr(t, err)
+				if got := ids(page.Hits); !slices.Equal(got, []string{id}) {
+					t.Errorf("SearchTasks(%q) = %v, want [%s]", q, got, id)
+				}
+			}
+		})
+
 		// The index follows the task inside its own write: a title change drops the old word and
 		// finds the new one, search tokens are searched, and a deleted task is never a hit.
 		t.Run("TheIndexFollowsTheTask", func(t *testing.T) {

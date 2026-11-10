@@ -807,3 +807,77 @@ func TestMoveIntoInProgressClearsTheBackoff(t *testing.T) {
 		}
 	})
 }
+
+// move_task refuses an order key holding a byte outside the key alphabet, or longer than
+// domain.MaxOrderKeyLen, with VALIDATION on every engine (a NUL used to be Postgres's INTERNAL), and
+// stores nothing.
+func TestMoveRefusesAMalformedOrderKey(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
+		for _, order := range []string{"a0~", "a0\x00", "a0\n<b>", "a" + strings.Repeat("1", domain.MaxOrderKeyLen)} {
+			_, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: task.ID, Version: task.Version, Order: order})
+			if tkCode(err) != domain.CodeValidation {
+				t.Fatalf("move_task order %.20q: %v, want VALIDATION", order, err)
+			}
+		}
+		if got := e.get(t, task.ID); got.Version != task.Version || got.OrderKey != task.OrderKey {
+			t.Fatalf("a refused move wrote: %+v", got)
+		}
+	})
+}
+
+// Each card holds an order key of its own in its column, so a card can always be dropped between
+// two others: create_task + claim_next rounds leave distinct keys in IN_PROGRESS (a claim used to
+// carry its TODO key, the very key the next create took again), and concurrent creates into one
+// TODO column mint distinct keys (on Postgres they read the column's head at once).
+func TestLifecycleWritesKeepOrderKeysDistinct(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		distinct := func(t *testing.T, status domain.Status, want int) {
+			t.Helper()
+			page, err := e.st.ListTasks(e.ctx, e.project, store.TaskFilter{BoardID: e.board.ID, ColumnID: e.column(t, status)}, "", 200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := map[string]bool{}
+			for i, task := range page.Tasks {
+				keys[task.OrderKey] = true
+				if i > 0 {
+					if _, err := domain.OrderBetween(page.Tasks[i-1].OrderKey, task.OrderKey); err != nil {
+						t.Fatalf("%s: no key fits between %s %q and %s %q: %v", status, page.Tasks[i-1].ID, page.Tasks[i-1].OrderKey, task.ID, task.OrderKey, err)
+					}
+				}
+			}
+			if len(page.Tasks) != want || len(keys) != want {
+				t.Fatalf("%s holds %d tasks under %d distinct keys, want %d and %d", status, len(page.Tasks), len(keys), want, want)
+			}
+		}
+		for range 3 {
+			if _, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "t"}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := e.c.Lifecycle().ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+			if err != nil || got.Task == nil {
+				t.Fatalf("claim_next: %+v %v", got.Task, err)
+			}
+		}
+		distinct(t, domain.InProgress, 3)
+
+		const n = 16
+		var wg sync.WaitGroup
+		errs := make([]error, n)
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, errs[i] = e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "c"})
+			}()
+		}
+		wg.Wait()
+		for _, err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		distinct(t, domain.Todo, n)
+	})
+}

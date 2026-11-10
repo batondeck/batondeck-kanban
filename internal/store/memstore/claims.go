@@ -53,11 +53,15 @@ func sameAgent(a, b *string) bool {
 	return *a == *b
 }
 
-// claim writes the lease on t: IN_PROGRESS, in.ColumnID when given, no backoff, the version one up.
+// claim writes the lease on t: IN_PROGRESS, in.ColumnID when given (at that column's head when it
+// is another, store.HeadKey), no backoff, the version one up.
 func (st *state) claim(t store.Task, in store.ClaimInput) (store.Task, error) {
 	if in.ColumnID != "" {
 		if err := st.columnOn(t.ProjectID, t.BoardID, in.ColumnID); err != nil {
 			return store.Task{}, err
+		}
+		if in.ColumnID != t.ColumnID {
+			t.OrderKey = st.headKey(t.ProjectID, t.BoardID, in.ColumnID, t.OrderKey)
 		}
 		t.ColumnID = in.ColumnID
 	}

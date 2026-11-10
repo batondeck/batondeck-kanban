@@ -11,11 +11,13 @@
 
 -- ClaimNext in ONE statement. The connection is the store's single writer, and the statement's own
 -- transaction takes the write lock before it reads the frontier, so two callers cannot pick the same
--- row. column_id '' keeps the task's column; a column that is not the board's matches no row, and
--- the caller tells that apart from an empty frontier.
+-- row. column_id '' keeps the task's column; landing_order_key '' keeps its order key, another is the
+-- caller's fresh key at the head of the column the task lands in. A column that is not the board's
+-- matches no row, and the caller tells that apart from an empty frontier.
 -- name: ClaimNext :one
 UPDATE tasks SET status = 'IN_PROGRESS',
   column_id = CASE WHEN CAST(sqlc.arg(column_id) AS TEXT) = '' THEN column_id ELSE CAST(sqlc.arg(column_id) AS TEXT) END,
+  order_key = CASE WHEN CAST(sqlc.arg(landing_order_key) AS TEXT) = '' THEN order_key ELSE CAST(sqlc.arg(landing_order_key) AS TEXT) END,
   claim_owner = CAST(sqlc.arg(owner) AS TEXT), claim_agent = CAST(sqlc.narg(agent) AS TEXT), claim_agent_id = CAST(sqlc.narg(agent_id) AS TEXT),
   lease_id = CAST(sqlc.arg(lease_id) AS TEXT), lease_expires_at = CAST(sqlc.arg(expires_at) AS INTEGER), next_eligible_at = NULL,
   version = version + 1, updated_by = CAST(sqlc.arg(owner) AS TEXT), updated_at = CAST(sqlc.arg(now) AS INTEGER)

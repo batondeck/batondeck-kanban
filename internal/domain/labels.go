@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// The system labels (ADR-0001). The server writes them: cancelled by cancel_task, poisoned by the
-// poison outcome of ApplyFailure, removed again by Unpoison. A caller never adds or removes one.
+// The system labels (ADR-0001). The server writes them: cancelled by cancel_task and removed again
+// when the task leaves DONE (Reopened), poisoned by the poison outcome of ApplyFailure and removed
+// again by Unpoison. A caller never adds or removes one.
 const (
 	LabelCancelled = "cancelled"
 	LabelPoisoned  = "poisoned"
@@ -54,6 +55,13 @@ func CheckCallerLabels(current, requested []string) error {
 		}
 	}
 	return nil
+}
+
+// Reopened returns labels as a task leaving DONE carries them: without cancelled, which marks a DONE
+// task that was abandoned rather than delivered, so a reopened task is counted as done when it is
+// delivered again.
+func Reopened(labels []string) []string {
+	return WithoutLabel(labels, LabelCancelled)
 }
 
 // WithLabel returns a copy of labels with l appended unless it is already there.

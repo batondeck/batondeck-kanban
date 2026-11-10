@@ -109,6 +109,18 @@ func (st *state) put(t store.Task) store.Task {
 	return t
 }
 
+// headKey is store.HeadKey for column columnID of the board: a fresh key before its first.
+func (st *state) headKey(projectID, boardID, columnID, keep string) string {
+	first := ""
+	for _, t := range st.tasks {
+		if t.ProjectID == projectID && t.BoardID == boardID && t.ColumnID == columnID &&
+			(first == "" || t.OrderKey < first) {
+			first = t.OrderKey
+		}
+	}
+	return store.HeadKey(first, keep)
+}
+
 // columnOn refuses a column id that is not one of the board's.
 func (st *state) columnOn(projectID, boardID, columnID string) error {
 	b, err := st.boardOf(projectID, boardID)
@@ -309,9 +321,13 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		if err != nil {
 			return store.Task{}, err
 		}
+		reopened := t.Status == domain.Done && c.Status != domain.Done
 		if c.ColumnID != "" {
 			if err := st.columnOn(projectID, t.BoardID, c.ColumnID); err != nil {
 				return store.Task{}, err
+			}
+			if c.ColumnID != t.ColumnID && c.OrderKey == nil {
+				t.OrderKey = st.headKey(projectID, t.BoardID, c.ColumnID, t.OrderKey)
 			}
 			t.ColumnID = c.ColumnID
 		}
@@ -342,6 +358,9 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		setNullable(&t.NextEligibleAt, c.NextEligibleAt)
 		if c.Labels != nil {
 			t.Labels = list(c.Labels)
+		}
+		if reopened {
+			t.Labels = list(domain.Reopened(t.Labels))
 		}
 		if c.ClearClaim {
 			t.Claim = nil

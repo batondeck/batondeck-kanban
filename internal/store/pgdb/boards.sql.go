@@ -116,7 +116,7 @@ func (q *Queries) GetBoard(ctx context.Context, arg GetBoardParams) (Board, erro
 }
 
 const getColumn = `-- name: GetColumn :one
-SELECT project_id, board_id, id, name, position, status, wip_limit FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3
+SELECT project_id, board_id, id, name, position, status, wip_limit FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3 FOR KEY SHARE
 `
 
 type GetColumnParams struct {
@@ -125,6 +125,9 @@ type GetColumnParams struct {
 	ID        string
 }
 
+// The column a write puts a task into, its row held FOR KEY SHARE to the transaction: remove_column
+// (LockColumn, FOR UPDATE) waits for the write and then counts its task, or the write waits for
+// remove_column and then finds no column. Concurrent writes into one column do not wait on each other.
 func (q *Queries) GetColumn(ctx context.Context, arg GetColumnParams) (Column, error) {
 	row := q.db.QueryRow(ctx, getColumn, arg.ProjectID, arg.BoardID, arg.ID)
 	var i Column
@@ -325,6 +328,33 @@ func (q *Queries) LockBoard(ctx context.Context, arg LockBoardParams) (Board, er
 		&i.Name,
 		&i.CreatedBy,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const lockColumn = `-- name: LockColumn :one
+SELECT project_id, board_id, id, name, position, status, wip_limit FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3 FOR UPDATE
+`
+
+type LockColumnParams struct {
+	ProjectID string
+	BoardID   string
+	ID        string
+}
+
+// The column remove_column and update_column judge, locked to the transaction before they count its
+// tasks: a write that holds it (GetColumn) commits first, and one that comes later waits.
+func (q *Queries) LockColumn(ctx context.Context, arg LockColumnParams) (Column, error) {
+	row := q.db.QueryRow(ctx, lockColumn, arg.ProjectID, arg.BoardID, arg.ID)
+	var i Column
+	err := row.Scan(
+		&i.ProjectID,
+		&i.BoardID,
+		&i.ID,
+		&i.Name,
+		&i.Position,
+		&i.Status,
+		&i.WipLimit,
 	)
 	return i, err
 }

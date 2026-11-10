@@ -14312,6 +14312,11 @@
               "string"
             ]
           },
+          "cursor": {
+            "typeSet": [
+              "string"
+            ]
+          },
           "days": {
             "typeSet": [
               "integer"
@@ -14408,6 +14413,11 @@
               ],
               "additionalProperties": false
             }
+          },
+          "nextCursor": {
+            "typeSet": [
+              "string"
+            ]
           }
         },
         "required": [

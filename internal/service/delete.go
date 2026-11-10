@@ -74,8 +74,9 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 //     edges but not the other tasks' caches (R0.10 review);
 //  3. each blocker outside the set: the deleted id stripped from its blocks, the blocker bumped;
 //  4. root's parent: root stripped from its blockedBy and the same unblock;
-//  5. each member's task-scope memory and attachments, then the task (its events, context items,
-//     summary, edges, comments and follow-ups go with it: the schema cascades);
+//  5. each member's task-scope memory and attachments, its sprints' member counts lowered by one,
+//     then the task (its events, context items, summary, edges, comments and follow-ups go with it:
+//     the schema cascades);
 //  6. a run's parent: if no run is left and it is racing, racing:false and TODO (endRace);
 //  7. the board-level task.deleted {id, title, status} on root, a change-log row per deleted task.
 //
@@ -140,6 +141,11 @@ func (t *txn) deleteTree(root store.Task) ([]string, error) {
 			return nil, err
 		}
 		blobs = append(blobs, freed...)
+		for _, id := range x.SprintIDs { // as set_sprint remove: a deleted member is not counted against SPRINT_MAX_TASKS
+			if _, err := t.Tx.AddSprintMembers(t.ctx, x.ProjectID, id, -1); err != nil {
+				return nil, err
+			}
+		}
 		if err := t.Tx.DeleteTask(t.ctx, x.ProjectID, x.ID, x.Version); err != nil {
 			return nil, err
 		}

@@ -7,9 +7,10 @@
 // that same delivery window once their ticket is DONE or gone, the browser sessions expired and
 // the API tokens expired or revoked more than LapsedGrace ago (a label's oldest and newest token rows
 // per identity stay, as the label-ownership record), the OAuth codes and tokens expired more than
-// LapsedGrace ago, the attachments still pending PendingAttachmentAge after they were created, the
-// blobs no attachment or memory entry references any more, and the blob files on disk that no blob
-// row names.
+// LapsedGrace ago, the idempotency keys past their replay window (each row holds a mutation's
+// whole result, and a key past its window counts as never seen), the attachments still pending
+// PendingAttachmentAge after they were created, the blobs no attachment or memory entry references
+// any more, and the blob files on disk that no blob row names.
 // Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.
@@ -65,6 +66,7 @@ type Store interface {
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
 }
 
@@ -84,8 +86,8 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens int64
-	Deliveries, RawBodies, AlertStates, PendingAttachments, Blobs, BlobFiles               int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens    int64
+	Deliveries, RawBodies, AlertStates, PendingAttachments, IdempotencyKeys, Blobs, BlobFiles int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -110,7 +112,7 @@ type Sweeper struct {
 // ago, then the expired deliveries (each with its raw body) and the expired raw bodies of kept
 // deliveries, then the expired alert states whose ticket is DONE or gone (an open ticket's stays, so
 // a late firing still appends to it), then the attachments still pending PendingAttachmentAge after
-// their creation, then one Batch of the blobs unreferenced for BlobGrace (a
+// their creation, then the idempotency keys past their window, then one Batch of the blobs unreferenced for BlobGrace (a
 // blob whose row CollectBlobs could not delete is listed again next tick), then the blob files last
 // written more than BlobGrace ago that no row names (among them a file whose unlink failed after
 // CollectBlobs deleted its row, and those an upload cut off between its file and its row left).
@@ -163,6 +165,7 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.PendingAttachments = step("pending attachments", func(limit int) (int64, error) {
 		return s.Store.DeleteStalePendingAttachments(ctx, ms-PendingAttachmentAge.Milliseconds(), limit)
 	})
+	out.IdempotencyKeys = step("idempotency keys", func(limit int) (int64, error) { return s.Store.DeleteExpiredIdempotencyKeys(ctx, ms, limit) })
 	if s.CollectBlobs != nil {
 		bs, err := s.Store.ListUnreferencedBlobs(ctx, ms-BlobGrace.Milliseconds(), Batch)
 		if err != nil && s.Report != nil && ctx.Err() == nil {

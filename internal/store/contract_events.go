@@ -40,7 +40,8 @@ type EventPage struct {
 }
 
 // Events is the event log: append-only, never updated. Keys: an event is (project_id, id), its id
-// minted here ("E-" and random hex). Errors: a missing task is domain.NotFound("Task", id) and a
+// minted here (NewEventID: "E-", a sequence that only grows in the process, then random hex, so the
+// events of one timestamp read in the order they were appended). Errors: a missing task is domain.NotFound("Task", id) and a
 // missing board domain.NotFound("Board", id), a project that does not exist holding neither; an
 // unknown type (domain.IsEventType), an empty actor, Ts <= 0, Data that is not a JSON object and a
 // malformed cursor are domain.Validation. Reads are newest first, (ts, id) descending, paged by a

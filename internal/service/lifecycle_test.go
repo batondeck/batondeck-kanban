@@ -1418,3 +1418,47 @@ func TestBlockKeepsAnExistingBlocker(t *testing.T) {
 		}
 	})
 }
+
+// A cancelled task that is reopened is no longer cancelled: move_task DONE -> IN_PROGRESS and
+// add_follow_up {reopen} each drop the system label, so the task delivered afterwards counts as done.
+// Cancelling a poisoned task drops poisoned: a DONE task is not in the poison queue.
+func TestReopenDropsCancelledAndCancelDropsPoisoned(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		lc := e.c.Lifecycle()
+		cancel := func(t *testing.T, id string) store.Task {
+			t.Helper()
+			r, err := lc.Cancel(e.ctx, e.alice, CancelTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version, Reason: "descoped"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := e.get(t, id)
+			if r.Task.Status != domain.Done || !slices.Contains(got.Labels, domain.LabelCancelled) {
+				t.Fatalf("cancel: %s %v", got.Status, got.Labels)
+			}
+			return got
+		}
+
+		moved := cancel(t, e.tkSeed(t, domain.Todo, "", 0, []string{"keep"}).ID)
+		if _, err := e.tkMove(t, e.alice, moved, domain.InProgress); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, moved.ID); got.Status != domain.InProgress || !slices.Equal(got.Labels, []string{"keep"}) {
+			t.Fatalf("move DONE -> IN_PROGRESS of a cancelled task: %s %v, want IN_PROGRESS [keep]", got.Status, got.Labels)
+		}
+
+		followed := cancel(t, e.task(t, domain.Todo).ID)
+		r, err := e.c.FollowUps().AddFollowUp(e.ctx, e.alice, AddFollowUpReq{ProjectID: e.project, TaskID: followed.ID, Body: "needed after all", Reopen: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, followed.ID); got.Status != domain.Todo || slices.Contains(got.Labels, domain.LabelCancelled) || slices.Contains(r.Task.Labels, domain.LabelCancelled) {
+			t.Fatalf("add_follow_up reopen of a cancelled task: %s %v", got.Status, got.Labels)
+		}
+
+		poisoned := e.tkSeed(t, domain.Blocked, domain.BlockedReasonPoison, 3, []string{domain.LabelPoisoned})
+		got := cancel(t, poisoned.ID)
+		if !slices.Equal(got.Labels, []string{domain.LabelCancelled}) || got.BlockedReason != nil {
+			t.Fatalf("cancelled poisoned task: labels %v reason %v, want [cancelled] and none", got.Labels, got.BlockedReason)
+		}
+	})
+}

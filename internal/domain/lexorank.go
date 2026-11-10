@@ -130,11 +130,64 @@ func OrderBetween(a, b string) (string, error) {
 	return ia + m, nil
 }
 
-// IsValidOrder reports whether key is a well-formed order key. Validate a caller's key with it before
-// storing: a malformed stored key makes every later OrderBetween against it fail.
+// OrderBetweenSpread is OrderBetween with four more digits drawn from entropy, so two writers that
+// place a task in the same gap from the same read (each before the other's write is visible) mint
+// different keys rather than one key twice. The key sorts strictly between a and b. It is
+// OrderBetween's own key, unspread, only where no spread key fits on either side of it, which a head
+// placement (a == "") never meets short of the smallest integer.
+func OrderBetweenSpread(a, b string, entropy uint32) (string, error) {
+	if a != "" && b != "" && a > b {
+		a, b = b, a
+	}
+	k, err := OrderBetween(a, b)
+	if err != nil {
+		return "", err
+	}
+	var spread [4]byte // three digits and a last one that is not zero, so the key stays well formed
+	for i := range 3 {
+		spread[i] = orderDigits[entropy%62]
+		entropy /= 62
+	}
+	spread[3] = orderDigits[1+entropy%61]
+	// k + spread sorts after k, so after a; it sorts before b unless k is a prefix of b, and then a key
+	// nearer b is tried.
+	lo := k
+	for range 4 {
+		if c := lo + string(spread[:]); b == "" || c < b {
+			return c, nil
+		}
+		if lo, err = OrderBetween(lo, b); err != nil {
+			break
+		}
+	}
+	// b's fraction runs through low digits after k ("a01111V" after "a0"), which repeated head
+	// placements produce on their own: spread a key before k instead. For a head placement that key is
+	// the integer before k's, which no spread can carry past k, and keys stay short.
+	if k2, err := OrderBetween(a, k); err == nil {
+		if c := k2 + string(spread[:]); c < k {
+			return c, nil
+		}
+	}
+	return k, nil
+}
+
+// MaxOrderKeyLen is the longest order key a caller may send: keys squeezed into one gap grow about
+// one digit per six placements, so it allows some 1,500 placements into the same gap.
+const MaxOrderKeyLen = 256
+
+// IsValidOrder reports whether key is a well-formed order key a caller may store: at most
+// MaxOrderKeyLen bytes, every one of the alphabet (an A-Z/a-z head, base-62 digits), and well formed.
+// Validate a caller's key with it before storing: a malformed stored key makes every later
+// OrderBetween against it fail, and a byte outside the alphabet (read as the zero digit, as the
+// library does) makes later keys computed against it land on the wrong side of it.
 func IsValidOrder(key string) bool {
-	if key == "" {
+	if key == "" || len(key) > MaxOrderKeyLen {
 		return false
+	}
+	for i := 1; i < len(key); i++ {
+		if orderDigits[digitIndex[key[i]]] != key[i] {
+			return false
+		}
 	}
 	_, err := OrderBetween(key, "")
 	return err == nil

@@ -197,6 +197,23 @@ func newID(prefix string, n int) string {
 	return prefix + hex.EncodeToString(b)[:n]
 }
 
+// lastEventSeq is the last sequence number NewEventID minted in this process.
+var lastEventSeq atomic.Int64
+
+// NewEventID is an event id: "E-", 16 hex digits of a sequence that only grows in this process (the
+// clock in nanoseconds, or one past the last id's, whichever is greater) and 8 random ones. The
+// feeds order events by (ts, id), and one mutation stamps its events with one millisecond, so ids
+// that sort as they were minted keep those events in the order they were appended.
+func NewEventID() string {
+	now := time.Now().UnixNano()
+	for {
+		last := lastEventSeq.Load()
+		if next := max(now, last+1); lastEventSeq.CompareAndSwap(last, next) {
+			return fmt.Sprintf("E-%016x%s", uint64(next), newID("", 8))
+		}
+	}
+}
+
 func nowMillis() int64 { return time.Now().UnixMilli() }
 
 func nullInt(p *int64) sql.NullInt64 {

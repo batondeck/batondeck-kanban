@@ -8,8 +8,8 @@ import (
 
 // Migration 0003 (P-65): memory's only foreign keys are its project's and its blob's, so a deleted
 // task takes no memory row with it; and the SQLite rebuild left memory nothing to lose: its table
-// and its primary key's index, no other index, trigger or view, with every column, the scope CHECK
-// and the remaining keys' ON DELETE actions kept.
+// and its primary key's index (and, since 0007, that migration's indexes), no trigger or view, with
+// every column, the scope CHECK and the remaining keys' ON DELETE actions kept.
 
 func TestMemoryKeepsNoKeyToTasksSQLite(t *testing.T) {
 	db := openSQLiteFile(t, migratedSQLite(t))
@@ -18,8 +18,9 @@ func TestMemoryKeepsNoKeyToTasksSQLite(t *testing.T) {
 		t.Errorf("memory's foreign keys reference %v, want [blobs projects]", parents)
 	}
 	objects := sqliteStrings(t, db, `SELECT type || ' ' || name FROM sqlite_master WHERE tbl_name = 'memory' OR sql LIKE '%memory%' ORDER BY name`)
-	if !slices.Equal(objects, []string{"table memory", "index sqlite_autoindex_memory_1"}) {
-		t.Errorf("schema objects on memory %v, want the table and its primary key's index", objects)
+	// 0007's indexes (a blob's references, a task's window, the expiry sweep) are the only ones since.
+	if want := []string{"table memory", "index memory_blob", "index memory_expiry", "index memory_task", "index sqlite_autoindex_memory_1"}; !slices.Equal(objects, want) {
+		t.Errorf("schema objects on memory %v, want %v: the table, its primary key's index and 0007's", objects, want)
 	}
 	// The rebuild keeps every column, the scope CHECK and both remaining keys' ON DELETE actions.
 	cols := sqliteStrings(t, db, `SELECT name || ' ' || type || ' ' || "notnull" || ' ' || pk || ' ' || coalesce(dflt_value, '-') FROM pragma_table_info('memory') ORDER BY cid`)

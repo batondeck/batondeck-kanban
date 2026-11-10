@@ -23,7 +23,7 @@ func RegisterBoards(s *mcp.Server, svc service.Services) {
 		"Add a column, mapped to a status, to a board.",
 		b.AddColumn)
 	mcp.Tool(s, "boards", "update_column",
-		"Update a board column: rename it, change its mapped status, WIP limit or order.",
+		"Update a board column: rename it, change its mapped status (empty columns only), WIP limit or order.",
 		b.UpdateColumn)
 	mcp.Tool(s, "boards", "remove_column",
 		"Remove a board column. It must be empty, and a board keeps at least one column.",

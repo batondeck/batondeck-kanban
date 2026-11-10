@@ -499,7 +499,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		}
 	}
 	if req.Order != "" && !domain.IsValidOrder(req.Order) {
-		return MoveTaskResp{}, domain.Validation("Invalid order key: "+req.Order, map[string]any{"field": "order"})
+		return MoveTaskResp{}, domain.Validation(fmt.Sprintf("Invalid order key: %.80q (at most %d characters of 0-9, A-Z and a-z)", req.Order, domain.MaxOrderKeyLen), map[string]any{"field": "order"})
 	}
 	version := req.Version
 	// The project lock, first in the transaction (before mutate's FOR UPDATE read of the task, so the

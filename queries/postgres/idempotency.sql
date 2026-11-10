@@ -18,3 +18,12 @@ UPDATE idempotency_keys SET result = $1 WHERE project_id = $2 AND identity = $3 
 
 -- name: DeleteProjectIdempotencyKeys :exec
 DELETE FROM idempotency_keys WHERE project_id = $1;
+
+-- The retention sweep: the keys whose window ended at or before now (a replay can no longer find
+-- them, and each holds a mutation's whole result), the oldest expiry first, a page at a time, through
+-- idempotency_keys_expiry. A global key (create_project's) goes too.
+-- name: DeleteExpiredIdempotencyKeys :execrows
+DELETE FROM idempotency_keys WHERE (project_id, identity, key) IN (
+  SELECT i.project_id, i.identity, i.key FROM idempotency_keys i
+  WHERE i.expires_at <= sqlc.arg(now)::bigint
+  ORDER BY i.expires_at, i.project_id COLLATE "C", i.identity COLLATE "C", i.key COLLATE "C" LIMIT sqlc.arg(page_limit)::bigint);

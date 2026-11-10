@@ -5,6 +5,6 @@ package api
 // refused by service.authorize as the tool is.
 func auditRoutes(o *Options) []route {
 	return []route{
-		{Method: "GET", Path: "/api/audit", h: call(o, o.Services.Audit.ListAuditLog, in{query: []string{"actor", "subject", "action", "days", "limit"}})},
+		{Method: "GET", Path: "/api/audit", h: call(o, o.Services.Audit.ListAuditLog, in{query: []string{"actor", "subject", "action", "days", "limit", "cursor"}})},
 	}
 }

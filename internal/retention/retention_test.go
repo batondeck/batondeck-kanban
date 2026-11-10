@@ -99,6 +99,43 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 	}
 }
 
+// A sweep deletes the idempotency keys whose replay window has ended, a project's and a global one
+// (create_project's) alike, and keeps a key still in its window, which still replays.
+func TestASweepRemovesExpiredIdempotencyKeys(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			keyed := func(key string, ttl time.Duration) store.WriteOptions {
+				return store.WriteOptions{Identity: "alice", IdempotencyKey: key, IdempotencyTTL: ttl}
+			}
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "brief", CreatedBy: "alice"}, keyed("cp-brief", time.Millisecond))
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "kept", CreatedBy: "alice"}, keyed("cp-kept", day))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "b", CreatedBy: "alice"}, keyed("cb-brief", time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}),
+				Now: func() time.Time { return time.Now().Add(time.Hour) }, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			if got := sw.Sweep(ctx); got.IdempotencyKeys != 2 {
+				t.Fatalf("swept %+v, want the two keys past their window", got)
+			}
+			if again := sw.Sweep(ctx); again.IdempotencyKeys != 0 {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+			replay, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "kept again", CreatedBy: "alice"}, keyed("cp-kept", day))
+			if err != nil || replay.ID != kept.ID {
+				t.Fatalf("the key in its window replays %+v (%v), want project %s", replay, err, kept.ID)
+			}
+		})
+	}
+}
+
 // R2.9: a sweep deletes the on-call deliveries past their 30-day expiry (each with its raw body) and
 // the raw bodies past their 7-day expiry, and keeps a delivery whose raw body went, on memstore and
 // both engines. The expiries are stamped at write time, so the sweep compares with now.
@@ -432,6 +469,10 @@ func (f *fake) DeleteStalePendingAttachments(_ context.Context, _ int64, limit i
 	return f.del("pending attachments", limit)
 }
 
+func (f *fake) DeleteExpiredIdempotencyKeys(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("idempotency keys", limit)
+}
+
 func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
 	return nil, nil
 }
@@ -442,7 +483,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || got.PendingAttachments != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || got.PendingAttachments != MaxPerTick || got.IdempotencyKeys != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
