@@ -70,7 +70,7 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 	if req.LargeArtifact != (LargeArtifact{}) {
 		// TODO(spec): the signed-upload path waits for the blob store (R0.19 left Blobs unbuilt on
 		// the engines); until it lands a large value is refused rather than written half.
-		return WriteMemoryResp{}, domain.Validation("largeArtifact uploads are not available yet; write an inline value", map[string]any{"field": "largeArtifact"})
+		return WriteMemoryResp{}, domain.Validation("largeArtifact uploads are not available yet: write an inline value of at most 32768 characters, or attach the content to the task with attach_file", map[string]any{"field": "largeArtifact"})
 	}
 	expires, err := parseTTL(req.TTL)
 	if err != nil {
@@ -87,7 +87,9 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 		}
 		value = bytes.TrimSuffix(b.Bytes(), []byte("\n"))
 		if jsLen(string(value)) > memoryInlineMax {
-			return WriteMemoryResp{}, domain.Validation("Memory value exceeds MEMORY_INLINE_MAX (32768); use largeArtifact", map[string]any{"field": "value"})
+			// Not "use largeArtifact" (conductor's): that path is refused above until the blob store
+			// backs it, so the refusal names the one that works.
+			return WriteMemoryResp{}, domain.Validation("Memory value exceeds MEMORY_INLINE_MAX (32768 characters of JSON); a larger value cannot be stored in memory: attach it to the task with attach_file and keep a short note here", map[string]any{"field": "value", "max": memoryInlineMax})
 		}
 	}
 	m := mutation{
