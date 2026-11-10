@@ -24,6 +24,28 @@ export const listTasks = (projectId: string, boardId: string, q: Record<string, 
     `${P(projectId)}/boards/${boardId}/tasks?${new URLSearchParams(q).toString()}`,
   );
 
+/** `list_tasks` takes `limit` 1 to 200 (internal/service/tasks.go listMaxLimit) and refuses more. */
+export const LIST_TASKS_MAX = 200;
+
+/**
+ * The board's first `want` tasks, read page by page with the cursor, each page within the server's
+ * 200. The answer is shaped like one `listTasks` page: every row read, and `nextCursor` when the board
+ * holds more. Asking `listTasks` for `limit` over 200 is refused with 400 VALIDATION.
+ */
+export async function listTasksUpTo(projectId: string, boardId: string, want: number): Promise<{ tasks: Task[]; nextCursor?: string }> {
+  const tasks: Task[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const limit = Math.max(1, Math.min(LIST_TASKS_MAX, want - tasks.length));
+    const page = await listTasks(projectId, boardId, { limit: String(limit), ...(cursor ? { cursor } : {}) });
+    tasks.push(...page.tasks);
+    cursor = page.nextCursor;
+    // An empty page that still names a cursor ends the read rather than looping on it.
+    if (!cursor || tasks.length >= want || page.tasks.length === 0) break;
+  }
+  return { tasks, ...(cursor ? { nextCursor: cursor } : {}) };
+}
+
 export const createTask = (projectId: string, boardId: string, body: Record<string, unknown>) =>
   req<{ task: Task }>('POST', `${P(projectId)}/boards/${boardId}/tasks`, body);
 

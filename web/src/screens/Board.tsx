@@ -29,7 +29,7 @@ import { ApiError, isLocalEdit } from '../api/http.js';
 import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
-import { boardTasksKey, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
+import { boardTasksKey, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
 import { TaskDrawer } from './TaskDrawer.js';
 import { type AgentEntry, STATE_META, agentKey, buildAgentList, busyAgentKeys, isLiveEntry } from '../agentStatus.js';
 import { uiSettings } from '../settings.js';
@@ -752,14 +752,34 @@ export function Board() {
   const pollMs = streamLive ? (false as const) : 10000;
   const boardQ = useQuery({ queryKey: ['board', projectId, boardId], queryFn: () => boardsApi.getBoard(projectId, boardId), refetchInterval: pollMs });
   const [limit, setLimit] = useState(() => uiSettings().taskPageLimit);
+  // The stream's frame handler reads the key through this, so a "Load more" does not tear the shared
+  // socket down and up again to hand the handler a new `limit`.
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
   // `limit` IS part of the key — see `boardTasksKey`. It used to be held out of it and forced through a
   // manual invalidate effect, which left one cache entry shared with TaskDrawer's differently-sized
   // observer.
-  // `keepPreviousData` is load-bearing now that `limit` is in the key: "Load more" switches to a key
-  // with no cached entry, so without it `tasksQ.data` is undefined for a whole round-trip — the board
-  // would blank out and the "Load more" button (gated on `nextCursor`) would vanish mid-click. The old
-  // shape got this for free by mutating one entry; this restores it explicitly.
-  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => boardsApi.listTasks(projectId, boardId, { limit: String(limit) }), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  // `limit` is how many rows the board shows, NOT the `limit` of one request: `list_tasks` refuses more
+  // than 200, so `listTasksUpTo` reads the rows page by page with the cursor. "Load more" asked for
+  // `limit=400` once, the server answered 400 VALIDATION, and every later refetch at that size failed.
+  // "Load more" reads the bigger list BEFORE switching to its key (`loadMore` below), so the board never
+  // renders a key with no data; `keepPreviousData` stays as the net for an entry collected meanwhile.
+  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, limit), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  const [moreErr, setMoreErr] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMore = async (): Promise<void> => {
+    const next = limit + boardsApi.LIST_TASKS_MAX;
+    setLoadingMore(true);
+    try {
+      await qc.fetchQuery({ queryKey: boardTasksKey(projectId, boardId, next), queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, next), retry: false });
+      setMoreErr(null);
+      setLimit(next);
+    } catch (e) {
+      setMoreErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   const feedQ = useQuery({ queryKey: ['feed', projectId, boardId], queryFn: () => feedApi.feed(projectId, boardId), refetchInterval: pollMs });
   const searchQ = useQuery({
     queryKey: ['search', projectId, filters.q],
@@ -855,16 +875,23 @@ export function Board() {
             //
             // MERGE, not skip: every OTHER task in the snapshot still lands, so a colleague's change to
             // a different card is not delayed by your in-flight drag.
-            const incoming = snap.tasks as { tasks: Task[] };
-            qc.setQueryData<{ tasks: Task[] }>(boardTasksKey(projectId, boardId, limit), (old) =>
-              mergeSnapshotPreservingLocalEdits(old, incoming, isLocalEdit),
+            //
+            // THE FRAME IS THE FIRST PAGE ONLY (200 tasks). Over a list "Load more" grew, it stands for
+            // that page and the rows past it are kept (`mergeFirstPage`); those rows are then re-read,
+            // since the frame says nothing about them. Only then: a board within one page costs no read.
+            const incoming = snap.tasks as { tasks: Task[]; nextCursor?: string };
+            const key = boardTasksKey(projectId, boardId, limitRef.current);
+            const held = qc.getQueryData<{ tasks: Task[] }>(key)?.tasks.length ?? 0;
+            qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
+              mergeSnapshotPreservingLocalEdits(old, mergeFirstPage(old, incoming), isLocalEdit),
             );
+            if (incoming.nextCursor && held > incoming.tasks.length) void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
         },
         refetchBoard,
       ),
-    [projectId, boardId, qc, limit, refetchBoard],
+    [projectId, boardId, qc, refetchBoard],
   );
 
   const [newPriority, setNewPriority] = useState('normal');
@@ -879,6 +906,16 @@ export function Board() {
 
   const board = boardQ.data?.board;
   const allTasks = useMemo(() => tasksQ.data?.tasks ?? [], [tasksQ.data]);
+  // NOT LOADED IS NOT EMPTY. A list that failed (or is still on its way) has no rows to show, and
+  // drawing it as "0 tasks" with "No tasks" in every column tells the reader the board is empty.
+  const tasksLoaded = !!tasksQ.data;
+  // The board's own total, from the counts `get_board` answers, for when the list holds one page of it.
+  const boardTotal = Object.values(boardQ.data?.taskCounts ?? {}).reduce((n, c) => n + c, 0);
+  const tasksSubtitle = !tasksLoaded
+    ? tasksQ.isError ? 'tasks not loaded' : 'loading tasks…'
+    : tasksQ.data?.nextCursor && boardTotal > allTasks.length
+      ? `${allTasks.length} of ${boardTotal} tasks`
+      : `${allTasks.length} ${allTasks.length === 1 ? 'task' : 'tasks'}`;
   const changedTasks = useChangedTasks(allTasks);
 
   // Live agent presence: an agent holding a non-expired claim is "busy"; everything else is derived from
@@ -1165,7 +1202,7 @@ export function Board() {
       {/* Board header — identity + the two primary affordances (create, activity) */}
       <PageHeader
         title={board?.name ?? 'Board'}
-        subtitle={`${allTasks.length} ${allTasks.length === 1 ? 'task' : 'tasks'}`}
+        subtitle={tasksSubtitle}
         actions={
           <>
             {projectBoards.length > 1 && (
@@ -1296,8 +1333,26 @@ export function Board() {
         {(filters.status || filters.assignee || filters.label || filters.sprint || filters.unblocked || filters.q) && (
           <button className="btn secondary" onClick={() => setFilters({ status: '', assignee: '', label: '', sprint: '', unblocked: false, q: '' })}>Clear</button>
         )}
-        {tasksQ.data?.nextCursor && <button className="btn secondary" onClick={() => setLimit((l) => l + 200)}>Load more</button>}
+        {tasksQ.data?.nextCursor && (
+          <button className="btn secondary" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? 'Loading…' : 'Load more'}</button>
+        )}
       </div>
+
+      {/* The task list's read failed: said, with a way to try again, rather than drawn as an empty
+          board. With rows from an earlier read still on screen, they stay and the line says so. */}
+      {tasksQ.isError && !tasksQ.isFetching && (
+        <p className="error" role="alert" style={{ fontSize: 12, margin: '6px 12px 0' }}>
+          {tasksLoaded ? 'Couldn’t refresh the tasks; showing the last ones read' : 'Couldn’t load the tasks'}
+          {tasksQ.error instanceof Error && tasksQ.error.message ? `: ${tasksQ.error.message}` : ''}.{' '}
+          <button type="button" className="btn secondary" style={{ fontSize: 11, padding: '1px 7px' }} onClick={() => void tasksQ.refetch()}>Retry</button>
+        </p>
+      )}
+      {moreErr && (
+        <p className="error" role="alert" style={{ fontSize: 12, margin: '6px 12px 0' }}>
+          Couldn’t load more tasks: {moreErr}.{' '}
+          <button type="button" className="btn secondary" style={{ fontSize: 11, padding: '1px 7px' }} onClick={() => setMoreErr(null)}>Dismiss</button>
+        </p>
+      )}
 
       {/* A refusal because the caller is not a member says so, as the closed controls above do (P-445).
           The server answers FORBIDDEN "Not a member of project …"; the roster may say it first. */}
@@ -1464,7 +1519,7 @@ export function Board() {
                           />
                         ))}
                       </AnimatePresence>
-                      {colTasks.length === 0 && (
+                      {colTasks.length === 0 && tasksLoaded && (
                         <div className="muted" style={{ fontSize: 12, padding: '8px 4px' }}>
                           {canCreate ? (
                             <>No tasks — press <span className="kbd">c</span></>

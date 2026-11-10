@@ -50,6 +50,24 @@ export function mergeSnapshotPreservingLocalEdits(
 }
 
 /**
+ * Write a board frame's task page over a cached list that may hold MORE than that page.
+ *
+ * A frame carries the board's first page only (200 tasks, internal/api/stream.go boardTasksLimit),
+ * with its cursor when the board holds more. Written over a list that "Load more" grew, it would drop
+ * every row past its page and bring the button back. So the frame stands for the first page, and the
+ * cached rows past it are kept, less any the frame now carries. A frame with no cursor holds the
+ * whole board and replaces the list outright. The kept rows are as fresh as the last read of them:
+ * the board refetches the list when it keeps any (Board.tsx).
+ */
+export function mergeFirstPage(old: TaskPage | undefined, frame: TaskPage): TaskPage {
+  if (!frame.nextCursor || !old?.tasks || old.tasks.length <= frame.tasks.length) return frame;
+  const inFrame = new Set(frame.tasks.map((t) => t.id));
+  const rest = old.tasks.slice(frame.tasks.length).filter((t) => !inFrame.has(t.id));
+  if (rest.length === 0) return frame;
+  return { tasks: [...frame.tasks, ...rest], ...(old.nextCursor ? { nextCursor: old.nextCursor } : {}) };
+}
+
+/**
  * Apply an optimistic transform to a task everywhere it appears (board lists + the task detail).
  *
  * PREFIX-BASED, AND THAT IS THE WHOLE POINT. It iterates
