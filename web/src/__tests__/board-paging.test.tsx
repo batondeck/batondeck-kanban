@@ -56,6 +56,9 @@ let failTasks = false;
 let taskUrls: string[] = [];
 /** Runs once after the board's first page is served: a change landing between two page reads. */
 let afterFirstPage: (() => void) | null = null;
+/** Holds the answer to the next task-list request (read at request time) until it resolves: a read
+ *  still in flight. */
+let holdNextRead: Promise<void> | null = null;
 const json = (status: number, b: unknown) => ({ ok: status < 400, status, json: async () => b }) as Response;
 
 beforeEach(() => {
@@ -65,6 +68,7 @@ beforeEach(() => {
   failTasks = false;
   taskUrls = [];
   afterFirstPage = null;
+  holdNextRead = null;
   vi.stubGlobal('EventSource', FakeES);
   vi.stubGlobal(
     'fetch',
@@ -78,8 +82,10 @@ beforeEach(() => {
         if (limit < 0 || limit > 200) return json(400, { code: 'VALIDATION', message: 'limit is 1 to 200' });
         const from = Number(url.searchParams.get('cursor') ?? '0');
         const page = all.slice(from, from + limit);
+        const next = from + limit < all.length ? { nextCursor: String(from + limit) } : {};
         if (from === 0 && afterFirstPage) { afterFirstPage(); afterFirstPage = null; }
-        return json(200, { tasks: page, ...(from + limit < all.length ? { nextCursor: String(from + limit) } : {}) });
+        if (holdNextRead) { const h = holdNextRead; holdNextRead = null; await h; }
+        return json(200, { tasks: page, ...next });
       }
       const routes: Array<[RegExp, unknown]> = [
         [/\/boards\/b1\/feed$/, { events: [] }],
@@ -151,6 +157,45 @@ describe('the board pages its task list with the cursor (limit stays within 1..2
     await act(() => new Promise<void>((r) => setTimeout(r, 30)));
     expect(cards()).toBe(25);
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it.each([
+    ['after Load more', true],
+    ['on the first page', false],
+  ])('a read already in flight when a frame lands does not put the older rows back (%s)', async (_, more) => {
+    const qc = renderBoard();
+    await waitFor(() => expect(cards()).toBe(20));
+    const shown = more ? 25 : 20;
+    if (more) {
+      fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+      await waitFor(() => expect(cards()).toBe(25));
+    }
+    const es = FakeES.instances.at(-1)!;
+    act(() => {
+      es.readyState = 1;
+      es.emit('open');
+    });
+
+    // A re-read of the list starts (a settle refetch, say): the server reads the rows, and the answer
+    // is still on its way.
+    let release!: () => void;
+    holdNextRead = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    void qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] });
+    await waitFor(() => expect(taskUrls.length).toBeGreaterThan(0));
+
+    // Then T-1 is renamed, and the frame for that change lands while the read is still out.
+    all = [{ ...all[0]!, title: 'Renamed' }, ...all.slice(1)];
+    act(() => {
+      es.emit('board', { board: { board, taskCounts: { c1: 25 } }, tasks: { tasks: all.slice(0, 20), nextCursor: '20' }, feed: { events: [] } });
+    });
+    await waitFor(() => expect(screen.getByText('Renamed')).toBeInTheDocument());
+
+    // The read that began before the rename finishes now: it must not overwrite the frame.
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    await waitFor(() => expect(cards()).toBe(shown));
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(screen.queryByText('Task 1'), 'the older row came back').toBeNull();
   });
 
   it('a Load more that fails says so, keeps the cards shown, and leaves later refetches working', async () => {

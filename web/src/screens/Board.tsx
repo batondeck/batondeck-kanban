@@ -896,14 +896,17 @@ export function Board() {
             //
             // THE FRAME IS THE FIRST PAGE ONLY (200 tasks). Over a list "Load more" grew, it stands for
             // that page and the rows past it are kept (`mergeFirstPage`); those rows are then re-read,
-            // since the frame says nothing about them. Only then: a board within one page costs no read.
+            // since the frame says nothing about them. A read already in flight began before this
+            // change, so it is cancelled and started again (the default `cancelRefetch`): left to
+            // finish, it would put the older rows back. Otherwise a frame costs no read.
             const incoming = snap.tasks as { tasks: Task[]; nextCursor?: string };
             const key = boardTasksKey(projectId, boardId, limitRef.current);
             const held = qc.getQueryData<{ tasks: Task[] }>(key)?.tasks.length ?? 0;
+            const inFlight = qc.isFetching({ queryKey: key, exact: true }) > 0;
             qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
               mergeSnapshotPreservingLocalEdits(old, mergeFirstPage(old, incoming), isLocalEdit),
             );
-            if (incoming.nextCursor && held > incoming.tasks.length) void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
+            if (inFlight || (incoming.nextCursor && held > incoming.tasks.length)) void qc.invalidateQueries({ queryKey: key, exact: true });
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
         },
