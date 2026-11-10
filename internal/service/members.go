@@ -16,8 +16,9 @@ import (
 // two admins and leave none. When the identity is an account, a row
 // keyed by its login (added by that login before the account existed, and kept as given) is folded
 // into the account's row in the same mutation: the row goes, and its grant follows when the account
-// was no member. After the commit the identity's cached access is dropped, so a new role or
-// membership holds on its next call.
+// was no member. After the commit the identity's cached access is dropped (InvalidateAccess here,
+// ObserveChange in every other process once the bus delivers the row), so a new role or membership
+// holds on its next call.
 func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMemberReq) (AddMemberResp, error) {
 	a, err := p.c.authorize(ctx, caller, req.ProjectID, "add_member", domain.GrantSubject{}, false)
 	if err != nil {
@@ -91,7 +92,8 @@ func foldMember(ctx context.Context, t *txn, projectID, from, to string, moveGra
 // RemoveMember is remove_member; removing the last admin is VALIDATION, a non-member NOT_FOUND. The
 // identity is named as memberKey resolves it, so a row keyed by a login is removable by that login
 // after an account has taken it.
-// After the commit the identity's cached access is dropped, so it is refused on its next call.
+// After the commit the identity's cached access is dropped (InvalidateAccess here, ObserveChange in
+// every other process once the bus delivers the row), so it is refused on its next call.
 func (p projects) RemoveMember(ctx context.Context, caller domain.Caller, req RemoveMemberReq) (RemoveMemberResp, error) {
 	a, err := p.c.authorize(ctx, caller, req.ProjectID, "remove_member", domain.GrantSubject{}, false)
 	if err != nil {

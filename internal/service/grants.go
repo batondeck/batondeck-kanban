@@ -19,7 +19,8 @@ type grantsSvc struct{ c *Core }
 // is VALIDATION (conductor's), a deny or tools entry that is no tool, or one no grant can enforce, is
 // VALIDATION naming it (domain.CheckGrantEnforceable; a grant stored before that check still loads
 // and is enforced by the names it holds). After the
-// commit the member's cached access and tools/list narrowing are dropped, so the grant holds on their
+// commit the member's cached access and tools/list narrowing are dropped (InvalidateAccess here,
+// ObserveChange in every other process once the bus delivers the row), so the grant holds on their
 // next call and their next request is told its tool list changed.
 func (g grantsSvc) Grant(ctx context.Context, caller domain.Caller, req GrantCapabilitiesReq) (GrantCapabilitiesResp, error) {
 	a, err := g.c.authorize(ctx, caller, req.ProjectID, "grant_capabilities", domain.GrantSubject{}, false)
