@@ -134,9 +134,10 @@ describe('a jwt integration', () => {
 });
 
 describe('clearing a setting on edit', () => {
-  // The core replaces the stored mapping with any mapping that is not `{}`, reads an absent one (or
-  // `{}`) as "unchanged", and clears the target column only on an explicit null. A patch that just
-  // OMITS what was cleared is answered 200 and changes nothing.
+  // The core replaces the stored mapping whole with any mapping the patch carries (`{}` clears it),
+  // reads an absent one as "unchanged", and clears the target column only on an explicit null. A
+  // patch that just OMITS what was cleared is answered 200 and changes nothing. internal/api's
+  // TestOncallUpdateReplacesMappingAndClearsColumnOverREST pins the core's half on every engine.
   const GRAFANA: Integration = {
     ...BASE,
     source: 'grafana',
@@ -144,8 +145,6 @@ describe('clearing a setting on edit', () => {
     target: { boardId: 'B-9', columnId: 'C-triage' },
     mapping: { labels: ['oncall'] },
   };
-  const isEmpty = (v: unknown): boolean =>
-    v === null || (Array.isArray(v) ? v.length === 0 : typeof v === 'object' && Object.keys(v as object).length === 0);
 
   it('clearing the only stamped label clears it, rather than saving nothing', async () => {
     mount(GRAFANA);
@@ -154,10 +153,8 @@ describe('clearing a setting on edit', () => {
     fireEvent.change(await screen.findByLabelText(/labels stamped on every ticket/i), { target: { value: '' } });
     fireEvent.click(saveButton());
     const patch = await sentPatch();
-    const mapping = patch['mapping'] as Record<string, unknown> | undefined;
-    expect(mapping, 'an omitted mapping is "unchanged" to the core').toBeDefined();
-    expect(Object.keys(mapping!).length, '`{}` is "unchanged" to the core too').toBeGreaterThan(0);
-    for (const [k, v] of Object.entries(mapping!)) expect(isEmpty(v), `mapping.${k} is cleared`).toBe(true);
+    expect(patch, 'an omitted mapping is "unchanged" to the core').toHaveProperty('mapping');
+    expect(patch['mapping'], 'an empty mapping replaces the stored one').toEqual({});
   });
 
   it('blanking the target column sends null, which is what clears it', async () => {

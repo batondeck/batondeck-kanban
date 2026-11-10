@@ -389,7 +389,7 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 			return Integration{}, domain.Stale(req.Version, cur.Version)
 		}
 		// Against the stored source: a source is fixed once its endpoint is pasted somewhere.
-		if err := checkMapping(cur.Source, p.Mapping); err != nil {
+		if err := checkMapping(cur.Source, p.Mapping.V); err != nil {
 			return Integration{}, err
 		}
 		patch := store.IntegrationPatch{UpdatedAt: t.Now.UnixMilli()}
@@ -430,8 +430,8 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 			}
 			shown = built.shown
 		}
-		if !isZeroMapping(p.Mapping) {
-			if patch.Mapping, err = marshalObject(p.Mapping); err != nil {
+		if p.Mapping.Set {
+			if patch.Mapping, err = marshalObject(p.Mapping.V); err != nil {
 				return Integration{}, err
 			}
 		}
@@ -466,11 +466,6 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 		resp.Secret, resp.ShownOnce = shown, true
 	}
 	return resp, nil
-}
-
-func isZeroMapping(m IntegrationMapping) bool {
-	b, _ := json.Marshal(m)
-	return string(b) == "{}"
 }
 
 func (s oncallSvc) DeleteIntegration(ctx context.Context, caller domain.Caller, req DeleteIntegrationReq) (DeleteIntegrationResp, error) {

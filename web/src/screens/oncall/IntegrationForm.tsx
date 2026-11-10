@@ -204,10 +204,9 @@ export function createBodyOf(f: FormState, source: OncallSource): CreateIntegrat
  * integration on every save and breaking the live sender.
  *
  * A CLEARED SETTING MUST BE SAID, because the core reads an absent field as "unchanged". It clears
- * the target column only on an explicit `null`. It replaces the stored mapping with any mapping that
- * is not `{}`, but an absent mapping or `{}` changes nothing — so when the operator has cleared the
- * last mapping setting, `{ labels: [] }` stands for "no mapping": no stamped labels is exactly what
- * an absent `labels` means.
+ * the target column only on an explicit `null`, and it replaces the stored mapping whole with any
+ * mapping the patch carries — so when the operator has cleared the last mapping setting, the patch
+ * carries `mapping: {}`.
  */
 export function patchBodyOf(f: FormState, source: OncallSource, current: Integration): IntegrationPatchBody {
   const modeChanged = f.authMode !== current.auth.mode;
@@ -222,7 +221,7 @@ export function patchBodyOf(f: FormState, source: OncallSource, current: Integra
   return {
     ...body,
     ...(clearsColumn ? { columnId: null } : {}),
-    ...(clearsMapping ? { mapping: { labels: [] } } : {}),
+    ...(clearsMapping ? { mapping: {} } : {}),
     ...(sendAuth ? { auth: authOf(f) } : {}),
   };
 }
