@@ -610,6 +610,34 @@ func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
 	})
 }
 
+// api-http#4 (review): the kept file name is bounded and printable: valid UTF-8, at most 255
+// characters (a file name's limit on common file systems), no control characters. Anything else is
+// VALIDATION on fileName before an attachment is made; a name with spaces, accents or a slash
+// is kept as given.
+func TestAttachFileBoundsTheFileNameOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		attach := func(name string) error {
+			_, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: name, MimeType: "text/plain", Kind: "file", Bytes: 3})
+			return err
+		}
+		for _, bad := range []string{strings.Repeat("a", 256), "line\nbreak.txt", "tab\t.txt", "nul\x00.txt", "bad\xff.txt", "del\x7f.txt"} {
+			err := attach(bad)
+			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["field"] != "fileName" {
+				t.Errorf("fileName %q: %v, want VALIDATION on fileName", bad, err)
+			}
+		}
+		if list := m.list(t, task.ID); len(list) != 0 {
+			t.Fatalf("a refused name left attachments: %+v", list)
+		}
+		for _, good := range []string{strings.Repeat("a", 251) + ".txt", strings.Repeat("設", 251) + ".txt", "Résumé (final) v2.txt", "docs/spec.txt"} {
+			if err := attach(good); err != nil {
+				t.Errorf("fileName %q: %v, want it kept", good, err)
+			}
+		}
+	})
+}
+
 // named is body committed to the blob store with a blob row, last written at mod.
 func (m *mediaEnv) named(t *testing.T, body []byte, mod time.Time) string {
 	t.Helper()

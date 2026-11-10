@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/batondeck/batondeck-kanban/internal/blob"
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -98,7 +101,8 @@ func (c *Core) signedExpiry() time.Time {
 
 // AttachFile is attach_file: a pending attachment row and an upload URL for it, signed for upload
 // until expiresAt. The task's version moves once; the event is attachment.created. A replay of its
-// idempotency key answers the same attachment with a URL signed at the replay.
+// idempotency key answers the same attachment with a URL signed at the replay. fileName is kept as
+// given, once checkFileName passes it.
 func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachFileReq) (AttachFileResp, error) {
 	c := m.c
 	a, err := c.authorize(ctx, caller, req.ProjectID, "attach_file", domain.GrantSubject{}, true)
@@ -119,6 +123,9 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 		return AttachFileResp{}, domain.Validation("bytes exceeds blob.max_bytes", map[string]any{"field": "bytes", "max": c.media.MaxBytes})
 	case !allowedMime(req.MimeType):
 		return AttachFileResp{}, domain.Validation("mimeType not allowed: "+req.MimeType, map[string]any{"field": "mimeType"})
+	}
+	if err := checkFileName(req.FileName); err != nil {
+		return AttachFileResp{}, err
 	}
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return AttachFileResp{}, err
@@ -277,6 +284,26 @@ func (c *Core) pendingAttachment(ctx context.Context, s store.Store, ref blob.Re
 func uploadedAlready(id string, status store.AttachmentStatus) *domain.BatonDeckError {
 	return domain.NewError(domain.CodeInvalidTransition, "the attachment is "+string(status)+", not pending: it was uploaded already",
 		map[string]any{"attachmentId": id, "status": status})
+}
+
+// maxFileName is the longest file name attach_file keeps, in characters: a file name's limit on
+// common file systems (255 characters on APFS and NTFS, 255 bytes on ext4).
+const maxFileName = 255
+
+// checkFileName refuses a file name attach_file would keep that no common file system takes or that
+// does not print: not UTF-8, over maxFileName characters, or holding a control character. A slash
+// or a backslash stays, as given: a caller saving a file under the name picks its own directory and
+// keeps the name's last element.
+func checkFileName(name string) error {
+	switch {
+	case !utf8.ValidString(name):
+		return domain.Validation("fileName is not UTF-8", map[string]any{"field": "fileName"})
+	case utf8.RuneCountInString(name) > maxFileName:
+		return domain.Validation("fileName is longer than 255 characters", map[string]any{"field": "fileName", "max": maxFileName})
+	case strings.ContainsFunc(name, unicode.IsControl):
+		return domain.Validation("fileName holds a control character", map[string]any{"field": "fileName"})
+	}
+	return nil
 }
 
 // unlinkUnreferenced removes sha's file when no blob row names it (an upload refused after its file
