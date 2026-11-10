@@ -97,7 +97,8 @@ type HookResult struct {
 // presented (before any read), the integration by its id alone (unknown, tombstoned or disabled is
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
-// <source id or the body's hash>#<fingerprint or index>. The delivery is charged to the
+// <source id or the body's hash>#<fingerprint or index> (a body-hash id qualified so that it repeats
+// only as a retry, deliveryRecord). The delivery is charged to the
 // integration's rate budget before it is verified, so a refused sender cannot buy an outbound JWKS
 // fetch past the budget (P-231); a verification or parse failure is paid by that charge and is a
 // rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
@@ -177,8 +178,11 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		}
 		return badRequest(reason)
 	}
+	// A source's own id is a delivery's for the delivery window; the body's hash, when the source
+	// has none, only for a retry (deliveryRecord).
 	base := conn.DeliveryID(payload, cc)
-	if base == "" {
+	hashed := base == ""
+	if hashed {
 		base = bodyHash
 	}
 	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
@@ -193,7 +197,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 			key = strconv.Itoa(i)
 		}
 		deliveryID := base + "#" + key
-		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID)
+		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID, hashed)
 		if e, ok := domain.AsBatonDeckError(err); ok {
 			if e.Code == domain.CodeRateLimited {
 				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))
@@ -216,8 +220,8 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		if got.TaskID != nil {
 			task = *got.TaskID
 		}
-		c.log.Printf("ingest: integration %s delivery %s %s task %s doorbell %s replayed %t", integration.ID, deliveryID, got.Result, task, got.Doorbell, got.Replayed)
-		out.Results = append(out.Results, HookResult{DeliveryID: deliveryID, Result: string(got.Result), TaskID: got.TaskID, Replayed: got.Replayed})
+		c.log.Printf("ingest: integration %s delivery %s %s task %s doorbell %s replayed %t", integration.ID, got.DeliveryID, got.Result, task, got.Doorbell, got.Replayed)
+		out.Results = append(out.Results, HookResult{DeliveryID: got.DeliveryID, Result: string(got.Result), TaskID: got.TaskID, Replayed: got.Replayed})
 	}
 	return out, nil
 }

@@ -711,7 +711,7 @@ func (s oncallSvc) ReplayDelivery(ctx context.Context, caller domain.Caller, req
 	}
 	// A new delivery id per replay: the original's would replay its own recorded outcome.
 	newID := "replay:" + req.DeliveryID + ":" + strconv.FormatInt(s.c.nowMs(), 10)
-	got, err := s.c.ingest(ctx, caller, "replay_delivery", a, integration, ev, newID)
+	got, err := s.c.ingest(ctx, caller, "replay_delivery", a, integration, ev, newID, false)
 	if err != nil {
 		return ReplayDeliveryResp{}, err
 	}
@@ -753,21 +753,22 @@ func (s oncallSvc) SendTestEvent(ctx context.Context, caller domain.Caller, req 
 		ev.Title = "Test event from " + integration.Name
 	}
 	deliveryID := "test:" + integration.ID + ":" + strconv.FormatInt(now.UnixMilli(), 10)
-	got, err := s.c.ingest(ctx, caller, "send_test_event", a, integration, ev, deliveryID)
+	got, err := s.c.ingest(ctx, caller, "send_test_event", a, integration, ev, deliveryID, false)
 	if err != nil {
 		return SendTestEventResp{}, err
 	}
 	return SendTestEventResp{DeliveryID: deliveryID, Doorbell: got.Doorbell, Result: string(got.Result), TaskID: got.TaskID}, nil
 }
 
-// Ingested is what ingesting one event did: the delivery row's result and ticket, whether the
-// delivery id was already recorded (nothing re-ran), and the doorbell rung (assigned, broadcast or
-// none).
+// Ingested is what ingesting one event did: the id its delivery row is under, the row's result and
+// ticket, whether the delivery id was already recorded (nothing re-ran), and the doorbell rung
+// (assigned, broadcast or none).
 type Ingested struct {
-	Result   store.DeliveryResult
-	TaskID   *string
-	Replayed bool
-	Doorbell string
+	DeliveryID string
+	Result     store.DeliveryResult
+	TaskID     *string
+	Replayed   bool
+	Doorbell   string
 }
 
 // defaultSeverityMap is conductor's DEFAULT_SEVERITY_MAP (incident.ts:24-39).
@@ -818,6 +819,62 @@ func incidentTitle(ev oncall.Event, m IntegrationMapping) string {
 	return title
 }
 
+// retryWindow is how long a delivery id derived from the body's hash (the source sent none of its
+// own) answers as a retry of a recorded delivery. A sender with no id of its own posts the same
+// body for every outage of the same check, so an identical body after the window, or after another
+// delivery of the same alert, is a new delivery; within it, a sender's retry lands once.
+const retryWindow = 10 * time.Minute
+
+// deliveryRecord resolves the id ev is recorded under and the delivery already recorded under it
+// (nil when none), read through s: the store, or the ingest's transaction. A source's own id is
+// kept as it is, for the delivery window. A body-hash id (hashed) is qualified so that it repeats
+// only as a retry: for a correlated alert by the time it was ingested, which its ingest leaves as
+// the alert state's lastAt, so a retry finds the delivery while it is still the alert's latest and
+// within retryWindow; with no alert state (per_event, a test event) by its retryWindow-long slot,
+// the slot before it searched too. Not found, a body-hash id is qualified by now.
+func deliveryRecord(ctx context.Context, s store.Store, integration store.Integration, ev oncall.Event, id string, hashed bool, now time.Time) (string, *store.Delivery, error) {
+	get := func(id string) (*store.Delivery, error) {
+		d, err := s.GetDelivery(ctx, integration.ProjectID, integration.ID, id)
+		if isNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &d, nil
+	}
+	if !hashed {
+		d, err := get(id)
+		return id, d, err
+	}
+	ms, window := now.UnixMilli(), retryWindow.Milliseconds()
+	var candidates []string
+	if integration.Lifecycle != "per_event" && ev.Status != oncall.StatusTest {
+		st, err := s.GetAlertState(ctx, integration.ProjectID, integration.ID, ev.Fingerprint)
+		if err != nil && !isNotFound(err) {
+			return "", nil, err
+		}
+		if err == nil {
+			candidates = append(candidates, id+"@"+strconv.FormatInt(st.LastAt, 10))
+		}
+		id += "@" + strconv.FormatInt(ms, 10)
+	} else {
+		slot := ms / window
+		candidates = append(candidates, id+"@w"+strconv.FormatInt(slot, 10), id+"@w"+strconv.FormatInt(slot-1, 10))
+		id = candidates[0]
+	}
+	for _, at := range candidates {
+		d, err := get(at)
+		if err != nil {
+			return "", nil, err
+		}
+		if d != nil && ms-d.TS < window {
+			return at, d, nil
+		}
+	}
+	return id, nil, nil
+}
+
 // ingest files one verified, normalized event against integration under deliveryID, in one
 // transaction under the project lock (two firings of one fingerprint must not both find no open
 // ticket and both file one): a delivery id already recorded answers its recorded outcome and writes
@@ -831,7 +888,7 @@ func incidentTitle(ev oncall.Event, m IntegrationMapping) string {
 // routed assignee assigned, else the project broadcast; an append, annotation or close rings nobody.
 // A close deletes an untouched ticket through delete_task's cascade (its delivery rows keep the
 // dangling taskId); any other resolve annotates.
-func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a access, integration store.Integration, ev oncall.Event, deliveryID string) (Ingested, error) {
+func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a access, integration store.Integration, ev oncall.Event, deliveryID string, hashed bool) (Ingested, error) {
 	var mapping IntegrationMapping
 	var routing IntegrationRouting
 	var limits IntegrationLimits
@@ -844,24 +901,19 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			return Ingested{}, c.mapErr(tool, fmt.Errorf("integration %s %s: %w", integration.ID, f.name, err))
 		}
 	}
-	recorded := func(s store.Store) (*Ingested, error) {
-		prior, err := s.GetDelivery(ctx, integration.ProjectID, integration.ID, deliveryID)
-		if isNotFound(err) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return &Ingested{Result: prior.Result, TaskID: prior.TaskID, Replayed: true, Doorbell: "none"}, nil
+	replay := func(id string, prior store.Delivery) Ingested {
+		return Ingested{DeliveryID: id, Result: prior.Result, TaskID: prior.TaskID, Replayed: true, Doorbell: "none"}
 	}
-	if prior, err := recorded(c.store); err != nil || prior != nil {
-		if err != nil {
-			return Ingested{}, c.mapErr(tool, err)
-		}
-		return *prior, nil
+	now := c.now()
+	charged, prior, err := deliveryRecord(ctx, c.store, integration, ev, deliveryID, hashed, now)
+	if err != nil {
+		return Ingested{}, c.mapErr(tool, err)
 	}
-	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), c.now(), deliveryID) {
-		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %s refused", integration.ID, int(limits.RatePerMin), deliveryID)
+	if prior != nil {
+		return replay(charged, *prior), nil
+	}
+	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), now, charged) {
+		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %s refused", integration.ID, int(limits.RatePerMin), charged)
 		return Ingested{}, domain.NewError(domain.CodeRateLimited, "Rate limit exceeded for integration "+integration.ID,
 			map[string]any{"integrationId": integration.ID, "ratePerMin": limits.RatePerMin})
 	}
@@ -883,13 +935,14 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		ProjectID: integration.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (Ingested, error) {
 		blobs = nil
-		if prior, err := recorded(t.Tx); err != nil || prior != nil {
-			if err != nil {
-				return Ingested{}, err
-			}
+		id, prior, err := deliveryRecord(ctx, t.Tx, integration, ev, deliveryID, hashed, t.Now)
+		if err != nil {
+			return Ingested{}, err
+		}
+		if prior != nil {
 			// Recorded while this one waited for the lock: still a replay, and still no change.
 			t.NoChange()
-			return *prior, nil
+			return replay(id, *prior), nil
 		}
 		ts := t.Now.UnixMilli()
 		// The lifecycle table consults correlation only for a correlated, non-test event.
@@ -921,7 +974,7 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			}
 			untouched = kept == ""
 		}
-		out := Ingested{Result: store.ResultRecorded, Doorbell: "none"}
+		out := Ingested{DeliveryID: id, Result: store.ResultRecorded, Doorbell: "none"}
 		var eventTask *string // the task the incident.delivery event hangs on; nil is the board
 		switch oncall.Decide(integration.Lifecycle, ev.Status, open != nil, untouched) {
 		case oncall.ActionCreate:
@@ -976,19 +1029,20 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			id := open.ID
 			out.Result, out.TaskID = store.ResultClosed, &id
 		}
-		if open != nil && ev.Status == oncall.StatusResolved {
+		// A resolve of an alert whose ticket is done or gone is the alert's latest delivery too.
+		if state.TaskID != "" && ev.Status == oncall.StatusResolved {
 			state.LastAt, state.AlertStatus = ts, oncall.StatusResolved
 			if err := t.Tx.PutAlertState(ctx, state); err != nil {
 				return Ingested{}, err
 			}
 		}
 		if _, _, err := t.Tx.InsertDelivery(ctx, store.Delivery{
-			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: ts, Kind: kind,
+			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: id, TS: ts, Kind: kind,
 			Result: out.Result, TaskID: out.TaskID, NormalizedEvent: event, ExpiresAt: t.Now.Add(c.deliveryTTL).UnixMilli(),
 		}); err != nil {
 			return Ingested{}, err
 		}
-		data, err := marshalObject(map[string]any{"integrationId": integration.ID, "deliveryId": deliveryID, "result": out.Result, "kind": kind})
+		data, err := marshalObject(map[string]any{"integrationId": integration.ID, "deliveryId": id, "result": out.Result, "kind": kind})
 		if err != nil {
 			return Ingested{}, err
 		}

@@ -255,6 +255,74 @@ func TestMutateNoChangeWritesNothing(t *testing.T) {
 	}
 }
 
+// A delivery id the server derives from the body's hash (the source sent none of its own) answers
+// as a retry only while the delivery is one: within the retry window, and while it is still the
+// alert's latest delivery. An uptime check that goes down, up and down again posts the same body
+// twice, and the second outage files again; so does the same body after the window. Without alert
+// state (per_event) the window alone decides. A retry of each new delivery is still a replay.
+func TestHookBodyHashIDIsARetryOnlyWhileItIsOne(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := map[string]string{HeaderAPIKey: "key-0123456789"}
+	hdr := func(name string) string { return key[name] }
+	integration := func(name, lifecycle string) string {
+		return f.integration(t, root, CreateIntegrationReq{Name: name, Source: "webhook", Lifecycle: IntegrationLifecycle(lifecycle),
+			Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+			Mapping: IntegrationMapping{Extract: MappingExtract{Fingerprint: []string{"monitor"}, Title: []string{"monitor"}, Status: []string{"status"}},
+				StatusMap: map[string]AlertStatus{"down": "firing", "up": "resolved"}}}).Integration.ID
+	}
+	send := func(iid, body string) HookResult {
+		t.Helper()
+		out := f.hook(t, iid, HookRequest{Header: hdr, Body: []byte(body)})
+		if out.Refusal != "" || len(out.Results) != 1 {
+			t.Fatalf("%s: %+v", body, out)
+		}
+		f.clock.advance(time.Second)
+		return out.Results[0]
+	}
+	const down, up = `{"monitor":"api","status":"down"}`, `{"monitor":"api","status":"up"}`
+	auto := integration("auto", "autoclose")
+	first := send(auto, down)
+	if first.Result != "created" || first.Replayed {
+		t.Fatalf("the first outage: %+v", first)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != first.DeliveryID || *r.TaskID != *first.TaskID {
+		t.Fatalf("its retry: %+v, want the first replayed", r)
+	}
+	if r := send(auto, up); r.Result != "closed" || r.Replayed {
+		t.Fatalf("the recovery: %+v", r)
+	}
+	second := send(auto, down)
+	if second.Result != "created" || second.Replayed || *second.TaskID == *first.TaskID || second.DeliveryID == first.DeliveryID {
+		t.Fatalf("the second outage, the same body after a recovery: %+v, want a new ticket", second)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != second.DeliveryID || *r.TaskID != *second.TaskID {
+		t.Fatalf("the second outage's retry: %+v, want it replayed", r)
+	}
+	// A sender that posts no recovery: the same body after the retry window is a new delivery.
+	f.clock.advance(retryWindow)
+	later := send(auto, down)
+	if later.Result != "appended" || later.Replayed || *later.TaskID != *second.TaskID {
+		t.Fatalf("the same body after the retry window: %+v, want it appended to the open ticket", later)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != later.DeliveryID {
+		t.Fatalf("its retry: %+v, want it replayed", r)
+	}
+
+	each := integration("each", "per_event")
+	one := send(each, down)
+	if r := send(each, down); one.Result != "created" || !r.Replayed || *r.TaskID != *one.TaskID {
+		t.Fatalf("per_event: %+v then %+v, want created then replayed", one, r)
+	}
+	f.clock.advance(retryWindow)
+	two := send(each, down)
+	if two.Result != "created" || two.Replayed || *two.TaskID == *one.TaskID {
+		t.Fatalf("per_event, the same body after the retry window: %+v, want a second ticket", two)
+	}
+	if r := send(each, down); !r.Replayed || *r.TaskID != *two.TaskID {
+		t.Fatalf("per_event, its retry: %+v, want it replayed", r)
+	}
+}
+
 // AC4: under autoclose a repeat firing appends to the open ticket, and the resolve deletes it while
 // it is untouched (get_task NOT_FOUND; the delivery row keeps its taskId); a ticket someone wrote is
 // annotated instead — also when an ingest append followed the write.
@@ -459,9 +527,15 @@ func TestHookToleratesAnUnopenablePreviousSecret(t *testing.T) {
 	if out := f.hook(t, iid, signedHook(rot.Secret, f.clock.now(), genericBody("b", "firing", "t"))); out.Refusal != HookUnauthorized {
 		t.Fatalf("an unopenable current secret: %+v", out)
 	}
-	ds := f.deliveries(t, iid)
-	if ds[0].Kind != store.DeliveryRejected || *ds[0].Error != "secret_unavailable" {
-		t.Fatalf("the refusal's row: %+v", ds[0])
+	// The accepted row and the refusal share a timestamp: find the refusal by its kind.
+	var refused *store.Delivery
+	for _, d := range f.deliveries(t, iid) {
+		if d.Kind == store.DeliveryRejected {
+			refused = &d
+		}
+	}
+	if refused == nil || *refused.Error != "secret_unavailable" {
+		t.Fatalf("the refusal's row: %+v", refused)
 	}
 }
 
