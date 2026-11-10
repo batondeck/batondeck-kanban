@@ -272,3 +272,34 @@ func TestTheHoldersAccountAcksItsAgentsFollowUp(t *testing.T) {
 		}
 	})
 }
+
+// A follow-up a master agent addresses to another agent of its own account (the README's one login,
+// labelled tokens) rings that agent's sessions: the record names it as target, and the identity is
+// the caller's own, so ringing the identity would be dropped as a self-ring.
+func TestASameAccountFollowUpRingsTheTargetAgent(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		master, worker := e.alice, e.alice
+		master.Agent, worker.Agent = "master-1", "w1"
+		task := e.task(t, domain.Todo)
+		e.claim(t, worker, task.ID, 0)
+		fu, err := e.c.FollowUps().AddFollowUp(e.ctx, master, AddFollowUpReq{ProjectID: e.project, TaskID: task.ID, Body: "also handle the empty case"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fu.FollowUp.Target == nil || *fu.FollowUp.Target != "w1" {
+			t.Fatalf("the follow-up's target %v, want the holding agent w1", fu.FollowUp.Target)
+		}
+		row, p := e.lastChange(t)
+		if row.Kind != DoorbellAssigned || row.Scope != AgentScope("w1") || p.TaskID != task.ID {
+			t.Fatalf("the follow-up's change row %s scope %q (%+v), want assigned on %q: w1's sessions are never rung", row.Kind, row.Scope, p, AgentScope("w1"))
+		}
+		// The control: the holding agent writing to itself rings nobody.
+		before := e.changeCount(t)
+		if _, err := e.c.FollowUps().AddFollowUp(e.ctx, worker, AddFollowUpReq{ProjectID: e.project, TaskID: task.ID, Body: "note to self"}); err != nil {
+			t.Fatal(err)
+		}
+		if row, _ := e.lastChange(t); e.changeCount(t) != before+1 || row.Kind == DoorbellAssigned {
+			t.Fatalf("a follow-up to oneself wrote %s on %q, want one changed row", row.Kind, row.Scope)
+		}
+	})
+}
