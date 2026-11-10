@@ -119,7 +119,8 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
   // resource subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
   const followUpsQ = useQuery({
     queryKey: ['followups', projectId, taskId],
-    queryFn: () => followupsApi.listFollowUps(projectId, taskId),
+    // Every page: the route answers 100 at a time, oldest first, so the first page alone hid the newest.
+    queryFn: () => followupsApi.listAllFollowUps(projectId, taskId),
     refetchInterval: 30000,
   });
   const [body, setBody] = useState('');
@@ -201,6 +202,11 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
             ackPending={!canAck && !ackClosedWhy}
           />
         ))}
+        {followUpsQ.data?.truncated && (
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            Showing the first {followUps.length} follow-ups: the newer ones are not loaded.
+          </p>
+        )}
       </Stack>
 
       {/* Composer */}

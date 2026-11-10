@@ -114,7 +114,7 @@ async function taskAs(role: string): Promise<Calls> {
   const fetchMock = routeFetch({
     '/api/session$': { json: { identity: 'alice@example.com', csrfToken: null } },
     '/tasks/T-1$': { json: { task: inProgress } },
-    '/tasks/T-1/comments$': { json: { comments: [comment] } },
+    '/tasks/T-1/comments(\\?|$)': { json: { comments: [comment] } },
     '/projects/p1$': { json: { project: { id: 'p1', name: 'P1', members: { 'alice@example.com': role }, settings: { reviewEnabled: true, quotaEnabled: false, txnCap: null } } } },
   }) as unknown as Calls;
   vi.stubGlobal('fetch', fetchMock);

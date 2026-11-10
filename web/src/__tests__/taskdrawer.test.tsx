@@ -440,7 +440,7 @@ describe('markdown on a ticket is GFM', () => {
     vi.stubGlobal(
       'fetch',
       routeFetch({
-        '/tasks/T-1/comments$': {
+        '/tasks/T-1/comments(\\?|$)': {
           json: { comments: [{ id: 'C-1', taskId: 'T-1', author: 'a@x.test', body: TABLE, parentCommentId: null, mentions: [], ts: new Date().toISOString() }] },
         },
       }),
