@@ -13,6 +13,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { Chronicle, ChronicleHistory, ChroniclePageView } from '../screens/Chronicle.js';
 import { ProjectProvider, useProject } from '../projectContext.js';
+import { ProjectSwitcher } from '../App.js';
 
 const PROJECTS = [
   { projectId: 'P-1', name: 'Alpha', role: 'admin' },
@@ -60,7 +61,11 @@ function renderAt(path: string, element: React.ReactNode, route: string) {
         <ProjectProvider>
           <Sidebar />
           <Where />
-          <Routes><Route path={route} element={element} /></Routes>
+          <ProjectSwitcher />
+          <Routes>
+            <Route path={route} element={element} />
+            {route !== '/chronicle' && <Route path="/chronicle" element={<output aria-label="index">index</output>} />}
+          </Routes>
         </ProjectProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -102,6 +107,58 @@ describe('a shared record link', () => {
     // Picking versions to compare keeps the project in the URL.
     fireEvent.click((await screen.findAllByRole('button', { name: 'Compare with latest' }))[1]!);
     await waitFor(() => expect(screen.getByLabelText('location').textContent).toBe('/chronicle/CP-1/history?project=P-2&a=CV-1&b=CV-2'));
+  });
+});
+
+/**
+ * The URL's project goes into the sidebar ONCE, when the record opens. It must not hold the sidebar
+ * there: the first cut re-applied it whenever the two differed, so the global Project select could
+ * not be moved off it on any record or history page. Moving the sidebar now leaves the record for
+ * the Chronicle index of the project picked, so the page never shows a project the sidebar does
+ * not name.
+ */
+describe('the sidebar on a record page', () => {
+  const switcher = () => screen.getByLabelText('Project') as HTMLSelectElement;
+
+  it('can move to another project, and the record gives way to that project’s index', async () => {
+    stub();
+    renderAt('/chronicle/CP-1?project=P-2', <ChroniclePageView />, '/chronicle/:pageId');
+    expect(await screen.findByText('written in P-2')).toBeTruthy();
+    await waitFor(() => expect(switcher().value).toBe('P-2'));
+    fireEvent.change(switcher(), { target: { value: 'P-1' } });
+    await waitFor(() => expect(screen.getByLabelText('location').textContent).toBe('/chronicle'));
+    expect(switcher().value).toBe('P-1');
+    expect(screen.getByLabelText('sidebar project').textContent).toBe('P-1');
+  });
+
+  it('can pick "All projects"', async () => {
+    localStorage.setItem('bd.projectId', 'P-1');
+    stub();
+    renderAt('/chronicle/CP-1?project=P-2', <ChroniclePageView />, '/chronicle/:pageId');
+    expect(await screen.findByText('written in P-2')).toBeTruthy();
+    await waitFor(() => expect(switcher().value).toBe('P-2'));
+    fireEvent.change(switcher(), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByLabelText('location').textContent).toBe('/chronicle'));
+    expect(switcher().value).toBe('');
+  });
+
+  it('can move on the history page too', async () => {
+    stub();
+    renderAt('/chronicle/CP-1/history?project=P-2', <ChronicleHistory />, '/chronicle/:pageId/history');
+    await waitFor(() => expect(switcher().value).toBe('P-2'));
+    fireEvent.change(switcher(), { target: { value: 'P-1' } });
+    await waitFor(() => expect(screen.getByLabelText('location').textContent).toBe('/chronicle'));
+    expect(switcher().value).toBe('P-1');
+  });
+
+  it('a stored sidebar project arriving with the roster does not count as a move', async () => {
+    localStorage.setItem('bd.projectId', 'P-1');
+    stub();
+    renderAt('/chronicle/CP-1?project=P-2', <ChroniclePageView />, '/chronicle/:pageId');
+    expect(await screen.findByText('written in P-2')).toBeTruthy();
+    await waitFor(() => expect(switcher().value).toBe('P-2'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByLabelText('location').textContent).toBe('/chronicle/CP-1?project=P-2');
   });
 });
 

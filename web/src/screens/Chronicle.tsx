@@ -17,7 +17,7 @@
  *
  * Talks only to the REST API (`api/chronicle.ts`, internal/api/chronicle.go).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -633,15 +633,33 @@ export function ChronicleNew() {
  * the sidebar's. A named project the reader is a member of becomes the sidebar's selection too, so
  * the rest of the app agrees with the record on screen. A project they cannot read is still asked
  * for, and the answer says so ("No such record … a project you cannot read").
+ *
+ * The URL's project goes into the sidebar ONCE per project named, not whenever the two differ:
+ * re-applying it held the global Project select on it, so it could not be moved on a record page.
+ * Moving the sidebar off the URL's project leaves the record for the Chronicle index of the project
+ * picked (or of all projects), so the page never shows a project the sidebar does not name. Changes
+ * are counted only once the roster has loaded: the stored selection arriving with it is not a move.
  */
 function useRecordProject(): string {
   const [params] = useSearchParams();
-  const { projectId: selected, projects, setProjectId } = useProject();
+  const nav = useNavigate();
+  const { projectId: selected, projects, setProjectId, ready } = useProject();
   const named = params.get('project') ?? '';
   const member = !!named && projects.some((p) => p.projectId === named);
+  const applied = useRef('');
+  const seen = useRef<string | null>(null);
   useEffect(() => {
-    if (member && named !== selected) setProjectId(named);
+    if (!member || applied.current === named) return;
+    applied.current = named;
+    if (selected !== named) setProjectId(named);
   }, [member, named, selected, setProjectId]);
+  useEffect(() => {
+    if (!ready) return;
+    const before = seen.current;
+    seen.current = selected;
+    if (before === null || before === selected) return;
+    if (named && selected !== named) nav('/chronicle');
+  }, [ready, named, selected, nav]);
   return named || selected;
 }
 
