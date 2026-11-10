@@ -188,6 +188,98 @@ function MyTokenBudget() {
 }
 
 /**
+ * Your password: replace the one you were handed. Settings → Users shows a new account's first
+ * password to the admin who added it, so until its holder changes it here, that admin (and anyone
+ * who saw the message that carried it) can sign in as them. The server checks the current password
+ * and the length; the change signs out every other session of yours, and this one carries on.
+ * Personal, like the token budget: it renders whichever project is picked.
+ */
+function MyPassword() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const change = useMutation({
+    mutationFn: () => meApi.changePassword({ currentPassword: current, newPassword: next }),
+    onSuccess: (r) => {
+      setCurrent('');
+      setNext('');
+      setRepeat('');
+      setErr(null);
+      const n = r.otherSessionsEnded;
+      setDone(`Password changed. ${n} other session${n === 1 ? ' was' : 's were'} signed out.`);
+    },
+    onError: (e: Error) => { setDone(null); setErr(e.message); },
+  });
+  return (
+    <section id="password" style={{ marginBottom: 36 }}>
+      <Panel title="Your password" pad>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setDone(null);
+            if (next !== repeat) {
+              setErr('The two new passwords differ.');
+              return;
+            }
+            change.mutate();
+          }}
+        >
+          <Stack gap={12}>
+            <p className="muted" style={{ fontSize: 14, margin: 0 }}>
+              Replace the password you were given with one only you know: at least 12 characters. Your
+              other signed-in sessions are signed out; this one stays.
+            </p>
+            <Cluster gap={8}>
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                aria-label="Current password"
+                placeholder="Current password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                aria-label="New password"
+                placeholder="New password"
+                minLength={12}
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                aria-label="Repeat the new password"
+                placeholder="Repeat the new password"
+                value={repeat}
+                onChange={(e) => setRepeat(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button type="submit" className="btn" disabled={change.isPending}>
+                {change.isPending ? 'Changing…' : 'Change password'}
+              </button>
+            </Cluster>
+            {err && <p className="error" style={{ fontSize: 12, margin: 0 }}>{err}</p>}
+            {done && <p role="status" style={{ fontSize: 14, margin: 0 }}>{done}</p>}
+          </Stack>
+        </form>
+      </Panel>
+    </section>
+  );
+}
+
+/**
  * Settings → Users (R1.15): the workspace admin lists the local accounts and adds one, whose
  * generated password this panel shows once. Hidden from everyone else, and the BFF refuses them
  * regardless (403): hiding is not the control. Disable, password reset and role changes are the
@@ -286,7 +378,8 @@ export function UsersSection() {
           {shown && (
             <div role="status" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
               <p style={{ fontSize: 14, margin: '0 0 8px' }}>
-                Initial password for {shown.login}, shown once. Pass it on now:
+                Initial password for {shown.login}, shown once. Pass it on now; they can replace it
+                under Settings → Your password:
               </p>
               <Cluster gap={8}>
                 <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{shown.password}</code>
@@ -912,6 +1005,7 @@ export function Settings() {
           the user who has just signed up. Columns, Members and CLI tokens come first (usability #9).
         */}
         <MyTokenBudget />
+        <MyPassword />
 
         {/* Workflow / policy */}
         {projectId && (

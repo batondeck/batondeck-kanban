@@ -77,7 +77,9 @@ batondeck-kanban token create --user you@example.com
 
 `token create` prints the token (`bd_…`) once, on stdout; it lives 30 days unless `--ttl` says
 otherwise. The same login and password sign in to the web UI at `http://localhost:8080`, where
-Settings → CLI tokens makes more.
+Settings → CLI tokens makes more. A teammate added under Settings → Users gets a generated password,
+shown once to the admin who added them; they replace it under Settings → Your password, which
+signs out their other sessions.
 
 ### 3. Claude Code
 

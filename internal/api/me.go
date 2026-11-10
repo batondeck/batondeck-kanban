@@ -13,12 +13,14 @@ import (
 )
 
 // meRoutes are the Settings page's own-account routes (app.ts:2696-2733): the settings over
-// get_my_settings and set_my_settings, and the CLI tokens over the TokenService (ADR-0004: these
-// routes replace the dropped create/list/revoke_cli_token tools). A token is the caller's own: no
-// route takes an identity. No marketplace-key routes (the plan dropped them).
+// get_my_settings and set_my_settings, the CLI tokens over the TokenService (ADR-0004: these
+// routes replace the dropped create/list/revoke_cli_token tools), and the user's own password
+// change (auth.Service.PasswordChangeHandler). A token is the caller's own: no route takes an
+// identity. No marketplace-key routes (the plan dropped them).
 func meRoutes(o *Options) []route {
 	m := o.Services.Me
 	return []route{
+		{Method: "POST", Path: "/api/me/password", h: o.Auth.PasswordChangeHandler()},
 		{Method: "GET", Path: "/api/me/settings", h: call(o, m.GetMySettings, in{})},
 		{Method: "PATCH", Path: "/api/me/settings", h: call(o, m.SetMySettings, in{})},
 		{Method: "GET", Path: "/api/me/cli-tokens", h: tokenRoute(o, listCLITokens)},

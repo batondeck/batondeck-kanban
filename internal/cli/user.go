@@ -18,8 +18,9 @@ import (
 // stdin is where a password is read from; tests replace it with a pipe.
 var stdin = os.Stdin
 
-// minPasswordLen is the shortest password user add and user passwd accept.
-const minPasswordLen = 12
+// minPasswordLen is the shortest password user add and user passwd accept, as the Settings
+// password change does.
+const minPasswordLen = auth.MinPasswordLen
 
 // readPassword reads the first line of stdin. A terminal is refused rather than read, because it
 // would echo the password: pipe it in instead.

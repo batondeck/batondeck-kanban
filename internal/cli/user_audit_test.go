@@ -111,7 +111,8 @@ func TestUserCommandsAreAudited(t *testing.T) {
 }
 
 // An account the workspace admin adds on Settings → Users (POST /api/users) is recorded on the
-// composed app: one user.added row names the admin, the new identity and its login. On each engine.
+// composed app: one user.added row names the admin, the new identity and its login; so is the
+// admin's own password change (POST /api/me/password). On each engine.
 func TestServeAuditsAUserAddedOnSettings(t *testing.T) {
 	for _, eng := range []struct {
 		name string
@@ -173,6 +174,22 @@ func TestServeAuditsAUserAddedOnSettings(t *testing.T) {
 			}
 			wantAccountRow(t, auditRows(t, st, auth.AuditUserAdded), root.ID, domain.CanonIdentity(added.User.ID),
 				map[string]any{"login": "carol", "admin": false, "via": "settings"})
+
+			// The admin's own password change on Settings is recorded as theirs.
+			req, _ = http.NewRequest(http.MethodPost, srv.URL+"/api/me/password", strings.NewReader(`{"currentPassword":"pw-root","newPassword":"a-longer-root-password"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			req.Header.Set(auth.CSRFHeader, csrf)
+			resp, err = browser.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("password change: %d", resp.StatusCode)
+			}
+			wantAccountRow(t, auditRows(t, st, auth.AuditUserPasswordChanged), root.ID, domain.CanonIdentity(root.ID),
+				map[string]any{"login": "root", "via": "settings", "sessionsEnded": float64(1)})
 		})
 	}
 }

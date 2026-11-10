@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,6 +41,11 @@ func (s *Service) Login(ctx context.Context, addr, login, password string) (secr
 	if err != nil {
 		return "", store.Session{}, err
 	}
+	return s.openSession(ctx, u)
+}
+
+// openSession opens a session for u, as read when its password was checked.
+func (s *Service) openSession(ctx context.Context, u store.User) (secret string, sess store.Session, err error) {
 	raw := make([]byte, 32)
 	csrf := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
@@ -179,17 +186,106 @@ func (s *Service) LoginHandler() http.Handler {
 			WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "internal error")
 			return
 		}
-		expires := time.UnixMilli(sess.ExpiresAt)
-		secure := s.secureCookies(r)
-		http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: secret, Path: "/", Expires: expires,
-			HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
-		http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: sess.CSRFToken, Path: "/", Expires: expires,
-			HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode})
+		s.setSessionCookies(w, r, secret, sess)
 		if next != "" {
 			http.Redirect(w, r, next, http.StatusSeeOther)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// setSessionCookies sets the session's two cookies on r's answer.
+func (s *Service) setSessionCookies(w http.ResponseWriter, r *http.Request, secret string, sess store.Session) {
+	expires := time.UnixMilli(sess.ExpiresAt)
+	secure := s.secureCookies(r)
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: secret, Path: "/", Expires: expires,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: sess.CSRFToken, Path: "/", Expires: expires,
+		HttpOnly: false, Secure: secure, SameSite: http.SameSiteLaxMode})
+}
+
+// passwordChangeVia is the audit row's via for a password a user changes on the Settings page.
+const passwordChangeVia = "settings"
+
+// PasswordChangeHandler answers a signed-in browser's POST of the JSON {currentPassword,
+// newPassword}: the user's own password change, so that whoever handed the account out (Settings →
+// Users shows its first password to the admin) keeps no working credential. The current password is
+// checked as a sign-in checks it, under the same limits; a wrong one is 400 VALIDATION (a 401 would
+// sign the page out). The new one must pass CheckNewPassword. The change ends every session of the
+// user (SetPasswordAs, recorded as user.password_changed) and opens a fresh one for this browser,
+// whose cookies the answer sets: 200 {otherSessionsEnded}. A bearer request is 403 FORBIDDEN: a
+// password is changed from a session, not with a token. Mount it inside Authenticate and CSRF.
+func (s *Service) PasswordChangeHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		c, _ := CallerFrom(ctx)
+		if _, ok := SessionFrom(ctx); !ok {
+			WriteError(w, http.StatusForbidden, domain.CodeForbidden, "a password is changed from a signed-in browser, not with a token")
+			return
+		}
+		var in struct {
+			CurrentPassword string `json:"currentPassword"`
+			NewPassword     string `json:"newPassword"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLoginBody))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&in); err != nil {
+			WriteError(w, http.StatusBadRequest, domain.CodeValidation, "the body is {currentPassword, newPassword}")
+			return
+		}
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			WriteError(w, http.StatusBadRequest, domain.CodeValidation, "the body holds more than one JSON value")
+			return
+		}
+		if err := CheckNewPassword(in.NewPassword); err != nil {
+			e, _ := domain.AsBatonDeckError(err)
+			WriteError(w, http.StatusBadRequest, domain.CodeValidation, "The new "+strings.TrimPrefix(e.Message, "the "))
+			return
+		}
+		u, err := s.Accounts.Store.GetUser(ctx, c.Identity)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "internal error")
+			return
+		}
+		if _, err := s.Accounts.Authenticate(ctx, s.Proxies.ClientAddr(r), u.Email, in.CurrentPassword); err != nil {
+			switch e, _ := domain.AsBatonDeckError(err); {
+			case e != nil && e.Code == domain.CodeUnauthenticated:
+				WriteError(w, http.StatusBadRequest, domain.CodeValidation, "The current password is wrong.")
+			case e != nil && e.Code == domain.CodeRateLimited:
+				w.Header().Set("Retry-After", fmt.Sprint(e.Details["retryAfterSeconds"]))
+				WriteError(w, http.StatusTooManyRequests, domain.CodeRateLimited, e.Message)
+			default:
+				WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "internal error")
+			}
+			return
+		}
+		ended, err := s.Accounts.SetPasswordAs(ctx, c.Identity, passwordChangeVia, u.Email, in.NewPassword)
+		if err != nil {
+			if now, gerr := s.Accounts.Store.GetUser(ctx, u.ID); gerr != nil || now.PasswordHash == u.PasswordHash {
+				WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "The password was not changed.")
+				return
+			}
+			WriteError(w, http.StatusInternalServerError, domain.CodeInternal,
+				"The password was changed, but ending your other sessions or recording the change failed: sign in with the new password and change it again.")
+			return
+		}
+		// The change ended this browser's session too; it goes on in a fresh one.
+		fresh, ferr := s.Accounts.Store.GetUser(ctx, u.ID)
+		var secret string
+		var sess store.Session
+		if ferr == nil {
+			secret, sess, ferr = s.openSession(ctx, fresh)
+		}
+		if ferr != nil {
+			WriteError(w, http.StatusInternalServerError, domain.CodeInternal, "the password was changed, but this browser was signed out: sign in with the new password")
+			return
+		}
+		s.setSessionCookies(w, r, secret, sess)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			OtherSessionsEnded int64 `json:"otherSessionsEnded"`
+		}{max(ended-1, 0)})
 	})
 }
 

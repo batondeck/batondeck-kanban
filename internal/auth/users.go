@@ -93,6 +93,21 @@ func NormalizeLogin(login string) (string, error) {
 	return l, nil
 }
 
+// MinPasswordLen is the fewest characters a password a person chooses may have: `user add`,
+// `user passwd` and the Settings password change refuse a shorter one (CheckNewPassword). A
+// generated password (Settings → Users) is longer.
+const MinPasswordLen = 12
+
+// CheckNewPassword refuses, VALIDATION, a chosen password under MinPasswordLen characters, saying
+// how long it was.
+func CheckNewPassword(pw string) error {
+	if n := len([]rune(pw)); n < MinPasswordLen {
+		return domain.Validation(fmt.Sprintf("the password is %d characters: it must be at least %d", n, MinPasswordLen),
+			map[string]any{"field": "password", "min": MinPasswordLen})
+	}
+	return nil
+}
+
 func checkPassword(pw string) error {
 	if pw == "" {
 		return domain.Validation("the password is empty", map[string]any{"field": "password"})

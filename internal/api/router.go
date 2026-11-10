@@ -29,6 +29,7 @@ type Auth interface {
 	CSRF(next http.Handler) http.Handler
 	LoginHandler() http.Handler
 	LogoutHandler() http.Handler
+	PasswordChangeHandler() http.Handler
 	Reauthenticate(r *http.Request) (domain.Caller, error)
 }
 
