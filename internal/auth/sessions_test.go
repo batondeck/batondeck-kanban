@@ -255,6 +255,18 @@ func TestPublicURLMakesTheCookiesSecure(t *testing.T) {
 	if resp := login(nil); secure(resp) {
 		t.Fatal("an http public_url made the cookies Secure")
 	}
+	// A browser's Origin never names its scheme's default port, so a public_url that does still
+	// matches it.
+	for pub, o := range map[string]string{"https://Board.example.com:443/": "https://board.example.com", "http://board.example.com:80": "http://board.example.com"} {
+		f.svc.PublicURL = pub
+		if resp := login(map[string]string{"Origin": o}); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("public_url %s, Origin %s: %d, want 204", pub, o, resp.StatusCode)
+		}
+	}
+	f.svc.PublicURL = "https://board.example.com:8443"
+	if resp := login(map[string]string{"Origin": "https://board.example.com"}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("public_url on port 8443, Origin on 443: %d, want 403", resp.StatusCode)
+	}
 }
 
 // An Authorization header of another scheme (a reverse proxy's HTTP Basic auth, which the browser

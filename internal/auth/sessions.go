@@ -119,8 +119,8 @@ func requestIsTLS(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
-// publicOrigin is PublicURL's scheme://host as a browser's Origin names it, "" when PublicURL is
-// unset or not an http(s) URL with a host.
+// publicOrigin is PublicURL's scheme://host as a browser's Origin names it (lower case, without the
+// scheme's default port), "" when PublicURL is unset or not an http(s) URL with a host.
 func (s *Service) publicOrigin() string {
 	u, err := url.Parse(s.PublicURL)
 	if s.PublicURL == "" || err != nil || u.Host == "" {
@@ -130,7 +130,11 @@ func (s *Service) publicOrigin() string {
 	if scheme != "http" && scheme != "https" {
 		return ""
 	}
-	return scheme + "://" + strings.ToLower(u.Host)
+	host := strings.ToLower(u.Host)
+	if p := u.Port(); (scheme == "https" && p == "443") || (scheme == "http" && p == "80") {
+		host = strings.TrimSuffix(host, ":"+p)
+	}
+	return scheme + "://" + host
 }
 
 // secureCookies reports whether the cookies set on r's answer are Secure: r came over TLS, or
