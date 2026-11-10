@@ -23,13 +23,14 @@ const INTEGRATION = {
   createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
 } as unknown as Integration;
 
-/** `rawStatus` decides what the payload route answers — 200 with bytes, or 404 once aged out. */
-function stub(rawStatus: number, body = '{"hostile":"<img src=x onerror=alert(1)>"}') {
+/** `rawStatus` decides what the payload route answers — 200 with bytes, 404 once aged out, or
+ *  another refusal whose JSON error body is `error`. */
+function stub(rawStatus: number, body = '{"hostile":"<img src=x onerror=alert(1)>"}', error: unknown = {}) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }) as Response;
     if (url.includes('/raw')) {
-      return { ok: rawStatus < 400, status: rawStatus, text: async () => body, json: async () => ({}) } as Response;
+      return { ok: rawStatus < 400, status: rawStatus, text: async () => body, json: async () => error } as Response;
     }
     if (url.includes('/deliveries')) {
       return json({ deliveries: [{
@@ -52,8 +53,8 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function openViewer(rawStatus: number, body?: string) {
-  stub(rawStatus, body);
+async function openViewer(rawStatus: number, body?: string, error?: unknown) {
+  stub(rawStatus, body, error);
   render(<OncallSetup projectId="p1" integrations={[INTEGRATION]} onClose={() => {}} />, { wrapper });
   const btn = await screen.findByRole('button', { name: /view payload/i }, { timeout: 3_000 });
   fireEvent.click(btn);
@@ -79,6 +80,25 @@ describe('the refused-payload viewer', () => {
     });
     expect(dialog.textContent, 'and name the two retentions that differ').toMatch(/30 days/);
     expect(dialog.textContent).toMatch(/7/);
+    // Both windows are server settings (BATONDECK_RETENTION_*_DAYS), so the numbers are the defaults.
+    expect(dialog.textContent, 'the numbers are defaults, not facts about this server').toMatch(/by default/i);
+  });
+
+  it('a refusal that is NOT an aged-out body says what went wrong, not "nothing went wrong"', async () => {
+    const dialog = await openViewer(500, undefined, { code: 'INTERNAL', message: 'Internal error' });
+    await waitFor(() => {
+      expect(dialog.textContent, 'the error is shown').toMatch(/Internal error/);
+    });
+    expect(dialog.textContent, 'a 500 is not an aged-out payload').not.toMatch(/no longer stored/i);
+    expect(dialog.textContent).not.toMatch(/nothing went wrong/i);
+  });
+
+  it("a 403 shows the server's reason", async () => {
+    const dialog = await openViewer(403, undefined, { code: 'FORBIDDEN', message: 'only a project master reads raw bodies' });
+    await waitFor(() => {
+      expect(dialog.textContent).toMatch(/only a project master reads raw bodies/);
+    });
+    expect(dialog.textContent).not.toMatch(/no longer stored/i);
   });
 
   it('POSITIVE CONTROL: a live payload is shown, and shown as TEXT', async () => {

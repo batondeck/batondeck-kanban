@@ -19,6 +19,7 @@ import { closedWhy, mayCall } from '../../toolFloors.js';
 import { Icon } from '../../icons.js';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as oncallApi from '../../api/oncall.js';
+import { ApiError } from '../../api/http.js';
 import type { Delivery, Integration, OncallSource } from '../../types.js';
 import { Cluster, Empty, Note, Panel, Pill, Stack } from '../../ui.js';
 import { ConfirmButton, timeAgo } from '../../components.js';
@@ -41,10 +42,15 @@ const mintKey = (): string => `${crypto.randomUUID()}${crypto.randomUUID()}`.rep
  * The refused payload of one delivery, in a dialog.
  *
  * THIS REPLACED A DOWNLOAD LINK THAT COULD NOT WORK MOST OF THE TIME. The delivery ROW is kept for
- * `INGEST_DELIVERY_RETENTION_DAYS` (30); the raw body only for `INGEST_RAW_RETENTION_DAYS` (7). So
- * for 23 of those 30 days the button was offered, the payload was already TTL-deleted, and clicking
- * it navigated to a bare 404 with no explanation — reported from staging as "download doesn't work".
- * A dialog can say WHY, which a navigation cannot.
+ * `BATONDECK_RETENTION_DELIVERIES_DAYS` (default 30); the raw body only for
+ * `BATONDECK_RETENTION_RAW_BODIES_DAYS` (default 7). So for 23 of those 30 days the button was
+ * offered, the payload was already TTL-deleted, and clicking it navigated to a bare 404 with no
+ * explanation — reported from staging as "download doesn't work". A dialog can say WHY, which a
+ * navigation cannot.
+ *
+ * ONLY A 404 IS "AGED OUT". A 403 (the caller's role changed), a 500 or a network failure is shown as
+ * the error it is: telling the operator "nothing went wrong" would send them away from a real fault.
+ * The two windows are server settings the browser cannot read, so the note gives them as defaults.
  *
  * RENDERED AS AN ESCAPED TEXT NODE, never as markup. These are unauthenticated attacker-controlled
  * bytes. The old route's defence was to refuse to render them at all (octet-stream + attachment +
@@ -78,7 +84,7 @@ function RawPayloadDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const expired = q.isError;
+  const expired = q.error instanceof ApiError && q.error.status === 404;
   return (
     <div className="raw-dialog-scrim" onClick={onClose}>
       <div
@@ -102,10 +108,14 @@ function RawPayloadDialog({
         {q.isLoading && <p className="muted">Loading…</p>}
         {expired && (
           <Note>
-            This payload is no longer stored. A delivery’s log entry is kept for 30 days, but the raw
-            body it refused is kept for 7 — so the record of the refusal outlives the bytes that
-            caused it. Nothing went wrong; there is simply nothing left to show.
+            This payload is no longer stored. A refused body is kept for less time than its delivery’s
+            log entry — by default 7 days against 30 days, as the server’s retention settings decide —
+            so the record of the refusal can outlive the bytes that caused it. Nothing went wrong;
+            there is simply nothing left to show.
           </Note>
+        )}
+        {q.isError && !expired && (
+          <Note>Could not load this payload: {q.error.message}</Note>
         )}
         {q.data && (
           // Escaped text, never markup — see the docblock above.
