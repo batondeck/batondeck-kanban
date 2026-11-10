@@ -216,11 +216,16 @@ type IntegrationAuthInput struct {
 	JWT            IntegrationJWT      `json:"jwt,omitzero"`
 }
 
-// IntegrationJWT is a jwt integration's issuer, audience and key set.
+// IntegrationJWT is a jwt integration's issuer, audience and key set, and the optional pins on
+// who the token names: Subject is matched against sub exactly, Email against email exactly with
+// email_verified true. On a shared issuer (Google, GitHub Actions) anyone can mint a token for a
+// chosen audience, so only a pin identifies the sender.
 type IntegrationJWT struct {
 	Audience string `json:"audience"`
+	Email    string `json:"email,omitzero"`
 	Issuer   string `json:"issuer"`
 	JWKSURL  string `json:"jwksUrl"`
+	Subject  string `json:"subject,omitzero"`
 }
 
 // IntegrationRouting is who an incident is routed to. A stored routing that still carries the

@@ -24,16 +24,20 @@ import (
 )
 
 // JWT bearer verification against an integration's JWKS (conductor auth/jwt.ts): RS256 only, the
-// issuer and audience the integration names, the key set fetched from its jwksUrl. That fetch is the
+// issuer and audience the integration names (and the subject and verified email it pins, if any),
+// the key set fetched from its jwksUrl. That fetch is the
 // one outbound network call ingest makes, and it is logged as such (plan §Clarifications 8). The
 // URL is operator input fetched server-side, so the fetch holds conductor's SSRF posture: https
 // only; the host resolved once and refused when any address is private, loopback, link-local,
 // unspecified, reserved (carrier-grade NAT among them) or the metadata host; the connection pinned to the vetted address (no second
 // resolution to rebind); no redirects; 64 KiB and 5 s.
 
-// JWT is an integration's jwt block.
+// JWT is an integration's jwt block. Subject and Email, when set, pin the token's sub and its
+// (verified) email: on a shared issuer anyone with an account can mint a token for an audience they
+// choose, so issuer and audience alone do not say who sent it.
 type JWT struct {
 	Issuer, Audience, JWKSURL string
+	Subject, Email            string
 }
 
 // The refusal reasons a JWT verification returns.
@@ -131,10 +135,13 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": signature", false
 	}
 	var claims struct {
-		Iss string          `json:"iss"`
-		Aud json.RawMessage `json:"aud"`
-		Exp *float64        `json:"exp"`
-		Nbf *float64        `json:"nbf"`
+		Iss           string          `json:"iss"`
+		Aud           json.RawMessage `json:"aud"`
+		Exp           *float64        `json:"exp"`
+		Nbf           *float64        `json:"nbf"`
+		Sub           string          `json:"sub"`
+		Email         string          `json:"email"`
+		EmailVerified any             `json:"email_verified"`
 	}
 	if err := decodeSegment(parts[1], &claims); err != nil {
 		return ReasonVerifyFailed + ": malformed claims", false
@@ -149,8 +156,17 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": expired", false
 	case claims.Nbf != nil && now < *claims.Nbf:
 		return ReasonVerifyFailed + ": not yet valid", false
+	case cfg.Subject != "" && claims.Sub != cfg.Subject:
+		return ReasonVerifyFailed + ": subject", false
+	case cfg.Email != "" && (claims.Email != cfg.Email || !verifiedEmail(claims.EmailVerified)):
+		return ReasonVerifyFailed + ": email", false
 	}
 	return "", true
+}
+
+// verifiedEmail reads an email_verified claim: true, or the string "true" some issuers send.
+func verifiedEmail(v any) bool {
+	return v == true || v == "true"
 }
 
 // headerTextMax is the most runes of a token header's alg or kid a refusal reason names.

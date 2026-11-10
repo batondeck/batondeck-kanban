@@ -866,3 +866,56 @@ func TestHookSignatureFormFollowsTheSource(t *testing.T) {
 		t.Errorf("the pasted secret in v0 form: %+v, want accepted", out)
 	}
 }
+
+// A jwt integration's subject and email pins are kept on save and enforced on delivery: on Google's
+// issuer a token any other account minted for the same audience is refused, the pinned one passes;
+// a pin over 512 characters is refused on save. Control: TestHookVerifiesEachMode's unpinned jwt.
+func TestHookJWTPins(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k", "n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes())}}})
+	f := newFixture(t, Options{Sealer: oncallKeyring(t), JWKSFetch: func(context.Context, string) ([]byte, error) { return set, nil }})
+	root := f.alice
+	root.WorkspaceAdmin = true
+	const ours = "monitoring@operators-project.iam.gserviceaccount.com"
+	cfg := IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs", Email: ours, Subject: "1170"}
+	in := f.integration(t, root, CreateIntegrationReq{Name: "j", Source: "gcp", Auth: IntegrationAuthInput{Mode: "jwt", JWT: cfg}})
+	tok := func(sub, email string) func(string) string {
+		h, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k"})
+		c, _ := json.Marshal(map[string]any{"iss": cfg.Issuer, "aud": cfg.Audience, "exp": f.clock.now().Add(time.Hour).Unix(), "sub": sub, "email": email, "email_verified": true})
+		signing := b64url(h) + "." + b64url(c)
+		d := sha256.Sum256([]byte(signing))
+		sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+		hd := http.Header{}
+		hd.Set(HeaderAuthorize, "Bearer "+signing+"."+b64url(sig))
+		return hd.Get
+	}
+	body := func(i int) []byte {
+		return fmt.Appendf(nil, `{"version":"1.2","incident":{"incident_id":"i-%d","state":"open","policy_name":"p","started_at":1729764000}}`, i)
+	}
+	for i, c := range []struct {
+		sub, email, want string
+	}{
+		{"9999", "anything@attackers-own-project.iam.gserviceaccount.com", "verify_failed: subject"},
+		{"1170", "anything@attackers-own-project.iam.gserviceaccount.com", "verify_failed: email"},
+	} {
+		if out := f.hook(t, in.Integration.ID, HookRequest{Header: tok(c.sub, c.email), Body: body(i)}); out.Refusal != HookUnauthorized {
+			t.Errorf("a token for sub %s email %s: %+v, want unauthorized", c.sub, c.email, out)
+		}
+		if !strings.Contains(f.logs.String(), fmt.Sprintf("refused a delivery's signature: %q", c.want)) {
+			t.Errorf("no %q refusal in the log", c.want)
+		}
+	}
+	if out := f.hook(t, in.Integration.ID, HookRequest{Header: tok("1170", ours), Body: body(9)}); out.Refusal != "" {
+		t.Errorf("the pinned token: %+v, want accepted", out)
+	}
+	long := cfg
+	long.Email = strings.Repeat("e", 513)
+	_, err = f.c.Oncall().CreateIntegration(f.ctx, root, CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "long", Source: "gcp",
+		Auth: IntegrationAuthInput{Mode: "jwt", JWT: long}, Routing: IntegrationRouting{Mode: "broadcast"}})
+	if e := wantCode(t, err, domain.CodeValidation); e.Details["field"] != "auth.jwt.email" {
+		t.Errorf("a 513-character email pin: %+v", e)
+	}
+}

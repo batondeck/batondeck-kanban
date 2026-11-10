@@ -257,7 +257,8 @@ func (c *Core) verifyHook(ctx context.Context, integration store.Integration, r 
 		if a.JWT == nil {
 			return "jwt_not_configured", false
 		}
-		why, ok := c.jwt.Verify(ctx, r.Header(HeaderAuthorize), auth.JWT{Issuer: a.JWT.Issuer, Audience: a.JWT.Audience, JWKSURL: a.JWT.JWKSURL}, integration.ID)
+		cfg := auth.JWT{Issuer: a.JWT.Issuer, Audience: a.JWT.Audience, JWKSURL: a.JWT.JWKSURL, Subject: a.JWT.Subject, Email: a.JWT.Email}
+		why, ok := c.jwt.Verify(ctx, r.Header(HeaderAuthorize), cfg, integration.ID)
 		if !ok {
 			return why, false
 		}

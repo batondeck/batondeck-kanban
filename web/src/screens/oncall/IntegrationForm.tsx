@@ -51,6 +51,8 @@ export interface FormState {
   jwtIssuer: string;
   jwtAudience: string;
   jwtJwksUrl: string;
+  jwtSubject: string;
+  jwtEmail: string;
   routingMode: RoutingMode;
   onCallAgent: string;
   pdUserMap: Record<string, string>;
@@ -80,6 +82,8 @@ export function blankForm(source: OncallSource | undefined): FormState {
     jwtIssuer: '',
     jwtAudience: '',
     jwtJwksUrl: '',
+    jwtSubject: '',
+    jwtEmail: '',
     routingMode: 'broadcast',
     onCallAgent: '',
     pdUserMap: {},
@@ -160,7 +164,14 @@ function authOf(f: FormState): CreateIntegrationBody['auth'] {
   if (f.authMode === 'jwt') {
     return {
       mode: 'jwt',
-      jwt: { issuer: f.jwtIssuer.trim(), audience: f.jwtAudience.trim(), jwksUrl: f.jwtJwksUrl.trim() },
+      jwt: {
+        issuer: f.jwtIssuer.trim(),
+        audience: f.jwtAudience.trim(),
+        jwksUrl: f.jwtJwksUrl.trim(),
+        // The pins are sent only when filled in: blank pins nothing.
+        ...(trimmed(f.jwtSubject) ? { subject: f.jwtSubject.trim() } : {}),
+        ...(trimmed(f.jwtEmail) ? { email: f.jwtEmail.trim() } : {}),
+      },
     };
   }
   return {
@@ -362,6 +373,7 @@ export function IntegrationForm({
                 value={form.jwtIssuer}
                 onChange={(jwtIssuer) => set({ jwtIssuer })}
                 placeholder="https://idp.example.com/"
+                hint="On a shared issuer (Google, GitHub Actions) anyone with an account there can mint a token for your audience, so issuer and audience alone do not identify the sender: pin the subject or email below."
               />
               <TextField
                 id="oc-jwt-aud"
@@ -376,6 +388,22 @@ export function IntegrationForm({
                 onChange={(jwtJwksUrl) => set({ jwtJwksUrl })}
                 placeholder="https://idp.example.com/.well-known/jwks.json"
                 hint="RS256 only. Must be https, on a public address — private ranges are refused."
+              />
+              <TextField
+                id="oc-jwt-sub"
+                label="Subject pin (sub)"
+                value={form.jwtSubject}
+                onChange={(jwtSubject) => set({ jwtSubject })}
+                placeholder="blank → any subject"
+                hint="The token's sub must equal this exactly: a service account's unique id, or a GitHub Actions repo:owner/name:ref:… subject."
+              />
+              <TextField
+                id="oc-jwt-email"
+                label="Email pin"
+                value={form.jwtEmail}
+                onChange={(jwtEmail) => set({ jwtEmail })}
+                placeholder="blank → any email"
+                hint="The token's email must equal this exactly, and the token must say email_verified."
               />
             </Stack>
           )}

@@ -60,11 +60,14 @@ type HMACAuth struct {
 	ExternallyIssued bool `json:"externallyIssued,omitempty"`
 }
 
-// JWTAuth is a jwt integration's issuer, audience and key set.
+// JWTAuth is a jwt integration's issuer, audience and key set, and the subject and email it pins
+// ("" pins nothing).
 type JWTAuth struct {
 	Issuer   string `json:"issuer"`
 	Audience string `json:"audience"`
 	JWKSURL  string `json:"jwksUrl"`
+	Subject  string `json:"subject,omitempty"`
+	Email    string `json:"email,omitempty"`
 }
 
 // DualAcceptOpen reports whether a rotated-out secret still verifies at now.

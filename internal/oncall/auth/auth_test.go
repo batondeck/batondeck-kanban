@@ -269,3 +269,67 @@ func TestJWTRefusalBoundsTheSendersHeader(t *testing.T) {
 		t.Errorf("alg HS256: %q does not name it", reason)
 	}
 }
+
+// On a shared issuer (Google, GitHub Actions) anyone with an account there can mint a correctly
+// signed token for a chosen audience, so issuer and audience alone do not identify the sender. A
+// jwt block may pin the subject (sub, exactly) and the email (exactly, with email_verified true);
+// a token that misses a pin is refused naming it. Control: with no pins today's tokens pass.
+func TestJWTVerifyPins(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes())}}})
+	v := &Verifier{Fetch: func(context.Context, string) ([]byte, error) { return set, nil }, Now: func() time.Time { return now }}
+	base := JWT{Issuer: "https://accounts.google.com", Audience: "https://kanban.example.com/hooks/I-1", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs"}
+	rs := map[string]string{"alg": "RS256", "kid": "k1"}
+	claims := func(kv ...any) map[string]any {
+		c := map[string]any{"iss": base.Issuer, "aud": base.Audience, "exp": now.Add(time.Minute).Unix()}
+		for i := 0; i+1 < len(kv); i += 2 {
+			c[kv[i].(string)] = kv[i+1]
+		}
+		return c
+	}
+	ours := claims("sub", "1170", "email", "monitoring@operators-project.iam.gserviceaccount.com", "email_verified", true)
+	theirs := claims("sub", "9999", "email", "anything@attackers-own-project.iam.gserviceaccount.com", "email_verified", true)
+	bare := claims()
+	verify := func(cfg JWT, c map[string]any) (string, bool) {
+		return v.Verify(context.Background(), "Bearer "+sign(t, key, rs, c), cfg, "I-1")
+	}
+	for name, c := range map[string]map[string]any{"ours": ours, "theirs": theirs, "bare": bare} {
+		if reason, ok := verify(base, c); !ok {
+			t.Errorf("no pins, %s token: %q (control)", name, reason)
+		}
+	}
+	bySub := base
+	bySub.Subject = "1170"
+	byEmail := base
+	byEmail.Email = "monitoring@operators-project.iam.gserviceaccount.com"
+	for _, c := range []struct {
+		name   string
+		cfg    JWT
+		claims map[string]any
+		want   string
+	}{
+		{"subject pin, another sub", bySub, theirs, "verify_failed: subject"},
+		{"subject pin, no sub", bySub, bare, "verify_failed: subject"},
+		{"email pin, another email", byEmail, theirs, "verify_failed: email"},
+		{"email pin, no email", byEmail, bare, "verify_failed: email"},
+		{"email pin, unverified", byEmail, claims("email", byEmail.Email, "email_verified", false), "verify_failed: email"},
+		{"email pin, email_verified absent", byEmail, claims("email", byEmail.Email), "verify_failed: email"},
+	} {
+		if reason, ok := verify(c.cfg, c.claims); ok || reason != c.want {
+			t.Errorf("%s: %q, %v; want %q", c.name, reason, ok, c.want)
+		}
+	}
+	both := bySub
+	both.Email = byEmail.Email
+	for name, cfg := range map[string]JWT{"subject": bySub, "email": byEmail, "both": both} {
+		if reason, ok := verify(cfg, ours); !ok {
+			t.Errorf("%s pin, the pinned token: %q (control)", name, reason)
+		}
+	}
+	if reason, ok := verify(byEmail, claims("email", byEmail.Email, "email_verified", "true")); !ok {
+		t.Errorf("email pin, email_verified \"true\" (a string, as some issuers send it): %q", reason)
+	}
+}

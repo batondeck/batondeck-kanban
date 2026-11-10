@@ -6872,12 +6872,22 @@
                       "string"
                     ]
                   },
+                  "email": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
                   "issuer": {
                     "typeSet": [
                       "string"
                     ]
                   },
                   "jwksUrl": {
+                    "typeSet": [
+                      "string"
+                    ]
+                  },
+                  "subject": {
                     "typeSet": [
                       "string"
                     ]
@@ -28862,12 +28872,22 @@
                           "string"
                         ]
                       },
+                      "email": {
+                        "typeSet": [
+                          "string"
+                        ]
+                      },
                       "issuer": {
                         "typeSet": [
                           "string"
                         ]
                       },
                       "jwksUrl": {
+                        "typeSet": [
+                          "string"
+                        ]
+                      },
+                      "subject": {
                         "typeSet": [
                           "string"
                         ]

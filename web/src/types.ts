@@ -542,7 +542,7 @@ export interface CreateIntegrationBody {
   source: IntegrationSource;
   boardId: string;
   columnId?: string;
-  auth: { mode: IntegrationAuthMode; externalSecret?: string; apiKey?: string; jwt?: { issuer: string; audience: string; jwksUrl: string } };
+  auth: { mode: IntegrationAuthMode; externalSecret?: string; apiKey?: string; jwt?: { issuer: string; audience: string; jwksUrl: string; subject?: string; email?: string } };
   routing: { mode: RoutingMode; onCallAgent?: string | null; pdUserMap?: Record<string, string> };
   mapping?: IntegrationMappingBody;
   lifecycle?: LifecycleMode;

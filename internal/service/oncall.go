@@ -31,6 +31,7 @@ const (
 	maxRatePerMin       = 6000
 	maxPayloadCapKb     = 512
 	maxIntegrationList  = 200
+	maxJWTPinChars      = 512
 	maxDeliveriesPage   = 200
 	// DeliveryRetention is how long a delivery row is kept by default; RawBodyRetention a refused
 	// delivery's raw body (plan §Clarifications 5). Options overrides both; R2.9 sweeps both.
@@ -79,7 +80,7 @@ func secretBounds(field, v string) error {
 }
 
 // buildAuth turns a caller's auth input into the stored block: an hmac secret minted (or the
-// source's own) and sealed, an api_key or basic key hashed, jwt's issuer kept, mtls refused.
+// source's own) and sealed, an api_key or basic key hashed, jwt's issuer and pins kept, mtls refused.
 func (s oncallSvc) buildAuth(in IntegrationAuthInput, integrationID string, now time.Time) (builtAuth, error) {
 	switch in.Mode {
 	case "mtls":
@@ -117,7 +118,13 @@ func (s oncallSvc) buildAuth(in IntegrationAuthInput, integrationID string, now 
 		if why := auth.CheckJWKSURL(j.JWKSURL); why != "" {
 			return builtAuth{}, domain.Validation("auth.jwt.jwksUrl "+why, map[string]any{"field": "auth.jwt.jwksUrl"})
 		}
-		return builtAuth{auth: oncall.Auth{Mode: oncall.AuthJWT, JWT: &oncall.JWTAuth{Issuer: j.Issuer, Audience: j.Audience, JWKSURL: j.JWKSURL}}}, nil
+		for field, v := range map[string]string{"auth.jwt.subject": j.Subject, "auth.jwt.email": j.Email} {
+			if err := maxChars(field, v, maxJWTPinChars); err != nil {
+				return builtAuth{}, err
+			}
+		}
+		return builtAuth{auth: oncall.Auth{Mode: oncall.AuthJWT, JWT: &oncall.JWTAuth{Issuer: j.Issuer, Audience: j.Audience, JWKSURL: j.JWKSURL,
+			Subject: j.Subject, Email: j.Email}}}, nil
 	}
 	return builtAuth{}, domain.Validation("unknown auth mode: "+string(in.Mode), map[string]any{"field": "auth.mode", "allowed": IntegrationAuthModeValues})
 }
