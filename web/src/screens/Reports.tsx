@@ -6,10 +6,10 @@
  * unavailable while every chart here still renders, and vice versa. A two-tab strip links them.
  *
  * ── THE CENSUS, AND WHY IT PAGES ────────────────────────────────────────────────────────────────
- * `list_tasks` caps `limit` at 200 and returns `nextCursor`. `Analytics.tsx` asks for 200 and
- * DISCARDS the cursor, so every number on that page is silently truncated at 200 tasks — a headline
- * "N work items" cannot ship on that. This screen drains pages up to a stated bound, and when it
- * stops early it SAYS SO rather than rendering a smaller number as if it were the whole board.
+ * `list_tasks` caps `limit` at 200 and returns `nextCursor`. A census that read one page would be
+ * silently truncated at 200 tasks — a headline "N work items" cannot ship on that. This screen
+ * drains pages up to a stated bound, and when it stops early it SAYS SO rather than rendering a
+ * smaller number as if it were the whole board. `Analytics.tsx` shares this census (same key).
  *
  * ── WHAT IS NOT HERE ────────────────────────────────────────────────────────────────────────────
  * No cycle time, no lead time, no completion trend. They need per-task status history, which does
@@ -38,7 +38,7 @@ import {
 import type { Priority, Status, Task } from '../types.js';
 import { STATUSES } from '../types.js';
 
-/** `list_tasks` max (src/tools/tasks.ts) — asking for more is a VALIDATION error, not a bigger page. */
+/** `list_tasks` max (internal/service) — asking for more is a VALIDATION error, not a bigger page. */
 const PAGE = 200;
 /** 2,000 tasks. A bound, not a silence: hitting it renders a footnote naming the number. */
 const MAX_PAGES = 10;

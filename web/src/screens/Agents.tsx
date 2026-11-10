@@ -33,9 +33,8 @@ export function Agents() {
   const qc = useQueryClient();
   const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
 
-  // Composed here from get_project and each board's tasks and feed: no overview route is served
-  // (ui-backend's aggregate had no lane). One fetch per board, bounded by the boards list, as
-  // ActivityLog's feed is.
+  // Composed here from get_project and each board's tasks and feed: the server has no overview
+  // route. One fetch per board, bounded by the boards list, as ActivityLog's feed is.
   const boardIds = (boardsQ.data?.boards ?? []).map((b) => b.id);
   const data = useQuery({
     queryKey: ['agentsdata', projectId, boardIds.join(',')],
@@ -61,8 +60,8 @@ export function Agents() {
   // logged by the core on initialize + each tool call.
   //
   // NO POLL. This screen is a standalone route, so no board stream is mounted here; it opens the
-  // identity-keyed `/api/stream` below instead and the gateway pushes presence snapshots down it. The
-  // initial fetch stays so the table renders before the first snapshot arrives.
+  // identity-keyed `/api/stream` below instead, which carries this device's presence frames (on open
+  // and on each change). The initial fetch stays so the table renders before the first frame arrives.
   // The fetch keeps the device rows a presence frame already put in the cache: a frame is sent only
   // on a change, so a list answering after it would otherwise drop them until the next one.
   const sessionsQ = useQuery({

@@ -74,7 +74,7 @@ function Toggle({ checked, onChange, disabled, title, labelledBy, describedBy }:
  * Roles a PERSON can be given here. Deliberately not the full `Role` ladder.
  *
  * Two things this fixes. `agent` used to be in this list and was the DEFAULT selection — but that role
- * was RETIRED (`src/domain/types.ts`), so the core's Zod enum rejects it: clicking "+ Add Member"
+ * was RETIRED, so the server's role list refuses it (internal/domain): clicking "+ Add Member"
  * without touching the dropdown always failed. And `worker` / `master` are agent PERSONAS — an agent
  * gets its reach through `add_member` over MCP, which is the documented onboarding path and is
  * unaffected by this list. This form is for sharing a board with a colleague by email; it is not where
@@ -479,8 +479,8 @@ function CliTokens() {
                   <tr key={t.id}>
                     <td>{t.label}</td>
                     {/* NO IDENTIFIER COLUMN. It rendered `t.display` — the public half of the id,
-                        never the secret (`src/domain/cli-token.ts` keeps `secretHash` only and states
-                        there is deliberately no Store method that could return one). But a
+                        never the secret (the store keeps only the token's hash, `SecretHash` in
+                        internal/store, and has no method that could return one). But a
                         `bd_bd7c064b…` in a credentials table is indistinguishable from a leaked
                         token BY LOOKING, and the label is not enough to fix that. The row is
                         identified by its label; `t.id` is still what Revoke sends, it is simply never
@@ -587,10 +587,9 @@ export function Settings() {
    * YOUR OWN MCP sessions. `list_agent_sessions` is CALLER-SCOPED — it never returns another user's
    * sessions — so this table is inherently personal and needs no admin gate.
    *
-   * It exists because "Manage sessions" on the Agents screen pointed at /admin: admin-only, and
-   * workspace-WIDE. The one person who could click it was sent somewhere that manages everyone's
-   * sessions, and every other member had no way to stop their own agent at all. The gateway route for
-   * self-service disconnect had been there the whole time; only the SPA was missing.
+   * It exists because "Manage sessions" on the Agents screen pointed at an admin-only, workspace-WIDE
+   * page that this build does not have. Every member needs a way to stop their own agent, and the REST
+   * route for self-service disconnect is caller-scoped, so the panel lives here.
    */
   /**
    * Honour `#sessions` and `#cli-tokens` in the URL. React Router does client-side navigation, so the browser never sees
@@ -971,10 +970,10 @@ export function Settings() {
                 )}
               </Panel>
               {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
-                  cost control over the tenant, not a workflow choice, and the core refuses both fields
-                  from anyone who is not a workspace admin (src/tools/projects.ts, update_settings) — so
-                  rendering them here only offered a project admin a guaranteed FORBIDDEN. They now live
-                  in the /admin portal (web/src/screens/Admin.tsx, ProjectQuotaCard). */}
+                  cost control, not a workflow choice, and update_settings refuses both fields from
+                  anyone who is not a workspace admin (internal/service/projects.go) — so rendering them
+                  here only offered a project admin a guaranteed FORBIDDEN. This build has no admin
+                  screen for them; a workspace admin sets them with update_settings over MCP. */}
             </Stack>
           ) : (
             <Panel pad>

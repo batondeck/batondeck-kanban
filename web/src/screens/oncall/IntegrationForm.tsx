@@ -690,7 +690,7 @@ export function IntegrationForm({
                 value={form.payloadCapKb}
                 onChange={(payloadCapKb) => set({ payloadCapKb })}
                 placeholder="256"
-                hint="Max 512 — the core's own request limit is 1 MB and the forwarded envelope carries the body twice."
+                hint="At most 512: the /hooks route refuses a larger body (413) before reading it."
               />
             </Cluster>
           </Stack>

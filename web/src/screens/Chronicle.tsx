@@ -15,7 +15,7 @@
  * wiki. `guard` carries --blocked, the system's warning token, so it cannot quietly become a tint
  * the next time the palette moves.
  *
- * Talks ONLY to the gateway, never to the core.
+ * Talks only to the REST API (`api/chronicle.ts`, internal/api/chronicle.go).
  */
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../icons.js';
@@ -697,7 +697,7 @@ export function ChroniclePageView() {
   });
 
   // T-430: the byline shows NAMES, and names live in the project's memberDisplay (T-319). Shared
-  // query key with Settings/Admin, so this is one cached read, not a new fan-out.
+  // query key with Settings, so this is one cached read, not a new fan-out.
   const proj = useQuery({
     queryKey: ['project', projectId],
     enabled: !!projectId,
