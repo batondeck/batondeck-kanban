@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
@@ -58,14 +61,21 @@ type Staged struct {
 	tmp    string
 }
 
-// Stage reads r whole to a temporary file, hashing it. On any error the file is removed.
+// tmpPrefix starts the name of every temporary file Stage writes.
+const tmpPrefix = "upload-"
+
+// Stage reads r whole to a temporary file, hashing it, and syncs it to disk, so the row a commit
+// writes after it never names bytes still only in the page cache. On any error the file is removed.
 func (s *Store) Stage(r io.Reader) (*Staged, error) {
-	f, err := os.CreateTemp(filepath.Join(s.dir, "tmp"), "upload-*")
+	f, err := os.CreateTemp(filepath.Join(s.dir, "tmp"), tmpPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("blob: %w", err)
 	}
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), r)
+	if err == nil {
+		err = f.Sync()
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -80,19 +90,112 @@ func (s *Store) Stage(r io.Reader) (*Staged, error) {
 func (st *Staged) Discard() { _ = os.Remove(st.tmp) }
 
 // Commit moves the staged file to its hash's path; a file already there has the same content and is
-// replaced. Call it under Lock(st.SHA256).
+// replaced. The directory entry is synced before it returns (and the store's directory too when
+// the hash's directory is new), so the move survives a power loss once a row names the hash. Call
+// it under Lock(st.SHA256).
 func (s *Store) Commit(st *Staged) error {
 	p, err := s.path(st.SHA256)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	parent := filepath.Dir(p)
+	_, statErr := os.Stat(parent)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("blob: %w", err)
 	}
 	if err := os.Rename(st.tmp, p); err != nil {
 		return fmt.Errorf("blob: %w", err)
 	}
+	if err := syncDir(parent); err != nil {
+		return err
+	}
+	if errors.Is(statErr, fs.ErrNotExist) {
+		return syncDir(s.dir)
+	}
 	return nil
+}
+
+// syncDir flushes dir's entries to disk.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("blob: %w", err)
+	}
+	err = d.Sync()
+	if cerr := d.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("blob: syncing %s: %w", dir, err)
+	}
+	return nil
+}
+
+// Walk calls fn for each committed blob file, in hash order, with its hash and modification time
+// (when its bytes were last written: the upload that committed it). Entries that are not a blob
+// file at its hash's path are skipped. An error from fn stops the walk and is Walk's.
+func (s *Store) Walk(fn func(sha string, modTime time.Time) error) error {
+	subs, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("blob: %w", err)
+	}
+	for _, sub := range subs {
+		if !sub.IsDir() || len(sub.Name()) != 2 {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(s.dir, sub.Name()))
+		if err != nil {
+			return fmt.Errorf("blob: %w", err)
+		}
+		for _, e := range entries {
+			sha := e.Name()
+			if !e.Type().IsRegular() || !domain.ValidSHA256(sha) || sha[:2] != sub.Name() {
+				continue
+			}
+			info, err := e.Info()
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // removed since the read
+			} else if err != nil {
+				return fmt.Errorf("blob: %w", err)
+			}
+			if err := fn(sha, info.ModTime()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// SweepTmp removes the temporary files Stage left that were last written before olderThan (an
+// upload cut off by a crash or a kill, which no Discard reached), and answers how many it removed.
+// An upload in flight writes its file as its body arrives, and its read deadline is its URL's
+// expiry, so an olderThan well before that leaves every live upload alone.
+func (s *Store) SweepTmp(olderThan time.Time) (int, error) {
+	dir := filepath.Join(s.dir, "tmp")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("blob: %w", err)
+	}
+	removed := 0
+	var errs []error
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), tmpPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(olderThan) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+			removed++
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return removed, fmt.Errorf("blob: %w", err)
+	}
+	return removed, nil
 }
 
 // OpenFile opens the blob's file for reading.

@@ -97,7 +97,7 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 		ToolCallRetentionDays: int64(ret.ToolCallsDays)})
 	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
 	if media.Files != nil {
-		sweep.CollectBlobs = sc.CollectBlobs
+		sweep.CollectBlobs, sweep.SweepBlobFiles = sc.CollectBlobs, sc.SweepBlobFiles
 	}
 	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
 	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse",

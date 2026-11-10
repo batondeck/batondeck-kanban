@@ -525,3 +525,54 @@ func TestBlobURLBaseOverTheEngines(t *testing.T) {
 		})
 	}
 }
+
+// api-http#1, store-rest#4: serve's retention sweep removes, from the blob directory, a file no blob
+// row names that was last written more than retention.BlobGrace ago and an upload's temporary file
+// as old, and keeps a younger file with no row.
+func TestServesSweepRemovesBlobFilesNoRowNames(t *testing.T) {
+	st := storetest.SQLite(t)
+	files, err := blob.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := compose(st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{Files: files}, core.Retention{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.core.Close(context.Background())
+	old := time.Now().Add(-2 * time.Hour)
+	commit := func(body string, mod time.Time) string {
+		t.Helper()
+		s, err := files.Stage(strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := files.Commit(s); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(filepath.Join(files.Dir(), s.SHA256[:2], s.SHA256), mod, mod); err != nil {
+			t.Fatal(err)
+		}
+		return s.SHA256
+	}
+	gone, young := commit("no row, old", old), commit("no row, young", time.Now())
+	if _, err := files.Stage(strings.NewReader("cut off")); err != nil {
+		t.Fatal(err)
+	}
+	tmps, _ := filepath.Glob(filepath.Join(files.Dir(), "tmp", "upload-*"))
+	if len(tmps) != 1 {
+		t.Fatalf("temporary files %v", tmps)
+	}
+	if err := os.Chtimes(tmps[0], old, old); err != nil {
+		t.Fatal(err)
+	}
+	swept := a.sweep.Sweep(context.Background())
+	onDisk := func(sha string) bool {
+		_, err := os.Stat(filepath.Join(files.Dir(), sha[:2], sha))
+		return err == nil
+	}
+	left, _ := filepath.Glob(filepath.Join(files.Dir(), "tmp", "upload-*"))
+	if onDisk(gone) || !onDisk(young) || len(left) != 0 || swept.BlobFiles != 2 {
+		t.Fatalf("after serve's sweep (%+v): the old file with no row on disk %v (want false), the young one %v (want true), temporary files %v (want none)", swept, onDisk(gone), onDisk(young), left)
+	}
+}

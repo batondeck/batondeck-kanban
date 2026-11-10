@@ -555,3 +555,21 @@ func TestASweepCollectsTheUnreferencedBlobs(t *testing.T) {
 		})
 	}
 }
+
+// The blob-file step: a sweep hands SweepBlobFiles its time less BlobGrace and counts what it
+// removed; with no SweepBlobFiles nothing is called.
+func TestASweepSweepsTheBlobFiles(t *testing.T) {
+	s := backends[0].open(t)
+	now := time.UnixMilli(5_000_000_000)
+	var asked []time.Time
+	sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+		Report:         func(step string, err error) { t.Errorf("%s: %v", step, err) },
+		SweepBlobFiles: func(_ context.Context, olderThan time.Time) int64 { asked = append(asked, olderThan); return 3 }}
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 3 || len(asked) != 1 || !asked[0].Equal(now.Add(-BlobGrace)) {
+		t.Fatalf("swept %+v, asked %v, want 3 files older than %v", swept, asked, now.Add(-BlobGrace))
+	}
+	sw.SweepBlobFiles = nil
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 0 {
+		t.Fatalf("with no SweepBlobFiles: swept %+v", swept)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/blob"
@@ -267,10 +268,14 @@ func uploadedAlready(id string, status store.AttachmentStatus) *domain.BatonDeck
 }
 
 // unlinkUnreferenced removes sha's file when no blob row names it (an upload refused after its file
-// was moved into place). Call it under the hash's lock.
+// was moved into place). A failed read keeps the file, since a row may name it; SweepBlobFiles
+// removes it later if none does. Call it under the hash's lock.
 func (c *Core) unlinkUnreferenced(ctx context.Context, sha string) {
 	_, err := c.store.GetBlob(ctx, sha)
 	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeNotFound {
+		if err != nil {
+			c.log.Printf("service: blob %s: kept, its row could not be read: %+v", sha, err)
+		}
 		return
 	}
 	if err := c.media.Files.Remove(sha); err != nil {
@@ -278,10 +283,87 @@ func (c *Core) unlinkUnreferenced(ctx context.Context, sha string) {
 	}
 }
 
+// blobFileChecks is the most blob files one SweepBlobFiles looks up; the next call goes on after
+// the last one it looked up, so a store of any size is covered in turn. A var for the tests.
+var blobFileChecks = 5000
+
+// blobSweep is where the next SweepBlobFiles goes on from: the last hash looked up, "" for the start.
+type blobSweep struct {
+	mu    sync.Mutex
+	after string
+}
+
+// SweepBlobFiles is the disk side of the blob GC (retention's blob-file step), for the files no row
+// will ever name: the temporary files of uploads cut off by a crash, and blob files last written
+// before olderThan that no blob row names (a crash or a timeout between an upload's move and its
+// row, or a GC whose unlink failed after it deleted the row). Each such file is looked up under its
+// hash's lock and removed only when the lookup says no row; a failed lookup keeps it. At most
+// blobFileChecks files are looked up per call. It answers how many files it removed.
+func (c *Core) SweepBlobFiles(ctx context.Context, olderThan time.Time) int64 {
+	files := c.media.Files
+	if files == nil {
+		return 0
+	}
+	n, err := files.SweepTmp(olderThan)
+	removed := int64(n)
+	if err != nil {
+		c.log.Printf("service: blob sweep: %+v", err)
+	}
+	var old []string // hash order
+	if err := files.Walk(func(sha string, mod time.Time) error {
+		if mod.Before(olderThan) {
+			old = append(old, sha)
+		}
+		return ctx.Err()
+	}); err != nil {
+		if ctx.Err() == nil {
+			c.log.Printf("service: blob sweep: %+v", err)
+		}
+		return removed
+	}
+	c.blobSweep.mu.Lock()
+	defer c.blobSweep.mu.Unlock()
+	i, _ := slices.BinarySearch(old, c.blobSweep.after)
+	if i < len(old) && old[i] == c.blobSweep.after {
+		i++
+	}
+	turn := append(old[i:len(old):len(old)], old[:i]...)
+	whole := len(turn) <= blobFileChecks
+	if !whole {
+		turn = turn[:blobFileChecks]
+	}
+	for _, sha := range turn {
+		if ctx.Err() != nil {
+			return removed
+		}
+		func() {
+			defer files.Lock(sha)()
+			_, err := c.store.GetBlob(ctx, sha)
+			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeNotFound {
+				if err != nil && ctx.Err() == nil {
+					c.log.Printf("service: blob sweep %s: kept, its row could not be read: %+v", sha, err)
+				}
+				return
+			}
+			if err := files.Remove(sha); err != nil {
+				c.log.Printf("service: blob sweep %s: %+v", sha, err)
+				return
+			}
+			removed++
+		}()
+		c.blobSweep.after = sha
+	}
+	if whole {
+		c.blobSweep.after = ""
+	}
+	return removed
+}
+
 // CollectBlobs is the blob GC (Options.BlobGC's default, and retention's for the unreferenced
 // blobs it lists): for each hash, under its lock, the row is deleted
 // unless an attachment or memory entry still names it, and then the file. A hash still referenced
-// keeps both; one with no row left loses its file.
+// keeps both; one with no row left loses its file. A file whose unlink fails once its row is gone
+// is left to SweepBlobFiles.
 func (c *Core) CollectBlobs(ctx context.Context, sha256s []string) {
 	for _, sha := range sha256s {
 		func() {

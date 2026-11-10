@@ -507,3 +507,92 @@ func TestAnUploadWhoseClientLeftAfterTheBodyFinishesOverTheEngines(t *testing.T)
 		})
 	}
 }
+
+// orphan is body committed to the blob store with no row, last written at mod.
+func (m *mediaEnv) orphan(t *testing.T, body []byte, mod time.Time) string {
+	t.Helper()
+	st, err := m.files.Stage(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.files.Commit(st); err != nil {
+		t.Fatal(err)
+	}
+	sha := hashOf(body)
+	if err := os.Chtimes(filepath.Join(m.files.Dir(), sha[:2], sha), mod, mod); err != nil {
+		t.Fatal(err)
+	}
+	return sha
+}
+
+// api-http#1, store-rest#4: the blob-file sweep removes what no row will ever name, last written
+// before its time: a committed file no blob row names, and an upload's temporary file. It keeps a
+// ready attachment's file however old, a younger file with no row (an upload between its move and
+// its row) and a younger temporary file (an upload still reading). It looks up at most
+// blobFileChecks files per call and the next call goes on from there.
+func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		now := time.Now()
+		old, cut := now.Add(-2*time.Hour), now.Add(-time.Hour)
+		task := m.newTask(t)
+		kept := []byte("a ready attachment's bytes")
+		if err := m.upload(t, m.attach(t, task.ID, int64(len(kept))).UploadURL, kept); err != nil {
+			t.Fatal(err)
+		}
+		keptSHA := hashOf(kept)
+		if err := os.Chtimes(filepath.Join(m.files.Dir(), keptSHA[:2], keptSHA), old, old); err != nil {
+			t.Fatal(err)
+		}
+		gone := m.orphan(t, []byte("a file no row names"), old)
+		young := m.orphan(t, []byte("an upload between its move and its row"), now)
+		for _, body := range []string{"an upload a crash cut off", "an upload still reading"} {
+			if _, err := m.files.Stage(strings.NewReader(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tmps, _ := filepath.Glob(filepath.Join(m.files.Dir(), "tmp", "upload-*"))
+		if len(tmps) != 2 {
+			t.Fatalf("temporary files %v, want 2", tmps)
+		}
+		if err := os.Chtimes(tmps[0], old, old); err != nil {
+			t.Fatal(err)
+		}
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 2 {
+			t.Fatalf("removed %d files, want 2 (the old orphan and the old temporary file)", n)
+		}
+		for sha, want := range map[string]bool{keptSHA: true, gone: false, young: true} {
+			if m.onDisk(sha) != want {
+				t.Errorf("%s on disk %v, want %v", sha, m.onDisk(sha), want)
+			}
+		}
+		left, _ := filepath.Glob(filepath.Join(m.files.Dir(), "tmp", "upload-*"))
+		if len(left) != 1 || left[0] != tmps[1] {
+			t.Fatalf("temporary files left %v, want only %s", left, tmps[1])
+		}
+		if list := m.list(t, task.ID); list[0].Status != "ready" {
+			t.Fatalf("the ready attachment is %s", list[0].Status)
+		}
+
+		defer func(n int) { blobFileChecks = n }(blobFileChecks)
+		blobFileChecks = 2
+		var three []string
+		for _, b := range []string{"one", "two", "three"} {
+			three = append(three, m.orphan(t, []byte(b), old))
+		}
+		// kept (looked up, has a row) and two of the three per call, in hash order from the cursor.
+		first := m.c.SweepBlobFiles(m.ctx, cut)
+		second := m.c.SweepBlobFiles(m.ctx, cut)
+		third := m.c.SweepBlobFiles(m.ctx, cut)
+		if first+second+third != 3 || first > 2 || second > 2 {
+			t.Fatalf("removed %d, %d, %d over three bounded calls, want 3 in all and at most 2 per call", first, second, third)
+		}
+		for _, sha := range three {
+			if m.onDisk(sha) {
+				t.Errorf("%s still on disk after the bounded calls went round", sha)
+			}
+		}
+		if !m.onDisk(keptSHA) {
+			t.Fatal("the ready attachment's file is gone")
+		}
+	})
+}
