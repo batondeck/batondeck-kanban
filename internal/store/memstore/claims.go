@@ -172,7 +172,7 @@ func (s *Store) ClaimTask(ctx context.Context, projectID, taskID string, expecte
 			return store.Task{}, domain.ConflictLocked(taskID, "race")
 		}
 		if len(t.BlockedBy) > 0 {
-			return store.Task{}, domain.InvalidTransition(t.Status, domain.InProgress, nil, nil)
+			return store.Task{}, domain.GatedClaim(taskID, t.Status, t.BlockedBy)
 		}
 		mine := t.Claim != nil && t.Claim.Owner == in.Owner && sameAgent(t.Claim.AgentID, in.AgentID)
 		if live(t.Claim, in.Now) && !mine {

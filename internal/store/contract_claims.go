@@ -59,8 +59,9 @@ type Claims interface {
 	// when the frontier is empty (an unknown board's frontier is empty: the service has read the
 	// board for its column). Concurrent callers never win the same task.
 	ClaimNext(ctx context.Context, q FrontierQuery, in ClaimInput) (task Task, ok bool, err error)
-	// ClaimTask claims one task at expectedVersion. A task with BlockedBy not empty, or neither
-	// TODO nor IN_PROGRESS with an expired lease or the caller's own, is INVALID_TRANSITION;
+	// ClaimTask claims one task at expectedVersion. A task with BlockedBy not empty is
+	// domain.GatedClaim (INVALID_TRANSITION naming the blockers); one neither TODO nor IN_PROGRESS
+	// with an expired lease or the caller's own is INVALID_TRANSITION;
 	// re-claiming one's own live lease replaces it. A version that is not the task's is STALE.
 	ClaimTask(ctx context.Context, projectID, taskID string, expectedVersion int64, in ClaimInput) (Task, error)
 	// Heartbeat moves the lease's expiry to expiresAt and returns the task; with keepLonger an

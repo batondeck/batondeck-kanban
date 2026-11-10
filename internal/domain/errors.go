@@ -105,6 +105,15 @@ func InvalidTransition(from, to Status, allowed, path []Status) *BatonDeckError 
 	return NewError(CodeInvalidTransition, message, details)
 }
 
+// GatedClaim is the INVALID_TRANSITION of a claim of a task that still has open blockers: its move
+// to IN_PROGRESS waits on them, and the message and details name them (blockedBy), so the caller
+// walks the chain rather than reading the one legal move out of TODO as illegal.
+func GatedClaim(taskID string, from Status, blockedBy []string) *BatonDeckError {
+	return NewError(CodeInvalidTransition,
+		fmt.Sprintf("Task %s is blocked by %s: it can be claimed once they are DONE.", taskID, strings.Join(blockedBy, ", ")),
+		map[string]any{"from": from, "to": InProgress, "taskId": taskID, "blockedBy": blockedBy})
+}
+
 func WIPExceeded(columnID string, limit int) *BatonDeckError {
 	return NewError(CodeWIPExceeded, fmt.Sprintf("Column %s WIP limit %d reached", columnID, limit),
 		map[string]any{"columnId": columnID, "limit": limit})

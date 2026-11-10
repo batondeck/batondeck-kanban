@@ -2,6 +2,7 @@ package service
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -125,5 +126,25 @@ func TestAClearedEdgeClosesNoCycle(t *testing.T) {
 		e.dependOn(t, c.ID, d.ID)
 		_, err = e.c.Context().AddDependency(e.ctx, e.alice, AddDependencyReq{ProjectID: e.project, FromTaskID: d.ID, ToTaskID: c.ID})
 		wantCode(t, err, domain.CodeCycleDetected)
+	})
+}
+
+// claim_task on a task with an open blocker says so: the refusal (INVALID_TRANSITION, as the
+// contract has it) names the blockers in its message and details, rather than calling the one legal
+// move out of TODO illegal.
+func TestClaimingAGatedTaskNamesItsBlockers(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		a := e.task(t, domain.Todo)
+		b := e.task(t, domain.Todo)
+		e.dependOn(t, a.ID, b.ID)
+		_, err := e.c.Lifecycle().Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: b.ID})
+		be := wantCode(t, err, domain.CodeInvalidTransition)
+		t.Logf("claim_task %s (blocked by %s): %s %v", b.ID, a.ID, be.Message, be.Details)
+		if !strings.Contains(be.Message, a.ID) {
+			t.Fatalf("message %q names no blocker, want %s", be.Message, a.ID)
+		}
+		if got, _ := be.Details["blockedBy"].([]string); !slices.Equal(got, []string{a.ID}) {
+			t.Fatalf("details %v, want blockedBy [%s]", be.Details, a.ID)
+		}
 	})
 }
