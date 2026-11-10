@@ -23,6 +23,7 @@ import type { Delivery, Integration, OncallSource } from '../../types.js';
 import { Cluster, Empty, Note, Panel, Pill, Stack } from '../../ui.js';
 import { ConfirmButton, timeAgo } from '../../components.js';
 import { sourceLogo } from './logos.js';
+import { EndpointHelp, endpointUrl } from './EndpointHelp.js';
 import {
   IntegrationForm,
   blankForm,
@@ -609,7 +610,7 @@ export function OncallSetup({
                 </Note>
                 <code style={{ wordBreak: 'break-all' }}>{shownSecret.secret}</code>
                 <div>
-                  Endpoint path: <code>{shownSecret.path}</code>
+                  Endpoint URL: <code style={{ wordBreak: 'break-all' }}>{endpointUrl(shownSecret.path)}</code>
                 </div>
                 <button className="btn" onClick={() => setShownSecret(null)}>
                   I have stored it
@@ -780,14 +781,7 @@ export function OncallSetup({
             <>
               <Panel title={`${active.name} — endpoint`} pad>
                 <Stack gap={8}>
-                  <div>
-                    Path: <code>{active.endpointPath}</code>
-                  </div>
-                  <Note>
-                    Paste this path onto the ingest function&apos;s host in the source&apos;s webhook
-                    settings. Auth mode: <b>{active.auth.mode}</b>
-                    {active.auth.externallyIssued ? ' (the source issued the secret)' : ''}.
-                  </Note>
+                  <EndpointHelp integration={active} />
                   <Cluster gap={8} wrap>
                     <button
                       className="btn secondary"

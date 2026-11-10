@@ -360,7 +360,7 @@ export function IntegrationForm({
               hint={
                 source.id === 'pagerduty'
                   ? 'PagerDuty signs with a secret IT issues when you create the webhook subscription. A secret minted here would never be used, so every delivery would be refused.'
-                  : 'Leave blank and BatonDeck mints a whsec_… and shows it once. Fill it in only when the source issues its own.'
+                  : 'Leave blank and BatonDeck mints a whsec_… and shows it once. Fill it in to use a secret your sender already holds; either way the sender signs the same timestamped v0 form, shown on the endpoint panel.'
               }
             />
           )}
