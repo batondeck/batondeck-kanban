@@ -1,5 +1,5 @@
--- The blob table: content-addressed rows, written once. A blob is referenced while an attachment or
--- a memory entry names it.
+-- The blob table: content-addressed rows, written once. A blob is referenced while an attachment, a
+-- memory entry or a Chronicle body (chronicle_blob_refs) names it.
 
 -- name: InsertBlob :exec
 INSERT INTO blobs (sha256, bytes, created_at) VALUES ($1, $2, $3) ON CONFLICT (sha256) DO NOTHING;
@@ -12,11 +12,13 @@ SELECT sha256, bytes, created_at FROM blobs WHERE sha256 = $1;
 -- name: DeleteUnreferencedBlob :execrows
 DELETE FROM blobs WHERE sha256 = $1
   AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.blob_sha256 = blobs.sha256)
-  AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.blob_sha256 = blobs.sha256);
+  AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.blob_sha256 = blobs.sha256)
+  AND NOT EXISTS (SELECT 1 FROM chronicle_blob_refs r WHERE r.blob_sha256 = blobs.sha256);
 
 -- name: ListUnreferencedBlobs :many
 SELECT b.sha256, b.bytes, b.created_at FROM blobs b
 WHERE b.created_at < sqlc.arg(older_than)::bigint
   AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.blob_sha256 = b.sha256)
   AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.blob_sha256 = b.sha256)
+  AND NOT EXISTS (SELECT 1 FROM chronicle_blob_refs r WHERE r.blob_sha256 = b.sha256)
 ORDER BY b.created_at, b.sha256 COLLATE "C" LIMIT sqlc.arg(page_limit)::bigint;

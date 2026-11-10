@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -24,9 +25,11 @@ type taskQueries interface {
 	WriteTaskState(ctx context.Context, arg sqlitedb.WriteTaskStateParams) (sqlitedb.WriteTaskStateRow, error)
 	ListTasks(ctx context.Context, arg sqlitedb.ListTasksParams) ([]sqlitedb.ListTasksRow, error)
 	CountTasks(ctx context.Context, arg sqlitedb.CountTasksParams) (sqlitedb.CountTasksRow, error)
+	LastOrderKey(ctx context.Context, arg sqlitedb.LastOrderKeyParams) (string, error)
 	ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByIDsParams) ([]sqlitedb.ListTasksByIDsRow, error)
 	DeleteTask(ctx context.Context, arg sqlitedb.DeleteTaskParams) (int64, error)
 	GetColumn(ctx context.Context, arg sqlitedb.GetColumnParams) (sqlitedb.Column, error)
+	HeadOrderKey(ctx context.Context, arg sqlitedb.HeadOrderKeyParams) (string, error)
 }
 
 func (s *SQLite) CreateTask(ctx context.Context, in CreateTaskInput) (Task, error) {
@@ -91,6 +94,14 @@ func (s *SQLite) CountTasks(ctx context.Context, projectID string, f TaskFilter)
 
 func (s *Postgres) CountTasks(ctx context.Context, projectID string, f TaskFilter) (int64, error) {
 	return countTasks(ctx, s, projectID, f)
+}
+
+func (s *SQLite) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	return lastOrderKey(ctx, s, projectID, boardID, columnID)
+}
+
+func (s *Postgres) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	return lastOrderKey(ctx, s, projectID, boardID, columnID)
 }
 
 func (s *SQLite) ListTasksByIDs(ctx context.Context, projectID string, ids []string) ([]Task, error) {
@@ -283,6 +294,28 @@ func placeOf(ctx context.Context, q sqlQueries, projectID, boardID, columnID str
 	return domain.NotFound("Column", columnID)
 }
 
+// HeadKey is the order key a task takes when a write moves it into a column without naming one: a key
+// before first, the column's first key ("" when it is empty), so the task lands at the column's head,
+// spread (domain.OrderBetweenSpread) so two writers that land tasks in one column at once mint
+// different keys (the same spread comes up about once in 14 million draws). A first that is
+// malformed gives keep, the task's own key: a neighbour's bad key never fails a lifecycle write.
+func HeadKey(first, keep string) string {
+	k, err := domain.OrderBetweenSpread("", first, rand.Uint32())
+	if err != nil {
+		return keep
+	}
+	return k
+}
+
+// landingKey is HeadKey for column columnID of the board: one bounded read of the column's first key.
+func landingKey(ctx context.Context, q sqlQueries, projectID, boardID, columnID, keep string) (string, error) {
+	first, err := q.HeadOrderKey(ctx, sqlitedb.HeadOrderKeyParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
+	if err != nil && !isNoRows(err) {
+		return "", fmt.Errorf("store: column head: %w", err)
+	}
+	return HeadKey(first, keep), nil
+}
+
 // columnOn refuses a column id that is not one of the board's.
 func columnOn(ctx context.Context, q sqlQueries, projectID, boardID, columnID string) error {
 	_, err := q.GetColumn(ctx, sqlitedb.GetColumnParams{ProjectID: projectID, BoardID: boardID, ID: columnID})
@@ -450,9 +483,17 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		}
 	}
 	return versioned(ctx, e, projectID, taskID, expectedVersion, func(q sqlQueries, t Task) (Task, error) {
+		reopened := t.Status == domain.Done && c.Status != domain.Done
 		if c.ColumnID != "" {
 			if err := columnOn(ctx, q, projectID, t.BoardID, c.ColumnID); err != nil {
 				return Task{}, err
+			}
+			if c.ColumnID != t.ColumnID && c.OrderKey == nil {
+				key, err := landingKey(ctx, q, projectID, t.BoardID, c.ColumnID, t.OrderKey)
+				if err != nil {
+					return Task{}, err
+				}
+				t.OrderKey = key
 			}
 			t.ColumnID = c.ColumnID
 		}
@@ -483,6 +524,9 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		setNullable(&t.NextEligibleAt, c.NextEligibleAt)
 		if c.Labels != nil {
 			t.Labels = c.Labels
+		}
+		if reopened {
+			t.Labels = domain.Reopened(t.Labels)
 		}
 		if c.ClearClaim {
 			t.Claim = nil
@@ -600,6 +644,18 @@ func countTasks(ctx context.Context, e engine, projectID string, f TaskFilter) (
 		return 0, domain.NotFound("Board", f.BoardID)
 	}
 	return r.TaskCount, nil
+}
+
+// lastOrderKey is the column's last order key in one statement; an empty column is "".
+func lastOrderKey(ctx context.Context, e engine, projectID, boardID, columnID string) (string, error) {
+	key, err := e.queries(false).LastOrderKey(ctx, sqlitedb.LastOrderKeyParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
+	switch {
+	case isNoRows(err):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("store: last order key: %w", err)
+	}
+	return key, nil
 }
 
 func listTasksByIDs(ctx context.Context, e engine, projectID string, ids []string) ([]Task, error) {
@@ -792,6 +848,10 @@ func (p pgQueries) CountTasks(ctx context.Context, arg sqlitedb.CountTasksParams
 	return sqlitedb.CountTasksRow(r), err
 }
 
+func (p pgQueries) LastOrderKey(ctx context.Context, arg sqlitedb.LastOrderKeyParams) (string, error) {
+	return p.q.LastOrderKey(ctx, pgdb.LastOrderKeyParams(arg))
+}
+
 func (p pgQueries) ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByIDsParams) ([]sqlitedb.ListTasksByIDsRow, error) {
 	rows, err := p.q.ListTasksByIDs(ctx, pgdb.ListTasksByIDsParams(arg))
 	return convert(rows, func(r pgdb.ListTasksByIDsRow) sqlitedb.ListTasksByIDsRow { return sqlitedb.ListTasksByIDsRow(r) }), err
@@ -799,6 +859,10 @@ func (p pgQueries) ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByI
 
 func (p pgQueries) DeleteTask(ctx context.Context, arg sqlitedb.DeleteTaskParams) (int64, error) {
 	return p.q.DeleteTask(ctx, pgdb.DeleteTaskParams(arg))
+}
+
+func (p pgQueries) HeadOrderKey(ctx context.Context, arg sqlitedb.HeadOrderKeyParams) (string, error) {
+	return p.q.HeadOrderKey(ctx, pgdb.HeadOrderKeyParams(arg))
 }
 
 func (p pgQueries) GetColumn(ctx context.Context, arg sqlitedb.GetColumnParams) (sqlitedb.Column, error) {

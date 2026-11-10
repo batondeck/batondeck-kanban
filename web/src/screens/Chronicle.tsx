@@ -15,9 +15,9 @@
  * wiki. `guard` carries --blocked, the system's warning token, so it cannot quietly become a tint
  * the next time the palette moves.
  *
- * Talks ONLY to the gateway, never to the core.
+ * Talks only to the REST API (`api/chronicle.ts`, internal/api/chronicle.go).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../icons.js';
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -26,13 +26,14 @@ import * as projectsApi from '../api/projects.js';
 import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
 import { displayAgentName } from '../agentStatus.js';
 import { Button, Chip, Chips, Cluster, Empty, Note, Panel, Section, Stack, Tag } from '../ui.js';
-import { ChronicleBlockView, sameBlockText } from '../chronicleBlocks.js';
+import { ChronicleBlockView, recordHref, sameBlockText } from '../chronicleBlocks.js';
 import { useProject } from '../projectContext.js';
 import { useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { clearPalette, publishPalette } from '../palette.js';
 import { railsOf, sortByDate, type SortField } from '../chronicleSearch.js';
 import { CHRONICLE_KINDS, isAgent } from '../types.js';
+import { randomHex } from '../randomId.js';
 import type {
   ChronicleBlock,
   ChronicleBlockInput,
@@ -54,7 +55,7 @@ import type {
  * block a new identity each time, so every version would read as "everything deleted, everything
  * added" and the sweep would have nothing to match against.
  */
-const newBlockId = (): string => `a-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+const newBlockId = (): string => `a-${randomHex(6)}`;
 
 /**
  * Fold the editor's `{id, text}` list back into full block inputs.
@@ -319,7 +320,7 @@ export function Chronicle() {
                     <Link
                       key={`${p.projectId}/${pg.id}`}
                       className="line-row"
-                      to={`/chronicle/${pg.id}`}
+                      to={recordHref(p.projectId, pg.id)}
                       onClick={() => setProjectId(p.projectId)}
                     >
                       <span className="line-row-label">
@@ -371,7 +372,7 @@ export function Chronicle() {
                 <Link
                   key={r.id}
                   className="chip"
-                  to={`/chronicle/${r.id}`}
+                  to={recordHref(projectId, r.id)}
                   title={r.title}
                   /* THE COUNT NEEDS ITS OWN ACCESSIBLE NAME, and finding that out cost a red test.
                      The accessible-name algorithm TRIMS each child's text before concatenating, so a
@@ -418,7 +419,7 @@ export function Chronicle() {
         {Object.entries(byKind).map(([kind, ps]) => (
           <Panel key={kind} title={kind} right={ps.length}>
             {ps.map((p) => (
-              <Link key={p.id} className="line-row" to={`/chronicle/${p.id}`}>
+              <Link key={p.id} className="line-row" to={recordHref(projectId, p.id)}>
                 <span className="line-row-label">
                   {p.title}{' '}
                   {/* The persisted sweep-conflict flag (T-298): the queryable signal, visible where a
@@ -515,7 +516,7 @@ export function ChronicleNew() {
   const [note, setNote] = useState<string | null>(null);
   /** ONE key per form instance: a double-click or a retried POST replays the same create instead of
    *  bouncing the second attempt off the taken-slug refusal. */
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(() => randomHex(16));
 
   const effectiveSlug = slugTouched ? slug : slugify(title);
 
@@ -533,7 +534,7 @@ export function ChronicleNew() {
       }),
     onSuccess: async ({ pageId }) => {
       await qc.invalidateQueries({ queryKey: ['chronicle', projectId] });
-      await nav(`/chronicle/${pageId}`);
+      await nav(recordHref(projectId, pageId));
     },
     onError: (e: Error) => setNote(e.message),
   });
@@ -627,15 +628,53 @@ export function ChronicleNew() {
   );
 }
 
+/**
+ * The project a record screen works in: the one its URL names (`?project=`, see `recordHref`), else
+ * the sidebar's. A named project the reader is a member of becomes the sidebar's selection too, so
+ * the rest of the app agrees with the record on screen. A project they cannot read is still asked
+ * for, and the answer says so ("No such record … a project you cannot read").
+ *
+ * The URL's project goes into the sidebar ONCE per project named, not whenever the two differ:
+ * re-applying it held the global Project select on it, so it could not be moved on a record page.
+ * Moving the sidebar off the URL's project leaves the record for the Chronicle index of the project
+ * picked (or of all projects), so the page never shows a project the sidebar does not name. Changes
+ * are counted only once the roster has loaded: the stored selection arriving with it is not a move.
+ */
+function useRecordProject(): string {
+  const [params] = useSearchParams();
+  const nav = useNavigate();
+  const { projectId: selected, projects, setProjectId, ready } = useProject();
+  const named = params.get('project') ?? '';
+  const member = !!named && projects.some((p) => p.projectId === named);
+  const applied = useRef('');
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (!member || applied.current === named) return;
+    applied.current = named;
+    if (selected !== named) setProjectId(named);
+  }, [member, named, selected, setProjectId]);
+  useEffect(() => {
+    if (!ready) return;
+    const before = seen.current;
+    seen.current = selected;
+    if (before === null || before === selected) return;
+    if (named && selected !== named) nav('/chronicle');
+  }, [ready, named, selected, nav]);
+  return named || selected;
+}
+
 /** One page: read, edit inline, delete, reach its history. */
 export function ChroniclePageView() {
-  const { projectId } = useProject();
-  // Edit and Land are `edit_chronicle_page`, Delete `delete_chronicle_page`, both tier write (P-440):
-  // below it they are closed and say why.
+  const projectId = useRecordProject();
+  // Edit and Land are `edit_chronicle_page`, tier write; Delete is `delete_chronicle_page`, tier master
+  // (P-440; the owner's ruling of 2026-11-10: it destroys every version). Below its tier each is closed
+  // and says why: a viewer can do neither, a worker can edit but not delete.
   const myRole = useMyProjectRole(projectId);
   const canEdit = mayCall(myRole, 'edit_chronicle_page');
   const canDelete = mayCall(myRole, 'delete_chronicle_page');
   const editWhy = closedWhy(myRole, 'edit_chronicle_page', 'edit or delete records');
+  // The one reason beside Edit and Delete: the edit's while Edit is closed (it covers both), else the delete's.
+  const headerWhy = canEdit ? closedWhy(myRole, 'delete_chronicle_page', 'delete records') : editWhy;
   const { pageId = '' } = useParams();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -679,7 +718,7 @@ export function ChroniclePageView() {
   });
 
   // T-430: the byline shows NAMES, and names live in the project's memberDisplay (T-319). Shared
-  // query key with Settings/Admin, so this is one cached read, not a new fan-out.
+  // query key with Settings, so this is one cached read, not a new fan-out.
   const proj = useQuery({
     queryKey: ['project', projectId],
     enabled: !!projectId,
@@ -892,7 +931,7 @@ export function ChroniclePageView() {
         subtitle={page?.slug}
         actions={
           <Cluster gap={8}>
-            <Link to={`/chronicle/${pageId}/history`}>History</Link>
+            <Link to={recordHref(projectId, pageId, '/history')}>History</Link>
             {editing ? (
               <>
                 {/* In a conflict this button is the only way OUT, and it throws the draft away — so it
@@ -942,15 +981,15 @@ export function ChroniclePageView() {
                   <Button
                     variant="danger"
                     disabled={!canDelete}
-                    title={canDelete ? undefined : editWhy ?? 'Checking your role'}
-                    aria-describedby={!canDelete && editWhy ? 'chronicle-closed' : undefined}
+                    title={canDelete ? undefined : headerWhy ?? 'Checking your role'}
+                    aria-describedby={!canDelete && headerWhy ? 'chronicle-closed' : undefined}
                     onClick={() => setConfirmDelete('')}
                   >
                     Delete
                   </Button>
                 )}
-                {(!canEdit || !canDelete) && editWhy && (
-                  <span id="chronicle-closed" className="muted" style={{ fontSize: 12 }}>{editWhy}</span>
+                {(!canEdit || !canDelete) && headerWhy && (
+                  <span id="chronicle-closed" className="muted" style={{ fontSize: 12 }}>{headerWhy}</span>
                 )}
               </>
             )}
@@ -1181,7 +1220,7 @@ export function ChroniclePageView() {
               const folded = blocks.filter((b) => /^(ev|cov)/.test(b.id));
               const lead = blocks.filter((b) => !/^(ev|cov)/.test(b.id));
               const render = (b: ChronicleBlock) => (
-                <ChronicleBlockView key={b.id} block={b} resolveSlug={resolveSlug} />
+                <ChronicleBlockView key={b.id} block={b} resolveSlug={resolveSlug} projectId={projectId} />
               );
               return (
                 <>
@@ -1204,7 +1243,7 @@ export function ChroniclePageView() {
 
 /** History: version list, diff between any two, revert. */
 export function ChronicleHistory() {
-  const { projectId } = useProject();
+  const projectId = useRecordProject();
   // A revert writes a new version: `edit_chronicle_page`, tier write (P-440).
   const myRole = useMyProjectRole(projectId);
   const canRevert = mayCall(myRole, 'edit_chronicle_page');
@@ -1219,9 +1258,18 @@ export function ChronicleHistory() {
     queryFn: () => projectsApi.getProject(projectId),
   });
   const names = proj.data?.memberDisplay;
-  const [params, setParams] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const a = params.get('a');
   const b = params.get('b');
+  /** Picks the two versions to compare; the record's `?project=` stays in the URL. */
+  const setParams = (pick: { a?: string; b?: string }): void => {
+    const next = new URLSearchParams();
+    const project = params.get('project');
+    if (project) next.set('project', project);
+    if (pick.a) next.set('a', pick.a);
+    if (pick.b) next.set('b', pick.b);
+    setSearchParams(next);
+  };
 
   /**
    * PAGED, and the paging is VISIBLE — the index's pattern (see `Chronicle` above), applied to
@@ -1277,7 +1325,7 @@ export function ChronicleHistory() {
 
   return (
     <div className="page">
-      <PageHeader title="History" actions={<Link to={`/chronicle/${pageId}`}>Back to page</Link>} />
+      <PageHeader title="History" actions={<Link to={recordHref(projectId, pageId)}>Back to page</Link>} />
       {list.isError && <Note>{(list.error as Error).message}</Note>}
       {revert.isError && <Note>{(revert.error as Error).message}</Note>}
 

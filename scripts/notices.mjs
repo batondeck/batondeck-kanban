@@ -1,16 +1,24 @@
 // THIRD_PARTY_NOTICES, written by `make notices` and held to its inputs by `make notices-check`.
 //
 // The file carries the licence text of everything the binary built from this repository
-// redistributes, as the Go tool reports it, classified by nobody: the Go modules whose packages the
-// shipped binary links on any platform a release ships: one `go list -deps ./cmd/batondeck-kanban`
-// per entry of the Makefile's PLATFORMS (handed in as NOTICES_PLATFORMS, so the list has one copy),
-// each with GOOS and GOARCH set and CGO_ENABLED=0 as `make dist` builds, under GOWORK=off; the
-// union, each module with the LICENSE, COPYING, UNLICENSE and NOTICE files its directory holds.
+// redistributes, classified by nobody, in two sections.
 //
-// The header records the platforms, the sha256 of go.sum and the linked set (its count and the
-// sha256 of its sorted module ids). `--check` recomputes those and compares: it reads go.sum and
-// runs `go list -deps` once per platform, reading no licence text, so it runs on every
-// `make check`. When the web UI's packages land, their set (web/package-lock.json) joins INPUTS.
+// The Go modules whose packages the shipped binary links on any platform a release ships, as the Go
+// tool reports them: one `go list -deps ./cmd/batondeck-kanban` per entry of the Makefile's
+// PLATFORMS (handed in as NOTICES_PLATFORMS, so the list has one copy), each with GOOS and GOARCH
+// set and CGO_ENABLED=0 as `make dist` builds, under GOWORK=off; the union, each module with the
+// LICENSE, COPYING, UNLICENSE and NOTICE files its directory holds.
+//
+// The npm packages the embedded web UI (web/dist) is built from: every package
+// web/package-lock.json installs that is not dev-only. That is a superset of what the bundler keeps
+// (it drops code no page imports), which is the safe direction for a notices file. Each package
+// with the licence files its directory under web/node_modules holds, or its package.json `license`
+// field where it ships none; so `make notices` needs `cd web && npm ci` first.
+//
+// The header records the platforms, the sha256 of go.sum and of web/package-lock.json, and the two
+// sets (each one's count and the sha256 of its sorted ids). `--check` recomputes those and
+// compares: it reads the two lock files and runs `go list -deps` once per platform, reading no
+// licence text and no node_modules, so it runs on every `make check`.
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -19,7 +27,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = 'THIRD_PARTY_NOTICES'
-const INPUTS = ['go.sum']
+const INPUTS = ['go.sum', 'web/package-lock.json']
+const NPM_LOCK = 'web/package-lock.json'
 const LICENCE_FILE = /^(licen[cs]e|copying|unlicense|notice)([.\-_].*)?$/i
 
 const fail = (msg) => { console.error(`notices: ${msg}`); process.exit(1) }
@@ -35,7 +44,12 @@ const linkedLine = () => {
   const hash = createHash('sha256').update(ids.join('\n')).digest('hex')
   return `  ${'linked Go modules'.padEnd(28)}${ids.length}, sha256 ${hash}`
 }
-const inputLines = () => [`  ${'platforms'.padEnd(28)}${PLATFORMS.join(' ')}`, ...INPUTS.map((p) => `  ${p.padEnd(28)}sha256 ${sha256(p)}`), linkedLine()]
+const npmLine = () => {
+  const ids = npmPackages().map((m) => m.id)
+  const hash = createHash('sha256').update(ids.join('\n')).digest('hex')
+  return `  ${'bundled npm packages'.padEnd(28)}${ids.length}, sha256 ${hash}`
+}
+const inputLines = () => [`  ${'platforms'.padEnd(28)}${PLATFORMS.join(' ')}`, ...INPUTS.map((p) => `  ${p.padEnd(28)}sha256 ${sha256(p)}`), linkedLine(), npmLine()]
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 const run = (cmd, args, cwd, env = {}) =>
   execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 1 << 28, env: { ...process.env, GOWORK: 'off', ...env } })
@@ -48,7 +62,7 @@ function check() {
     fail(`${OUT} was not made from the dependency set on disk; its header does not carry:\n` +
       `${stale.map((l) => l.trim()).join('\n')}\nrun make notices and commit the result`)
   }
-  console.log(`notices-check: ${OUT} matches ${PLATFORMS.join(' ')}, ${INPUTS.join(', ')} and the ${goModules().length} Go modules the binary links`)
+  console.log(`notices-check: ${OUT} matches ${PLATFORMS.join(' ')}, ${INPUTS.join(', ')}, the ${goModules().length} Go modules the binary links and the ${npmPackages().length} npm packages the web UI is built from`)
 }
 
 // Every licence-like file in dir, sorted by name; none when the directory has none or is not there.
@@ -97,13 +111,44 @@ function goModules() {
   return goModulesMemo
 }
 
+// The packages web/package-lock.json installs that are not dev-only, read from the lock file alone
+// (lockfileVersion 3: one entry per installed path, `dev: true` on what only devDependencies
+// reach). A name and version installed at two paths is one entry, read from the first.
+let npmPackagesMemo
+function npmPackages() {
+  if (npmPackagesMemo) return npmPackagesMemo
+  const lock = JSON.parse(readFileSync(join(root, NPM_LOCK), 'utf8'))
+  if (lock.lockfileVersion !== 3) fail(`${NPM_LOCK} is lockfileVersion ${lock.lockfileVersion}; this script reads version 3`)
+  const pkgs = new Map()
+  for (const [path, e] of Object.entries(lock.packages)) {
+    if (!path || e.dev || e.link) continue
+    const id = `${path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length)} ${e.version}`
+    if (!pkgs.has(id)) pkgs.set(id, { id, note: '', dir: join(root, 'web', path) })
+  }
+  npmPackagesMemo = [...pkgs.values()].sort(byId)
+  return npmPackagesMemo
+}
+
+// A package's licence files, or, where its directory holds none, the licence its package.json
+// declares, as one line. None when it has neither (make notices then fails, naming it).
+function npmLicenceFiles(dir) {
+  const files = licenceFiles(dir)
+  if (files.length) return files
+  let pkg
+  try { pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) } catch { fail(`${dir} is not installed: run cd web && npm ci, then make notices`) }
+  const declared = typeof pkg.license === 'string' ? pkg.license : pkg.license && pkg.license.type
+  if (!declared) return []
+  const who = typeof pkg.author === 'string' ? pkg.author : pkg.author && pkg.author.name
+  return [{ name: 'package.json', text: `license: ${declared}${who ? `\nauthor: ${who}` : ''}\n(the package ships no licence file; this is what its package.json declares)` }]
+}
+
 function render(sections) {
   const rule = '='.repeat(80), line = '-'.repeat(80)
   const out = [
     'Third-party notices for batondeck-kanban', rule, '',
     'What the binary built from this repository redistributes, under the licences below: the Go',
-    'modules it links. Each entry carries the licence files as the dependency\'s own source holds',
-    'them; this file classifies nothing.', '',
+    'modules it links, and the npm packages its embedded web UI is built from. Each entry carries',
+    'the licence files as the dependency\'s own source holds them; this file classifies nothing.', '',
     'Written by `make notices` (scripts/notices.mjs) for these platforms from these inputs, which `make notices-check`',
     '(part of `make check`) holds it to:', '', ...inputLines(), '', 'Contents',
   ]
@@ -123,6 +168,7 @@ if (process.argv.includes('--check')) {
 } else {
   const sections = [
     { title: 'Go modules the shipped binary links', how: `go list -deps ./cmd/batondeck-kanban for each of ${PLATFORMS.join(', ')} (CGO_ENABLED=0, GOWORK=off), the union; the licence files of each module directory`, entries: goModules().map((m) => ({ ...m, files: licenceFiles(m.dir) })) },
+    { title: 'npm packages the embedded web UI is built from', how: `every package ${NPM_LOCK} installs that is not dev-only (more than the bundle keeps); the licence files of each package directory, or its package.json licence where it ships none`, entries: npmPackages().map((m) => ({ ...m, files: npmLicenceFiles(m.dir) })) },
   ]
   const missing = sections.flatMap((s) => s.entries.filter((e) => e.files.length === 0).map((e) => `${s.title}: ${e.id}`))
   if (missing.length) fail(`no licence file found for:\n  ${missing.join('\n  ')}`)

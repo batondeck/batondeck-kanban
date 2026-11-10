@@ -14,7 +14,9 @@ is assigned to that label), the project and board, and capabilities. Missing pro
 Each turn, the doorbell's or the user's:
 
 1. **Is there an active sprint?** `list_sprints { projectId, boardId, status: "ACTIVE" }`, then
-   `get_sprint`. While one is ACTIVE, pass its `sprintId` to selection.
+   `get_sprint`. While one is ACTIVE, pass its `sprintId` to selection; its frontier includes the
+   runs of its raced members. A PROPOSED sprint is not worked as a sprint yet: until an admin
+   activates it, its members are claimed like any other task.
 2. **Claim.** `claim_next { projectId, boardId }` → keep the `leaseId`; it takes unassigned work and
    work assigned to you, never another's. With an agent label, call it with `assignee: "<label>"`
    too. On a doorbell,

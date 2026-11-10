@@ -87,6 +87,11 @@ func (s *Server) parseAuthorize(r *http.Request, v url.Values) (authRequest, *re
 	if !slices.Contains(c.RedirectURIs, redirectURI) {
 		return authRequest{}, &refusal{direct: true, code: "invalid_request", desc: "redirect_uri is not registered for this client"}
 	}
+	// Judged again as registration judges it: a registration made before a rule (userinfo) was
+	// added is still in the store.
+	if why := badRedirectURI(redirectURI); why != "" {
+		return authRequest{}, &refusal{direct: true, code: "invalid_request", desc: why + "; register again"}
+	}
 	state := v.Get("state")
 	fail := func(code, desc string) (authRequest, *refusal) {
 		return authRequest{}, &refusal{code: code, desc: desc, redirectURI: redirectURI, state: state}
@@ -166,7 +171,8 @@ func (s *Server) authorizePage(w http.ResponseWriter, r *http.Request) {
 	caller, sess, ok := s.session(r)
 	if !ok {
 		s.render(w, http.StatusOK, "login.html", loginPage{
-			Client: clientLabel(req.client), Next: r.URL.RequestURI(), Failed: r.URL.Query().Get("login") == "failed"})
+			Client: clientLabel(req.client), Next: r.URL.RequestURI(),
+			Failed: r.URL.Query().Get("login") == "failed", Limited: r.URL.Query().Get("login") == "limited"})
 		return
 	}
 	login := caller.Identity
@@ -189,9 +195,17 @@ func (s *Server) session(r *http.Request) (domain.Caller, store.Session, bool) {
 	return c, sess, true
 }
 
+// clientLabel is the name the sign-in and consent pages show for c: its client_name without the
+// characters /register refuses (hiddenNameRune), which a registration stored before that rule may
+// still hold, else its client id.
 func clientLabel(c store.OAuthClient) string {
-	if c.ClientName != "" {
-		return c.ClientName
+	if name := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if hiddenNameRune(r) {
+			return -1
+		}
+		return r
+	}, c.ClientName)); name != "" {
+		return name
 	}
 	return c.ClientID
 }

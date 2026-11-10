@@ -78,6 +78,43 @@ func idempotency(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("DeleteExpiredIdempotencyKeysSweepsThePastWindowsAPageAtATime", func(t *testing.T) {
+		s := migrated(t, newStore)
+		short := store.WriteOptions{Identity: "alice", IdempotencyTTL: time.Millisecond}
+		p := newProject(t, s, "alice")
+		for _, key := range []string{"a", "b", "c"} {
+			o := short
+			o.IdempotencyKey = key
+			if _, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: key, CreatedBy: "alice"}, o); err != nil {
+				t.Fatal(err)
+			}
+		}
+		global := short
+		global.IdempotencyKey = "cp"
+		if _, err := s.CreateProject(ctx, in, global); err != nil {
+			t.Fatal(err)
+		}
+		live := store.WriteOptions{Identity: "alice", IdempotencyKey: "live", IdempotencyTTL: time.Hour}
+		kept, err := s.CreateProject(ctx, in, live)
+		if err != nil {
+			t.Fatal(err)
+		}
+		later := time.Now().Add(time.Minute).UnixMilli()
+		for _, page := range []struct {
+			limit int
+			want  int64
+		}{{3, 3}, {3, 1}, {3, 0}} {
+			if n, err := s.DeleteExpiredIdempotencyKeys(ctx, later, page.limit); err != nil || n != page.want {
+				t.Fatalf("sweep of %d: %d (%v), want %d", page.limit, n, err, page.want)
+			}
+		}
+		if again, err := s.CreateProject(ctx, in, live); err != nil || again.ID != kept.ID {
+			t.Fatalf("the key in its window replayed %+v (%v), want %s", again, err, kept.ID)
+		}
+		_, err = s.DeleteExpiredIdempotencyKeys(ctx, later, 0)
+		wantCode(t, err, domain.CodeValidation, "")
+	})
+
 	t.Run("AKeyIsScopedByIdentity", func(t *testing.T) {
 		s := migrated(t, newStore)
 		a, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "p", CreatedBy: "alice"}, store.WriteOptions{Identity: "alice", IdempotencyKey: "k", IdempotencyTTL: time.Hour})

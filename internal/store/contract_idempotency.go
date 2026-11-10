@@ -31,6 +31,11 @@ type Idempotency interface {
 	// returns its result. ttl <= 0 with a key is VALIDATION. The window is fixed at the first write,
 	// never extended by a replay.
 	WithIdempotency(ctx context.Context, projectID, identity, key string, ttl time.Duration, fn func(tx Store) ([]byte, error)) ([]byte, error)
+	// DeleteExpiredIdempotencyKeys deletes at most limit kept results whose window ended at or before
+	// now, the oldest expiry first, global ones included, and returns how many: such a key counts as
+	// never seen, so its row only holds a mutation's result. limit <= 0 is VALIDATION. The retention
+	// sweep calls it.
+	DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error)
 }
 
 var (

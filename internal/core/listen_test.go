@@ -89,6 +89,37 @@ func TestParseListen(t *testing.T) {
 	}
 }
 
+// The socket path limit (tested): a socket path longer than the kernel's sun_path takes is refused
+// when the config is read, naming its length and the limit, not at bind as "invalid argument" after
+// serve had migrated the store. A path of exactly the limit parses and binds (the positive
+// control).
+func TestParseListenRefusesASocketPathOverTheLimit(t *testing.T) {
+	dir := sockPath(t)
+	dir = filepath.Dir(dir)
+	at := func(n int) string { // a path of n bytes under dir
+		p := filepath.Join(dir, "s")
+		return p + strings.Repeat("x", n-len(p))
+	}
+	long := at(MaxSocketPath + 1)
+	_, err := ParseListen("unix://" + long)
+	if want := fmt.Sprintf("is %d bytes; the limit is %d", MaxSocketPath+1, MaxSocketPath); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("ParseListen of a %d-byte socket path: %v; want an error containing %q", len(long), err, want)
+	}
+	if _, err := Listen(ListenAddr{Network: NetworkUnix, Address: long}, log.New(io.Discard, "", 0)); err == nil || !strings.Contains(err.Error(), "the limit is") {
+		t.Fatalf("Listen on a %d-byte socket path: %v; want the limit named", len(long), err)
+	}
+	exact := at(MaxSocketPath)
+	a, err := ParseListen("unix://" + exact)
+	if err != nil {
+		t.Fatalf("ParseListen of a %d-byte socket path: %v", len(exact), err)
+	}
+	ln, err := Listen(a, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("Listen on a %d-byte socket path: %v", len(exact), err)
+	}
+	ln.Close()
+}
+
 // The same-uid control: the socket is mode 0600, the owning uid is served, and its requests are
 // marked as arriving on a Unix socket. A TCP listener's are not.
 func TestUnixSocketServesTheOwningUID(t *testing.T) {

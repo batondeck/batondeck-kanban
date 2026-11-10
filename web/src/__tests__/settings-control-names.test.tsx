@@ -49,7 +49,7 @@ function mount(): HTMLElement {
       if (/\/api\/projects\/p1\/boards$/.test(url)) return json({ boards: [board] });
       if (url.endsWith('/api/me/settings')) return json({ maxTicketTokens: null, tokenPolicy: null, starredAssets: [], defaults: { maxTicketTokens: 50000, tokenPolicy: 'warn', charsPerToken: 4 }, estimated: true });
       if (url.endsWith('/api/me/cli-tokens'))
-        return json({ tokens: [{ id: 't1', label: 'laptop', createdAt: '2026-11-01T00:00:00Z', expiresAt: '2027-11-01T00:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live' }] });
+        return json({ tokens: [{ id: 't1', label: 'laptop', createdAt: '2026-11-01T00:00:00Z', expiresAt: '2027-11-01T00:00:00Z', revokedAt: null, status: 'live' }] });
       if (url.endsWith('/api/users')) return json({ users: [{ id: 'U-1', login: 'ada@example.com', displayName: 'Ada Admin', role: 'admin', disabled: false, createdAt: 1 }] });
       if (/\/agents\/sessions/.test(url))
         return json({ sessions: [{ sessionKey: 's1', identityId: 'U-1', agentId: 'a1', agentName: 'claude-1', clientName: 'claude-code', lastSeenAt: '2026-11-01T00:00:00Z', revokedAt: null }] });

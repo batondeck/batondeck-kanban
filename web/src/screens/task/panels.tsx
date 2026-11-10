@@ -11,12 +11,13 @@ import { Icon } from '../../icons.js';
 import ReactMarkdown from 'react-markdown';
 import * as contextApi from '../../api/context.js';
 import * as tasksApi from '../../api/tasks.js';
+import { onOwnOrigin } from '../../api/media.js';
 import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, personName, timeAgo } from '../../components.js';
 import { AppLinkCard, normalizeLink } from '../../AppLink.js';
-import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
+import { Bar, Button, Cluster, KV, Note, Panel, ReadFailed, Stack } from '../../ui.js';
 import { Comments } from '../Comments.js';
 import { FollowUps } from '../FollowUps.js';
-import { LIMITS, type Artifact, type Task } from '../../types.js';
+import { LIMITS, type Artifact, type Status, type Task } from '../../types.js';
 import type { LoadedTaskDetail } from './useTaskDetail.js';
 
 const SCOLOR_DOT: Record<string, string> = { TODO: '--ready', IN_PROGRESS: '--progress', BLOCKED: '--blocked', REVIEW: '--review', DONE: '--done' };
@@ -85,13 +86,27 @@ function ClosedWhy({ id, why }: { id: string; why: string | undefined }) {
 /* ---- description + digest ------------------------------------------------------------------ */
 
 export function DescriptionPanel({ d }: P) {
-  const { task, projectId, taskId, editing, setEditing, draft, setDraft, startEdit, run, canEdit } = d;
+  const { task, editing, setEditing, draft, setDraft, startEdit, editConflict, keepMyEdit, saveEdit, canEdit } = d;
   return (
     <Panel title="Description" right={<span className="mono">markdown · updated {timeAgo(task.updatedAt)}</span>} pad>
       {editing ? (
         <>
           <textarea className="input" maxLength={LIMITS.description} style={{ width: '100%', minHeight: 100 }} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-          <Button style={{ marginTop: 8 }} variant="primary" disabled={!canEdit} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
+          {editConflict && (
+            // Save would overwrite this, so it holds: theirs beside mine, and the editor chooses.
+            <Note>
+              <p style={{ margin: '0 0 6px' }}>Changed by someone else since you started editing (v{draft.version} → v{task.version}). Theirs now:</p>
+              {task.title !== draft.base.title && <p style={{ margin: '0 0 6px' }}>Title: <strong>{task.title}</strong></p>}
+              {task.description !== draft.base.description && (
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, margin: '0 0 6px' }}>{task.description}</div>
+              )}
+              <Cluster gap={4}>
+                <Button onClick={keepMyEdit}>Keep my edit</Button>
+                <Button onClick={() => setEditing(false)}>Discard my edit</Button>
+              </Cluster>
+            </Note>
+          )}
+          <Button style={{ marginTop: 8 }} variant="primary" disabled={!canEdit || editConflict} onClick={saveEdit}>Save</Button>
         </>
       ) : task.description ? (
         // Agents write markdown briefs — render them (same .md styling as comments) instead of raw text.
@@ -110,13 +125,17 @@ export function DescriptionPanel({ d }: P) {
 /** The agent-written rolling summary (`set_summary`). Editable in place. */
 export function DigestPanel({ d }: P) {
   const { task, projectId, taskId, ctx, run, canSummarise, why } = d;
-  const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
+  // The draft keeps the text it started from: the task refreshes under it (stream, poll), and Save
+  // read the version at click time, so it overwrote a digest an agent set meanwhile. When the digest
+  // changed since, Save holds until the editor chooses, as the description's editor does.
+  const [summaryDraft, setSummaryDraft] = useState<{ text: string; base: string } | null>(null);
+  const conflict = summaryDraft !== null && task.contextSummary !== summaryDraft.base;
   // `set_summary` is tier write (P-440): below it double-click opens nothing, and the empty digest
   // says why instead of inviting the double-click.
   const summaryWhy = why('set_summary', 'edit the digest');
   return (
     <Panel title="Agent digest" pad>
-      <div onDoubleClick={() => canSummarise && summaryDraft === null && setSummaryDraft(task.contextSummary)}>
+      <div onDoubleClick={() => canSummarise && summaryDraft === null && setSummaryDraft({ text: task.contextSummary, base: task.contextSummary })}>
         {summaryDraft === null ? (
           <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: 'var(--text-2)' }}>
             {ctx?.summary || task.contextSummary || (
@@ -128,9 +147,19 @@ export function DigestPanel({ d }: P) {
           </p>
         ) : (
           <>
-            <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft} onChange={(e) => setSummaryDraft(e.target.value)} />
+            <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft.text} onChange={(e) => setSummaryDraft({ ...summaryDraft, text: e.target.value })} />
+            {conflict && (
+              <Note>
+                <p style={{ margin: '0 0 6px' }}>The digest changed since you started editing. Theirs now:</p>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, margin: '0 0 6px' }}>{task.contextSummary}</div>
+                <Cluster gap={4}>
+                  <Button onClick={() => setSummaryDraft({ ...summaryDraft, base: task.contextSummary })}>Keep my edit</Button>
+                  <Button onClick={() => setSummaryDraft(null)}>Discard my edit</Button>
+                </Cluster>
+              </Note>
+            )}
             <Cluster gap={4} style={{ marginTop: 6 }}>
-              <Button variant="primary" disabled={!canSummarise} onClick={() => void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
+              <Button variant="primary" disabled={!canSummarise || conflict} onClick={() => { if (!conflict) void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft.text), () => setSummaryDraft(null)); }}>Save summary</Button>
               <Button onClick={() => setSummaryDraft(null)}>Cancel</Button>
             </Cluster>
           </>
@@ -144,7 +173,7 @@ export function DigestPanel({ d }: P) {
 
 /** Who holds the ticket and for how much longer. Renders only while a claim is live. */
 export function LeasePanel({ d }: P) {
-  const { task, countdown } = d;
+  const { task, countdown, names, claimIsMine } = d;
   if (!task.claim) return null;
   return (
     <Panel title="Lease" right={<span className="mono">held · {countdown.expired ? 'expired' : `${countdown.label} left`}</span>}>
@@ -153,12 +182,13 @@ export function LeasePanel({ d }: P) {
       </div>
       <KV k="holder">
         <Cluster gap={4}>
-          <Avatar id={task.claim.agent || task.claim.owner} active />
-          <span>{task.claim.agent || task.claim.owner}</span>
-          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted">· for {task.claim.owner}</span>}
+          {/* The agent, else the account by name; the account behind an agent too. Never a raw id
+              (P-314, P-457). */}
+          <Avatar id={task.claim.agent || task.claim.owner} label={task.claim.agent || personName(task.claim.owner, names)} nameOnly active />
+          <span>{claimIsMine ? 'you' : task.claim.agent || personName(task.claim.owner, names)}</span>
+          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted" title={personName(task.claim.owner, names, { full: true })}>· for {personName(task.claim.owner, names)}</span>}
         </Cluster>
       </KV>
-      <KV k="leaseId"><span className="mono">{task.claim.leaseId}</span></KV>
       <KV k="on expiry">returns to <span className="role ready">To do</span>, unclaimed</KV>
     </Panel>
   );
@@ -169,7 +199,8 @@ export function LeasePanel({ d }: P) {
  *
  *  `completedBy` is the account id the core stored (`U-<hex>`), so it is named the way the header's
  *  "created by" and the comments name a person (P-431): the member's name, else their login, else the
- *  shortened id when nothing names the account. */
+ *  shortened id when nothing names the account. When an agent completed it, the agent's name leads
+ *  and the account follows in brackets (P-457): on this board "who finished it" is usually an agent. */
 export function ReviewPanel({ d }: P) {
   const { task, names } = d;
   if (task.status !== 'REVIEW' || !task.review) return null;
@@ -185,7 +216,10 @@ export function ReviewPanel({ d }: P) {
           <span style={{ fontSize: 14, color: 'var(--progress)' }}>Nobody owns this review — assign a reviewer.</span>
         )}
         <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }} title={task.review.requestedAt}>
-          waiting {timeAgo(task.review.requestedAt)} · completed by {personName(task.review.completedBy, names)}
+          requested {timeAgo(task.review.requestedAt)} · completed by{' '}
+          {task.review.completedByAgent
+            ? `${task.review.completedByAgent} (${personName(task.review.completedBy, names)})`
+            : personName(task.review.completedBy, names)}
         </span>
       </Cluster>
     </Panel>
@@ -206,18 +240,20 @@ export function DeliveredPanel({ d }: P) {
 /* ---- graph ----------------------------------------------------------------------------------- */
 
 export function DependenciesPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, blockedByEdges, blocksEdges, relatesEdges, taskById, canLink, why } = d;
+  const { projectId, taskId, ctx, ctxQ, run, blockedByEdges, blocksEdges, relatesEdges, taskById, canLink, why } = d;
   const [depId, setDepId] = useState('');
   // `add_dependency` and `remove_dependency` are tier master (P-440).
   const linkWhy = why('add_dependency', 'add or remove dependencies');
   const linkAttrs = closedAttrs(canLink, linkWhy, 'deps-closed');
   return (
-    <Panel title="Dependencies" right={<span className="mono">blocks {blocksEdges.length} · blocked by {blockedByEdges.length}</span>} pad>
+    <Panel title="Dependencies" right={ctx ? <span className="mono">blocks {blocksEdges.length} · blocked by {blockedByEdges.length}</span> : undefined} pad>
       <Stack gap={12}>
+        {/* The edges come from the context read: until it answers, "None" would be a guess. */}
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         <div>
           <h3 style={{ ...label, margin: '0 0 8px' }}>Blocked by</h3>
           {blockedByEdges.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
+            ctx && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
           ) : (
             <Cluster gap={8} wrap>
               {blockedByEdges.map((e) => (
@@ -242,7 +278,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
         <div>
           <h3 style={{ ...label, margin: '0 0 8px' }}>Blocks</h3>
           {blocksEdges.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
+            ctx && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
           ) : (
             <Cluster gap={8} wrap>
               {blocksEdges.map((e) => (
@@ -265,7 +301,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
 }
 
 export function SubtasksPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, subs, subsDone, subsPct, canMove, canAddSubtask, why } = d;
+  const { projectId, taskId, run, subs, subQ, subsDone, subsPct, canMove, canAddSubtask, nextOf, why } = d;
   const [subTitle, setSubTitle] = useState('');
   // A subtask's checkbox is `move_task`, Add is `add_subtask`; both tier master (P-440).
   const subWhy = why('add_subtask', 'add subtasks or mark them done');
@@ -279,8 +315,16 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
         </div>
       )}
       <Stack gap={8}>
+        {subQ.isError && <ReadFailed what="the subtasks" error={subQ.error} stale={!!subQ.data} onRetry={() => void subQ.refetch()} />}
         {subs.map((s: Task) => {
           const done = s.status === 'DONE';
+          // The box is one move, and only a move the fixed table allows (ADR-0005): DONE is reached
+          // from REVIEW alone, so ticking a TODO, IN_PROGRESS or BLOCKED subtask is closed and says
+          // so, rather than sending a move the server refuses (INVALID_TRANSITION).
+          const to: Status = done ? 'IN_PROGRESS' : 'DONE';
+          const legal = nextOf(s.status).includes(to);
+          const open = canMove && legal;
+          const illegalWhy = `${s.id} is ${s.status.replace('_', ' ')}: a task reaches Done from Review only. Open it to move it on.`;
           // NOT a row-wide <label>: the row mixes two actions (checkbox = toggle done, title =
           // navigate), and a wrapping label would forward clicks on the id/pill/gaps to the
           // checkbox — silently marking a subtask DONE when the user meant to open it.
@@ -290,10 +334,10 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
                 type="checkbox"
                 checked={done}
                 aria-label={`Mark ${s.id} ${done ? 'not done' : 'done'}`}
-                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: canMove ? 'pointer' : 'default' }}
-                disabled={!canMove}
-                {...checkAttrs}
-                onChange={() => void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: done ? 'IN_PROGRESS' : 'DONE' }))}
+                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: open ? 'pointer' : 'default' }}
+                disabled={!open}
+                {...(canMove ? (legal ? {} : { title: illegalWhy }) : checkAttrs)}
+                onChange={() => { if (open) void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: to })); }}
               />
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, minWidth: 0 }}>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.id}</span>
@@ -328,7 +372,7 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
 
 /** Notes / decisions / fields. Link-kind items render in LinksPanel. */
 export function ContextPanel({ d }: P) {
-  const { projectId, taskId, task, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, task, ctx, ctxQ, run, canAnnotate, why, names } = d;
   const [note, setNote] = useState('');
   // A note is `add_context_item`, tier write (P-440).
   const noteWhy = why('add_context_item', 'add notes');
@@ -346,15 +390,16 @@ export function ContextPanel({ d }: P) {
   return (
     <Panel
       title="Context items"
-      right={<span className="mono">{items.length} · note / decision / field</span>}
+      right={<span className="mono">{ctx ? `${items.length} · ` : ''}note / decision / field</span>}
       pad
       {...(briefId ? { footnote: 'The telemetry snapshot is shown in Incident, above.' } : {})}
     >
       <Stack gap={4}>
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         {items.map((i) => (
           <div key={i.id} className="card" style={{ padding: 10 }}>
             <Cluster gap={4}>
-              <Avatar id={i.author} /> <span className="chip">{i.kind}</span> <span className="muted" style={{ fontSize: 11 }}>{timeAgo(i.ts)}</span>
+              <Avatar id={i.author} label={personName(i.author, names)} nameOnly /> <span className="chip">{i.kind}</span> <span className="muted" style={{ fontSize: 11 }}>{timeAgo(i.ts)}</span>
             </Cluster>
             <div style={{ marginTop: 4, fontSize: 14, whiteSpace: 'pre-wrap' }}>{i.body}</div>
           </div>
@@ -371,17 +416,18 @@ export function ContextPanel({ d }: P) {
 
 /** External artifacts (Lucid, Google Docs, Figma, …) as smart link cards. */
 export function LinksPanel({ d }: P) {
-  const { projectId, taskId, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, ctx, ctxQ, run, canAnnotate, why, names } = d;
   const [link, setLink] = useState('');
   // A link is a context item too: `add_context_item`, tier write (P-440).
   const linkWhy = why('add_context_item', 'attach links');
   const linkAttrs = closedAttrs(canAnnotate, linkWhy, 'links-closed');
   const links = (ctx?.items ?? []).filter((i) => i.kind === 'link');
   return (
-    <Panel title="Links" right={<span className="mono">{links.length}</span>} pad>
+    <Panel title="Links" right={ctx ? <span className="mono">{links.length}</span> : undefined} pad>
       <Stack gap={4}>
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         {links.map((i) => (
-          <AppLinkCard key={i.id} url={i.body} meta={`${i.author.split('@')[0]} · ${timeAgo(i.ts)}`} />
+          <AppLinkCard key={i.id} url={i.body} meta={`${personName(i.author, names)} · ${timeAgo(i.ts)}`} />
         ))}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 8 }}>
@@ -414,8 +460,9 @@ export function MemoryPanel({ d }: P) {
   const [memVal, setMemVal] = useState('');
   const entries = memQ.data?.entries ?? [];
   return (
-    <Panel title="Agent memory" right={<span className="mono">{entries.length}</span>} pad>
+    <Panel title="Agent memory" right={memQ.data ? <span className="mono">{entries.length}</span> : undefined} pad>
       <Stack gap={2}>
+        {memQ.isError && <ReadFailed what="the memory" error={memQ.error} stale={!!memQ.data} onRetry={() => void memQ.refetch()} />}
         {entries.map((m) => (
           <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px dashed var(--border)' }}>
             <Cluster gap={8}>
@@ -425,7 +472,7 @@ export function MemoryPanel({ d }: P) {
             <span className="mono" style={{ fontSize: 12, color: 'var(--accent-tint)' }}>{JSON.stringify(m.value)}</span>
           </div>
         ))}
-        {entries.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No memory entries.</p>}
+        {memQ.isSuccess && entries.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No memory entries.</p>}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 10 }}>
         <input className="input" style={{ width: 90 }} placeholder="key" value={memKey} disabled={!canWriteMemory} {...memAttrs} onChange={(e) => setMemKey(e.target.value)} />
@@ -469,7 +516,7 @@ export function DiscussionPanel({ d }: P) {
 /* ---- files ------------------------------------------------------------------------------------- */
 
 /**
- * One produced artifact. A url renders through the existing smart link card (favicon + forge name);
+ * One produced artifact. A url renders through the existing smart link card (link icon + forge name);
  * a bare ref (a commit sha or repo-relative path from a checkout with no remote) still renders — as
  * mono text with its kind, because evidence without a forge is still evidence.
  */
@@ -504,7 +551,8 @@ export function FilesPanel({ d }: P) {
           {artifacts.map((a, i) => <ArtifactRow key={`${a.kind}-${a.url ?? a.ref ?? i}`} artifact={a} />)}
         </Stack>
       )}
-      {artifacts.length === 0 && attachments.length === 0 && <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>None.</p>}
+      {attQ.isError && <div style={{ marginBottom: 8 }}><ReadFailed what="the attachments" error={attQ.error} stale={!!attQ.data} onRetry={() => void attQ.refetch()} /></div>}
+      {artifacts.length === 0 && attQ.isSuccess && attachments.length === 0 && <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>None.</p>}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {attachments.map((a) => {
           const tile = (
@@ -519,14 +567,18 @@ export function FilesPanel({ d }: P) {
                   </>
                 )}
               </div>
+              {a.fileName ? (
+                <p style={{ fontSize: 12, margin: '4px 0 0', overflowWrap: 'anywhere' }}>{a.fileName}</p>
+              ) : null}
               <p className="mono" style={{ fontSize: 10, color: a.status === 'failed' ? 'var(--blocked)' : 'var(--text-muted)', margin: '4px 0 0' }}>
                 {a.kind} · {fmtBytes(a.bytes)}{a.status !== 'ready' ? ` · ${a.status}` : ''}
               </p>
             </>
           );
-          // Signed download URLs open in a new tab — same-tab navigation would dump the SPA onto GCS.
+          // Download URLs open in a new tab — same-tab navigation would leave the SPA for the file.
+          // `download` names the saved file, and the URL is made same-origin by onOwnOrigin.
           return a.downloadUrl ? (
-            <a key={a.id} href={a.downloadUrl} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
+            <a key={a.id} href={onOwnOrigin(a.downloadUrl)} {...(a.fileName ? { download: a.fileName } : {})} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
           ) : (
             <div key={a.id}>{tile}</div>
           );
@@ -600,7 +652,7 @@ export function FilesPanel({ d }: P) {
  * next change to the rule would have moved only one of them.
  *
  * THE EARLIEST INGEST ITEM, NOT THE FIRST ONE IN THE ARRAY. Context items come back newest-first
- * (`orderBy('ts','desc')`), and the RESOLVE path writes its own ingest-authored note — so `find`
+ * (`ORDER BY c.ts DESC, c.id DESC` in queries/sqlite/context.sql and its Postgres twin), and the RESOLVE path writes its own ingest-authored note — so `find`
  * returned "Alert resolved upstream at …" the moment an alert cleared, replacing the labels,
  * annotations and links this exists to surface, exactly when someone is reading the ticket to
  * understand what happened. Only the CREATE path writes a telemetry snapshot, so the snapshot is the
@@ -629,7 +681,7 @@ export function IncidentPanel({ d }: P) {
   // own note added later must never be mistaken for the telemetry snapshot.
   //
   // THE EARLIEST INGEST ITEM, NOT THE FIRST ONE IN THE ARRAY. Context items come back newest-first
-  // (`orderBy('ts','desc')`), and the RESOLVE path writes its own ingest-authored note — so `find`
+  // (`ORDER BY c.ts DESC, c.id DESC`), and the RESOLVE path writes its own ingest-authored note — so `find`
   // returned "Alert resolved upstream at …" the moment an alert cleared, replacing the labels,
   // annotations and links this panel exists to show, exactly when someone is reading the ticket to
   // understand what happened. Only the CREATE path writes a telemetry snapshot, so the snapshot is
@@ -662,7 +714,7 @@ export function IncidentPanel({ d }: P) {
           </Note>
         )}
         {brief ? (
-          // MARKDOWN, because `ticketSnapshot` (src/domain/incident.ts) COMPOSES markdown: the status
+          // MARKDOWN, because `incidentSnapshot` (internal/service/oncall.go) COMPOSES markdown: the status
           // line is `**FIRING**`, and labels/annotations/links are `- ` bullet lists. A <pre> printed
           // the asterisks literally on every incident ticket.
           //
@@ -673,11 +725,12 @@ export function IncidentPanel({ d }: P) {
               {brief.body}
             </ReactMarkdown>
           </div>
-        ) : (
+        ) : ctx ? (
+          // Only once the context has been read: a failed read is said in the Context panel.
           <span className="muted" style={{ fontSize: 12 }}>
             No telemetry snapshot on this ticket.
           </span>
-        )}
+        ) : null}
       </Stack>
     </Panel>
   );
@@ -709,6 +762,9 @@ function ChipField({
   closed?: { title?: string; 'aria-describedby'?: string } | null;
 }) {
   const [draft, setDraft] = useState('');
+  // Set by Escape so the blur that follows it (the drawer blurs the focused field) commits nothing:
+  // the cleared draft has not rendered yet when that blur runs. Typing again clears it.
+  const cancelled = useRef(false);
   const commit = (raw: string): void => {
     const parts = raw.split(',').map((x) => x.trim()).filter(Boolean);
     const next = [...values];
@@ -742,12 +798,18 @@ function ChipField({
         disabled={!!closed}
         {...(closed ?? {})}
         placeholder={values.length ? '' : placeholder}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => { cancelled.current = false; setDraft(e.target.value); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(draft); }
           else if (e.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1));
+          // The drawer's Escape blurs the field and a blur commits, so without this the key that means
+          // cancel would SAVE the half-typed value (`escapeResets` below does the same for Details).
+          else if (e.key === 'Escape') { cancelled.current = true; setDraft(''); }
         }}
-        onBlur={() => draft && commit(draft)}
+        onBlur={() => {
+          if (cancelled.current) { cancelled.current = false; return; }
+          if (draft) commit(draft);
+        }}
         style={{ border: 'none', outline: 'none', background: 'none', font: 'inherit', color: 'inherit', flex: 1, minWidth: 80, padding: 0 }}
       />
     </div>
@@ -872,7 +934,13 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
 
 /** One compact line per event. Collapsed by default — it can grow long and dominate the surface. */
 export function ActivityPanel({ d }: P) {
-  const { history, taskId } = d;
+  const { history, historyState, ownHistQ, taskId } = d;
+  // Say what was read: still loading, unreadable, or cut at the read's bound, never "No activity".
+  const count = historyState.loading
+    ? 'Loading activity…'
+    : historyState.failed
+      ? 'Activity could not be read.'
+      : `${historyState.truncated ? 'The latest ' : ''}${history.length} event${history.length === 1 ? '' : 's'} on this ticket.`;
   const displayNames = useDisplayNames(d.projectId);
   const [open, setOpen] = useState(false);
   return (
@@ -886,9 +954,11 @@ export function ActivityPanel({ d }: P) {
           Recent Activity
         </button>
       }
-      right={<span className="mono">{history.length}</span>}
+      right={historyState.loading || historyState.failed ? undefined : <span className="mono">{history.length}</span>}
       pad
     >
+      {/* The ticket's own events; a failed read says so, open or shut. */}
+      {ownHistQ.isError && <div style={{ marginBottom: 6 }}><ReadFailed what="the activity" error={ownHistQ.error} stale={!!ownHistQ.data} onRetry={() => void ownHistQ.refetch()} /></div>}
       {open ? (
         <Stack gap={2}>
           {history.map((e) => (
@@ -901,10 +971,11 @@ export function ActivityPanel({ d }: P) {
               <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
             </div>
           ))}
-          {history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No activity yet.</p>}
+          {history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{historyState.loading || historyState.failed ? count : 'No activity yet.'}</p>}
+          {historyState.truncated && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{count} Older ones are not loaded.</p>}
         </Stack>
       ) : (
-        <p className="muted" style={{ fontSize: 12, margin: 0 }}>{history.length} event{history.length === 1 ? '' : 's'} on this ticket.</p>
+        <p className="muted" style={{ fontSize: 12, margin: 0 }}>{count}</p>
       )}
     </Panel>
   );

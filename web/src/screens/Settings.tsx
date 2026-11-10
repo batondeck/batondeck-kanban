@@ -9,12 +9,13 @@ import * as projectsApi from '../api/projects.js';
 import * as usersApi from '../api/users.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar } from '../components.js';
-import type { Status } from '../types.js';
+import type { AgentSession, Status } from '../types.js';
+import { keepCachedDevices } from '../presenceMerge.js';
 import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
-import { useMyProjectRole } from '../displayNames.js';
+import { NOT_A_MEMBER, useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { useSingleProject } from '../projectContext.js';
 
@@ -73,7 +74,7 @@ function Toggle({ checked, onChange, disabled, title, labelledBy, describedBy }:
  * Roles a PERSON can be given here. Deliberately not the full `Role` ladder.
  *
  * Two things this fixes. `agent` used to be in this list and was the DEFAULT selection — but that role
- * was RETIRED (`src/domain/types.ts`), so the core's Zod enum rejects it: clicking "+ Add Member"
+ * was RETIRED, so the server's role list refuses it (internal/domain): clicking "+ Add Member"
  * without touching the dropdown always failed. And `worker` / `master` are agent PERSONAS — an agent
  * gets its reach through `add_member` over MCP, which is the documented onboarding path and is
  * unaffected by this list. This form is for sharing a board with a colleague by email; it is not where
@@ -188,6 +189,101 @@ function MyTokenBudget() {
 }
 
 /**
+ * Your password: replace the one you were handed. Settings → Users shows a new account's first
+ * password to the admin who added it, so until its holder changes it here, that admin (and anyone
+ * who saw the message that carried it) can sign in as them. The server checks the current password
+ * and the length; the change signs out every other session of yours, and this one carries on. It
+ * leaves CLI tokens and OAuth grants, as the host's `user passwd` does, so the panel says where to
+ * look for ones the password's earlier holder made. Personal, like the token budget: it renders
+ * whichever project is picked.
+ */
+function MyPassword() {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const change = useMutation({
+    mutationFn: () => meApi.changePassword({ currentPassword: current, newPassword: next }),
+    onSuccess: (r) => {
+      setCurrent('');
+      setNext('');
+      setRepeat('');
+      setErr(null);
+      const n = r.otherSessionsEnded;
+      setDone(`Password changed. ${n} other session${n === 1 ? ' was' : 's were'} signed out.`);
+    },
+    onError: (e: Error) => { setDone(null); setErr(e.message); },
+  });
+  return (
+    <section id="password" style={{ marginBottom: 36 }}>
+      <Panel title="Your password" pad>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setDone(null);
+            if (next !== repeat) {
+              setErr('The two new passwords differ.');
+              return;
+            }
+            change.mutate();
+          }}
+        >
+          <Stack gap={12}>
+            <p className="muted" style={{ fontSize: 14, margin: 0 }}>
+              Replace the password you were given with one only you know: at least 12 characters. Your
+              other signed-in sessions are signed out; this one stays. CLI tokens and agents keep working:
+              check CLI tokens and Your MCP sessions on this page for any you did not set up.
+            </p>
+            <Cluster gap={8}>
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                aria-label="Current password"
+                placeholder="Current password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                aria-label="New password"
+                placeholder="New password"
+                minLength={12}
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <input
+                className="input"
+                type="password"
+                autoComplete="new-password"
+                aria-label="Repeat the new password"
+                placeholder="Repeat the new password"
+                value={repeat}
+                onChange={(e) => setRepeat(e.target.value)}
+                required
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button type="submit" className="btn" disabled={change.isPending}>
+                {change.isPending ? 'Changing…' : 'Change password'}
+              </button>
+            </Cluster>
+            {err && <p className="error" style={{ fontSize: 12, margin: 0 }}>{err}</p>}
+            {done && <p role="status" style={{ fontSize: 14, margin: 0 }}>{done}</p>}
+          </Stack>
+        </form>
+      </Panel>
+    </section>
+  );
+}
+
+/**
  * Settings → Users (R1.15): the workspace admin lists the local accounts and adds one, whose
  * generated password this panel shows once. Hidden from everyone else, and the BFF refuses them
  * regardless (403): hiding is not the control. Disable, password reset and role changes are the
@@ -202,7 +298,10 @@ export function UsersSection() {
   const [name, setName] = useState('');
   // The one copy of the initial password: from the add answer, cleared by Done, never fetched.
   const [shown, setShown] = useState<{ login: string; password: string } | null>(null);
+  // gcTime 0 and reset() on Done, as the token mint below: the answer carries the plaintext, so it
+  // must not outlive Done in the mutation cache.
   const add = useMutation({
+    gcTime: 0,
     mutationFn: () => usersApi.addUser(login.trim(), name.trim()),
     onSuccess: (r) => {
       setShown({ login: r.user.login, password: r.password });
@@ -286,11 +385,12 @@ export function UsersSection() {
           {shown && (
             <div role="status" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
               <p style={{ fontSize: 14, margin: '0 0 8px' }}>
-                Initial password for {shown.login}, shown once. Pass it on now:
+                Initial password for {shown.login}, shown once. Pass it on now; they can replace it
+                under Settings → Your password:
               </p>
               <Cluster gap={8}>
                 <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{shown.password}</code>
-                <button type="button" className="btn secondary" onClick={() => setShown(null)}>
+                <button type="button" className="btn secondary" onClick={() => { setShown(null); add.reset(); }}>
                   Done
                 </button>
               </Cluster>
@@ -328,6 +428,18 @@ export function UsersSection() {
  * here would silently start cutting into the secret if it ever changed.
  */
 const display = (token: string): string => `${token.split('_').slice(0, 2).join('_')}…`;
+
+/**
+ * A WIP limit field: blank is no limit (null), a whole number of 1 or more is that limit, anything
+ * else is undefined and is refused before sending. `Number('five')` is NaN, which JSON writes as
+ * null, and the server reads null as "no limit": a typo used to clear the column's limit silently.
+ */
+const parseWip = (raw: string): number | null | undefined => {
+  const t = raw.trim();
+  if (!t) return null;
+  return /^[1-9]\d*$/.test(t) && Number.isSafeInteger(Number(t)) ? Number(t) : undefined;
+};
+const WIP_INVALID = 'A WIP limit is a whole number of 1 or more, or blank for no limit.';
 
 
 function CliTokens() {
@@ -418,10 +530,11 @@ function CliTokens() {
                     // Clipboard access can be denied or absent (insecure origin, permission). Falling
                     // back to "select it yourself" beats a button that silently does nothing — and on
                     // that path the value must STAY on screen, so `copied` is not set.
-                    void navigator.clipboard?.writeText(minted).then(
-                      () => setCopied(true),
-                      () => setErr('Could not copy — select the value above and copy it manually.'),
-                    );
+                    // `?.` alone short-circuited to undefined with no clipboard at all (a plain-HTTP
+                    // LAN origin), so neither callback ran and the button did nothing.
+                    const fail = () => setErr('Could not copy — select the value above and copy it manually.');
+                    if (!navigator.clipboard) { fail(); return; }
+                    void navigator.clipboard.writeText(minted).then(() => setCopied(true), fail);
                   }}
                 >
                   Copy
@@ -443,7 +556,7 @@ function CliTokens() {
               aria-label="Token label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim()) mint.mutate(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim() && !mint.isPending) mint.mutate(); }}
               style={{ minWidth: 260 }}
             />
             <button className="btn" disabled={!label.trim() || mint.isPending} onClick={() => mint.mutate()}>
@@ -458,15 +571,17 @@ function CliTokens() {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ whiteSpace: 'nowrap' }}>
               <thead>
-                <tr><th>Label</th><th>Status</th><th>Expires</th><th>Last used</th><th /></tr>
+                {/* No "Last used" column: the server records no token use (the stamp was
+                    dropped), and "never" beside a token in constant use misleads. */}
+                <tr><th>Label</th><th>Status</th><th>Expires</th><th /></tr>
               </thead>
               <tbody>
                 {tokens.map((t) => (
                   <tr key={t.id}>
                     <td>{t.label}</td>
                     {/* NO IDENTIFIER COLUMN. It rendered `t.display` — the public half of the id,
-                        never the secret (`src/domain/cli-token.ts` keeps `secretHash` only and states
-                        there is deliberately no Store method that could return one). But a
+                        never the secret (the store keeps only the token's hash, `SecretHash` in
+                        internal/store, and has no method that could return one). But a
                         `bd_bd7c064b…` in a credentials table is indistinguishable from a leaked
                         token BY LOOKING, and the label is not enough to fix that. The row is
                         identified by its label; `t.id` is still what Revoke sends, it is simply never
@@ -475,7 +590,6 @@ function CliTokens() {
                         how they drift. */}
                     <td>{t.status}</td>
                     <td>{new Date(t.expiresAt).toLocaleString()}</td>
-                    <td>{t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : 'never'}</td>
                     <td>
                       {t.status === 'live' && (
                         <button
@@ -517,11 +631,13 @@ export function Settings() {
 
   /**
    * WHAT THE CALLER'S ROLE IN THIS PROJECT LETS THEM CHANGE HERE (P-432), the tiers of
-   * `internal/domain/grants.go`: `add_column` is write (a worker or above), `update_column` and
-   * `remove_column` structural (a member or above), `add_member`, `remove_member` and
-   * `update_settings` admin. A control below its tier is disabled and says why, as the task's Status
-   * and Claim do, instead of offering a click the server refuses. While the role loads every one is
-   * closed with no reason yet (fail closed). Hiding is not enforcing: the server still decides.
+   * `internal/domain/grants.go`: `add_column` is master (the owner's ruling of 2026-11-10; it was
+   * write), `update_column` and `remove_column` structural (a member or above), `add_member`,
+   * `remove_member` and `update_settings` admin. So a master may add a column but not rename, limit or
+   * delete one, and below master the reason names both floors. A control below its tier is disabled
+   * and says why, as the task's Status and Claim do, instead of offering a click the server refuses.
+   * While the role loads every one is closed with no reason yet (fail closed). Hiding is not
+   * enforcing: the server still decides.
    */
   const myRole = useMyProjectRole(projectId);
   const roleKnown = myRole !== undefined;
@@ -533,7 +649,9 @@ export function Settings() {
     ? null
     : canAddColumn
       ? closedWhy(myRole, 'update_column', 'rename, limit or delete columns')!
-      : closedWhy(myRole, 'add_column', 'change columns')!;
+      : myRole === NOT_A_MEMBER
+        ? closedWhy(myRole, 'add_column', 'change columns')!
+        : `${closedWhy(myRole, 'add_column', 'add columns')!} ${closedWhy(myRole, 'update_column', 'rename, limit or delete them')!}`;
   const membersWhy = closedWhy(myRole, 'add_member', 'add or remove members') ?? null;
   const workflowWhy = closedWhy(myRole, 'update_settings', 'change workflow settings') ?? null;
 
@@ -573,10 +691,9 @@ export function Settings() {
    * YOUR OWN MCP sessions. `list_agent_sessions` is CALLER-SCOPED — it never returns another user's
    * sessions — so this table is inherently personal and needs no admin gate.
    *
-   * It exists because "Manage sessions" on the Agents screen pointed at /admin: admin-only, and
-   * workspace-WIDE. The one person who could click it was sent somewhere that manages everyone's
-   * sessions, and every other member had no way to stop their own agent at all. The gateway route for
-   * self-service disconnect had been there the whole time; only the SPA was missing.
+   * It exists because "Manage sessions" on the Agents screen pointed at an admin-only, workspace-WIDE
+   * page that this build does not have. Every member needs a way to stop their own agent, and the REST
+   * route for self-service disconnect is caller-scoped, so the panel lives here.
    */
   /**
    * Honour `#sessions` and `#cli-tokens` in the URL. React Router does client-side navigation, so the browser never sees
@@ -595,7 +712,15 @@ export function Settings() {
     return () => clearTimeout(t);
   }, []);
 
-  const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => agentsApi.agentSessions(100) });
+  // The entry Agents merges presence frames into: the list never carries `device:` rows, so the answer
+  // keeps the ones the cache holds when it lands, or a visit here would drop them from Agents (P-394).
+  const sessionsQ = useQuery({
+    queryKey: ['agentSessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(100);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentSessions'])?.sessions) };
+    },
+  });
   // MCP sessions only: the device rows a presence frame merges into the same cache (`device:<pid>`,
   // presenceMerge.ts) are processes on this machine, not sessions disconnect_agent can end.
   const mySessions = (sessionsQ.data?.sessions ?? []).filter((s) => !s.sessionKey.startsWith('device:'));
@@ -625,10 +750,28 @@ export function Settings() {
     return p.then((r) => { refresh(); return r; }).catch((e) => setErr(String(e instanceof Error ? e.message : e)));
   };
 
-  const addMember = useMutation({ mutationFn: () => projectsApi.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
+  /**
+   * A LOGIN NO ACCOUNT HOLDS. add_member keys a member by the account id a login names; any other
+   * reference is kept as given, and that row grants nothing until an account takes the login and the
+   * member is added again (which folds the row into the account). The answer keys such a row by the
+   * typed text itself; so does an account id, which get_project's memberDisplay then names. The note
+   * shows once the refreshed project holds the row and names no account for it.
+   */
+  const [addedRef, setAddedRef] = useState<string | null>(null);
+  const addMember = useMutation({
+    mutationFn: () => projectsApi.addMember(projectId, member, role),
+    onSuccess: (r) => {
+      const typed = member.trim();
+      setAddedRef(typed && Object.prototype.hasOwnProperty.call(r.members, typed) ? typed : null);
+      setMember('');
+      refresh();
+    },
+    onError: (e) => setErr(String(e)),
+  });
+  const noAccount = addedRef !== null && project?.members[addedRef] !== undefined && memberDisplay[addedRef] === undefined ? addedRef : null;
   const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
-    mutationFn: () => boardsApi.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
+    mutationFn: (wipLimit: number | null) => boardsApi.addColumn(projectId, board!.id, col.name, col.status, wipLimit),
     onSuccess: () => { setCol({ name: '', status: 'TODO', wip: '' }); refresh(); },
     onError: (e) => setErr(String(e)),
   });
@@ -750,10 +893,14 @@ export function Settings() {
                         disabled={!dirty || !canEditColumns}
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
-                        onClick={() => void guard(
-                          boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: d.wip ? Number(d.wip) : null })
-                            .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
-                        )}
+                        onClick={() => {
+                          const wip = parseWip(d.wip);
+                          if (wip === undefined) { setErr(WIP_INVALID); return; }
+                          void guard(
+                            boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: wip })
+                              .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
+                          );
+                        }}
                       >
                         Save
                       </button>
@@ -797,10 +944,15 @@ export function Settings() {
                 />
                 <button
                   className="btn"
-                  disabled={!canAddColumn || !col.name}
+                  disabled={!canAddColumn || !col.name || addColumn.isPending}
                   title={!canAddColumn && columnsWhy ? columnsWhy : undefined}
                   aria-describedby={!canAddColumn && columnsWhy ? 'columns-closed' : undefined}
-                  onClick={() => addColumn.mutate()}
+                  onClick={() => {
+                    const wip = parseWip(col.wip);
+                    if (wip === undefined) { setErr(WIP_INVALID); return; }
+                    setErr(null);
+                    addColumn.mutate(wip);
+                  }}
                 >
                   + Add Column
                 </button>
@@ -845,7 +997,15 @@ export function Settings() {
                             <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{id}</span>
                           </span>
                         ) : (
-                          <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                          // memberDisplay names every account; a row it does not name is no account
+                          // (a login kept as given), so it grants nothing.
+                          <span
+                            style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}
+                            title="No account is this member, so the row grants nothing. Once a workspace admin adds the account under Users, add its login here again."
+                          >
+                            <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>no account · grants nothing</span>
+                          </span>
                         )}
                       </Cluster>
                     </td>
@@ -894,6 +1054,12 @@ export function Settings() {
                 + Add Member
               </button>
             </div>
+            {noAccount && (
+              <p role="status" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>
+                No account has the login {noAccount} yet, so this row grants nothing. Once a workspace admin adds the
+                account under Users, add {noAccount} here again.
+              </p>
+            )}
             {membersWhy && (
               <p id="members-closed" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>{membersWhy}</p>
             )}
@@ -911,6 +1077,7 @@ export function Settings() {
           the user who has just signed up. Columns, Members and CLI tokens come first (usability #9).
         */}
         <MyTokenBudget />
+        <MyPassword />
 
         {/* Workflow / policy */}
         {projectId && (
@@ -939,11 +1106,11 @@ export function Settings() {
                   <p id="workflow-closed" className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>{workflowWhy}</p>
                 )}
               </Panel>
-              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
-                  cost control over the tenant, not a workflow choice, and the core refuses both fields
-                  from anyone who is not a workspace admin (src/tools/projects.ts, update_settings) — so
-                  rendering them here only offered a project admin a guaranteed FORBIDDEN. They now live
-                  in the /admin portal (web/src/screens/Admin.tsx, ProjectQuotaCard). */}
+              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. This deployment has no
+                  quota enforcement, and update_settings refuses quotaEnabled and txnCap from everyone
+                  (internal/service/projects.go, settingsPatch): FORBIDDEN for a caller who is not a
+                  workspace admin, VALIDATION for one who is, since a cap would be recorded and never
+                  enforced. So the controls are gone and nothing in this build sets them. */}
             </Stack>
           ) : (
             <Panel pad>

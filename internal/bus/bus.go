@@ -11,18 +11,20 @@
 // Each has its catch-up from a cursor: Replay, ReplayProjects and ReplayAll.
 //
 // Cost: the tail runs only while a subscriber exists. When the engine gives a wake
-// (store.ChangeWatcher: Postgres LISTEN/NOTIFY, SQLite's in-process commit signal) it reads only
-// after a wake, at once unless it read less than WakeGap ago, so a write storm costs at most one
-// read per WakeGap and an idle tail issues no statement however many subscribers it has. Without a
-// watcher (memstore) it reads every PollInterval.
+// (store.ChangeWatcher: Postgres LISTEN/NOTIFY, SQLite's in-process commit signal and its poll of
+// another process's commits) it reads only after a wake, at once unless it read less than WakeGap
+// ago, so a write storm costs at most one read per WakeGap and an idle tail reads nothing however
+// many subscribers it has (SQLite's watch asks `PRAGMA data_version` every 250 ms on a connection
+// of its own). Without a watcher (memstore) it reads every PollInterval.
 //
 // Delivery never blocks on a slow subscriber: each has a bounded buffer, and a change that does not
 // fit is dropped and counted (Subscription.Dropped). A change is a hint; a subscriber that dropped
 // one re-reads what it serves, or replays the log from its cursor (Replay).
 //
-// Processes: Postgres's wake is heard by every process sharing the database. SQLite's is in-process,
-// so the SQLite engine supports exactly ONE serve process per data dir: a second process's writes
-// are not heard by this one's tail until something here wakes it. Run more than one on Postgres.
+// Processes: Postgres's wake is heard by every process sharing the database. SQLite's hears this
+// process's commits at once and another process's on the same file (several serve on one host,
+// core/lock.go) within its 250 ms data_version poll (store/watch.go). Serve processes on more than
+// one host need Postgres.
 //
 // Clocks: a change's Ts is its writer's clock, and a starting tail compares it with its own. The
 // processes sharing a Postgres database need clocks within GapTimeout of each other: a change from a

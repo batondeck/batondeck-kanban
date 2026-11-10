@@ -7,15 +7,18 @@ import type { Priority, Status, Task } from './types.js';
 import { isAgent } from './types.js';
 import { Icon } from './icons.js';
 import { ToolLogo, toolKey, type ToolKey } from './ToolLogo.js';
+import { onOwnOrigin } from './api/media.js';
 
 /** ReactMarkdown overrides for rendered task/comment markdown: links open in a new tab — a same-tab
- * navigation would dump the SPA (and any drafts) onto the linked site. */
+ * navigation would dump the SPA (and any drafts) onto the linked site. An embedded attachment (a
+ * signed /blobs URL) loads from this page's own origin, which the CSP's img-src allows (onOwnOrigin). */
 export const mdComponents: Components = {
   a: ({ children, ...props }) => (
     <a {...props} target="_blank" rel="noreferrer">
       {children}
     </a>
   ),
+  img: ({ src, node: _node, ...props }) => <img {...props} src={typeof src === 'string' ? onOwnOrigin(src) : src} />,
 };
 
 /**
@@ -201,59 +204,75 @@ export function leaseLeft(expiresAt: string | undefined | null): string | null {
   return ms > 0 ? `${Math.ceil(ms / 60000)}m` : null;
 }
 
+/**
+ * One verb per event type the server emits (`internal/domain/events.go`), read as "<actor> <verb> <task>".
+ * `event-verbs.test.ts` holds this table to that file both ways: an event with no verb showed a person
+ * the raw dotted identifier ("task.review_requested"), and the table still named the hosted product's
+ * plugin and org events, which this server never emits (P-457).
+ */
 const EVENT_VERB: Record<string, string> = {
-  'task.created': 'created',
-  'task.moved': 'moved',
-  'task.updated': 'updated',
-  'task.claimed': 'claimed',
-  'task.released': 'released',
-  'task.completed': 'completed',
-  'task.blocked': 'blocked',
-  'task.handoff': 'handed off',
+  'attachment.created': 'attached a file to',
+  'attachment.updated': 'updated an attachment on',
+  'board.created': 'created board',
+  'chronicle.conflicts_flagged': 'flagged conflicts in a record',
+  'chronicle.page_created': 'created a record',
+  'chronicle.page_deleted': 'deleted a record',
+  'chronicle.page_updated': 'updated a record',
+  'chronicle.version_added': 'added a version of a record',
   'comment.added': 'commented on',
   'context.added': 'added context to',
-  'memory.written': 'noted on',
   'dependency.added': 'linked',
-  'summary.set': 'summarized',
-  'project.created': 'created project',
-  'board.created': 'created board',
-  'task.dependency_cleared': 'unblocked',
-  'task.follow_up': 'added a follow-up to',
-  'task.reopened': 'reopened',
+  'dependency.removed': 'unlinked',
   'followup.acked': 'acked a follow-up on',
-  // Plugin Studio (S1–S10). These are ORG-scoped events, not task events: they carry no task, so the
-  // verb reads as a complete phrase on its own rather than "<verb> <task>". Without an entry here the
-  // activity log shows a human the raw dotted identifier — `test/unit/studio-hardening.test.ts` gap 3
-  // refuses a studio event kind that has no verb.
-  'plugin.created': 'created a plugin',
-  'plugin.file_added': 'added a file to a plugin',
-  'plugin.file_removed': 'removed a file from a plugin',
-  'plugin.mcp_set': 'set a plugin draft’s custom MCP servers',
-  'plugin.version_finalized': 'submitted a plugin version to the gate',
-  'plugin.scan_advanced': 'recorded a scan verdict on a plugin version',
-  'plugin.version_approved': 'approved a plugin version',
-  'plugin.version_published': 'published a plugin version',
-  'plugin.version_yanked': 'yanked a plugin version',
-  'plugin.deleted': 'deleted plugin',
-  'plugin.version_discarded': 'discarded draft version',
-  'plugin.version_delivered': 'delivered a plugin version',
-  'plugin.asset_selected': 'selected a registry asset into a plugin',
-  'plugin.asset_deselected': 'removed a registry asset from a plugin',
-  'registry.asset_created': 'created a registry asset',
-  'registry.asset_version_published': 'published a registry asset version',
-  'org.surface_profile_set': 'changed the org MCP surface',
-  'org.knowledge_source_set': 'set the org knowledgebase source',
-  'org.mcp_connection_added': 'connected an internal MCP server',
-  'org.mcp_connection_secret_rotated': 'rotated an MCP connection secret',
-  'org.audience_created': 'created an audience',
-  'org.audience_membership_changed': 'changed audience membership',
-  'org.git_destination_added': 'added a plugin delivery destination',
-  'runs.started': 'started a race on',
-  'runs.cancelled': 'cancelled the race on',
+  'incident.delivery': 'received an alert for',
+  'incident.resolved': 'resolved the alert on',
+  'integration.created': 'created an integration',
+  'integration.deleted': 'deleted an integration',
+  'integration.secret_rotated': 'rotated an integration secret',
+  'integration.updated': 'updated an integration',
+  'memory.written': 'noted on',
+  'project.created': 'created project',
+  'run.discarded': 'discarded a run on',
   'run.opened': 'opened a run on',
   'run.picked': 'picked a run for',
-  'run.discarded': 'discarded a run on',
+  'runs.cancelled': 'cancelled the race on',
+  'runs.started': 'started a race on',
+  'sprint.abandoned': 'abandoned a sprint',
+  'sprint.activated': 'started a sprint',
+  'sprint.checkpoint': 'checkpointed a sprint',
+  'sprint.closed': 'closed a sprint',
+  'sprint.created': 'proposed a sprint',
+  'sprint.self_approved': 'self-approved a sprint',
+  'sprint.task_added': 'added to a sprint',
+  'sprint.task_removed': 'removed from a sprint',
+  'sprint.updated': 'updated a sprint',
+  'summary.set': 'summarized',
+  'task.anomaly_detected': 'flagged an anomaly on',
+  'task.artifact_added': 'added an artifact to',
+  'task.artifact_missing': 'left no artifact on',
+  'task.artifact_retracted': 'retracted an artifact from',
+  'task.blocked': 'blocked',
+  'task.checkpoint_missing': 'left no checkpoint on',
+  'task.claimed': 'claimed',
+  'task.completed': 'completed',
+  'task.created': 'created',
+  'task.deleted': 'deleted',
+  'task.dependency_cleared': 'unblocked',
+  'task.failed': 'failed',
+  'task.follow_up': 'added a follow-up to',
+  'task.handoff': 'handed off',
+  'task.lease_reaped': 'reaped the lease on',
+  'task.moved': 'moved',
+  'task.orchestrated': 'split into subtasks',
+  'task.poisoned': 'marked as poisoned',
+  'task.released': 'released',
+  'task.reopened': 'reopened',
+  'task.review_requested': 'requested review of',
+  'task.self_approved': 'self-approved',
+  'task.updated': 'updated',
 };
+/** The event types that have a verb, for the test that compares them with the server's. */
+export const EVENT_VERB_TYPES = Object.keys(EVENT_VERB);
 export function eventVerb(type: string): string {
   return EVENT_VERB[type] ?? type;
 }

@@ -310,12 +310,27 @@ export function MapEditor({
   );
 }
 
+const parseList = (raw: string): string[] | undefined => {
+  const parts = raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
+};
+const sameList = (a: string[] | undefined, b: string[] | undefined): boolean =>
+  (a ?? []).join('\u0000') === (b ?? []).join('\u0000');
+
 /**
  * A FALLBACK CHAIN of paths, entered as one comma-separated line.
  *
  * Deliberately not a repeating row editor: a chain is read left-to-right ("this, or this, or this")
  * and one line reads that way while a stack of boxes does not. Empty segments are dropped, so a
  * trailing comma while typing is not an error.
+ *
+ * THE INPUT SHOWS WHAT WAS TYPED, not the parsed array re-joined. Re-joining on every keystroke
+ * dropped a trailing `,` or ` ` before the next character arrived, so `alert.id, $body_hash` typed
+ * key by key became the one path `alert.id$body_hash`. The typed text is kept as a draft and shown
+ * while it still parses to the value; a value replaced from outside (the form re-seeded) wins.
  */
 export function ChainField({
   id,
@@ -334,20 +349,19 @@ export function ChainField({
   placeholder?: string;
   required?: boolean;
 }) {
+  const [draft, setDraft] = useState(() => (value ?? []).join(', '));
+  const text = sameList(parseList(draft), value) ? draft : (value ?? []).join(', ');
   return (
     <TextField
       id={id}
       label={label}
       hint={hint}
       required={required}
-      value={(value ?? []).join(', ')}
+      value={text}
       placeholder={placeholder}
       onChange={(raw) => {
-        const parts = raw
-          .split(',')
-          .map((p) => p.trim())
-          .filter(Boolean);
-        onChange(parts.length > 0 ? parts : undefined);
+        setDraft(raw);
+        onChange(parseList(raw));
       }}
     />
   );

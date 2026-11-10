@@ -62,6 +62,17 @@ func TestSessionsRefusals(t *testing.T) {
 	wantCode(t, err, domain.CodeValidation)
 	_, err = s.TouchAgentSession(f.ctx, f.alice, TouchAgentSessionReq{SessionKey: SessionKey("alice", "x"), Kind: "dev"})
 	wantCode(t, err, domain.CodeValidation)
+	// A NUL (which Postgres cannot store) or a field longer than any name the transport writes is
+	// refused, the transport's cleaning being the first line.
+	long := strings.Repeat("x", 300)
+	for _, bad := range []TouchAgentSessionReq{
+		{AgentName: "n\x00"}, {AgentName: long}, {AgentName: "n", ClientName: "c\x00"}, {AgentName: "n", ClientVersion: long},
+		{AgentName: "n", Tool: "t\x00"}, {AgentName: "n", Tool: long}, {AgentName: "n", Tool: "t", ProjectID: "P\x00"}, {AgentName: "n", OAuthClientID: long},
+	} {
+		bad.SessionKey, bad.Kind = SessionKey("alice", "x"), "dev"
+		_, err = s.TouchAgentSession(f.ctx, f.alice, bad)
+		wantCode(t, err, domain.CodeValidation)
+	}
 	_, err = s.DisconnectAgent(f.ctx, f.alice, DisconnectAgentReq{IdentityID: "bob", AgentID: "x"})
 	wantCode(t, err, domain.CodeForbidden)
 	_, err = s.ListAgentSessions(f.ctx, f.alice, ListAgentSessionsReq{All: true})

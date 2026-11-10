@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -61,6 +62,54 @@ func TestProjectMutationsOverTheEnginesWriteTheirAuditRows(t *testing.T) {
 				t.Fatalf("audit actions %v, want %v", actions, want)
 			}
 			t.Logf("%s: audit actions %v", e.name, actions)
+		})
+	}
+}
+
+// A chronicle page's delete writes chronicle.page_deleted to the audit log (its event names no board
+// or task, so no feed reads it), and update_settings records checkpointPolicy, tokenPolicy and
+// maxTicketTokens: before, such a change stored settings.updated with data {}.
+func TestChronicleDeleteAndPolicySettingsAreAudited(t *testing.T) {
+	for _, e := range engines {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			c := New(st, Options{ToolCallFlush: -1})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			carol := domain.Caller{Identity: "carol", Agent: "claude", TokenScope: "carol"}
+			p, err := c.Projects().Create(ctx, carol, CreateProjectReq{Name: "Q"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: p.ProjectID, IdentityID: "wes", Role: domain.RoleMaster}); err != nil {
+				t.Fatal(err)
+			}
+			page, err := c.Chronicle().CreatePage(ctx, carol, CreateChroniclePageReq{ProjectID: p.ProjectID, Kind: "adr", Slug: "adr/x", Title: "X",
+				Blocks: []ChronicleBlockInput{{ID: "a-1", Text: "the decision"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wes := domain.Caller{Identity: "wes", Agent: "w", TokenScope: "wes"}
+			if _, err := c.Chronicle().DeletePage(ctx, wes, DeleteChroniclePageReq{ProjectID: p.ProjectID, PageID: page.PageID}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Projects().UpdateSettings(ctx, carol, UpdateSettingsReq{ProjectID: p.ProjectID, CheckpointPolicy: "off"}); err != nil {
+				t.Fatal(err)
+			}
+			deleted, err := st.ListAuditLog(ctx, store.AuditFilter{Action: "chronicle.page_deleted"}, "", 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted.Rows) != 1 || deleted.Rows[0].Subject != page.PageID || deleted.Rows[0].Actor != "wes" {
+				t.Fatalf("chronicle.page_deleted rows %+v, want one naming %s by wes", deleted.Rows, page.PageID)
+			}
+			settings, err := st.ListAuditLog(ctx, store.AuditFilter{Action: "settings.updated"}, "", 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(settings.Rows) != 1 || !strings.Contains(string(settings.Rows[0].Data), `"checkpointPolicy":"off"`) {
+				t.Fatalf("settings.updated rows %+v, want one recording checkpointPolicy", settings.Rows)
+			}
 		})
 	}
 }

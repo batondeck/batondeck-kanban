@@ -1,8 +1,10 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"slices"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -13,12 +15,14 @@ import (
 const listByIDsMax = 200
 
 // AddSubtask is add_subtask (conductor context.ts:534-560): a child task with parentTaskId, in the
-// parent's board's first column with that column's status. It adds no edge and leaves the parent as
-// it is (version included): mutate loads no task, and the only event is the child's task.created.
+// parent's board's first column with that column's status, after its last task. It adds no edge and
+// leaves the parent as it is (version included): mutate loads no task, and the only event is the
+// child's task.created.
 // The parent's BLOCKED landing is orchestrate_subtasks (R2.3), not this. A grant check pending on a
 // task is finished against the parent.
 func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req AddSubtaskReq) (AddSubtaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_subtask", domain.GrantSubject{}, true)
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_subtask",
+		domain.GrantSubject{Priorities: []domain.Priority{cmp.Or(req.Priority, domain.PriorityNormal)}}, true)
 	if err != nil {
 		return AddSubtaskResp{}, err
 	}
@@ -48,7 +52,7 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 	a.pending = false
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_subtask", Args: map[string]any{"projectId": req.ProjectID, "parentTaskId": req.ParentTaskID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (AddSubtaskResp, error) {
 		parent, err := t.Tx.GetTask(ctx, req.ProjectID, req.ParentTaskID)
 		if err != nil {
@@ -67,7 +71,7 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 			return AddSubtaskResp{}, domain.Validation("Board has no TODO column", nil)
 		}
 		col := board.Columns[i] // the store keeps them in (order, id)
-		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
+		order, err := endOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return AddSubtaskResp{}, err
 		}
@@ -99,21 +103,20 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 	})
 }
 
-// headOfColumn is an order key before the column's first task, one bounded read.
-// ponytail: conductor appends at the column's END (maxOrderInColumn); the store has no last-key read
-// (P-69) and paging to the end is unbounded, so the child lands at the head until P-69 lands.
-func headOfColumn(ctx context.Context, tx store.Store, projectID, boardID, columnID string) (string, error) {
-	page, err := tx.ListTasks(ctx, projectID, store.TaskFilter{BoardID: boardID, ColumnID: columnID}, "", 1)
+// endOfColumn is an order key after the column's last task (store.LastOrderKey, one statement), as
+// conductor's maxOrderInColumn: a new task, subtask, alert or a task moved into the column lands
+// last, so the column's order is arrival order and claim_next's frontier (by order key within a
+// priority) serves the oldest first. The key is spread (domain.OrderBetweenSpread), so writers that
+// append to one column at once (two creates on Postgres read the last key before either commits)
+// mint different keys: two of them draw the same spread about once in 14 million.
+func endOfColumn(ctx context.Context, tx store.Store, projectID, boardID, columnID string) (string, error) {
+	last, err := tx.LastOrderKey(ctx, projectID, boardID, columnID)
 	if err != nil {
 		return "", err
 	}
-	first := ""
-	if len(page.Tasks) > 0 {
-		first = page.Tasks[0].OrderKey
-	}
-	key, err := domain.OrderBetween("", first)
+	key, err := domain.OrderBetweenSpread(last, "", rand.Uint32())
 	if err != nil {
-		return "", internalf("order key before %q: %v", first, err)
+		return "", internalf("order key after %q: %v", last, err)
 	}
 	return key, nil
 }

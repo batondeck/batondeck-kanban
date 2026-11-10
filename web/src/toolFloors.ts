@@ -20,24 +20,25 @@ export type Floor = 'viewer' | 'worker' | 'master' | 'member' | 'admin';
 
 export const TOOL_FLOOR = {
   // TierWrite: a worker or above.
-  add_column: 'worker',
   add_comment: 'worker',
   add_context_item: 'worker',
   ack_follow_up: 'worker',
   attach_file: 'worker',
   claim_task: 'worker',
-  create_board: 'worker',
   create_chronicle_page: 'worker',
-  delete_chronicle_page: 'worker',
   edit_chronicle_page: 'worker',
   set_summary: 'worker',
   write_memory: 'worker',
-  // TierMaster.
+  // TierMaster. add_column, create_board and delete_chronicle_page are here by the owner's ruling of
+  // 2026-11-10 (they were write, as in conductor).
+  add_column: 'master',
   add_dependency: 'master',
   add_follow_up: 'master',
   add_subtask: 'master',
   cancel_runs: 'master',
+  create_board: 'master',
   create_task: 'master',
+  delete_chronicle_page: 'master',
   move_task: 'master',
   open_run: 'master',
   pick_run: 'master',

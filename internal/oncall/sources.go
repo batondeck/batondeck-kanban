@@ -25,7 +25,8 @@ type Source struct {
 	Label string
 	// AuthModes are the modes the source can actually produce, best first.
 	AuthModes []AuthMode
-	// AuthNote is one line on why the modes are what they are.
+	// AuthNote is one line on why the modes are what they are, and, for a source whose payload is a
+	// template the operator writes, the fields it must carry.
 	AuthNote string
 }
 
@@ -40,7 +41,7 @@ var Sources = []Source{
 	{ID: "dynatrace", Label: "Dynatrace", AuthModes: []AuthMode{AuthAPIKey},
 		AuthNote: "Dynatrace cannot compute our signature, but it can send a custom header."},
 	{ID: "datadog", Label: "Datadog", AuthModes: []AuthMode{AuthAPIKey},
-		AuthNote: "Datadog cannot compute our signature, but it can send a custom header."},
+		AuthNote: "Datadog cannot compute our signature, but it can send a custom header. In the webhook's payload, send alert_id ($ALERT_ID), aggreg_key ($AGGREG_KEY: each group of a multi-alert monitor is then its own alert), transition ($ALERT_TRANSITION) and title ($EVENT_TITLE)."},
 	{ID: "gcp", Label: "Google Cloud Monitoring", AuthModes: []AuthMode{AuthBasic},
 		AuthNote: "Cloud Monitoring can send HTTP Basic auth only — no custom headers, and it cannot sign. Use any username; the key is the password."},
 	{ID: "pagerduty", Label: "PagerDuty", AuthModes: []AuthMode{AuthHMAC},

@@ -17,22 +17,27 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 // JWT bearer verification against an integration's JWKS (conductor auth/jwt.ts): RS256 only, the
-// issuer and audience the integration names, the key set fetched from its jwksUrl. That fetch is the
+// issuer and audience the integration names (and the subject and verified email it pins, if any),
+// the key set fetched from its jwksUrl. That fetch is the
 // one outbound network call ingest makes, and it is logged as such (plan §Clarifications 8). The
 // URL is operator input fetched server-side, so the fetch holds conductor's SSRF posture: https
 // only; the host resolved once and refused when any address is private, loopback, link-local,
-// unspecified or the metadata host; the connection pinned to the vetted address (no second
+// unspecified, reserved (carrier-grade NAT among them) or the metadata host; the connection pinned to the vetted address (no second
 // resolution to rebind); no redirects; 64 KiB and 5 s.
 
-// JWT is an integration's jwt block.
+// JWT is an integration's jwt block. Subject and Email, when set, pin the token's sub and its
+// (verified) email: on a shared issuer anyone with an account can mint a token for an audience they
+// choose, so issuer and audience alone do not say who sent it.
 type JWT struct {
 	Issuer, Audience, JWKSURL string
+	Subject, Email            string
 }
 
 // The refusal reasons a JWT verification returns.
@@ -115,7 +120,7 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": malformed header", false
 	}
 	if header.Alg != "RS256" {
-		return ReasonVerifyFailed + ": alg " + header.Alg + " is not RS256", false
+		return ReasonVerifyFailed + ": alg " + quoted(header.Alg) + " is not RS256", false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
@@ -130,10 +135,13 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": signature", false
 	}
 	var claims struct {
-		Iss string          `json:"iss"`
-		Aud json.RawMessage `json:"aud"`
-		Exp *float64        `json:"exp"`
-		Nbf *float64        `json:"nbf"`
+		Iss           string          `json:"iss"`
+		Aud           json.RawMessage `json:"aud"`
+		Exp           *float64        `json:"exp"`
+		Nbf           *float64        `json:"nbf"`
+		Sub           string          `json:"sub"`
+		Email         string          `json:"email"`
+		EmailVerified any             `json:"email_verified"`
 	}
 	if err := decodeSegment(parts[1], &claims); err != nil {
 		return ReasonVerifyFailed + ": malformed claims", false
@@ -148,8 +156,30 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": expired", false
 	case claims.Nbf != nil && now < *claims.Nbf:
 		return ReasonVerifyFailed + ": not yet valid", false
+	case cfg.Subject != "" && claims.Sub != cfg.Subject:
+		return ReasonVerifyFailed + ": subject", false
+	case cfg.Email != "" && (claims.Email != cfg.Email || !verifiedEmail(claims.EmailVerified)):
+		return ReasonVerifyFailed + ": email", false
 	}
 	return "", true
+}
+
+// verifiedEmail reads an email_verified claim: true, or the string "true" some issuers send.
+func verifiedEmail(v any) bool {
+	return v == true || v == "true"
+}
+
+// headerTextMax is the most runes of a token header's alg or kid a refusal reason names.
+const headerTextMax = 32
+
+// quoted is s, a value from an unverified token's header, as a refusal reason may carry it: cut to
+// headerTextMax runes and Go-quoted, so the delivery log does not store the sender's text at length
+// and a line break in it cannot start a line of its own in the server log.
+func quoted(s string) string {
+	if r := []rune(s); len(r) > headerTextMax {
+		return strconv.Quote(string(r[:headerTextMax])) + "…"
+	}
+	return strconv.Quote(s)
 }
 
 func decodeSegment(seg string, into any) error {
@@ -190,7 +220,7 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 		return k, ""
 	}
 	if fresh && now.Sub(ks.fetched) < jwksRefetchAfter {
-		return nil, ReasonVerifyFailed + ": no key " + kid
+		return nil, ReasonVerifyFailed + ": no key " + quoted(kid)
 	}
 	v.mu.Lock()
 	at, failed := v.failed[rawURL]
@@ -225,7 +255,7 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 	if k := pickKey(keys, kid); k != nil {
 		return k, ""
 	}
-	return nil, ReasonVerifyFailed + ": no key " + kid
+	return nil, ReasonVerifyFailed + ": no key " + quoted(kid)
 }
 
 // fetchFailed remembers rawURL's failed fetch at now.
@@ -283,15 +313,66 @@ func parseJWKS(body []byte) (map[string]*rsa.PublicKey, error) {
 	return out, nil
 }
 
+// reservedPrefixes are the ranges ForbiddenAddress refuses beyond the net/netip classes: 0.0.0.0/8,
+// carrier-grade NAT (a tailnet's and some clouds' internal services), IETF protocol assignments,
+// benchmarking, class E and broadcast, the v6 prefixes that embed a v4 address and so can reach
+// any of the above (NAT64, local-use NAT64, 6to4, Teredo, the deprecated v4-compatible ::/96), and
+// the deprecated site-local fec0::/10.
+var reservedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("fec0::/10"),
+}
+
 // ForbiddenAddress reports whether the fetch must never reach a: private, loopback, link-local,
-// unspecified, unique-local, or one of those inside a v4-mapped v6 address.
+// unspecified, unique-local, multicast, a reservedPrefixes range, or one of those inside a
+// v4-mapped v6 address.
 func ForbiddenAddress(a netip.Addr) bool {
 	a = a.Unmap()
-	return !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
-		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() || (a.Is4() && a.As4()[0] == 0)
+	if !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
+		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, p := range reservedPrefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 var forbiddenHosts = map[string]bool{"metadata.google.internal": true, "metadata.google.internal.": true, "localhost": true}
+
+// CheckJWKSURL is why raw can never be fetched as an integration's jwksUrl, "" when it can be
+// tried: not an absolute https URL with a host, credentials in it, a forbidden host name, or an IP
+// literal in a forbidden range. It resolves nothing (SafeFetch vets every address a name resolves
+// to on each fetch), so create_integration and update_integration refuse on save what every
+// delivery would otherwise be refused for.
+func CheckJWKSURL(raw string) string {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil || u.Scheme == "" || u.Hostname() == "":
+		return "must be an absolute https URL with a host"
+	case u.Scheme != "https":
+		return "must be https"
+	case u.User != nil:
+		return "must not carry credentials"
+	case forbiddenHosts[strings.ToLower(u.Hostname())]:
+		return "names a host the fetch refuses"
+	}
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil && ForbiddenAddress(a) {
+		return "is a private, loopback, link-local or reserved address, which the fetch refuses"
+	}
+	return ""
+}
 
 // resolver is the DNS lookup SafeFetch vets; a variable only so a test can answer it.
 var resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {

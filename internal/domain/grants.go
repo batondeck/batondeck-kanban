@@ -112,11 +112,14 @@ const (
 
 // toolPosture is the one place every tool is classified: the 86 tools of the target surface
 // (conductor's 91 in scope, delete_task and cancel_task, less ADR-0004's 7). The exempt set, the
-// unscoped set and the landing statuses all derive from it.
+// unscoped set and the landing statuses all derive from it. The tiers are conductor's, except
+// create_board, add_column and delete_chronicle_page, which the owner's ruling of 2026-11-10 moved
+// from write to master: a worker could otherwise destroy a Chronicle page for good, or add a board or
+// a low-order, WIP-limited column that draws every claim and then refuses it, which it cannot undo.
 var toolPosture = map[string]Posture{
 	"ack_follow_up":             {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite, Idempotent: true},
 	"add_artifact":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite, Idempotent: true},
-	"add_column":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
+	"add_column":                {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_comment":               {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_context_item":          {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_dependency":            {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
@@ -130,13 +133,13 @@ var toolPosture = map[string]Posture{
 	"claim_next":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(InProgress), Effect: EffectWrite},
 	"claim_task":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(InProgress), Effect: EffectWrite},
 	"complete_task":             {TenantScoped: true, Landing: completionLanding, Effect: EffectWrite},
-	"create_board":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
+	"create_board":              {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_integration":        {Tier: TierStructural, TenantScoped: true, AdminOnly: AdminOnlyOnly, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_project":            {TenantScoped: false, GrantExempt: true, Effect: EffectWrite},
 	"create_sprint":             {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_task":               {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(Todo), Effect: EffectWrite},
-	"delete_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
+	"delete_chronicle_page":     {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_integration":        {Tier: TierStructural, TenantScoped: true, AdminOnly: AdminOnlyOnly, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_project":            {Tier: TierAdmin, TenantScoped: true, AdminOnly: AdminOnlyConditional, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_task":               {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
@@ -277,9 +280,14 @@ type GrantSubject struct {
 	ToColumnID    string
 	ReviewEnabled *bool
 	MemoryScope   MemoryScope
-	// Labels is a labels argument (create_task, update_task), used when there is no task yet.
+	// Labels is the labels the call writes (create_task's, update_task's patch.labels), nil when it
+	// writes none. With no task they are the target's labels; with the task loaded they must keep one
+	// the grant names as well, so a write cannot take a task out of the grant's scope.
 	Labels []string
-	Task   *GrantTask
+	// Priorities is every priority the call writes (create_task's and each subtask's, defaulted;
+	// update_task's patch.priority), each judged against MaxPriority as the task's own is.
+	Priorities []Priority
+	Task       *GrantTask
 }
 
 // GrantNeedsTask reports whether deciding g needs the target task: only the task-attribute
@@ -369,7 +377,8 @@ func CheckGrantEnforceable(g CapabilityGrant) error {
 // CheckGrant decides one call against one grant: "" when permitted, else the capability the caller
 // lacks (details.requiredCapability on the FORBIDDEN). What it cannot resolve it refuses: an
 // unclassified or undecidable landing under a statuses grant, a task-scoped grant on a call that
-// names neither a task nor a board.
+// names neither a task nor a board. The labels and priorities a call writes are judged beside the
+// loaded task's, so a write cannot leave the grant's labels or raise a task above its cap.
 func CheckGrant(g CapabilityGrant, s GrantSubject) string {
 	if GrantRefusesTool(g, s.Tool) {
 		return "tool:" + s.Tool
@@ -405,11 +414,14 @@ func CheckGrant(g CapabilityGrant, s GrantSubject) string {
 		}
 	}
 	if g.Labels != nil {
+		granted := func(labels []string) bool {
+			return slices.ContainsFunc(labels, func(l string) bool { return slices.Contains(g.Labels, l) })
+		}
 		labels := s.Labels
 		if s.Task != nil {
 			labels = s.Task.Labels
 		}
-		if !slices.ContainsFunc(labels, func(l string) bool { return slices.Contains(g.Labels, l) }) {
+		if !granted(labels) || (s.Task != nil && s.Labels != nil && !granted(s.Labels)) {
 			want := strings.Join(g.Labels, "|")
 			if want == "" {
 				want = "*"
@@ -418,11 +430,12 @@ func CheckGrant(g CapabilityGrant, s GrantSubject) string {
 		}
 	}
 	if g.MaxPriority != "" {
-		if s.Task == nil {
-			return "priority<=" + string(g.MaxPriority)
+		capped := func(p Priority) bool {
+			rank, known := priorityRank[p]
+			return known && rank <= priorityRank[g.MaxPriority]
 		}
-		rank, known := priorityRank[s.Task.Priority]
-		if !known || rank > priorityRank[g.MaxPriority] {
+		if (s.Task == nil && len(s.Priorities) == 0) || (s.Task != nil && !capped(s.Task.Priority)) ||
+			slices.ContainsFunc(s.Priorities, func(p Priority) bool { return !capped(p) }) {
 			return "priority<=" + string(g.MaxPriority)
 		}
 	}

@@ -17,8 +17,8 @@ import (
 )
 
 // StrictObjects are the nested objects of an Optional or Nullable that refuse unknown properties
-// (conductor's .strict()): grant_capabilities' scope.
-var StrictObjects = []reflect.Type{reflect.TypeFor[service.Grant]()}
+// (conductor's .strict()): grant_capabilities' scope, update_integration's mapping.
+var StrictObjects = []reflect.Type{reflect.TypeFor[service.Grant](), reflect.TypeFor[service.IntegrationMapping]()}
 
 // Optionals are the tri-state request fields' instantiations (service.Optional, service.Nullable).
 // Each is typed as its value: Optional[T] as T, Nullable[T] as *T (T or null), so a field keeps the
@@ -37,6 +37,7 @@ var Optionals = []reflect.Type{
 	reflect.TypeFor[service.Optional[service.SprintStatus]](),
 	reflect.TypeFor[service.Nullable[service.TokenPolicy]](),
 	reflect.TypeFor[service.Nullable[service.Grant]](),
+	reflect.TypeFor[service.Optional[service.IntegrationMapping]](),
 }
 
 // OpenObjects are the DTOs whose conductor schema allows properties it does not name. A Go struct

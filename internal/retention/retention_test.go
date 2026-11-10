@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,6 +95,43 @@ func TestASweepRemovesWhatOutlivedItsWindowAndKeepsTheRest(t *testing.T) {
 			}
 			if n, err := s.DeleteToolCallsOlderThan(ctx, 1<<62, 10); err != nil || n != 1 {
 				t.Fatalf("tool calls left: %d (%v), want the young one", n, err)
+			}
+		})
+	}
+}
+
+// A sweep deletes the idempotency keys whose replay window has ended, a project's and a global one
+// (create_project's) alike, and keeps a key still in its window, which still replays.
+func TestASweepRemovesExpiredIdempotencyKeys(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			keyed := func(key string, ttl time.Duration) store.WriteOptions {
+				return store.WriteOptions{Identity: "alice", IdempotencyKey: key, IdempotencyTTL: ttl}
+			}
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "brief", CreatedBy: "alice"}, keyed("cp-brief", time.Millisecond))
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "kept", CreatedBy: "alice"}, keyed("cp-kept", day))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "b", CreatedBy: "alice"}, keyed("cb-brief", time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}),
+				Now: func() time.Time { return time.Now().Add(time.Hour) }, Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			if got := sw.Sweep(ctx); got.IdempotencyKeys != 2 {
+				t.Fatalf("swept %+v, want the two keys past their window", got)
+			}
+			if again := sw.Sweep(ctx); again.IdempotencyKeys != 0 {
+				t.Fatalf("a second sweep deleted %+v", again)
+			}
+			replay, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "kept again", CreatedBy: "alice"}, keyed("cp-kept", day))
+			if err != nil || replay.ID != kept.ID {
+				t.Fatalf("the key in its window replays %+v (%v), want project %s", replay, err, kept.ID)
 			}
 		})
 	}
@@ -428,6 +466,14 @@ func (f *fake) DeleteExpiredAlertStates(_ context.Context, _ int64, limit int) (
 	return f.del("alert states", limit)
 }
 
+func (f *fake) DeleteStalePendingAttachments(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("pending attachments", limit)
+}
+
+func (f *fake) DeleteExpiredIdempotencyKeys(_ context.Context, _ int64, limit int) (int64, error) {
+	return f.del("idempotency keys", limit)
+}
+
 func (f *fake) ListUnreferencedBlobs(context.Context, int64, int) ([]store.Blob, error) {
 	return nil, nil
 }
@@ -438,7 +484,7 @@ func TestASweepIsBoundedAndGoesOnPastAFailure(t *testing.T) {
 	f := &fake{calls: map[string]int{}, fail: "change log"}
 	var reported []string
 	got := (&Sweeper{Store: f, Report: func(step string, _ error) { reported = append(reported, step) }}).Sweep(context.Background())
-	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
+	if got.Memory != MaxPerTick || got.ToolCalls != MaxPerTick || got.AgentSessions != MaxPerTick || got.Sessions != MaxPerTick || got.Tokens != MaxPerTick || got.OAuthCodes != MaxPerTick || got.OAuthTokens != MaxPerTick || got.Deliveries != MaxPerTick || got.RawBodies != MaxPerTick || got.AlertStates != MaxPerTick || got.PendingAttachments != MaxPerTick || got.IdempotencyKeys != MaxPerTick || f.calls["memory"] != MaxPerTick/Batch {
 		t.Fatalf("swept %+v in %v, want %d per table in %d statements", got, f.calls, MaxPerTick, MaxPerTick/Batch)
 	}
 	if got.ChangeLog != 3 || f.calls["change log"] != 1 || !slices.Equal(reported, []string{"change log"}) {
@@ -489,17 +535,31 @@ func TestASweepKeepsTheLiveAgentSessions(t *testing.T) {
 	}
 }
 
-// Run sweeps once at once and then every interval, until ctx ends.
+// Run sweeps once at once and then every interval, until ctx ends. Each half is waited for, not read
+// off a wall-clock window a loaded machine can stall (3 sweeps inside a 70 ms sleep missed when the
+// sweeper started 30 ms late): at an hour's interval the one sweep can only be the one at once, and
+// at 20 ms the timer brings two more.
 func TestRunSweepsAtOnceThenOnTheTimer(t *testing.T) {
-	f := &fake{calls: map[string]int{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { (&Sweeper{Store: f}).Run(ctx, 20*time.Millisecond); close(done) }()
-	time.Sleep(70 * time.Millisecond)
-	cancel()
-	<-done
-	if n := f.calls["tool calls"] / (MaxPerTick / Batch); n < 3 {
-		t.Fatalf("%d sweeps in 70 ms at a 20 ms interval, want at least 3", n)
+	for _, c := range []struct {
+		interval time.Duration
+		want     int
+		what     string
+	}{{time.Hour, 1, "the sweep at once"}, {20 * time.Millisecond, 3, "the sweep at once and two on the timer"}} {
+		f := &fake{calls: map[string]int{}}
+		var began atomic.Int64 // Sweep reads Now once, as it begins
+		sw := &Sweeper{Store: f, Now: func() time.Time { began.Add(1); return time.Now() }}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { sw.Run(ctx, c.interval); close(done) }()
+		for deadline := time.Now().Add(5 * time.Second); began.Load() < int64(c.want) && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		<-done // Run never returns while a sweep runs: every sweep begun has ended
+		n := f.calls["tool calls"] / (MaxPerTick / Batch)
+		if n < c.want || (c.interval == time.Hour && n != 1) {
+			t.Fatalf("%d sweeps within 5 s at a %v interval, want %d: %s", n, c.interval, c.want, c.what)
+		}
 	}
 }
 
@@ -551,6 +611,78 @@ func TestASweepCollectsTheUnreferencedBlobs(t *testing.T) {
 			sw.Now, sw.CollectBlobs = func() time.Time { return now }, nil
 			if swept := sw.Sweep(ctx); swept.Blobs != 0 {
 				t.Fatalf("with no CollectBlobs: swept %+v", swept)
+			}
+		})
+	}
+}
+
+// The blob-file step: a sweep hands SweepBlobFiles its time less BlobGrace and counts what it
+// removed; with no SweepBlobFiles nothing is called.
+func TestASweepSweepsTheBlobFiles(t *testing.T) {
+	s := backends[0].open(t)
+	now := time.UnixMilli(5_000_000_000)
+	var asked []time.Time
+	sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Now: func() time.Time { return now },
+		Report:         func(step string, err error) { t.Errorf("%s: %v", step, err) },
+		SweepBlobFiles: func(_ context.Context, olderThan time.Time) int64 { asked = append(asked, olderThan); return 3 }}
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 3 || len(asked) != 1 || !asked[0].Equal(now.Add(-BlobGrace)) {
+		t.Fatalf("swept %+v, asked %v, want 3 files older than %v", swept, asked, now.Add(-BlobGrace))
+	}
+	sw.SweepBlobFiles = nil
+	if swept := sw.Sweep(context.Background()); swept.BlobFiles != 0 {
+		t.Fatalf("with no SweepBlobFiles: swept %+v", swept)
+	}
+}
+
+// api-http#7: a sweep deletes the attachments still pending PendingAttachmentAge after they were
+// created (an upload that never came, whose URL no call can sign again: the idempotency key that
+// re-signs it lives a day), on memstore and both engines, and keeps a younger pending one and a
+// ready one however old.
+func TestASweepDeletesTheStalePendingAttachments(t *testing.T) {
+	for _, b := range backends {
+		t.Run(b.name, func(t *testing.T) {
+			s := b.open(t)
+			ctx := context.Background()
+			p, err := s.CreateProject(ctx, store.CreateProjectInput{Name: "P", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bd, err := s.CreateBoard(ctx, store.CreateBoardInput{ProjectID: p.ID, Name: "B", CreatedBy: "alice"}, store.WriteOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := s.CreateTask(ctx, store.CreateTaskInput{ProjectID: p.ID, BoardID: bd.ID, ColumnID: bd.Columns[0].ID, Status: bd.Columns[0].Status, Title: "t", OrderKey: "a0", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attach := func() store.Attachment {
+				a, err := s.CreateAttachment(ctx, store.CreateAttachmentInput{ProjectID: p.ID, TaskID: task.ID, MimeType: "text/plain", Bytes: 1, Kind: store.AttachmentFile, CreatedBy: "alice"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return a
+			}
+			ready, pending := attach(), attach()
+			sha := strings.Repeat("c", 64)
+			if _, err := s.PutBlob(ctx, sha, 1); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SetAttachmentReady(ctx, p.ID, task.ID, ready.ID, sha); err != nil {
+				t.Fatal(err)
+			}
+			sw := &Sweeper{Store: s, Windows: WindowsOf(core.Retention{ChangeLogDays: 7, ToolCallsDays: 45}), Report: func(step string, err error) { t.Errorf("%s: %v", step, err) }}
+			sw.Now = func() time.Time { return time.Now().Add(PendingAttachmentAge - time.Minute) }
+			if swept := sw.Sweep(ctx); swept.PendingAttachments != 0 {
+				t.Fatalf("inside the age: swept %+v", swept)
+			}
+			sw.Now = func() time.Time { return time.Now().Add(PendingAttachmentAge + time.Minute) }
+			swept := sw.Sweep(ctx)
+			list, err := s.ListAttachments(ctx, p.ID, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if swept.PendingAttachments != 1 || len(list) != 1 || list[0].ID != ready.ID {
+				t.Fatalf("past the age: swept %+v, left %+v; want %s gone and the ready %s kept", swept, list, pending.ID, ready.ID)
 			}
 		})
 	}

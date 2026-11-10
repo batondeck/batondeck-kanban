@@ -57,9 +57,22 @@ func ParseListen(s string) (ListenAddr, error) {
 		if err != nil || u.Host != "" || !filepath.IsAbs(u.Path) || u.RawQuery != "" || u.Fragment != "" {
 			return ListenAddr{}, fmt.Errorf("listen %q: want unix:///absolute/path", s)
 		}
-		return ListenAddr{Network: NetworkUnix, Address: filepath.Clean(u.Path)}, nil
+		path := filepath.Clean(u.Path)
+		if err := socketPathFits(path); err != nil {
+			return ListenAddr{}, fmt.Errorf("listen %q: %w", s, err)
+		}
+		return ListenAddr{Network: NetworkUnix, Address: path}, nil
 	}
 	return ListenAddr{}, fmt.Errorf("listen %q: unknown scheme %q (want tcp or unix)", s, scheme)
+}
+
+// socketPathFits refuses a socket path longer than the kernel binds (MaxSocketPath), which bind
+// would refuse only as "invalid argument".
+func socketPathFits(path string) error {
+	if len(path) > MaxSocketPath {
+		return fmt.Errorf("the socket path %s is %d bytes; the limit is %d: choose a shorter path", path, len(path), MaxSocketPath)
+	}
+	return nil
 }
 
 // Listen binds a. A Unix socket's directory is made 0700 when missing; a socket file nobody answers
@@ -74,6 +87,9 @@ func Listen(a ListenAddr, logger *log.Logger) (net.Listener, error) {
 
 // listenUnix is Listen for a socket path in a directory uid owns, admitting peers of uid alone.
 func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) {
+	if err := socketPathFits(path); err != nil {
+		return nil, fmt.Errorf("unix socket: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
@@ -102,6 +118,32 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 		return nil, fmt.Errorf("unix socket %s: %w", path, err)
 	}
 	return &peerListener{Listener: ln, uid: uid, path: path, log: logger}, nil
+}
+
+// DialUnix connects to the Unix socket at path and refuses a server whose uid, read from the
+// kernel as Listen reads a client's, is not uid: a client about to send a bearer (session
+// register) or a session's peer token (a doorbell) sends it only to a server of its own uid,
+// whoever could have bound the path first.
+func DialUnix(ctx context.Context, path string, uid int) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, NetworkUnix, path)
+	if err != nil {
+		return nil, err
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s: not a Unix connection", path)
+	}
+	p, err := peerCred(uc)
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s: reading the server's uid: %w", path, err)
+	}
+	if p.UID != uid {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s is served by uid %d, not uid %d: refusing to write to it", path, p.UID, uid)
+	}
+	return c, nil
 }
 
 // privateDir refuses a socket directory that another user could replace the socket in: one not

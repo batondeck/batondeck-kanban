@@ -82,8 +82,11 @@ func listUsers(o *Options, w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// userVia is the audit rows' via for an account change made on the Settings page.
+const userVia = "settings"
+
 // addUser creates a member with a generated password, which this answer carries once: it is stored
-// only as its argon2id hash. The body is {login, displayName?}; any other key is VALIDATION, so a
+// only as its argon2id hash, and the account's user.added row names the admin who added it. The body is {login, displayName?}; any other key is VALIDATION, so a
 // role cannot be asked for here.
 func addUser(o *Options, w http.ResponseWriter, r *http.Request) error {
 	var in struct {
@@ -102,7 +105,8 @@ func addUser(o *Options, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	u, err := o.Users.Add(r.Context(), in.Login, strings.TrimSpace(in.DisplayName), password, false)
+	c, _ := auth.CallerFrom(r.Context())
+	u, err := o.Users.AddAs(r.Context(), c.Identity, userVia, in.Login, strings.TrimSpace(in.DisplayName), password, false)
 	if err != nil {
 		return err
 	}

@@ -160,7 +160,7 @@ tool is never interrupted.
   - A bypass receiver holds everything not attested as bypass.
 - **The attestation is self-asserted.** It is the `from-mode` attribute inside the `<cross-session-message>` envelope in `content`.
 - **Precedence.** Managed (`policySettings`) beats `--settings` (`flagSettings`), which beats user settings. Project and local settings can only tighten.
-- **The owner's sessions.** `~/.claude/settings.json` sets `crossSessionInbound: "accept"`, so on this machine every session that loads user settings delivers regardless of mode.
+- **The test machine's sessions.** Its user settings set `crossSessionInbound: "accept"`, so every session there that loads user settings delivers regardless of mode.
 
 ### 3.5 Lifecycle of the socket and the registry
 
@@ -246,7 +246,7 @@ cursor-agent -> ~/.local/bin/cursor-agent               2026.04.17-479fd04  (not
 
 - **Bypass-class receivers.** Starting a `bypassPermissions` throwaway was denied by this session's auto-mode classifier, and I did not work around it. "Held by default, delivered when the sender attests `bypass`" rests on the binary and the docs only.
 - The held-message approval dialog (approve or deny), and release of held messages when `accept` later applies.
-- `claude -p` workers, `--bg` background sessions, and Desktop or VS Code sessions. The owner's pid 12655 is the Desktop app's 2.1.308.
+- `claude -p` workers, `--bg` background sessions, and Desktop or VS Code sessions. The Desktop app on the test machine was 2.1.308.
 - Linux and native Windows (`authRequired` is true only on Windows), and any version other than 2.1.309.
 - Which token `SendMessage` sent: it was redacted at capture. That it is the peer token from the key file is inferred from the code and from the `(withheld)` behaviour in §3.2.
 - The rate-limit, duplicate-drop and 50-message queue thresholds: taken from the docs, not exercised.

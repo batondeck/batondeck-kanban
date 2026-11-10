@@ -45,11 +45,11 @@ func (a audit) ListAuditLog(ctx context.Context, caller domain.Caller, req ListA
 	if req.Subject != "" {
 		f.SubjectAlias = domain.CanonIdentity(req.Subject)
 	}
-	page, err := a.c.store.ListAuditLog(ctx, f, "", int(limit))
+	page, err := a.c.store.ListAuditLog(ctx, f, req.Cursor, int(limit))
 	if err != nil {
 		return resp, a.c.mapErr("list_audit_log", err)
 	}
-	resp = ListAuditLogResp{Days: float64(days), Entries: make([]AuditEntry, 0, len(page.Rows))}
+	resp = ListAuditLogResp{Days: float64(days), Entries: make([]AuditEntry, 0, len(page.Rows)), NextCursor: page.NextCursor}
 	for _, r := range page.Rows {
 		data := "{}"
 		if len(r.Data) > 0 {

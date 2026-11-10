@@ -7,7 +7,8 @@ import "fmt"
 //
 //	viewer  reads only.
 //	worker  pulls work, does it, reports on it: claims, the lease-guarded outcomes, annotations.
-//	master  plans and supervises: a worker's surface plus creating, moving and wiring tasks.
+//	master  plans and supervises: a worker's surface plus creating, moving and wiring tasks, adding
+//	        boards and columns, and deleting Chronicle pages.
 //	member  a human teammate: a master plus structural board edits.
 //	admin   the project admin: a member plus membership and settings.
 //

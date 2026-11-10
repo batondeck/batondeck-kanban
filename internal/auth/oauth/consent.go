@@ -30,7 +30,9 @@ var roleText = map[domain.Role]string{
 type loginPage struct {
 	Client string
 	Next   string
-	Failed bool
+	Failed bool // the login and password did not match (login=failed)
+	// Limited is the sign-in limit (login=limited): no password was checked.
+	Limited bool
 }
 
 type roleOption struct {
@@ -78,7 +80,8 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data any
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
-	h.Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: the sign-in form's POST must carry its Origin (auth.CSRF).
+	h.Set("Referrer-Policy", "same-origin")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
@@ -147,6 +150,6 @@ func (s *Server) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), auth.AuditEvent{Action: "oauth.consent.granted", Actor: sess.UserID,
-		Subject: "oauth_client:" + req.client.ClientID, Result: "ok", Data: map[string]any{"role": string(role), "resource": req.resource}})
+		Subject: "oauth_client:" + req.client.ClientID, Result: "ok", Data: map[string]any{"role": string(role), "resource": req.resource, "redirectUri": req.redirectURI}})
 	http.Redirect(w, r, withParams(req.redirectURI, map[string]string{"code": code, "state": req.state}), http.StatusSeeOther)
 }

@@ -227,6 +227,7 @@ type AttachmentBrief struct {
 	Bytes         float64          `json:"bytes"`
 	CreatedBy     string           `json:"createdBy"`
 	ExtractedText *string          `json:"extractedText"`
+	FileName      string           `json:"fileName"`
 	GCSURI        string           `json:"gcsUri"`
 	ID            string           `json:"id"`
 	Kind          MediaKind        `json:"kind"`

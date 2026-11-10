@@ -29,6 +29,10 @@ const (
 	HeaderAuthorize   = "Authorization"
 	rawBodyKeptMax    = 64 << 10
 	rejectionIDSuffix = "#rejected"
+	// maxEventsPerDelivery is the most distinct events (alerts) one delivery is ingested with: each is
+	// its own transaction, so of a larger delivery the rest are dropped and the cut is a rejected row
+	// (Alertmanager's max_alerts bounds a group).
+	maxEventsPerDelivery = 500
 )
 
 // HookRequest is one delivery as the route read it: its headers (Header is http.Header.Get) and
@@ -97,12 +101,14 @@ type HookResult struct {
 // presented (before any read), the integration by its id alone (unknown, tombstoned or disabled is
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
-// <source id or the body's hash>#<fingerprint or index>. The delivery is charged to the
-// integration's rate budget before it is verified, so a refused sender cannot buy an outbound JWKS
-// fetch past the budget (P-231); a verification or parse failure is paid by that charge and is a
-// rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
-// budget lasts). A delivery that parses gets the charge back before its events are ingested, since
-// ingest charges each new delivery id itself. The error is an internal fault only.
+// <the event's own key, the source's delivery id or the body's hash>#<fingerprint or index> (a part
+// over idPartMax bytes hashed); a body-hash id then gets a suffix, @<ingest ms> or @w<10-minute
+// slot>, so that it repeats only as a retry (deliveryRecord). The delivery is charged to the integration's rate budget before it is
+// verified, so a refused sender cannot buy an outbound JWKS fetch past the budget (P-231); a
+// verification or parse failure is paid by that charge and is a rejected delivery row (its raw body
+// kept for the raw-body window while the integration's hourly budget lasts). A delivery that parses
+// gets the charge back before its events are ingested, since ingest charges each new delivery id
+// itself. The error is an internal fault only.
 func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (HookOutcome, error) {
 	now := c.now()
 	refuse := func(why HookRefusal, format string, a ...any) (HookOutcome, error) {
@@ -142,14 +148,15 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		return HookOutcome{Refusal: HookRateLimited, RetryAfter: rateRetryAfter(int(limits.RatePerMin))}, nil
 	}
 	if reason, challenge := c.verifyHook(ctx, integration, r, now); reason != "" {
-		c.log.Printf("ingest: integration %s refused a delivery's signature: %s", integration.ID, reason)
+		c.log.Printf("ingest: integration %s refused a delivery's signature: %q", integration.ID, reason)
 		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
 		return HookOutcome{Refusal: HookUnauthorized, Challenge: challenge}, nil
 	}
 	badRequest := func(reason string) (HookOutcome, error) {
-		c.log.Printf("ingest: integration %s refused a delivery: %s", integration.ID, reason)
+		reason = capReason(connectors.StripNUL(reason))
+		c.log.Printf("ingest: integration %s refused a delivery: %q", integration.ID, reason)
 		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
@@ -171,40 +178,75 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	cc := connectors.Context{Mapping: &mapping, BodyHash: bodyHash, Now: now}
 	events, err := conn.Events(payload, cc)
 	if err != nil {
-		reason := "unrecognized_payload: " + err.Error()
-		if rs := []rune(reason); len(rs) > 500 {
-			reason = string(rs[:500])
-		}
-		return badRequest(reason)
+		return badRequest("unrecognized_payload: " + err.Error())
 	}
-	base := conn.DeliveryID(payload, cc)
-	if base == "" {
+	// A source's own id is a delivery's for the delivery window; the body's hash, when the source
+	// has none, only for a retry (deliveryRecord).
+	base := idPart(connectors.StripNUL(conn.DeliveryID(payload, cc)))
+	hashed := base == ""
+	if hashed {
 		base = bodyHash
 	}
-	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
-	// one token per new delivery id and none for a recorded one, so the charge is given back.
-	c.limiter.Refund(integration.ID, int(limits.RatePerMin))
-	caller := domain.Caller{Identity: IngestActor(integration.ID)}
-	out := HookOutcome{Results: []HookResult{}}
+	type pending struct {
+		ev         oncall.Event
+		deliveryID string
+		hashed     bool
+	}
+	// One verified delivery buys a bounded amount of work: an event whose delivery id repeats within
+	// it is ingested once (it is the same alert), and of more distinct events than
+	// maxEventsPerDelivery only the first are ingested, the cut a rejected row paid by the charge.
+	todo, seen := make([]pending, 0, min(len(events), maxEventsPerDelivery+1)), map[string]bool{}
 	for i, ev := range events {
 		// The fingerprint qualifies the id, so a grouped delivery's alerts never collapse into one.
-		key := ev.Fingerprint
+		key := idPart(ev.Fingerprint)
 		if key == "" {
 			key = strconv.Itoa(i)
 		}
-		deliveryID := base + "#" + key
-		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID)
+		id, idHashed := base, hashed
+		if ev.DeliveryKey != "" {
+			id, idHashed = idPart(connectors.StripNUL(ev.DeliveryKey)), false
+		}
+		if deliveryID := id + "#" + key; !seen[deliveryID] {
+			seen[deliveryID] = true
+			todo = append(todo, pending{ev: ev, deliveryID: deliveryID, hashed: idHashed})
+		}
+	}
+	if n := len(todo); n > maxEventsPerDelivery {
+		// Not refused: a 4xx has Alertmanager drop the whole group, in the outage that made it this
+		// big. The cut is where the operator looks, and the charge pays for its row.
+		reason := fmt.Sprintf("too_many_events: the delivery carries %d distinct alerts, over the %d one delivery is ingested with; the first %d were ingested and %d dropped; have the sender split its groups (Alertmanager: max_alerts)",
+			n, maxEventsPerDelivery, maxEventsPerDelivery, n-maxEventsPerDelivery)
+		c.log.Printf("ingest: integration %s cut a delivery: %s", integration.ID, reason)
+		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
+			return HookOutcome{}, err
+		}
+		todo = todo[:maxEventsPerDelivery]
+	} else {
+		// The delivery parsed: its events pay as they did before the charge moved ahead of
+		// verification, one token per new delivery id and none for a recorded one, so the charge is
+		// given back.
+		c.limiter.Refund(integration.ID, int(limits.RatePerMin))
+	}
+	caller := domain.Caller{Identity: IngestActor(integration.ID)}
+	out := HookOutcome{Results: []HookResult{}}
+	for _, p := range todo {
+		ev, deliveryID := p.ev, p.deliveryID
+		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID, p.hashed)
 		if e, ok := domain.AsBatonDeckError(err); ok {
 			if e.Code == domain.CodeRateLimited {
 				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))
 				return out, nil
 			}
-			c.log.Printf("ingest: integration %s delivery %s refused: %s %s", integration.ID, deliveryID, e.Code, e.Message)
+			c.log.Printf("ingest: integration %s delivery %q refused: %s %q", integration.ID, deliveryID, e.Code, e.Message)
 			if e.Retryable {
 				// Nothing of this event landed (its transaction rolled back), and the events before it
 				// are recorded, so the sender's retry replays them and lands this one once.
 				out.Refusal, out.Code, out.Detail, out.RetryAfter = HookUnavailable, string(e.Code), e.Message, 1
 				return out, nil
+			}
+			// Not retryable: the sender drops it, so the refusal is recorded where the operator looks.
+			if err := c.reject(ctx, integration, r.Body, e.Message, now); err != nil {
+				return HookOutcome{}, err
 			}
 			out.Refusal, out.Detail = HookBadRequest, e.Message
 			return out, nil
@@ -216,10 +258,24 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		if got.TaskID != nil {
 			task = *got.TaskID
 		}
-		c.log.Printf("ingest: integration %s delivery %s %s task %s doorbell %s replayed %t", integration.ID, deliveryID, got.Result, task, got.Doorbell, got.Replayed)
-		out.Results = append(out.Results, HookResult{DeliveryID: deliveryID, Result: string(got.Result), TaskID: got.TaskID, Replayed: got.Replayed})
+		c.log.Printf("ingest: integration %s delivery %q %s task %s doorbell %s replayed %t", integration.ID, got.DeliveryID, got.Result, task, got.Doorbell, got.Replayed)
+		out.Results = append(out.Results, HookResult{DeliveryID: got.DeliveryID, Result: string(got.Result), TaskID: got.TaskID, Replayed: got.Replayed})
 	}
 	return out, nil
+}
+
+// idPartMax is the most bytes of a sender's delivery id or fingerprint a delivery id carries as
+// sent; a longer one is replaced by idPart's hash.
+const idPartMax = 200
+
+// idPart is s as one part of a delivery id: as sent when it is at most idPartMax bytes, else
+// "sha256:" and 32 hex of its hash, so the id stays within replay_delivery's and read_delivery_raw's
+// 1024 characters and the same long id still names the same delivery.
+func idPart(s string) string {
+	if len(s) <= idPartMax {
+		return s
+	}
+	return "sha256:" + connectors.Sha256Hex([]byte(s))[:32]
 }
 
 // verifyHook verifies r by integration's auth mode: "" when it passes, else the reason, and
@@ -246,7 +302,8 @@ func (c *Core) verifyHook(ctx context.Context, integration store.Integration, r 
 		if a.JWT == nil {
 			return "jwt_not_configured", false
 		}
-		why, ok := c.jwt.Verify(ctx, r.Header(HeaderAuthorize), auth.JWT{Issuer: a.JWT.Issuer, Audience: a.JWT.Audience, JWKSURL: a.JWT.JWKSURL}, integration.ID)
+		cfg := auth.JWT{Issuer: a.JWT.Issuer, Audience: a.JWT.Audience, JWKSURL: a.JWT.JWKSURL, Subject: a.JWT.Subject, Email: a.JWT.Email}
+		why, ok := c.jwt.Verify(ctx, r.Header(HeaderAuthorize), cfg, integration.ID)
 		if !ok {
 			return why, false
 		}
@@ -256,9 +313,11 @@ func (c *Core) verifyHook(ctx context.Context, integration store.Integration, r 
 		if why != "" {
 			return why, false
 		}
-		// PagerDuty signs the raw body with its own secret and no timestamp; the rest sign BatonDeck's.
+		// PagerDuty signs the raw body with its own secret and no timestamp; every other source signs
+		// BatonDeck's timestamped form, whether its secret was minted or pasted (externallyIssued
+		// only means it was never shown back), so the catalog's "replay-bounded" holds for it.
 		var ok bool
-		if integration.Source == "pagerduty" || a.HMAC.ExternallyIssued {
+		if integration.Source == "pagerduty" {
 			sig := r.Header(HeaderPagerDuty)
 			if sig == "" {
 				sig = r.Header(HeaderSignature)
@@ -300,13 +359,29 @@ func (c *Core) hookSecrets(integration store.Integration, a oncall.Auth, now tim
 	return nil, "secret_unavailable"
 }
 
-// reject records a refused delivery (kind and result rejected, the reason its error), already paid
-// by Hook's charge ahead of verification (P-231), so it charges nothing itself. The raw body (its
-// first 64 KiB) is kept for the raw-body window while the integration's hourly budget of
-// oncall.RejectionsPerHour lasts. Its id is the body's hash, so a sender repeating one body is
-// recorded once.
+// rejectionReasonMax is the most runes of a refusal reason a rejected delivery's error keeps: a
+// reason can carry the sender's text (a connector's error naming a field, a token header's alg),
+// and the row is written for a sender who may hold no credential at all.
+const rejectionReasonMax = 500
+
+// capReason is reason cut to rejectionReasonMax runes.
+func capReason(reason string) string {
+	if rs := []rune(reason); len(rs) > rejectionReasonMax {
+		return string(rs[:rejectionReasonMax])
+	}
+	return reason
+}
+
+// reject records a refused delivery (kind and result rejected, the reason its error, without NULs
+// since it may quote the payload, and cut to rejectionReasonMax runes), already paid by Hook's charge ahead of verification (P-231), so
+// it charges nothing itself. The raw body (its first 64 KiB) is kept for the raw-body window while
+// the integration's hourly budget of oncall.RejectionsPerHour lasts. Its id is the hash of the
+// reason and the body, qualified by the hour: a sender repeating one body for one reason is recorded
+// once an hour, and a new reason for it (the key fixed, the body still wrong) at once.
 func (c *Core) reject(ctx context.Context, integration store.Integration, body []byte, reason string, now time.Time) error {
-	deliveryID := connectors.Sha256Hex(body)[:32] + rejectionIDSuffix
+	reason = capReason(connectors.StripNUL(reason))
+	hashed := append([]byte(reason+"\n"), body...)
+	deliveryID := connectors.Sha256Hex(hashed)[:32] + "@h" + strconv.FormatInt(now.Unix()/3600, 10) + rejectionIDSuffix
 	err := c.store.Atomically(ctx, func(tx store.Store) error {
 		_, inserted, err := tx.InsertDelivery(ctx, store.Delivery{
 			ProjectID: integration.ProjectID, IntegrationID: integration.ID, DeliveryID: deliveryID, TS: now.UnixMilli(),

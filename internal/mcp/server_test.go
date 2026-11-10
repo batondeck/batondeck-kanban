@@ -118,6 +118,14 @@ func TestInitializeAnswersTheSurface(t *testing.T) {
 	if err != nil || len(tpl.ResourceTemplates) != 11 {
 		t.Errorf("resources/templates/list = %+v, %v; want the eleven templates (five board and task, six chronicle)", tpl, err)
 	}
+	// Every list is the caller's own (tools/list is filtered per audience): no cache shared across
+	// callers may serve it, so none is labelled public, the protocol default.
+	for name, scope := range map[string]string{"tools/list": tools.CacheScope, "prompts/list": prompts.CacheScope,
+		"resources/list": res.CacheScope, "resources/templates/list": tpl.CacheScope} {
+		if scope != "private" {
+			t.Errorf("%s cacheScope %q, want private", name, scope)
+		}
+	}
 
 	touches := calls(f, "Sessions.TouchAgentSession")
 	if len(touches) == 0 {
@@ -275,6 +283,9 @@ func plant(h *harness) {
 	AddTool(h.srv, &mcp.Tool{Name: "rpcerr"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
 		return nil, plantOut{}, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "planted protocol error"}
 	})
+	AddTool(h.srv, &mcp.Tool{Name: "rpcfault"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		return nil, plantOut{}, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "planted protocol fault"}
+	})
 	AddTool(h.srv, &mcp.Tool{Name: "plain"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
 		return nil, plantOut{}, errors.New("planted plain error")
 	})
@@ -418,15 +429,19 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A name nobody registered: go-sdk refuses it, and the caller's free text names no project.
+	// A name nobody registered: go-sdk refuses it, and the row carries neither the caller's free text
+	// nor a project, only unknownTool.
 	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "BUY-CHEAP-PILLS-example.com", Arguments: map[string]any{"projectId": "P-1"}})
+	// Arguments go-sdk refuses against the input schema: no service judged the caller's membership,
+	// so the project the arguments name is not the row's.
+	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1", "bogus": 1}})
 	var got []string
 	for _, c := range calls(f, "ToolCalls.Record") {
 		r := c.Req.(service.RecordToolCallReq)
 		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code+" "+r.ProjectID)
 	}
 	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1",
-		"u-ada denied error FORBIDDEN ", "u-ada BUY-CHEAP-PILLS-example.com error INTERNAL "}
+		"u-ada denied error FORBIDDEN ", "u-ada " + unknownTool + " error VALIDATION ", "u-ada whoami error VALIDATION "}
 	if !slices.Equal(got, want) {
 		t.Errorf("tool_calls rows = %q, want %q", got, want)
 	}
@@ -597,9 +612,10 @@ func waitFor(t *testing.T, cond func() bool) {
 
 // A protocol error from tools/call (an unknown tool, a handler's *jsonrpc.Error) reaches the
 // client as a JSON-RPC error, is recorded once, and leaves the server serving: go-sdk hands the
-// middleware a typed-nil result beside the error.
+// middleware a typed-nil result beside the error. The row's code is the one the client was told:
+// invalid params (-32602, an unknown tool's) is VALIDATION, any other protocol error INTERNAL.
 func TestProtocolErrorsLeaveTheServerServing(t *testing.T) {
-	for _, name := range []string{"nosuch", "rpcerr"} {
+	for name, code := range map[string]string{"nosuch": "VALIDATION", "rpcerr": "VALIDATION", "rpcfault": "INTERNAL"} {
 		t.Run(name, func(t *testing.T) {
 			f := servicefake.New()
 			h := bootHarness(t, f.Services(), resolver())
@@ -616,7 +632,11 @@ func TestProtocolErrorsLeaveTheServerServing(t *testing.T) {
 				r := c.Req.(service.RecordToolCallReq)
 				rows = append(rows, r.Tool+" "+r.Outcome+" "+r.Code)
 			}
-			if want := []string{name + " error INTERNAL"}; !slices.Equal(rows, want) {
+			recorded := name
+			if name == "nosuch" {
+				recorded = unknownTool // the caller's free text is never stored
+			}
+			if want := []string{recorded + " error " + code}; !slices.Equal(rows, want) {
 				t.Errorf("tool_calls rows = %q, want %q", rows, want)
 			}
 		})

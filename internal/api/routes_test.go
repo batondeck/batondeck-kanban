@@ -141,6 +141,26 @@ func TestRouteArguments(t *testing.T) {
 	}
 }
 
+// A body is one JSON object and nothing after it: trailing bytes, even ones that start with } or ]
+// (which json.Decoder.More does not count as another value), are 400 VALIDATION and reach no
+// service.
+func TestRouteBodyIsOneJSONValue(t *testing.T) {
+	f := servicefake.New()
+	h := newHarness(t, fakeServices(f))
+	n := len(f.Calls())
+	for _, body := range []string{`{"name":"trail"}}}]`, `{"name":"trail"}]{"name":"x"}`, `{"name":"trail"}{"name":"x"}`, `{"name":"trail"} x`} {
+		if code, resp := h.do("POST", "/api/projects", body, nil); code != 400 || !strings.Contains(resp, `"VALIDATION"`) {
+			t.Errorf("body %s: %d %s, want 400 VALIDATION", body, code, resp)
+		}
+	}
+	if len(f.Calls()) != n {
+		t.Fatalf("a refused body reached the service: %+v", f.Calls()[n:])
+	}
+	if code, resp := h.do("POST", "/api/projects", "{\"name\":\"trail\"}\n", nil); code != 200 {
+		t.Fatalf("one object and a newline: %d %s", code, resp)
+	}
+}
+
 // Requirement 4: a service error is ui-backend's status for its code and {code, message, details}.
 func TestRouteErrorShape(t *testing.T) {
 	f := servicefake.New()

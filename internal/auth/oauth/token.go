@@ -133,6 +133,9 @@ func (s *Server) exchangeCode(ctx context.Context, code, verifier, clientID, red
 		if refused != nil {
 			return nil
 		}
+		if refused, err = accountRefusal(ctx, tx, c.IdentityID); refused != nil || err != nil {
+			return err
+		}
 		fam := store.OAuthFamily{ID: familyOf(hash), ClientID: c.ClientID, IdentityID: c.IdentityID,
 			Scope: c.Scope, Resource: c.Resource, CreatedAt: now.UnixMilli()}
 		if err := tx.CreateOAuthFamily(ctx, fam); err != nil {
@@ -204,6 +207,11 @@ func (s *Server) refresh(ctx context.Context, token, clientID, resource, scope s
 			refused = invalidGrant("invalid or expired refresh token")
 			return nil
 		}
+		// A disabled account's grant is not refreshed (nor its token spent), so it cannot slide
+		// forward while the account is disabled; once enabled, the unexpired token works again.
+		if refused, err = accountRefusal(ctx, tx, t.IdentityID); refused != nil || err != nil {
+			return err
+		}
 		// The request is judged whole before the token is spent: a refusal here leaves it usable.
 		fam, err := tx.GetOAuthFamily(ctx, t.FamilyID)
 		if err != nil {
@@ -242,6 +250,22 @@ func (s *Server) refresh(ctx context.Context, token, clientID, resource, scope s
 		return issued{}, refused
 	}
 	return out, nil
+}
+
+// accountRefusal is the grant refusal for an identity that cannot act: a disabled or missing
+// account (read through tx, not the resolver's 60 s cache). nil, nil when it can.
+func accountRefusal(ctx context.Context, tx store.Store, identityID string) (*grantError, error) {
+	u, err := tx.GetUser(ctx, identityID)
+	if errors.Is(err, store.ErrNotFound) {
+		return invalidGrant("the grant's account no longer exists"), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if u.DisabledAt != 0 {
+		return invalidGrant("the grant's account is disabled"), nil
+	}
+	return nil, nil
 }
 
 // narrowest is the highest role a refresh's scope names, if it is at most the granted one.

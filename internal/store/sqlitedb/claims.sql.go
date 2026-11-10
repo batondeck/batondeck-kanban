@@ -14,25 +14,28 @@ const claimNext = `-- name: ClaimNext :one
 
 UPDATE tasks SET status = 'IN_PROGRESS',
   column_id = CASE WHEN CAST(?1 AS TEXT) = '' THEN column_id ELSE CAST(?1 AS TEXT) END,
-  claim_owner = CAST(?2 AS TEXT), claim_agent = CAST(?3 AS TEXT), claim_agent_id = CAST(?4 AS TEXT),
-  lease_id = CAST(?5 AS TEXT), lease_expires_at = CAST(?6 AS INTEGER), next_eligible_at = NULL,
-  version = version + 1, updated_by = CAST(?2 AS TEXT), updated_at = CAST(?7 AS INTEGER)
+  order_key = CASE WHEN CAST(?2 AS TEXT) = '' THEN order_key ELSE CAST(?2 AS TEXT) END,
+  claim_owner = CAST(?3 AS TEXT), claim_agent = CAST(?4 AS TEXT), claim_agent_id = CAST(?5 AS TEXT),
+  lease_id = CAST(?6 AS TEXT), lease_expires_at = CAST(?7 AS INTEGER), next_eligible_at = NULL,
+  version = version + 1, updated_by = CAST(?3 AS TEXT), updated_at = CAST(?8 AS INTEGER)
 WHERE rid = (
-  SELECT f.rid FROM tasks f, (SELECT CAST(?8 AS TEXT) AS caps, CAST(?9 AS TEXT) AS sprint, CAST(?10 AS TEXT) AS only_ids) p
-  WHERE f.project_id = ?11 AND f.board_id = ?12 AND f.status = 'TODO'
+  SELECT f.rid FROM tasks f, (SELECT CAST(?9 AS TEXT) AS caps, CAST(?10 AS TEXT) AS sprint, CAST(?11 AS TEXT) AS only_ids) p
+  WHERE f.project_id = ?12 AND f.board_id = ?13 AND f.status = 'TODO'
     AND json_array_length(f.blocked_by) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
-    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?7 AS INTEGER))
-    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?7 AS INTEGER))
-    AND (CASE WHEN CAST(?13 AS TEXT) IS NULL
-          THEN f.assignee IS NULL OR f.assignee = CAST(?14 AS TEXT)
-            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?14 AS TEXT))
-          ELSE f.assignee = CAST(?13 AS TEXT) END)
+    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?8 AS INTEGER))
+    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?8 AS INTEGER))
+    AND (CASE WHEN CAST(?14 AS TEXT) IS NULL
+          THEN f.assignee IS NULL OR f.assignee = CAST(?15 AS TEXT)
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?15 AS TEXT))
+          ELSE f.assignee = CAST(?14 AS TEXT) END)
     AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
       SELECT 1 FROM json_each(f.required_capabilities) r
       WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
-    AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint))
+    AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par, json_each(par.sprint_ids) ps
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND ps.value = p.sprint)))
     AND (p.only_ids = 'null' OR EXISTS (SELECT 1 FROM json_each(p.only_ids) o WHERE o.value = f.id))
     AND (CAST(?1 AS TEXT) = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = CAST(?1 AS TEXT)))
@@ -44,20 +47,21 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 `
 
 type ClaimNextParams struct {
-	ColumnID  string
-	Owner     string
-	Agent     sql.NullString
-	AgentID   sql.NullString
-	LeaseID   string
-	ExpiresAt int64
-	Now       int64
-	Caps      string
-	SprintID  string
-	OnlyIds   string
-	ProjectID string
-	BoardID   string
-	Assignee  sql.NullString
-	Caller    string
+	ColumnID        string
+	LandingOrderKey string
+	Owner           string
+	Agent           sql.NullString
+	AgentID         sql.NullString
+	LeaseID         string
+	ExpiresAt       int64
+	Now             int64
+	Caps            string
+	SprintID        string
+	OnlyIds         string
+	ProjectID       string
+	BoardID         string
+	Assignee        sql.NullString
+	Caller          string
 }
 
 type ClaimNextRow struct {
@@ -111,18 +115,21 @@ type ClaimNextRow struct {
 // with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 // the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 // tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
-// of that sprint (its id in sprint_ids), with only_ids (a JSON array; JSON null for no filter) only
+// of that sprint (its id in sprint_ids) and the runs of its members (run_of a task whose sprint_ids hold
+// it: a raced member's work is in its runs), with only_ids (a JSON array; JSON null for no filter) only
 // the tasks it names. caps, sprint_id and only_ids are read once, as the derived table p:
 // sqlc does not bind a parameter nested deeper than one subquery under json_each. Best first: score
 // descending, then priority (urgent, high, normal, low), then order key and id as bytes (SQLite's
 // BINARY collation).
 // ClaimNext in ONE statement. The connection is the store's single writer, and the statement's own
 // transaction takes the write lock before it reads the frontier, so two callers cannot pick the same
-// row. column_id ” keeps the task's column; a column that is not the board's matches no row, and
-// the caller tells that apart from an empty frontier.
+// row. column_id ” keeps the task's column; landing_order_key ” keeps its order key, another is the
+// caller's fresh key at the head of the column the task lands in. A column that is not the board's
+// matches no row, and the caller tells that apart from an empty frontier.
 func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNextRow, error) {
 	row := q.db.QueryRowContext(ctx, claimNext,
 		arg.ColumnID,
+		arg.LandingOrderKey,
 		arg.Owner,
 		arg.Agent,
 		arg.AgentID,
@@ -464,24 +471,27 @@ WHERE f.project_id = ?4 AND f.board_id = ?5 AND f.status = 'TODO'
   AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
     SELECT 1 FROM json_each(f.required_capabilities) r
     WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
-  AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint))
+  AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint)
+    OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par, json_each(par.sprint_ids) ps
+      WHERE par.project_id = f.project_id AND par.id = f.run_of AND ps.value = p.sprint)))
   AND (p.only_ids = 'null' OR EXISTS (SELECT 1 FROM json_each(p.only_ids) o WHERE o.value = f.id))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key, f.id
-LIMIT ?9
+LIMIT ?10 OFFSET ?9
 `
 
 type PreviewFrontierParams struct {
-	Caps      string
-	SprintID  string
-	OnlyIds   string
-	ProjectID string
-	BoardID   string
-	Now       int64
-	Assignee  sql.NullString
-	Caller    string
-	PageLimit int64
+	Caps       string
+	SprintID   string
+	OnlyIds    string
+	ProjectID  string
+	BoardID    string
+	Now        int64
+	Assignee   sql.NullString
+	Caller     string
+	PageOffset int64
+	PageLimit  int64
 }
 
 type PreviewFrontierRow struct {
@@ -540,6 +550,7 @@ func (q *Queries) PreviewFrontier(ctx context.Context, arg PreviewFrontierParams
 		arg.Now,
 		arg.Assignee,
 		arg.Caller,
+		arg.PageOffset,
 		arg.PageLimit,
 	)
 	if err != nil {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -140,14 +141,16 @@ func callerAgent(c domain.Caller) *string {
 }
 
 // Create is create_task (conductor tasks.ts:102-160): the task lands TODO (ADR-0005), in columnId,
-// which must be a TODO column, or the board's first TODO column; its T-n is the project's next (the
-// store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
+// which must be a TODO column, or the board's first TODO column, after the column's last task
+// (endOfColumn); its T-n is the project's next (the store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
 // assignee). With sprintId the task is created a member of that sprint in the same transaction, as
 // set_sprint add makes one (P-239): the sprint must exist (NOT_FOUND), be on the task's board
 // (VALIDATION) and pass domain.CheckSprintMembership; its memberCount moves by one and the task gets
-// sprint.task_added {sprintId, memberCount}. Without sprintId no statement is added.
+// sprint.task_added {sprintId, memberCount}, under the project lock. Without sprintId no statement
+// is added.
 func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels}, false)
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels,
+		Priorities: []domain.Priority{cmp.Or(req.Priority, domain.PriorityNormal)}}, false)
 	if err != nil {
 		return CreateTaskResp{}, err
 	}
@@ -202,7 +205,10 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_task", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
+		// With sprintId, the project lock orders the sprint's read before update_sprint's close
+		// (Sprints.Set's reason); without it no statement is added.
+		LockProject: req.SprintID != "",
 	}, func(t *txn) (CreateTaskResp, error) {
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, req.BoardID)
 		if err != nil {
@@ -243,7 +249,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 			}
 			sprintIDs = []string{sprint.ID}
 		}
-		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
+		order, err := endOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return CreateTaskResp{}, err
 		}
@@ -315,7 +321,11 @@ func (s tasksSvc) Get(ctx context.Context, caller domain.Caller, req GetTaskReq)
 // autoAssign's resolution is not carried (no agent-profile store): autoAssign beside patch.assignee
 // is conductor's VALIDATION, and autoAssign alone is VALIDATION too.
 func (s tasksSvc) Update(ctx context.Context, caller domain.Caller, req UpdateTaskReq) (UpdateTaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_task", domain.GrantSubject{Labels: req.Patch.Labels}, true)
+	subject := domain.GrantSubject{Labels: req.Patch.Labels}
+	if req.Patch.Priority != "" {
+		subject.Priorities = []domain.Priority{req.Patch.Priority}
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_task", subject, true)
 	if err != nil {
 		return UpdateTaskResp{}, err
 	}
@@ -499,7 +509,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		}
 	}
 	if req.Order != "" && !domain.IsValidOrder(req.Order) {
-		return MoveTaskResp{}, domain.Validation("Invalid order key: "+req.Order, map[string]any{"field": "order"})
+		return MoveTaskResp{}, domain.Validation(fmt.Sprintf("Invalid order key: %.80q (at most %d characters of 0-9, A-Z and a-z)", req.Order, domain.MaxOrderKeyLen), map[string]any{"field": "order"})
 	}
 	version := req.Version
 	// The project lock, first in the transaction (before mutate's FOR UPDATE read of the task, so the
@@ -517,7 +527,11 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 			return MoveTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
+		yields, err := leaseYields(ctx, t.Tx, cur, caller, a.Role, t.Now.UnixMilli())
+		if err != nil {
+			return MoveTaskResp{}, err
+		}
+		if !yields {
 			return MoveTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
@@ -546,7 +560,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		}
 		order := d.Order
 		if order == "" && d.NeedsEndOfColumnOrder {
-			if order, err = headOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
+			if order, err = endOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
 				return MoveTaskResp{}, err
 			}
 		}
@@ -632,9 +646,13 @@ func (t *txn) unblockDependentsOf(clearedID string, skip map[string]bool) error 
 	return nil
 }
 
-// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent).
+// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent). The
+// dependent is read locked (LockTask; the caller holds the project lock, so the order stays project
+// then tasks): unblockDependent writes it at the version read, and a writer that takes no project
+// lock (update_task, add_context_item) must not move it in between, or a versioned move_task,
+// cancel_task or delete_task would fail STALE quoting the dependent's versions, not its own.
 func (t *txn) unblockOne(depID, clearedID string) error {
-	dep, err := t.Tx.GetTask(t.ctx, t.ProjectID, depID)
+	dep, err := t.Tx.LockTask(t.ctx, t.ProjectID, depID)
 	if err != nil {
 		return err
 	}

@@ -369,3 +369,52 @@ func TestDeleteCascadeOver200Runs(t *testing.T) {
 		}
 	})
 }
+
+// A deleted sprint member leaves the sprint's memberCount: deleting a member, and deleting a parent
+// whose subtask is a member, each lower it by one, so a sprint that once held its cap takes members
+// again once it holds fewer.
+func TestDeleteLowersTheSprintMemberCount(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		sp, err := e.c.Sprints().Create(e.ctx, e.alice, CreateSprintReq{ProjectID: e.project, BoardID: e.board.ID, Name: "s", Goal: "g", Acceptance: "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := func(t *testing.T) int64 {
+			t.Helper()
+			got, err := e.st.GetSprint(e.ctx, e.project, sp.Sprint.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return got.MemberCount
+		}
+		var members []string
+		for range 3 {
+			r, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "m", SprintID: sp.Sprint.ID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			members = append(members, r.Task.ID)
+		}
+		parent := e.tkSeed(t, domain.Todo, "", 0, nil)
+		sub, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "sub", SprintID: sp.Sprint.ID, ParentTaskID: &parent.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t); n != 4 {
+			t.Fatalf("after four creates memberCount=%d, want 4", n)
+		}
+		if err := e.tkDelete(e.alice, e.get(t, members[0])); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t); n != 3 {
+			t.Fatalf("after deleting member %s: memberCount=%d, want 3", members[0], n)
+		}
+		if err := e.tkDelete(e.alice, e.get(t, parent.ID)); err != nil {
+			t.Fatal(err)
+		}
+		e.tkGone(t, sub.Task.ID)
+		if n := count(t); n != 2 {
+			t.Fatalf("after deleting %s's parent: memberCount=%d, want 2", sub.Task.ID, n)
+		}
+	})
+}

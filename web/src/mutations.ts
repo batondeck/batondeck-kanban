@@ -5,6 +5,7 @@
  */
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import * as boardsApi from './api/boards.js';
+import { isLocalEdit } from './api/http.js';
 import type { Task } from './types.js';
 
 type TaskPage = { tasks: Task[]; nextCursor?: string };
@@ -36,6 +37,9 @@ export type Snapshot = Array<[readonly unknown[], unknown]>;
  * MERGE RATHER THAN SKIP: every other task in the snapshot still lands, so a colleague's change to a
  * different card is not delayed by your in-flight drag.
  *
+ * NEWER WINS. A local copy older than the snapshot's (the server already applied this tab's write) is
+ * not kept: the snapshot holds the write, and the local copy's version is spent.
+ *
  * `isLocal` is injected (production passes `isLocalEdit`) so this is testable without faking timers.
  */
 export function mergeSnapshotPreservingLocalEdits(
@@ -46,7 +50,66 @@ export function mergeSnapshotPreservingLocalEdits(
   if (!old?.tasks?.length || !incoming.tasks?.length) return incoming;
   const mine = new Map(old.tasks.filter((t) => isLocal(t.id)).map((t) => [t.id, t]));
   if (mine.size === 0) return incoming;
-  return { ...incoming, tasks: incoming.tasks.map((t) => mine.get(t.id) ?? t) };
+  // A local copy is kept only while the snapshot is not newer: an optimistic patch keeps the version
+  // it was made from, so a snapshot at a later version already holds this tab's write, and keeping the
+  // older copy would send its stale version with the next write (STALE, and the card snaps back).
+  return { ...incoming, tasks: incoming.tasks.map((t) => { const m = mine.get(t.id); return m && m.version >= t.version ? m : t; }) };
+}
+
+/**
+ * Write a board frame's task page over a cached list that may hold MORE than that page.
+ *
+ * A frame carries the board's first page only (200 tasks, internal/api/stream.go boardTasksLimit),
+ * with its cursor when the board holds more. Written over a list that "Load more" grew, it would drop
+ * every row past its page and bring the button back. So the frame stands for the first page, and the
+ * cached rows past it are kept, less any the frame now carries. A frame with no cursor holds the
+ * whole board and replaces the list outright. The kept rows are as fresh as the last read of them:
+ * the board refetches the list when it keeps any (Board.tsx).
+ */
+export function mergeFirstPage(old: TaskPage | undefined, frame: TaskPage): TaskPage {
+  if (!frame.nextCursor || !old?.tasks || old.tasks.length <= frame.tasks.length) return frame;
+  const inFrame = new Set(frame.tasks.map((t) => t.id));
+  const rest = old.tasks.slice(frame.tasks.length).filter((t) => !inFrame.has(t.id));
+  if (rest.length === 0) return frame;
+  return { tasks: [...frame.tasks, ...rest], ...(old.nextCursor ? { nextCursor: old.nextCursor } : {}) };
+}
+
+/** The newest board frame's task page, per board, numbered across boards. */
+const boardFrames = new Map<string, { seq: number; page: TaskPage }>();
+let boardFrameSeq = 0;
+
+/** Note a board frame's task page, for `readBoardTasks` (Board.tsx calls it for every frame). */
+export function recordBoardFrame(projectId: string, boardId: string, page: TaskPage): void {
+  boardFrames.set(`${projectId}/${boardId}`, { seq: ++boardFrameSeq, page });
+}
+
+/**
+ * Read a board's task list (up to `want` rows, page by page), consistent with the stream's frames.
+ *
+ * A frame that lands while the read is out is newer than the read, which would put the older rows back
+ * when it answers. The read is NOT restarted for it: a board busier than a read is long then sent one
+ * full list_tasks per frame, each run to the end by the server, none of them used. Instead the answer
+ * gets the newest frame laid over it, as Board.tsx lays a frame over the cache, keeping my own in-flight
+ * edits from the list at `editsFrom` (default: the one being read). A frame holds the first page only, so
+ * when the answer runs past it, the rows past it may predate the change: the list is then read once
+ * more, after this read and never beside it.
+ *
+ * Every observer of a board list reads through this (Board, the ticket drawer): an entry runs the read
+ * of whichever observer rendered last.
+ */
+export async function readBoardTasks(qc: QueryClient, projectId: string, boardId: string, want: number, editsFrom?: readonly unknown[]): Promise<TaskPage> {
+  const board = `${projectId}/${boardId}`;
+  const before = boardFrames.get(board)?.seq ?? 0;
+  const read = await boardsApi.listTasksUpTo(projectId, boardId, want);
+  const last = boardFrames.get(board);
+  if (!last || last.seq === before) return read;
+  const key = boardTasksKey(projectId, boardId, want);
+  const out = mergeSnapshotPreservingLocalEdits(qc.getQueryData<TaskPage>(editsFrom ?? key), mergeFirstPage(read, last.page), isLocalEdit);
+  if (out.tasks.length > last.page.tasks.length) {
+    // Once this answer is written: an invalidate while the read is still out would be absorbed by it.
+    setTimeout(() => void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false }), 0);
+  }
+  return out;
 }
 
 /**
@@ -61,7 +124,7 @@ export function mergeSnapshotPreservingLocalEdits(
  *      from, so the optimistic patch went to an entry nobody read and the rollback snapshot came back
  *      undefined. `invalidateQueries` matches by PREFIX and did hit the real entry, so the card moved on
  *      the settle refetch — a broken optimistic update looked merely slow.
- *   2. `assignMut` had the identical defect twenty lines below, and worse: `Analytics.tsx` DECLARES a
+ *   2. `assignMut` had the identical defect twenty lines below, and worse: `Analytics.tsx` then DECLARED a
  *      query at exactly that key, so on a single-board project it patched another screen's cache.
  *   3. A bespoke key-BUILDING helper fixed both and still failed when `limit` changed mid-flight —
  *      "Load more" then drag, and the new entry does not exist yet, so the updater returns `old`,
@@ -73,7 +136,10 @@ export function patchTaskCaches(qc: QueryClient, projectId: string, taskId: stri
   const snapshot: Snapshot = [];
   // every board list under this project: ['tasks', projectId, *]
   for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId] })) {
-    if (!data) continue;
+    // Only flat pages: a screen that keys another shape under this prefix (an infinite query's
+    // `{pages, pageParams}`, as the Analytics census once did) is left alone rather than thrown on,
+    // which would fail the write before its request is sent.
+    if (!data || !Array.isArray(data.tasks)) continue;
     snapshot.push([key, data]);
     qc.setQueryData<TaskPage>(key, { ...data, tasks: data.tasks.map((t) => (t.id === taskId ? patch(t) : t)) });
   }
@@ -103,6 +169,9 @@ function reconcile(qc: QueryClient, projectId: string, taskId?: string): void {
   }
   void qc.invalidateQueries({ queryKey: ['hist', projectId] });
   void qc.invalidateQueries({ queryKey: ['board', projectId] });
+  // The Analytics/Reports census lives outside the `tasks` prefix (Analytics.tsx says why), so it
+  // needs its own: without it a reopened Analytics counted the board as it was before this write.
+  void qc.invalidateQueries({ queryKey: ['task-census', projectId] });
 }
 
 /**
@@ -131,8 +200,16 @@ export function useTaskAction<TVars>(
   });
 }
 
+/**
+ * The optimistic placeholder's id: this prefix, which a card shows as its id, and a number of its own,
+ * so two quick creates are two React keys (one shared 'T-…' made React drop the second card).
+ */
+export const TEMP_TASK_ID = 'T-…';
+let tempSeq = 0;
+export const isTempTaskId = (id: string): boolean => id.startsWith(TEMP_TASK_ID);
+
 /** Optimistic create: a temp-ID card appears instantly in the target board list and is replaced by the
- * server's real task on settle (the invalidate swaps it). */
+ * server's real task when the create answers (`onSuccess`), before the settle refetch. */
 export function useTaskCreate(projectId: string, boardId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -141,8 +218,9 @@ export function useTaskCreate(projectId: string, boardId: string) {
       await qc.cancelQueries({ queryKey: ['tasks', projectId, boardId] });
       // Must match the Task interface exactly (no phantom/missing fields) — this short-lived placeholder is
       // replaced by the server's real task on settle. The `: Task` annotation (no cast) enforces the shape.
+      const tempId = `${TEMP_TASK_ID}${++tempSeq}`;
       const temp: Task = {
-        id: `T-…`,
+        id: tempId,
         projectId,
         boardId,
         columnId: '',
@@ -173,11 +251,24 @@ export function useTaskCreate(projectId: string, boardId: string) {
       // stays correct whatever suffix the board's key grows next.
       const snapshot: Snapshot = [];
       for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId, boardId] })) {
-        if (!data) continue;
+        if (!data || !Array.isArray(data.tasks)) continue; // flat pages only, as in patchTaskCaches
         snapshot.push([key, data]);
         qc.setQueryData<TaskPage>(key, { ...data, tasks: [temp, ...data.tasks] });
       }
-      return { snapshot };
+      return { snapshot, tempId };
+    },
+    // THE SWAP IS ONE WRITE. The placeholder becomes the server's task in place, or is dropped where a
+    // board frame already brought that task, so no list holds both (the board showed the task twice).
+    onSuccess: (res, _body, ctx) => {
+      if (!ctx?.tempId || !res?.task) return;
+      for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId, boardId] })) {
+        if (!Array.isArray(data?.tasks) || !data.tasks.some((t) => t.id === ctx.tempId)) continue;
+        const arrived = data.tasks.some((t) => t.id === res.task.id);
+        qc.setQueryData<TaskPage>(key, {
+          ...data,
+          tasks: arrived ? data.tasks.filter((t) => t.id !== ctx.tempId) : data.tasks.map((t) => (t.id === ctx.tempId ? res.task : t)),
+        });
+      }
     },
     onError: (_e, _v, ctx) => restore(qc, ctx?.snapshot),
     onSettled: () => reconcile(qc, projectId),

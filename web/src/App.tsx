@@ -158,10 +158,9 @@ function Foot() {
 function Shell() {
   // NAV AND ROUTES MUST DECIDE THE SAME WAY. This read `isAdmin` while the routes below read the
   // permission — the same "seen vs callable" divergence T-366's review caught in the core, reproduced
-  // here in one file. During the migration window it is not hypothetical: `permissions` is absent
-  // until the BFF lands, so the routes refuse while `isAdmin` may still be true, and the nav would
-  // offer a link to a door that refuses — the precise thing `permissions.ts` says this exists to
-  // prevent. One predicate, both places.
+  // here in one file. `/api/session` (internal/api/session.go) sends both from one fact today, but two
+  // predicates can drift, and the nav would then offer a link to a door that refuses — the precise
+  // thing `permissions.ts` says this exists to prevent. One predicate, both places.
   const { permissions } = useAuth();
   return (
     <div className="shell">
@@ -254,8 +253,8 @@ function RequirePermission({ slug, children }: { slug: string; children: ReactNo
 
 export function App() {
   // `isAdmin` is deliberately NOT destructured any more: every route decision here now goes
-  // through `RequirePermission`. The alias still exists on the context for the screens that
-  // have not migrated yet (T-378 tail) — this file is simply no longer one of them.
+  // through `RequirePermission`. The alias still exists on the context for its two remaining
+  // readers (see `AuthState.isAdmin` in auth.tsx) — this file is simply no longer one of them.
   const { identity, loading } = useAuth();
   if (loading) return <BootLoader caption="Signing you in…" />;
   if (!identity) return <SignIn />;

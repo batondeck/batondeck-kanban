@@ -19,6 +19,7 @@ type attachmentQueries interface {
 	SetAttachmentReady(ctx context.Context, arg sqlitedb.SetAttachmentReadyParams) (sqlitedb.Attachment, error)
 	ListAttachments(ctx context.Context, arg sqlitedb.ListAttachmentsParams) ([]sqlitedb.ListAttachmentsRow, error)
 	DeleteAttachmentsByTask(ctx context.Context, arg sqlitedb.DeleteAttachmentsByTaskParams) (int64, error)
+	DeleteStalePendingAttachments(ctx context.Context, arg sqlitedb.DeleteStalePendingAttachmentsParams) (int64, error)
 }
 
 var attachmentKinds = map[AttachmentKind]bool{AttachmentFile: true, AttachmentImage: true, AttachmentAudio: true, AttachmentVideo: true}
@@ -55,10 +56,19 @@ func (s *Postgres) DeleteAttachmentsByTask(ctx context.Context, projectID, taskI
 	return deleteAttachmentsByTask(ctx, s, projectID, taskID)
 }
 
+func (s *SQLite) DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteStalePendingAttachments(ctx, s, before, limit)
+}
+
+func (s *Postgres) DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteStalePendingAttachments(ctx, s, before, limit)
+}
+
 func attachmentFrom(r sqlitedb.Attachment) Attachment {
 	return Attachment{
 		ProjectID: r.ProjectID, TaskID: r.TaskID, ID: r.ID, BlobSHA256: r.BlobSha256.String, MimeType: r.MimeType,
 		Bytes: r.Bytes, Kind: AttachmentKind(r.Kind), Status: AttachmentStatus(r.Status), CreatedBy: r.CreatedBy, TS: r.Ts,
+		FileName: r.FileName,
 	}
 }
 
@@ -75,7 +85,7 @@ func createAttachment(ctx context.Context, e engine, in CreateAttachmentInput) (
 	}
 	r, err := e.queries(true).InsertAttachment(ctx, sqlitedb.InsertAttachmentParams{
 		ProjectID: in.ProjectID, TaskID: in.TaskID, ID: newID("A-", 16), MimeType: in.MimeType, Bytes: in.Bytes,
-		Kind: string(in.Kind), CreatedBy: in.CreatedBy, Ts: nowMillis(),
+		Kind: string(in.Kind), CreatedBy: in.CreatedBy, Ts: nowMillis(), FileName: in.FileName,
 	})
 	if isForeignKeyViolation(err) {
 		return Attachment{}, domain.NotFound("Task", in.TaskID)
@@ -134,7 +144,7 @@ func listAttachments(ctx context.Context, e engine, projectID, taskID string) ([
 		out = append(out, Attachment{
 			ProjectID: projectID, TaskID: taskID, ID: r.ID.String, BlobSHA256: r.BlobSha256.String, MimeType: r.MimeType.String,
 			Bytes: r.Bytes.Int64, Kind: AttachmentKind(r.Kind.String), Status: AttachmentStatus(r.Status.String),
-			CreatedBy: r.CreatedBy.String, TS: r.Ts.Int64,
+			CreatedBy: r.CreatedBy.String, TS: r.Ts.Int64, FileName: r.FileName.String,
 		})
 	}
 	return out, nil
@@ -144,6 +154,17 @@ func deleteAttachmentsByTask(ctx context.Context, e engine, projectID, taskID st
 	n, err := e.queries(true).DeleteAttachmentsByTask(ctx, sqlitedb.DeleteAttachmentsByTaskParams{ProjectID: projectID, TaskID: taskID})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete attachments: %w", err)
+	}
+	return n, nil
+}
+
+func deleteStalePendingAttachments(ctx context.Context, e engine, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := e.queries(true).DeleteStalePendingAttachments(ctx, sqlitedb.DeleteStalePendingAttachmentsParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, fmt.Errorf("store: delete stale pending attachments: %w", err)
 	}
 	return n, nil
 }
@@ -176,4 +197,8 @@ func (p pgQueries) ListAttachments(ctx context.Context, arg sqlitedb.ListAttachm
 
 func (p pgQueries) DeleteAttachmentsByTask(ctx context.Context, arg sqlitedb.DeleteAttachmentsByTaskParams) (int64, error) {
 	return p.q.DeleteAttachmentsByTask(ctx, pgdb.DeleteAttachmentsByTaskParams(arg))
+}
+
+func (p pgQueries) DeleteStalePendingAttachments(ctx context.Context, arg sqlitedb.DeleteStalePendingAttachmentsParams) (int64, error) {
+	return p.q.DeleteStalePendingAttachments(ctx, pgdb.DeleteStalePendingAttachmentsParams(arg))
 }

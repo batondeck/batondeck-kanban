@@ -135,3 +135,36 @@ func TestTheHoldersBrowserAcksItsAgentsFollowUp(t *testing.T) {
 		}
 	})
 }
+
+// The feed route takes taskId, limit and cursor (web-board#8): taskId is that task's own events, the
+// ticket's Activity, which the board's newest page stops holding once the board moves on.
+func TestFeedRouteOfOneTask(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		pid, bid := seedBoard(t, h, s.Core, "Feed")
+		ctx := context.Background()
+		var ids []string
+		for _, title := range []string{"one", "two"} {
+			task, err := s.Core.Tasks().Create(ctx, h.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: title})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, task.Task.ID)
+		}
+		feed := "/api/projects/" + pid + "/boards/" + bid + "/feed"
+		code, body := h.do("GET", feed+"?taskId="+ids[0]+"&limit=1", "", nil)
+		var page struct {
+			Events     []service.BoardEvent
+			NextCursor string
+		}
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatalf("%v in %s", err, body)
+		}
+		if code != http.StatusOK || len(page.Events) != 1 || page.Events[0].TaskID != ids[0] {
+			t.Fatalf("GET feed?taskId=%s&limit=1: %d %s", ids[0], code, body)
+		}
+		if code, body := h.do("GET", feed+"?taskId=T-missing", "", nil); code != http.StatusNotFound {
+			t.Fatalf("GET feed?taskId=T-missing: %d %s, want 404", code, body)
+		}
+	})
+}

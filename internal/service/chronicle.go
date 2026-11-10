@@ -165,7 +165,7 @@ func (s chronicleSvc) CreatePage(ctx context.Context, caller domain.Caller, req 
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_chronicle_page", Args: map[string]any{"projectId": req.ProjectID, "slug": req.Slug},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (CreateChroniclePageResp, error) {
 		up, err := t.Tx.UpsertChroniclePage(ctx, store.UpsertChroniclePageInput{
 			ProjectID: req.ProjectID, Kind: req.Kind, Slug: req.Slug, Title: req.Title, Blocks: blocks,
@@ -229,7 +229,7 @@ func (s chronicleSvc) IngestPage(ctx context.Context, caller domain.Caller, req 
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "ingest_chronicle_page", Args: map[string]any{"projectId": req.ProjectID, "slug": req.Slug},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (IngestChroniclePageResp, error) {
 		up, err := t.Tx.UpsertChroniclePage(ctx, store.UpsertChroniclePageInput{
 			ProjectID: req.ProjectID, Kind: req.Kind, Slug: req.Slug, Title: req.Title, SourcePath: req.SourcePath,
@@ -335,7 +335,7 @@ func (s chronicleSvc) EditPage(ctx context.Context, caller domain.Caller, req Ed
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "edit_chronicle_page", Args: map[string]any{"projectId": req.ProjectID, "pageId": req.PageID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (EditChroniclePageResp, error) {
 		inherited := map[string]*domain.BlockOrigin{}
 		parent, err := t.Tx.GetChronicleVersion(ctx, req.ProjectID, req.PageID, req.ExpectedParentVersionID)

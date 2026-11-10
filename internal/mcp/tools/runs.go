@@ -11,7 +11,7 @@ func init() { register("runs", RegisterRuns) }
 func RegisterRuns(s *mcp.Server, svc service.Services) {
 	r := svc.Runs
 	mcp.Tool(s, "runs", "start_runs",
-		"Race a task: create N claimable run tasks (`count`, or one per `agents` name) and take the parent out of the claim pool. Master role; version-checked; capped by maxRunsPerTask.",
+		"Race a task with no open blockers: create N claimable run tasks (`count`, or one per `agents` name) and take it out of the claim pool. Master role; version-checked; capped by maxRunsPerTask.",
 		r.Start)
 	mcp.Tool(s, "runs", "open_run",
 		"Add one run to a racing task, routed to `agent` if given. Master role; capped by maxRunsPerTask.",

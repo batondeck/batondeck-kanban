@@ -86,16 +86,17 @@ type UpdateIntegrationReq struct {
 }
 
 // IntegrationPatch is update_integration's patch: each present field replaces the stored one.
+// Mapping is replaced whole, so a present {} clears it; an absent one keeps it.
 type IntegrationPatch struct {
-	Auth      IntegrationAuthInput `json:"auth,omitzero"`
-	BoardID   string               `json:"boardId,omitzero"`
-	ColumnID  Nullable[string]     `json:"columnId,omitzero"`
-	Enabled   Optional[bool]       `json:"enabled,omitzero"`
-	Lifecycle IntegrationLifecycle `json:"lifecycle,omitzero"`
-	Limits    IntegrationLimitsIn  `json:"limits,omitzero"`
-	Mapping   IntegrationMapping   `json:"mapping,omitzero"`
-	Name      string               `json:"name,omitzero"`
-	Routing   IntegrationRouting   `json:"routing,omitzero"`
+	Auth      IntegrationAuthInput         `json:"auth,omitzero"`
+	BoardID   string                       `json:"boardId,omitzero"`
+	ColumnID  Nullable[string]             `json:"columnId,omitzero"`
+	Enabled   Optional[bool]               `json:"enabled,omitzero"`
+	Lifecycle IntegrationLifecycle         `json:"lifecycle,omitzero"`
+	Limits    IntegrationLimitsIn          `json:"limits,omitzero"`
+	Mapping   Optional[IntegrationMapping] `json:"mapping,omitzero"`
+	Name      string                       `json:"name,omitzero"`
+	Routing   IntegrationRouting           `json:"routing,omitzero"`
 }
 
 // UpdateIntegrationResp is update_integration's output.
@@ -216,11 +217,16 @@ type IntegrationAuthInput struct {
 	JWT            IntegrationJWT      `json:"jwt,omitzero"`
 }
 
-// IntegrationJWT is a jwt integration's issuer, audience and key set.
+// IntegrationJWT is a jwt integration's issuer, audience and key set, and the optional pins on
+// who the token names: Subject is matched against sub exactly, Email against email exactly with
+// email_verified true. On a shared issuer (Google, GitHub Actions) anyone can mint a token for a
+// chosen audience, so only a pin identifies the sender.
 type IntegrationJWT struct {
 	Audience string `json:"audience"`
+	Email    string `json:"email,omitzero"`
 	Issuer   string `json:"issuer"`
 	JWKSURL  string `json:"jwksUrl"`
+	Subject  string `json:"subject,omitzero"`
 }
 
 // IntegrationRouting is who an incident is routed to. A stored routing that still carries the

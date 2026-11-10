@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"math"
 	"slices"
@@ -44,8 +45,8 @@ func factorOut(f domain.ScoreFactor) AgingFactor {
 	return AgingFactor{Contribution: f.Contribution, Value: f.Value, Weight: f.Weight}
 }
 
-// Rank is rank_tasks: the pool (at most five pages), and on the profile path the profile and its
-// stats.
+// Rank is rank_tasks: the pool (at most five pages; with sprintId its members and the runs of its
+// members, as claim_next {sprintId} takes them), and on the profile path the profile and its stats.
 func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTasksReq) (RankTasksResp, error) {
 	if _, err := s.c.authorize(ctx, caller, req.ProjectID, "rank_tasks", domain.GrantSubject{}, false); err != nil {
 		return RankTasksResp{}, err
@@ -87,10 +88,25 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 		return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
 	}
 	now := s.c.now()
-	var pool []store.Task
+	var pool, runs []store.Task
 	for _, t := range tasks {
-		if domain.IsClaimable(claimView(t), now) && (req.SprintID == "" || slices.Contains(t.SprintIDs, req.SprintID)) {
+		switch {
+		case !domain.IsClaimable(claimView(t), now):
+		case req.SprintID == "" || slices.Contains(t.SprintIDs, req.SprintID):
 			pool = append(pool, t)
+		case t.RunOf != nil:
+			runs = append(runs, t)
+		}
+	}
+	if len(runs) > 0 {
+		in, err := membersInSprint(ctx, s.c.store, req.ProjectID, req.SprintID, tasks, runs)
+		if err != nil {
+			return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
+		}
+		for _, r := range runs {
+			if in[*r.RunOf] {
+				pool = append(pool, r)
+			}
 		}
 	}
 	rk := newScorer(settings)
@@ -115,6 +131,38 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 		resp.Ranked = append(resp.Ranked, rt)
 	}
 	return resp, nil
+}
+
+// membersInSprint is the set of runs' parents that are members of sprintID: a raced member's work is
+// in its runs, which the sprint's frontier (claim_next {sprintId}) offers with it. A parent among
+// known is judged from it; the rest are read, listByIDsMax at a time.
+func membersInSprint(ctx context.Context, st store.Store, projectID, sprintID string, known, runs []store.Task) (map[string]bool, error) {
+	byID := make(map[string]store.Task, len(known))
+	for _, t := range known {
+		byID[t.ID] = t
+	}
+	var missing []string
+	for _, r := range runs {
+		if _, ok := byID[*r.RunOf]; !ok && !slices.Contains(missing, *r.RunOf) {
+			missing = append(missing, *r.RunOf)
+		}
+	}
+	for chunk := range slices.Chunk(missing, listByIDsMax) {
+		got, err := st.ListTasksByIDs(ctx, projectID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range got {
+			byID[t.ID] = t
+		}
+	}
+	in := map[string]bool{}
+	for _, r := range runs {
+		if p, ok := byID[*r.RunOf]; ok && slices.Contains(p.SprintIDs, sprintID) {
+			in[p.ID] = true
+		}
+	}
+	return in, nil
 }
 
 // scorer is the one ranking rank_tasks and next_task {strategy: "score"} share (P-258): the
@@ -237,7 +285,11 @@ func factorsOut(sc domain.TaskScore) ScoreFactors {
 
 // Orchestrate is orchestrate_subtasks.
 func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req OrchestrateSubtasksReq) (OrchestrateSubtasksResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "orchestrate_subtasks", domain.GrantSubject{}, true)
+	written := make([]domain.Priority, 0, len(req.Children))
+	for _, c := range req.Children {
+		written = append(written, cmp.Or(c.Priority, domain.PriorityNormal))
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "orchestrate_subtasks", domain.GrantSubject{Priorities: written}, true)
 	if err != nil {
 		return OrchestrateSubtasksResp{}, err
 	}
@@ -274,7 +326,7 @@ func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req O
 	// of a call that succeeded presents the lease the fan-out dropped (conductor's note).
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "orchestrate_subtasks", Args: map[string]any{"projectId": req.ProjectID, "parentTaskId": req.ParentTaskID},
-		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
+		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, LockProject: true,
 	}, func(t *txn) (OrchestrateSubtasksResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()
@@ -289,25 +341,20 @@ func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req O
 		if todoCol == "" {
 			return OrchestrateSubtasksResp{}, domain.Validation("Board has no TODO column", nil)
 		}
-		// One bounded read for the column's head, then the keys chained in memory toward it, in the
-		// children's order (a key per child from one base, never the same key twice).
-		// ponytail: the children land at the column's head, as add_subtask's (P-69: no last-key read).
-		page, err := t.Tx.ListTasks(ctx, req.ProjectID, store.TaskFilter{BoardID: board.ID, ColumnID: todoCol}, "", 1)
+		// One read of the column's last key (store.LastOrderKey), then the keys chained in memory after
+		// it, in the children's order: the children land at the column's end, as add_subtask's.
+		order, err := t.Tx.LastOrderKey(ctx, req.ProjectID, board.ID, todoCol)
 		if err != nil {
 			return OrchestrateSubtasksResp{}, err
-		}
-		upper := ""
-		if len(page.Tasks) > 0 {
-			upper = page.Tasks[0].OrderKey
 		}
 		parentID := cur.ID
 		resp := OrchestrateSubtasksResp{Children: []Task{}}
 		var children []store.Task
 		var childIDs []string
-		order := ""
 		for _, c := range req.Children {
-			if order, err = domain.OrderBetween(order, upper); err != nil {
-				return OrchestrateSubtasksResp{}, internalf("order key before %q: %v", upper, err)
+			prev := order
+			if order, err = domain.OrderBetween(prev, ""); err != nil {
+				return OrchestrateSubtasksResp{}, internalf("order key after %q: %v", prev, err)
 			}
 			priority := c.Priority
 			if priority == "" {

@@ -71,6 +71,7 @@ func TestAnOAuthCallersAgentIsItsClientName(t *testing.T) {
 	for _, cl := range []store.OAuthClient{
 		{ClientID: "c-1", ClientName: " Claude Desktop\n", RedirectURIs: []string{"http://127.0.0.1/cb"}, Scope: "member", CreatedAt: now},
 		{ClientID: "c-2", ClientName: "", RedirectURIs: []string{"http://127.0.0.1/cb"}, Scope: "member", CreatedAt: now},
+		{ClientID: "c-3", ClientName: "id:U-0123456789abcdef", RedirectURIs: []string{"http://127.0.0.1/cb"}, Scope: "member", CreatedAt: now},
 	} {
 		if err := f.st.CreateOAuthClient(ctx, cl); err != nil {
 			t.Fatal(err)
@@ -101,6 +102,11 @@ func TestAnOAuthCallersAgentIsItsClientName(t *testing.T) {
 	got, err = f.svc.ResolveCaller(ctx, unnamed)
 	if err != nil || got.Agent != "" || got.Via != domain.ViaOAuth {
 		t.Fatalf("unnamed client: %+v %v", got, err)
+	}
+	// "id:<identity>" is the id AgentID derives, never a name a client registers.
+	got, err = f.svc.ResolveCaller(ctx, mint("c-3"))
+	if err != nil || got.Agent != "" || got.Via != domain.ViaOAuth {
+		t.Fatalf("a client registered as another identity's id: %+v %v, want no agent", got, err)
 	}
 }
 

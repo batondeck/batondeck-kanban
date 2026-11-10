@@ -63,8 +63,10 @@ func newFixture(t *testing.T, mod ...func(*Options)) *fixture {
 		t.Fatal(err)
 	}
 	f := &fixture{st: st, clk: &clock{t: time.UnixMilli(1_800_000_000_000)}}
+	// Each fixture has its own sign-in limits: the process-wide default would carry one test's
+	// failed sign-ins into the next, under a clock that starts at the same instant in every test.
 	f.svc = &auth.Service{
-		Accounts: &auth.Accounts{Store: st, Now: f.clk.now, Params: auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}},
+		Accounts: &auth.Accounts{Store: st, Now: f.clk.now, Params: auth.Argon2Params{Time: 1, Memory: 64, Threads: 1}, Limits: &auth.LoginLimits{}},
 		Tokens:   &auth.TokenService{Store: st, Now: f.clk.now},
 		Sessions: st,
 		Now:      f.clk.now,

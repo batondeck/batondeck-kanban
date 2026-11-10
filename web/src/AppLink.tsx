@@ -1,17 +1,16 @@
 /**
  * Smart external-artifact links (Jira-style "integrations"): recognize the app behind a pasted URL
- * and render a branded link card. The icon is the site's favicon (via Google's favicon proxy — no
- * per-app SVG maintenance, and it covers the long tail of apps automatically); the label is a
- * curated pretty-name for known apps, falling back to the hostname.
+ * and render a branded link card. The label is a curated pretty-name for known apps, falling back to
+ * the hostname. The icon is a generic link glyph. There is deliberately no favicon lookup: Google's
+ * favicon service, which this used, would tell a third party every host a team links to (an internal
+ * CI or wiki host included) and the viewer's address, and the AppCSP admits no such host.
  */
-import { useState } from 'react';
 import { Icon } from './icons.js';
-import { uiSettings } from './settings.js';
 
 export interface LinkApp {
   /** Pretty app name ("Lucidchart", "Google Docs") or the bare hostname for unknown apps. */
   name: string;
-  /** Hostname (www. stripped) — used for the favicon lookup. */
+  /** Hostname (www. stripped). */
   host: string;
   url: string;
   /** Spoof-safe short form (host + path) for display — never echoes raw userinfo/query tricks. */
@@ -86,23 +85,7 @@ export function normalizeLink(raw: string): string | null {
   return null;
 }
 
-function FavIcon({ host }: { host: string }) {
-  const [failed, setFailed] = useState(false);
-  // linkFavicons off (admin privacy setting) → no external request, generic icon.
-  if (failed || !uiSettings().linkFavicons) return <Icon name="link" size={14} />;
-  return (
-    <img
-      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`}
-      alt=""
-      width={16}
-      height={16}
-      style={{ borderRadius: 'var(--r-1)', flex: '0 0 auto' }}
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
-/** One attached artifact link: favicon + app name + truncated target, opens in a new tab. A body that
+/** One attached artifact link: link icon + app name + truncated target, opens in a new tab. A body that
  * isn't a bare URL (older/agent-written data) still renders — as plain text, never silently dropped. */
 export function AppLinkCard({ url, meta }: { url: string; meta?: string }) {
   const app = appForUrl(url);
@@ -123,7 +106,7 @@ export function AppLinkCard({ url, meta }: { url: string; meta?: string }) {
       rel="noreferrer"
       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', textDecoration: 'none', color: 'inherit' }}
     >
-      <FavIcon host={app.host} />
+      <Icon name="link" size={14} />
       <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <span style={{ fontSize: 14, fontWeight: 600 }}>
           {app.name}

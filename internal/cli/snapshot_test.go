@@ -253,3 +253,47 @@ func TestTapCloseTurnsTheCacheOff(t *testing.T) {
 		t.Fatalf("after the tap closed: GetBoard per call %v, want [1 1] (cache off)", got)
 	}
 }
+
+// A change the tap dropped may have been a membership, role or grant change, which drops the
+// project's cached access when it is delivered (Core.ObserveChange): the drop clears every cached
+// access entry, so the change holds on the identity's next call rather than after the access TTL.
+// Here alice's membership goes behind the service's back while her entry is warm.
+func TestTapDropClearsCachedAccess(t *testing.T) {
+	f := newTapFix(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tap, err := f.a.bus.Tap(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.a.bus.Close()
+	f.a.core.ResetSnapshots(true)
+	f.reads(t) // warms alice's access entry
+	if err := f.st.RemoveMember(ctx, f.projectA, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.appendChange(t, f.boardY)
+	f.appendChange(t, f.boardX)
+	last := f.appendChange(t, f.boardX)
+	for deadline := time.Now().Add(5 * time.Second); tap.Dropped() < 2 || f.a.bus.Frontier() < last; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("tap dropped %d, frontier %d, want 2 and %d", tap.Dropped(), f.a.bus.Frontier(), last)
+		}
+	}
+	alice := domain.Caller{Identity: "alice", Agent: "claude", TokenScope: "alice"}
+	read := func() error {
+		_, err := f.a.core.Context().GetTaskContext(ctx, alice, service.GetTaskContextReq{ProjectID: f.projectA, TaskID: f.taskX})
+		return err
+	}
+	if err := read(); err != nil {
+		t.Fatalf("alice's warm entry was dropped before the feed ran: %v", err)
+	}
+	go feedSnapshots(tap, f.a.core, log.New(io.Discard, "", 0))
+	err = read()
+	for deadline := time.Now().Add(3 * time.Second); err == nil && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		err = read()
+	}
+	if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeForbidden {
+		t.Fatalf("after the tap dropped changes, alice (no longer a member) reads: %v, want FORBIDDEN: a stale access entry is served", err)
+	}
+}

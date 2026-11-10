@@ -3,13 +3,13 @@
  *
  * Before `errors.tsx` the SPA had NO error boundary: any throw during render unmounted the whole tree
  * and left `#root` empty — the user saw a blank page and we saw nothing at all. These tests assert the
- * two halves of the fix that actually matter to a user: something is still on screen, and the crash
- * left the building.
+ * two halves of the fix that actually matter to a user: something is still on screen, and the screen
+ * does not claim a report nobody received.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { ErrorBoundary, reportClientError } from '../errors.js';
+import { ErrorBoundary } from '../errors.js';
 
 function Boom(): never {
   throw new Error('Cannot read properties of undefined (reading map)');
@@ -46,7 +46,14 @@ describe('ErrorBoundary', () => {
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
   });
 
-  it('reports the crash to the gateway with its stack (otherwise the failure is undiscoverable)', () => {
+  /**
+   * NOTHING CLAIMS A REPORT THAT WAS NEVER MADE. The boundary posted every crash (and every
+   * window error and unhandled rejection) to `/api/client-error`, a route this server leaves out by
+   * decision (internal/api/routes.json), and told the user "It has been reported". The POST was
+   * answered 405, the report existed nowhere, and the console gained a second error beside the real
+   * one. The screen now asks the user to report it, with the message to quote.
+   */
+  it('sends nothing, and asks the user to report it instead of saying it was reported', () => {
     render(
       <MemoryRouter>
         <ErrorBoundary>
@@ -54,13 +61,11 @@ describe('ErrorBoundary', () => {
         </ErrorBoundary>
       </MemoryRouter>,
     );
-    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/api/client-error'));
-    expect(call, 'the crash was never reported — a white screen we cannot see is the status quo').toBeTruthy();
-    const body = JSON.parse(String((call?.[1] as RequestInit).body)) as { msg: string; stack: string };
-    expect(body.msg).toContain('Cannot read properties of undefined');
-    expect(body.stack).toContain('component stack');
-    // keepalive: a crash is usually followed by a reload, which cancels a normal fetch mid-flight.
-    expect((call?.[1] as RequestInit).keepalive).toBe(true);
+    expect(fetchMock, 'the crash was posted to a route the server does not have').not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).not.toMatch(/has been reported/i);
+    expect(alert.textContent).toMatch(/report it/i);
+    expect(alert.textContent).toContain('Cannot read properties of undefined');
   });
 
   it('POSITIVE CONTROL: a child that does not throw renders untouched', () => {
@@ -74,13 +79,5 @@ describe('ErrorBoundary', () => {
     expect(screen.getByText('the actual screen')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('reporting never throws, even when fetch itself is broken', () => {
-    // A reporter that throws inside an error handler turns one bug into a loop.
-    vi.stubGlobal('fetch', () => {
-      throw new Error('network stack is gone');
-    });
-    expect(() => reportClientError(new Error('x'))).not.toThrow();
   });
 });

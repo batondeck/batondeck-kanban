@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/url"
@@ -350,6 +351,51 @@ func TestDeleteTaskCollectsItsBlobsOverTheEngines(t *testing.T) {
 	})
 }
 
+// A Chronicle record that embeds an attachment holds its blob: deleting the source task (or a losing
+// run) frees the attachment, not the file the record shows. Deleting the record lets the next GC
+// collect it.
+func TestAChronicleRecordHoldsItsEmbeddedBlobOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		// A page body is capped by blob.max_bytes too: room for one block with a URL.
+		if err := m.c.Close(m.ctx); err != nil {
+			t.Fatal(err)
+		}
+		m.c = New(m.st, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1,
+			Media: MediaOptions{Files: m.files, BaseURL: "http://bk.test", MaxBytes: 4096, Signer: m.signer}})
+		task := m.newTask(t)
+		body := []byte("diagram")
+		if err := m.upload(t, m.attach(t, task.ID, int64(len(body))).UploadURL, body); err != nil {
+			t.Fatal(err)
+		}
+		atts := m.list(t, task.ID)
+		if len(atts) != 1 || atts[0].DownloadURL == nil {
+			t.Fatalf("attachments %+v, want one with a download URL", atts)
+		}
+		page, err := m.c.Chronicle().CreatePage(m.ctx, m.alice, CreateChroniclePageReq{ProjectID: m.project, Kind: "adr", Slug: "adr/0001-shot", Title: "Shot",
+			Blocks: []ChronicleBlockInput{{ID: "a-1", Text: "![d](" + *atts[0].DownloadURL + ")"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.c.Tasks().Delete(m.ctx, m.alice, DeleteTaskReq{ProjectID: m.project, TaskID: task.ID, Version: m.get(t, task.ID).Version}); err != nil {
+			t.Fatal(err)
+		}
+		sha := hashOf(body)
+		if _, err := m.st.GetBlob(m.ctx, sha); err != nil || !m.onDisk(sha) {
+			t.Fatalf("after delete_task the record's blob: row %v, on disk %v; want both kept", err, m.onDisk(sha))
+		}
+		if left, err := m.st.ListUnreferencedBlobs(m.ctx, time.Now().Add(time.Hour).UnixMilli(), 10); err != nil || len(left) != 0 {
+			t.Fatalf("unreferenced blobs %+v %v, want none: retention would collect the record's image", left, err)
+		}
+		if _, err := m.c.Chronicle().DeletePage(m.ctx, m.alice, DeleteChroniclePageReq{ProjectID: m.project, PageID: page.PageID}); err != nil {
+			t.Fatal(err)
+		}
+		m.c.CollectBlobs(m.ctx, []string{sha})
+		if _, err := m.st.GetBlob(m.ctx, sha); err == nil || m.onDisk(sha) {
+			t.Fatal("the blob outlived the last record that named it")
+		}
+	})
+}
+
 // Two uploads of one attachment at once, different bytes: one wins, the other is INVALID_TRANSITION,
 // and the loser's file is not left on disk.
 func TestConcurrentUploadsOneWinnerOverTheEngines(t *testing.T) {
@@ -456,4 +502,356 @@ func TestTheHashLockKeepsAReadyRowsFileOverTheEngines(t *testing.T) {
 			}
 		})
 	}
+}
+
+// cancellingStore cancels a request's context at the first Atomically after arm: CompleteUpload's
+// mutation, after its file is moved into place, as net/http does when the client closes the
+// connection right after the body.
+type cancellingStore struct {
+	store.Store
+	cancel atomic.Pointer[context.CancelFunc]
+}
+
+func (c *cancellingStore) Atomically(ctx context.Context, fn func(tx store.Store) error) error {
+	if f := c.cancel.Swap(nil); f != nil {
+		(*f)()
+	}
+	return c.Store.Atomically(ctx, fn)
+}
+
+// api-http#1: an upload whose client goes away once its body is in finishes anyway, row and file
+// together, instead of failing its mutation on the cancelled context and leaving a file no blob row
+// names (which nothing ever removed).
+func TestAnUploadWhoseClientLeftAfterTheBodyFinishesOverTheEngines(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			g := &cancellingStore{Store: ec.open(t)}
+			m := newMediaEnv(t, g, true)
+			body := []byte("the client left")
+			sha := hashOf(body)
+			task := m.newTask(t)
+			u, err := url.Parse(m.attach(t, task.ID, int64(len(body))).UploadURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref, _ := blob.ParseRef(strings.TrimPrefix(u.Path, "/blobs/"))
+			st, err := m.files.Stage(bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(m.ctx)
+			defer cancel()
+			g.cancel.Store(&cancel)
+			err = m.c.CompleteUpload(ctx, ref, st)
+			list := m.list(t, task.ID)
+			if m.onDisk(sha) && list[0].Status != "ready" {
+				t.Fatalf("the file is on disk and the attachment is %s (CompleteUpload: %v): a file no row names", list[0].Status, err)
+			}
+			if err != nil || list[0].Status != "ready" || !m.onDisk(sha) {
+				t.Fatalf("CompleteUpload: %v, attachment %s, on disk %v; want it ready with its file", err, list[0].Status, m.onDisk(sha))
+			}
+		})
+	}
+}
+
+// orphan is body committed to the blob store with no row, last written at mod.
+func (m *mediaEnv) orphan(t *testing.T, body []byte, mod time.Time) string {
+	t.Helper()
+	st, err := m.files.Stage(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.files.Commit(st); err != nil {
+		t.Fatal(err)
+	}
+	sha := hashOf(body)
+	if err := os.Chtimes(filepath.Join(m.files.Dir(), sha[:2], sha), mod, mod); err != nil {
+		t.Fatal(err)
+	}
+	return sha
+}
+
+// api-http#1, store-rest#4: the blob-file sweep removes what no row will ever name, last written
+// before its time: a committed file no blob row names, and an upload's temporary file. It keeps a
+// ready attachment's file however old, a younger file with no row (an upload between its move and
+// its row) and a younger temporary file (an upload still reading). It looks up at most
+// blobFileChecks files per call and the next call goes on from there.
+func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		now := time.Now()
+		old, cut := now.Add(-2*time.Hour), now.Add(-time.Hour)
+		task := m.newTask(t)
+		kept := []byte("a ready attachment's bytes")
+		if err := m.upload(t, m.attach(t, task.ID, int64(len(kept))).UploadURL, kept); err != nil {
+			t.Fatal(err)
+		}
+		keptSHA := hashOf(kept)
+		if err := os.Chtimes(filepath.Join(m.files.Dir(), keptSHA[:2], keptSHA), old, old); err != nil {
+			t.Fatal(err)
+		}
+		gone := m.orphan(t, []byte("a file no row names"), old)
+		young := m.orphan(t, []byte("an upload between its move and its row"), now)
+		for _, body := range []string{"an upload a crash cut off", "an upload still reading"} {
+			if _, err := m.files.Stage(strings.NewReader(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tmps, _ := filepath.Glob(filepath.Join(m.files.Dir(), "tmp", "upload-*"))
+		if len(tmps) != 2 {
+			t.Fatalf("temporary files %v, want 2", tmps)
+		}
+		if err := os.Chtimes(tmps[0], old, old); err != nil {
+			t.Fatal(err)
+		}
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 2 {
+			t.Fatalf("removed %d files, want 2 (the old orphan and the old temporary file)", n)
+		}
+		for sha, want := range map[string]bool{keptSHA: true, gone: false, young: true} {
+			if m.onDisk(sha) != want {
+				t.Errorf("%s on disk %v, want %v", sha, m.onDisk(sha), want)
+			}
+		}
+		left, _ := filepath.Glob(filepath.Join(m.files.Dir(), "tmp", "upload-*"))
+		if len(left) != 1 || left[0] != tmps[1] {
+			t.Fatalf("temporary files left %v, want only %s", left, tmps[1])
+		}
+		if list := m.list(t, task.ID); list[0].Status != "ready" {
+			t.Fatalf("the ready attachment is %s", list[0].Status)
+		}
+
+		defer func(n int) { blobFileChecks = n }(blobFileChecks)
+		blobFileChecks = 2
+		// Six files, in hash order alternately named by a row and not, plus kept: no two files with
+		// no row are next to each other in hash order, so each call's two lookups find at most one
+		// (and the majority guard, tested on its own below, never holds a call back).
+		bodies := []string{"one", "two", "three", "four", "five", "six"}
+		slices.SortFunc(bodies, func(a, b string) int { return strings.Compare(hashOf([]byte(a)), hashOf([]byte(b))) })
+		var three, rows []string
+		for i, b := range bodies {
+			if i%2 == 0 {
+				rows = append(rows, m.named(t, []byte(b), old))
+			} else {
+				three = append(three, m.orphan(t, []byte(b), old))
+			}
+		}
+		// Seven old files, two per call in hash order from the cursor: four calls go round once.
+		var got []int64
+		for range 4 {
+			got = append(got, m.c.SweepBlobFiles(m.ctx, cut))
+		}
+		if got[0]+got[1]+got[2]+got[3] != 3 || slices.Max(got) > 1 {
+			t.Fatalf("removed %v over four bounded calls, want 3 in all and at most 1 per call", got)
+		}
+		for _, sha := range three {
+			if m.onDisk(sha) {
+				t.Errorf("%s still on disk after the bounded calls went round", sha)
+			}
+		}
+		for _, sha := range append(rows, keptSHA) {
+			if !m.onDisk(sha) {
+				t.Fatalf("%s, which a row names, is gone", sha)
+			}
+		}
+	})
+}
+
+// api-http#4 (review): the kept file name is bounded and printable: valid UTF-8, at most 255
+// characters (a file name's limit on common file systems), no control characters. Anything else is
+// VALIDATION on fileName before an attachment is made; a name with spaces, accents or a slash
+// is kept as given.
+func TestAttachFileBoundsTheFileNameOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		attach := func(name string) error {
+			_, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: name, MimeType: "text/plain", Kind: "file", Bytes: 3})
+			return err
+		}
+		for _, bad := range []string{strings.Repeat("a", 256), "line\nbreak.txt", "tab\t.txt", "nul\x00.txt", "bad\xff.txt", "del\x7f.txt"} {
+			err := attach(bad)
+			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeValidation || e.Details["field"] != "fileName" {
+				t.Errorf("fileName %q: %v, want VALIDATION on fileName", bad, err)
+			}
+		}
+		if list := m.list(t, task.ID); len(list) != 0 {
+			t.Fatalf("a refused name left attachments: %+v", list)
+		}
+		for _, good := range []string{strings.Repeat("a", 251) + ".txt", strings.Repeat("設", 251) + ".txt", "Résumé (final) v2.txt", "docs/spec.txt"} {
+			if err := attach(good); err != nil {
+				t.Errorf("fileName %q: %v, want it kept", good, err)
+			}
+		}
+	})
+}
+
+// named is body committed to the blob store with a blob row, last written at mod.
+func (m *mediaEnv) named(t *testing.T, body []byte, mod time.Time) string {
+	t.Helper()
+	sha := m.orphan(t, body, mod)
+	if _, err := m.st.PutBlob(m.ctx, sha, int64(len(body))); err != nil {
+		t.Fatal(err)
+	}
+	return sha
+}
+
+// api-http#1 (review): the blob-file sweep removes a file because no row names it, so a board
+// started against a database that is not its own, or before its dump is loaded back, would see every
+// file as one to remove. When more than half the files one sweep looks up have no row, it keeps them
+// all and logs why; once rows name at least half, the rest go as before.
+func TestSweepBlobFilesKeepsEveryFileWhenMostHaveNoRowOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		if err := m.c.Close(m.ctx); err != nil {
+			t.Fatal(err)
+		}
+		logs := &logBuf{}
+		m.c = New(m.st, Options{Logger: log.New(logs, "", 0), ToolCallFlush: -1,
+			Media: MediaOptions{Files: m.files, Signer: m.signer, BaseURL: "http://bk.test", MaxBytes: 64}})
+		t.Cleanup(func() { _ = m.c.Close(context.Background()) })
+		now := time.Now()
+		old, cut := now.Add(-2*time.Hour), now.Add(-time.Hour)
+		var orphans []string
+		for _, b := range []string{"one", "two", "three"} {
+			orphans = append(orphans, m.orphan(t, []byte(b), old))
+		}
+		onDisk := func(when string, shas ...string) {
+			t.Helper()
+			for _, sha := range shas {
+				if !m.onDisk(sha) {
+					t.Fatalf("%s: %s was removed", when, sha)
+				}
+			}
+		}
+		// The database names none of them (empty, or not restored yet).
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 0 {
+			t.Fatalf("an empty database: removed %d files, want 0", n)
+		}
+		onDisk("an empty database", orphans...)
+		if !strings.Contains(logs.String(), "3 of 3 blob files") {
+			t.Fatalf("an empty database: the log does not say why the files were kept: %q", logs.String())
+		}
+		// It names one of four: most still have no row.
+		rows := []string{m.named(t, []byte("four"), old)}
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 0 {
+			t.Fatalf("one of four named: removed %d files, want 0", n)
+		}
+		onDisk("one of four named", append(rows, orphans...)...)
+		// It names half: the files no row names go, those it names stay.
+		rows = append(rows, m.named(t, []byte("five"), old), m.named(t, []byte("six"), old))
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 3 {
+			t.Fatalf("three of six named: removed %d files, want the 3 no row names", n)
+		}
+		onDisk("three of six named", rows...)
+		for _, sha := range orphans {
+			if m.onDisk(sha) {
+				t.Errorf("three of six named: %s, which no row names, is still on disk", sha)
+			}
+		}
+	})
+}
+
+// api-http#7: attach_file replayed under its idempotency key (as the key invites after a failed
+// PUT) answers the same attachment with an upload URL signed at the replay, not the stored URL,
+// which lapsed BlobURLTTL after the first call while the key lives a day.
+func TestAnAttachReplayedAfterItsURLLapsedAnswersAFreshURLOverTheEngines(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			st := ec.open(t)
+			m := newMediaEnv(t, st, true)
+			if err := m.c.Close(m.ctx); err != nil {
+				t.Fatal(err)
+			}
+			var at atomic.Int64
+			at.Store(time.Now().UnixNano())
+			clock := func() time.Time { return time.Unix(0, at.Load()) }
+			m.c = New(st, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1, Now: clock,
+				Media: MediaOptions{Files: m.files, Signer: m.signer, BaseURL: "http://bk.test", MaxBytes: 64}})
+			t.Cleanup(func() { _ = m.c.Close(context.Background()) })
+			task := m.newTask(t)
+			req := AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "f.txt", MimeType: "text/plain", Kind: "file", Bytes: 3, IdempotencyKey: "retry-me"}
+			first, err := m.c.Media().AttachFile(m.ctx, m.alice, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at.Add(int64(BlobURLTTL + time.Minute))
+			second, err := m.c.Media().AttachFile(m.ctx, m.alice, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.AttachmentID != first.AttachmentID || len(m.list(t, task.ID)) != 1 {
+				t.Fatalf("the replay answered %s, the first call %s, with %d attachments: want the same one", second.AttachmentID, first.AttachmentID, len(m.list(t, task.ID)))
+			}
+			check := func(raw string) error {
+				u, err := url.Parse(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m.signer.Verify(strings.TrimPrefix(u.Path, "/blobs/"), blob.Upload, u.Query().Get("exp"), u.Query().Get("sig"), clock())
+			}
+			if err := check(first.UploadURL); !errors.Is(err, blob.ErrExpired) {
+				t.Fatalf("the first URL at the replay: %v, want expired (the control)", err)
+			}
+			if err := check(second.UploadURL); err != nil {
+				t.Fatalf("the replay's upload URL at the replay: %v (URL %s, expiresAt %s)", err, second.UploadURL, second.ExpiresAt)
+			}
+			if exp, _ := time.Parse(time.RFC3339Nano, second.ExpiresAt); !exp.After(clock()) {
+				t.Fatalf("the replay's expiresAt %s is not after the replay", second.ExpiresAt)
+			}
+		})
+	}
+}
+
+// api-http#4: list_attachments answers the fileName attach_file was given, pending and ready.
+func TestListAttachmentsAnswersTheFileNameOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		body := []byte("pdf")
+		r, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "spec v2.pdf", MimeType: "application/pdf", Kind: "file", Bytes: int64(len(body))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if list := m.list(t, task.ID); len(list) != 1 || list[0].FileName != "spec v2.pdf" || list[0].Status != "pending" {
+			t.Fatalf("pending: %+v", list)
+		}
+		if err := m.upload(t, r.UploadURL, body); err != nil {
+			t.Fatal(err)
+		}
+		if list := m.list(t, task.ID); len(list) != 1 || list[0].FileName != "spec v2.pdf" || list[0].Status != "ready" {
+			t.Fatalf("ready: %+v", list)
+		}
+		// get_task_context's attachments section (an agent's one-call briefing) names it too.
+		cx, err := m.c.Context().GetTaskContext(m.ctx, m.alice, GetTaskContextReq{ProjectID: m.project, TaskID: task.ID, Include: []ContextSection{"attachments"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cx.Attachments) != 1 {
+			t.Fatalf("get_task_context attachments: %+v", cx.Attachments)
+		}
+		raw, err := json.Marshal(cx.Attachments[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"fileName":"spec v2.pdf"`) {
+			t.Fatalf("get_task_context attachment does not name the file: %s", raw)
+		}
+	})
+}
+
+// attach_file refuses, with QUOTA_EXCEEDED and no row, an attachment the blob volume has no room
+// for above its reserve; the upload would be refused anyway, and the agent learns it before it reads
+// the file.
+func TestAttachFileRefusedUnderTheVolumesReserve(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		m.files.Reserve = 1 << 62 // more than any volume holds
+		_, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "f.txt", MimeType: "text/plain", Kind: "file", Bytes: 10})
+		wantCode(t, err, domain.CodeQuotaExceeded)
+		if got := m.list(t, task.ID); len(got) != 0 {
+			t.Fatalf("%d attachments after the refusal, want 0", len(got))
+		}
+		// Control: with room, the same call attaches.
+		m.files.Reserve = 0
+		m.attach(t, task.ID, 10)
+		if got := m.list(t, task.ID); len(got) != 1 {
+			t.Fatalf("%d attachments, want 1", len(got))
+		}
+	})
 }

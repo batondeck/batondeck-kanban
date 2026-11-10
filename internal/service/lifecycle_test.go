@@ -123,6 +123,7 @@ func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 				if got.Status != domain.Todo || got.ClaimAttempts != int64(i) || got.NextEligibleAt == nil || *got.NextEligibleAt != want || got.Claim != nil {
 					t.Fatalf("fail %d: %+v, want TODO attempts %d nextEligibleAt %d", i, got, i, want)
 				}
+				e.clock.advance(time.Minute) // past the backoff: claim_task honours it
 				continue
 			}
 			if got.Status != domain.Blocked || !reasonIs(got, domain.BlockedReasonPoison) || got.ClaimAttempts != 3 ||
@@ -569,6 +570,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 		if _, p = e.lastChange(t); p.Kind != ChangeKindChanged {
 			t.Fatalf("fail into a backoff rang %+v", p)
 		}
+		e.clock.advance(time.Minute) // past the backoff: claim_task honours it
 		c = e.claim(t, bob, task.ID, 0)
 		h, err := lc.Handoff(e.ctx, bob, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: "reviewer-bot", MemoryNote: "over to you"})
 		if err != nil {
@@ -956,10 +958,12 @@ func reads(m map[string]int) (r int, w int) {
 	return r, w
 }
 
-// AC8: claim_next costs at most six read statements and next_task at most three, with the
+// AC8: claim_next costs at most six read statements and next_task at most four, with the
 // membership cached; cold (no snapshot) and warm (the bus live) are both measured. claim_next's pin
 // rose from four by P-117 for resume's two reads after the commit, the artifacts and one items page;
-// both are asserted, so neither can go uncounted.
+// next_task's from two (three when an empty frontier reaped, which it no longer does) for the same
+// two, when it previews a task (its resume was always null); both are asserted, so neither can go
+// uncounted.
 func TestClaimNextAndNextStatementPins(t *testing.T) {
 	f := newFixture(t, Options{})
 	n := &calls{m: map[string]int{}}
@@ -989,7 +993,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 			}
 			return err
 		}},
-		{"next_task", 3, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
+		{"next_task", 4, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
 		{"claim_next warm", 6, func() error {
 			f.c.ObserveChange(store.Change{ID: 1, Payload: json.RawMessage(`{}`)})
 			if _, err := f.c.boardSnapshot(f.ctx, f.project.ID, f.board.ID); err != nil {
@@ -1010,11 +1014,12 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		if r > c.pin {
 			t.Fatalf("%s issued %d read statements %v, the pin is %d", c.name, r, m, c.pin)
 		}
-		if strings.HasPrefix(c.name, "claim_next") && (m["ListArtifacts"] != 1 || m["ListContextItems"] != 1) {
+		if (strings.HasPrefix(c.name, "claim_next") || c.name == "next_task") && (m["ListArtifacts"] != 1 || m["ListContextItems"] != 1) {
 			t.Fatalf("%s read resume with %v, want one ListArtifacts and one ListContextItems", c.name, m)
 		}
 	}
-	// next_task on an empty frontier: the preview and the lazy reap's one read.
+	// next_task on an empty frontier: the preview alone (it reaps nothing, so it reads no expired
+	// leases).
 	empty, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "E", CreatedBy: "alice"}, store.WriteOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -1024,7 +1029,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := n.take()
-	if r, _ := reads(m); r > 3 {
+	if r, _ := reads(m); r > 1 || m["ListExpiredLeases"] != 0 {
 		t.Fatalf("empty next_task %d statements %v", r, m)
 	}
 	t.Logf("next_task empty   %v", m)
@@ -1415,6 +1420,50 @@ func TestBlockKeepsAnExistingBlocker(t *testing.T) {
 		t.Logf("blocker version %d -> %d; dependency.added events %d; edges %d; task %s", was, got.Version, len(added), len(e.edges(t)), e.get(t, task.ID).Status)
 		if got.Version != was || len(added) != 1 || len(e.edges(t)) != 1 || e.get(t, task.ID).Status != domain.Blocked {
 			t.Fatalf("block re-counted an existing blocker: version %d -> %d, events %d", was, got.Version, len(added))
+		}
+	})
+}
+
+// A cancelled task that is reopened is no longer cancelled: move_task DONE -> IN_PROGRESS and
+// add_follow_up {reopen} each drop the system label, so the task delivered afterwards counts as done.
+// Cancelling a poisoned task drops poisoned: a DONE task is not in the poison queue.
+func TestReopenDropsCancelledAndCancelDropsPoisoned(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		lc := e.c.Lifecycle()
+		cancel := func(t *testing.T, id string) store.Task {
+			t.Helper()
+			r, err := lc.Cancel(e.ctx, e.alice, CancelTaskReq{ProjectID: e.project, TaskID: id, Version: e.get(t, id).Version, Reason: "descoped"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := e.get(t, id)
+			if r.Task.Status != domain.Done || !slices.Contains(got.Labels, domain.LabelCancelled) {
+				t.Fatalf("cancel: %s %v", got.Status, got.Labels)
+			}
+			return got
+		}
+
+		moved := cancel(t, e.tkSeed(t, domain.Todo, "", 0, []string{"keep"}).ID)
+		if _, err := e.tkMove(t, e.alice, moved, domain.InProgress); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, moved.ID); got.Status != domain.InProgress || !slices.Equal(got.Labels, []string{"keep"}) {
+			t.Fatalf("move DONE -> IN_PROGRESS of a cancelled task: %s %v, want IN_PROGRESS [keep]", got.Status, got.Labels)
+		}
+
+		followed := cancel(t, e.task(t, domain.Todo).ID)
+		r, err := e.c.FollowUps().AddFollowUp(e.ctx, e.alice, AddFollowUpReq{ProjectID: e.project, TaskID: followed.ID, Body: "needed after all", Reopen: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := e.get(t, followed.ID); got.Status != domain.Todo || slices.Contains(got.Labels, domain.LabelCancelled) || slices.Contains(r.Task.Labels, domain.LabelCancelled) {
+			t.Fatalf("add_follow_up reopen of a cancelled task: %s %v", got.Status, got.Labels)
+		}
+
+		poisoned := e.tkSeed(t, domain.Blocked, domain.BlockedReasonPoison, 3, []string{domain.LabelPoisoned})
+		got := cancel(t, poisoned.ID)
+		if !slices.Equal(got.Labels, []string{domain.LabelCancelled}) || got.BlockedReason != nil {
+			t.Fatalf("cancelled poisoned task: labels %v reason %v, want [cancelled] and none", got.Labels, got.BlockedReason)
 		}
 	})
 }

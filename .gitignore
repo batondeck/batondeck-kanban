@@ -12,3 +12,14 @@
 # make e2e-ui: the Playwright HTML report, and each run's screenshots, traces, videos and server log
 /web/e2e-report/
 /web/e2e-results/
+# Secrets and local state the README has you make beside compose.yaml or a dev database: the compose
+# .env (master key, Postgres password), the backup's copies of it, the dump and the archives, a
+# SQLite data dir's key, blobs and lock. A public fork must never receive one by `git add`.
+.env
+.env.*
+*.env
+master.key
+/blobs/
+batondeck-kanban.lock
+batondeck.sql
+batondeck-*.tgz

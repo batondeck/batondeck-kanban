@@ -1,0 +1,4 @@
+{"event":{"id":"01DEN1HNLBC1VITYLBI7MKHB01","event_type":"incident.annotated","resource_type":"incident","occurred_at":"2026-10-24T12:05:00.000Z",
+ "agent":{"html_url":"https://acme.pagerduty.com/users/PLH1HKV","id":"PLH1HKV","self":"https://api.pagerduty.com/users/PLH1HKV","summary":"Tenex Engineer","type":"user_reference"},
+ "client":null,"data":{"incident":{"html_url":"https://acme.pagerduty.com/incidents/PGR0VU2","id":"PGR0VU2","self":"https://api.pagerduty.com/incidents/PGR0VU2",
+  "summary":"A little bump in the road","type":"incident_reference"},"id":"PWL7QXS","content":"Investigating the cause","trigger_log_entry_id":"R8KZ2LJ5M3WC7TYA0QBFD9EXN","type":"incident_note"}}}

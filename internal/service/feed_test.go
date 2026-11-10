@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -493,4 +494,69 @@ func TestCrossProcessDoneWithACrossBoardDependentDropsItsBoard(t *testing.T) {
 	if got.TaskCounts[review] != 0 || got.TaskCounts[done] != 1 {
 		t.Fatalf("process 1's get_board after process 2's move to DONE, every row delivered: REVIEW %v, DONE %v; want 0, 1 (stale snapshot)", got.TaskCounts[review], got.TaskCounts[done])
 	}
+}
+
+// A ticket's own history (web-board#8): the board feed's newest page holds the board's newest events
+// whatever task they are on, so the web's Activity panel, which filtered that page by task, read an
+// older ticket on a busy board as "No activity yet". With taskId the feed is that task's events,
+// newest first and paged as the board's; a task on another board of the project is NOT_FOUND, so the
+// read is never more than the board's own feed.
+func TestBoardFeedOfOneTaskOverTheEngines(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		old, quiet := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		base := time.Now().UnixMilli()
+		for _, ev := range []struct {
+			task string
+			ts   int64
+		}{{old.ID, base}, {old.ID, base + 1}} {
+			if _, err := e.st.AppendTaskEvent(e.ctx, store.EventInput{ProjectID: e.project, BoardID: e.board.ID, TaskID: ev.task, Actor: "alice", Type: domain.EventTaskUpdated, Ts: ev.ts}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The board moves on: 60 newer events on another task push the old ticket out of the default page.
+		for i := range 60 {
+			if _, err := e.st.AppendTaskEvent(e.ctx, store.EventInput{ProjectID: e.project, BoardID: e.board.ID, TaskID: quiet.ID, Actor: "alice", Type: domain.EventTaskUpdated, Ts: base + 10 + int64(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		board, err := e.c.Feed().BoardFeed(e.ctx, e.alice, BoardFeedReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range board.Events {
+			if ev.TaskID == old.ID {
+				t.Fatalf("the board's newest page holds the old ticket's event %+v: the scenario is not reproduced", ev)
+			}
+		}
+		own, err := e.c.Feed().BoardFeed(e.ctx, e.alice, BoardFeedReq{ProjectID: e.project, BoardID: e.board.ID, TaskID: old.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var mine []string
+		for _, ev := range own.Events {
+			if ev.TaskID != old.ID {
+				t.Fatalf("taskId %s answered another task's event %+v", old.ID, ev)
+			}
+			mine = append(mine, ev.Ts)
+		}
+		if len(mine) < 2 || own.NextCursor != "" {
+			t.Fatalf("taskId %s: %d events (cursor %q), want its own two at least, on one page", old.ID, len(mine), own.NextCursor)
+		}
+		// Paged as the board's feed: newest first, the cursor pages older.
+		first, err := e.c.Feed().BoardFeed(e.ctx, e.alice, BoardFeedReq{ProjectID: e.project, BoardID: e.board.ID, TaskID: old.ID, Limit: 1})
+		if err != nil || len(first.Events) != 1 || first.NextCursor == "" || first.Events[0].ID != own.Events[0].ID {
+			t.Fatalf("first page %+v (err %v), want %s and a cursor", first, err, own.Events[0].ID)
+		}
+		// A task of the project on another board is not this board's to read.
+		other, err := e.st.CreateBoard(e.ctx, store.CreateBoardInput{ProjectID: e.project, Name: "Other", CreatedBy: "alice"}, store.WriteOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = e.c.Feed().BoardFeed(e.ctx, e.alice, BoardFeedReq{ProjectID: e.project, BoardID: other.ID, TaskID: old.ID})
+		wantCode(t, err, domain.CodeNotFound)
+		_, err = e.c.Feed().BoardFeed(e.ctx, e.alice, BoardFeedReq{ProjectID: e.project, BoardID: e.board.ID, TaskID: "T-missing"})
+		wantCode(t, err, domain.CodeNotFound)
+		_, err = e.c.Feed().BoardFeed(e.ctx, domain.Caller{Identity: "mallory"}, BoardFeedReq{ProjectID: e.project, BoardID: e.board.ID, TaskID: old.ID})
+		wantCode(t, err, domain.CodeForbidden)
+	})
 }

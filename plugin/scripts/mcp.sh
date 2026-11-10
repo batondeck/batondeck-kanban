@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # One MCP tool call against a batondeck-kanban server, from a shell: prints the tool's structured
-# result as JSON and exits 0, or prints the error and exits 1. Each run opens its own MCP session.
+# result as JSON and exits 0, or prints the error and exits 1. Each run opens its own MCP session and
+# ends it on exit, success or failure (a session left open holds a slot of the server's bound until
+# it idles out, 30 minutes).
 #
 #   scripts/mcp.sh <tool> '<json arguments>'
 #   scripts/mcp.sh list_projects '{}'
@@ -22,14 +24,23 @@ hdr=(-H "Content-Type: application/json" -H "Accept: application/json, text/even
 # printf is a shell builtin, so no process carries the token on its command line either.
 auth() { printf 'Authorization: Bearer %s\n' "${BATONDECK_TOKEN}"; }
 
-# initialize, then read the session id the server answers with (a stateless server sends none).
-sid="$(auth | curl -sS -D - -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcp.sh","version":"1"}}}' \
-  | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')"
-[ -z "${sid}" ] || hdr+=(-H "Mcp-Session-Id: ${sid}")
-auth | curl -sS -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+unreachable() { echo "mcp.sh: cannot reach ${url} (is the server running? BATONDECK_URL)" >&2; exit 1; }
 
-req="$(python3 -c 'import json,sys; print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":sys.argv[1],"arguments":json.loads(sys.argv[2])}}))' "${tool}" "${args}")"
+# initialize, then read the session id the server answers with (a stateless server sends none).
+# These two setup calls run curl without -S: when the server is not there, unreachable's one line
+# is the whole message.
+sid="$(auth | curl -s -D - -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"mcp.sh","version":"1"}}}' \
+  | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}')" || unreachable
+if [ -n "${sid}" ]; then
+  hdr+=(-H "Mcp-Session-Id: ${sid}")
+  # End the session on every exit; the script's own exit status is kept.
+  trap 'auth | curl -sS -o /dev/null --max-time 10 -X DELETE "${url}" -H @- -H "Mcp-Session-Id: ${sid}" 2>/dev/null || true' EXIT
+fi
+auth | curl -s -o /dev/null -X POST "${url}" -H @- "${hdr[@]}" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' || unreachable
+
+req="$(python3 -c 'import json,sys; print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":sys.argv[1],"arguments":json.loads(sys.argv[2])}}))' "${tool}" "${args}")" \
+  || { echo "mcp.sh: the arguments are not JSON: ${args}" >&2; exit 1; }
 auth | curl -sS -N --max-time 120 -X POST "${url}" -H @- "${hdr[@]}" -d "${req}" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -46,4 +57,4 @@ for m in msgs:
         if r.get("isError"):
             print("TOOL_ERROR:", r["content"][0]["text"]); sys.exit(1)
         print(json.dumps(r.get("structuredContent", r), indent=2)); sys.exit(0)
-print("TRANSPORT_ERROR:", raw.strip()[:400]); sys.exit(1)'
+print("TRANSPORT_ERROR:", raw.strip()[:400]); sys.exit(1)' || exit 1

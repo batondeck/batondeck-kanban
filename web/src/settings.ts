@@ -1,9 +1,8 @@
 /**
- * Admin-tunable UI runtime settings. Defaults live HERE (the single source); the workspace stores only
- * overrides (workspace/settings.ui via get/set_feature_flags), delivered on /api/session and hydrated
- * once at boot. Non-React code (agentStatus) reads the module store synchronously via uiSettings();
- * React code re-renders through the AuthContext copy. Admins edit these in /admin — changes apply on
- * each client's next session load (~page load / auth refresh), like the core's ~60s flag cache.
+ * UI runtime settings. Defaults live HERE (the single source). `/api/session` carries a `uiSettings`
+ * object of overrides, hydrated on every session load; this server always sends it empty, so the
+ * defaults below are what every client runs with. Non-React code (agentStatus) reads the module store
+ * synchronously via uiSettings(); React code re-renders through the AuthContext copy.
  */
 export interface UiSettings {
   /** Results shown per PAGE of ticket search ("Show more" pages through the rest; the fetch always uses the server cap 50). */
@@ -20,8 +19,6 @@ export interface UiSettings {
   presenceOfflineAfterMs: number;
   /** "Who's around now" window for presence lists/pickers. */
   presenceWindowMs: number;
-  /** Fetch link-card icons from the Google favicon proxy (off → generic icon, no external request). */
-  linkFavicons: boolean;
 }
 
 export const UI_DEFAULTS: UiSettings = {
@@ -32,7 +29,6 @@ export const UI_DEFAULTS: UiSettings = {
   sessionsLimit: 100,
   presenceOfflineAfterMs: 75000,
   presenceWindowMs: 600000,
-  linkFavicons: true,
 };
 
 let current: UiSettings = UI_DEFAULTS;
@@ -44,6 +40,11 @@ export function uiSettings(): UiSettings {
 
 /** Merge workspace overrides over the defaults. Called by AuthProvider on every session load. */
 export function hydrateUiSettings(overrides: Partial<UiSettings> | undefined): UiSettings {
-  current = { ...UI_DEFAULTS, ...(overrides ?? {}) };
+  const merged = { ...UI_DEFAULTS, ...(overrides ?? {}) };
+  // `list_tasks` refuses a `limit` over 200 (internal/service/tasks.go listMaxLimit), and the drawer,
+  // the Activity log and the Agents screen send this page size in one request: past 200 each would fail.
+  const pageLimit = Math.floor(Number(merged.taskPageLimit));
+  merged.taskPageLimit = Number.isFinite(pageLimit) ? Math.min(200, Math.max(1, pageLimit)) : UI_DEFAULTS.taskPageLimit;
+  current = merged;
   return current;
 }

@@ -3,8 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"os"
+	"strings"
 	"sync/atomic"
 
 	"github.com/pressly/goose/v3"
@@ -43,6 +47,8 @@ type SQLite struct {
 	appended *atomic.Bool
 	// issued counts every area statement, whatever its context (StatementCounter).
 	issued *atomic.Int64
+	// watchDSN opens WatchChanges' connection of its own: a read connection's.
+	watchDSN string
 }
 
 var _ Store = (*SQLite)(nil)
@@ -54,22 +60,46 @@ const sqliteConns = 4
 // a read connection refuses writes, and its pragma comes last so that journal_mode(WAL) has run
 // on a fresh file before it.
 func sqliteDSN(path, synchronous string, write bool) string {
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(%s)", path, synchronous)
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(%s)", sqliteURI(path), synchronous)
 	if write {
 		return dsn + "&_txlock=immediate"
 	}
 	return dsn + "&_pragma=query_only(1)"
 }
 
+// sqliteURI is the file: URI naming path, percent-encoded (SQLite decodes it), so that a '?', '#'
+// or '%' in a directory or file name is part of the name: pasted in as it is, '?' and '#' end the
+// path and '%' starts an escape, and the driver opens another file. An absolute path takes an empty
+// authority ("file:///..."), so that one starting with "//" is not read as naming a host.
+func sqliteURI(path string) string {
+	p := (&url.URL{Path: path}).EscapedPath()
+	if strings.HasPrefix(path, "/") {
+		return "file://" + p
+	}
+	return "file:" + p
+}
+
 // OpenSQLite opens the SQLite file at path with the connection settings the type's comment explains:
 // write-ahead logging, foreign keys on, a five-second busy timeout, synchronous FULL or NORMAL as
 // given, one write connection whose transactions take the write lock at BEGIN, and a read pool of
-// four. It does not create the schema; Migrate does. The file is created if it is not there.
+// four. It does not create the schema; Migrate does. The file is created if it is not there, mode
+// 0600, before the driver opens it: the driver would make it under the umask (0644), and SQLite
+// gives the -wal and -shm files it makes beside it the database file's mode. An existing file keeps
+// the mode it has.
 func OpenSQLite(path, synchronous string) (*SQLite, error) {
 	switch synchronous {
 	case "FULL", "NORMAL":
 	default:
 		return nil, fmt.Errorf("store: synchronous %q (want FULL|NORMAL)", synchronous)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	switch {
+	case err == nil:
+		if err := f.Close(); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+	case !errors.Is(err, fs.ErrExist):
+		return nil, fmt.Errorf("store: %w", err)
 	}
 	w, err := sql.Open("sqlite", sqliteDSN(path, synchronous, true))
 	if err != nil {
@@ -84,7 +114,7 @@ func OpenSQLite(path, synchronous string) (*SQLite, error) {
 	}
 	r.SetMaxOpenConns(sqliteConns)
 	r.SetMaxIdleConns(sqliteConns)
-	return &SQLite{w: w, r: r, sig: signalFor(path), issued: new(atomic.Int64)}, nil
+	return &SQLite{w: w, r: r, sig: signalFor(path), issued: new(atomic.Int64), watchDSN: sqliteDSN(path, synchronous, false)}, nil
 }
 
 // ErrNotFound is what a store method returns when the row asked for is not there, on either
@@ -138,6 +168,15 @@ func (s *SQLite) ServerVersion(ctx context.Context) (string, error) {
 	return "SQLite " + v, nil
 }
 
+// HoldsSealedValues reads holdsSealedSQL from a read connection.
+func (s *SQLite) HoldsSealedValues(ctx context.Context) (bool, error) {
+	var held bool
+	if err := s.r.QueryRowContext(ctx, holdsSealedSQL).Scan(&held); err != nil {
+		return false, fmt.Errorf("store: sqlite: sealed values: %w", err)
+	}
+	return held, nil
+}
+
 // Atomically runs fn on a copy of this store whose statements all go through one transaction on
 // the write connection, begun IMMEDIATE (_txlock): it holds the write lock from BEGIN to the
 // commit, against every connection and every process.
@@ -149,7 +188,7 @@ func (s *SQLite) Atomically(ctx context.Context, fn func(tx Store) error) error 
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
-	in := &SQLite{w: s.w, r: s.r, tx: tx, sig: s.sig, appended: new(atomic.Bool), issued: s.issued}
+	in := &SQLite{w: s.w, r: s.r, tx: tx, sig: s.sig, appended: new(atomic.Bool), issued: s.issued, watchDSN: s.watchDSN}
 	if err := fn(in); err != nil {
 		_ = tx.Rollback()
 		return err

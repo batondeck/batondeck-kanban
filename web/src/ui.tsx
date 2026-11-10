@@ -291,6 +291,21 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
+/**
+ * A read that failed, said where its rows would be, with Retry. Without it a failed read looks like
+ * an empty one ("No comments yet."), and nobody can tell "there are none" from "we could not read
+ * them". `stale`: rows from an earlier read are still shown, so the line says they may be out of date.
+ */
+export function ReadFailed({ what, error, onRetry, stale }: { what: string; error: unknown; onRetry: () => void; stale?: boolean }) {
+  const detail = error instanceof Error && error.message ? `: ${error.message}` : '';
+  return (
+    <p className="error" role="alert" style={{ fontSize: 12, margin: 0 }}>
+      {stale ? `Couldn’t refresh ${what}; showing the last read` : `Couldn’t load ${what}`}{detail}.{' '}
+      <button type="button" className="btn secondary" style={{ fontSize: 11, padding: '1px 7px' }} onClick={onRetry}>Retry</button>
+    </p>
+  );
+}
+
 /** Horizontal progress/proportion bar. `tone` carries meaning (a lease running out is not
  *  the same event as soak progressing), so it is a prop rather than an inline colour. */
 export type BarTone = 'doing' | 'crit' | 'verifying' | 'accepted' | 'neutral';

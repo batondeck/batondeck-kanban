@@ -194,13 +194,17 @@ func (s commentsSvc) AddComment(ctx context.Context, caller domain.Caller, req A
 	if err := maxChars("body", req.Body, maxCommentChars); err != nil {
 		return AddCommentResp{}, err
 	}
+	// The parent is a comment of this task (the store answers NOT_FOUND otherwise), so bounded as one.
+	if err := maxChars("parentCommentId", req.ParentCommentID, maxKeyChars); err != nil {
+		return AddCommentResp{}, err
+	}
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return AddCommentResp{}, err
 	}
 	// TODO(spec): conductor's enforceTokenBudget warnings (the per-task chars budget) are not ported.
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_comment", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddCommentResp, error) {
 		workers := s.c.liveWorkers()
 		mentions, err := t.mentionsOf(req.Body, workers)

@@ -2,7 +2,9 @@
 # the pre-push hook runs (githooks/pre-push), once, with a Postgres 16 service and
 # BATONDECK_TEST_POSTGRES_DSN pointing at it, so the Postgres halves of conformance, perf and the
 # live contract run rather than skip. The SPA's typecheck and vitest suite are part of `make check`
-# (its web-check step), so the hook and this workflow cannot run different gates.
+# (its web-check step), so the hook and this workflow cannot run different gates. Before it, this
+# workflow alone runs govulncheck and npm audit: both ask an advisory database over the network,
+# which the hook does not need.
 #
 # The service is the hook's: the postgres:16-alpine image, user and password batondeck, the
 # `postgres` database (each test makes its own). GOWORK=off as in the hook: the gate proves the
@@ -24,7 +26,11 @@ defaults:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The slowest runs so far took 49 to 52 minutes, nearly all of it `make check`; 90 leaves room
+    # for a slower runner, and a hung test meets Go's own -timeout (TEST_TIMEOUT below, which names
+    # the test) well before the job limit (which names nothing). make prints each step's command as
+    # it starts it, so a job stopped at the limit still shows which step it was in.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16-alpine
@@ -42,18 +48,35 @@ jobs:
       GOWORK: "off"
       BATONDECK_TEST_POSTGRES_DSN: postgres://batondeck:batondeck@127.0.0.1:5432/postgres?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: govulncheck
+        # A vulnerability the code reaches, in the standard library of the Go go.mod pins or in a
+        # module, fails the gate (exit 3); one it does not call is listed and passes. Installed and
+        # then run, not `go run`: under `go run` it would scan the Go that runs it, which can be newer
+        # than the pinned one.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: npm audit
+        # An advisory of moderate or worse in what the web UI is built from (its dependencies) fails
+        # the gate; one in the dev tooling (vite, vitest, jsdom) is shown as a warning.
+        working-directory: web
+        run: |
+          npm audit --package-lock-only --omit=dev --audit-level=moderate
+          npm audit --package-lock-only || echo "::warning title=npm audit::a dev dependency of web/ has a published advisory (see above)"
 
       - name: make check, both engines
         # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.

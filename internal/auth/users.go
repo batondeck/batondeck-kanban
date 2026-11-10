@@ -10,6 +10,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,6 +41,16 @@ const (
 	maxLoginLen  = 254
 )
 
+// The audit actions of an account change (P-388): the workspace admin's on Settings → Users, the
+// host's `user` subcommand, a user's own password change. Each row's subject is the account's
+// identity (domain.CanonIdentity) and its data names the login and the via.
+const (
+	AuditUserAdded           = "user.added"
+	AuditUserDisabled        = "user.disabled"
+	AuditUserEnabled         = "user.enabled"
+	AuditUserPasswordChanged = "user.password_changed"
+)
+
 // Accounts manages local users. There is no sign-up: an account is made on the host with
 // `batondeck-kanban user add`.
 type Accounts struct {
@@ -52,6 +63,9 @@ type Accounts struct {
 	Params Argon2Params
 	// Limits bound Authenticate's password checks; nil means the process-wide default.
 	Limits *LoginLimits
+	// Audit receives the account rows of AddAs, DisableAs, EnableAs and SetPasswordAs, which refuse
+	// to run without it.
+	Audit store.Audit
 }
 
 func (a *Accounts) now() time.Time {
@@ -79,6 +93,21 @@ func NormalizeLogin(login string) (string, error) {
 	return l, nil
 }
 
+// MinPasswordLen is the fewest characters a password a person chooses may have: `user add`,
+// `user passwd` and the Settings password change refuse a shorter one (CheckNewPassword). A
+// generated password (Settings → Users) is longer.
+const MinPasswordLen = 12
+
+// CheckNewPassword refuses, VALIDATION, a chosen password under MinPasswordLen characters, saying
+// how long it was.
+func CheckNewPassword(pw string) error {
+	if n := len([]rune(pw)); n < MinPasswordLen {
+		return domain.Validation(fmt.Sprintf("the password is %d characters: it must be at least %d", n, MinPasswordLen),
+			map[string]any{"field": "password", "min": MinPasswordLen})
+	}
+	return nil
+}
+
 func checkPassword(pw string) error {
 	if pw == "" {
 		return domain.Validation("the password is empty", map[string]any{"field": "password"})
@@ -87,7 +116,7 @@ func checkPassword(pw string) error {
 }
 
 // Add creates an enabled user, a workspace admin when admin is set. displayName "" means the
-// login's part before any "@".
+// login's part before any "@". It records nothing: AddAs does.
 func (a *Accounts) Add(ctx context.Context, login, displayName, password string, admin bool) (store.User, error) {
 	l, err := NormalizeLogin(login)
 	if err != nil {
@@ -117,6 +146,104 @@ func (a *Accounts) Add(ctx context.Context, login, displayName, password string,
 	return u, nil
 }
 
+// AddAs is Add, recorded: a user.added row (actor, subject the new identity, data {login, admin,
+// via}) follows the account, and when that row cannot be written the account is disabled before
+// the error returns, so no usable account exists unrecorded. The host's `user add` and Settings →
+// Users call it; Add alone records nothing.
+func (a *Accounts) AddAs(ctx context.Context, actor, via, login, displayName, password string, admin bool) (store.User, error) {
+	if a.Audit == nil {
+		return store.User{}, errNoAccountAudit("add")
+	}
+	u, err := a.Add(ctx, login, displayName, password, admin)
+	if err != nil {
+		return store.User{}, err
+	}
+	if err := a.record(ctx, AuditUserAdded, actor, u, map[string]any{"login": u.Email, "admin": u.WorkspaceAdmin, "via": via}); err != nil {
+		if derr := a.Store.DisableUser(context.WithoutCancel(ctx), u.ID, a.now().UnixMilli()); derr != nil {
+			return store.User{}, fmt.Errorf("the account %s was added but not recorded, and disabling it failed too (run `user disable %s`): %w", u.Email, u.Email, errors.Join(err, derr))
+		}
+		return store.User{}, fmt.Errorf("the account %s was not recorded, so it was left disabled: %w", u.Email, err)
+	}
+	return u, nil
+}
+
+// DisableAs is Disable, recorded: a user.disabled row (data {login, via}). The disable stands when
+// the row cannot be written, and the error says so.
+func (a *Accounts) DisableAs(ctx context.Context, actor, via, login string) (store.User, error) {
+	if a.Audit == nil {
+		return store.User{}, errNoAccountAudit("disable")
+	}
+	u, err := a.Disable(ctx, login)
+	if err != nil {
+		return store.User{}, err
+	}
+	if err := a.record(ctx, AuditUserDisabled, actor, u, map[string]any{"login": u.Email, "via": via}); err != nil {
+		return store.User{}, fmt.Errorf("%s is disabled, but the audit row was not written: %w", u.Email, err)
+	}
+	return u, nil
+}
+
+// EnableAs is Enable, recorded: a user.enabled row (data {login, via}) when the user was disabled
+// (enabling an enabled user changes nothing and records nothing). When the row cannot be written
+// the user is disabled again before the error returns.
+func (a *Accounts) EnableAs(ctx context.Context, actor, via, login string) (store.User, bool, error) {
+	if a.Audit == nil {
+		return store.User{}, false, errNoAccountAudit("enable")
+	}
+	before, err := a.Lookup(ctx, login)
+	if err != nil {
+		return store.User{}, false, err
+	}
+	u, was, err := a.Enable(ctx, login)
+	if err != nil || !was {
+		return u, was, err
+	}
+	if err := a.record(ctx, AuditUserEnabled, actor, u, map[string]any{"login": u.Email, "via": via}); err != nil {
+		if derr := a.Store.DisableUser(context.WithoutCancel(ctx), u.ID, before.DisabledAt); derr != nil {
+			return store.User{}, false, fmt.Errorf("%s was enabled but not recorded, and disabling it again failed too: %w", u.Email, errors.Join(err, derr))
+		}
+		return store.User{}, false, fmt.Errorf("%s was not recorded, so it stays disabled: %w", u.Email, err)
+	}
+	return u, true, nil
+}
+
+// SetPasswordAs is SetPassword, recorded: a user.password_changed row (data {login, via,
+// sessionsEnded}). The new password and the ended sessions stand when the row cannot be written,
+// and the error says so.
+func (a *Accounts) SetPasswordAs(ctx context.Context, actor, via, login, password string) (int64, error) {
+	if a.Audit == nil {
+		return 0, errNoAccountAudit("password change")
+	}
+	ended, err := a.SetPassword(ctx, login, password)
+	if err != nil {
+		return 0, err
+	}
+	u, err := a.Lookup(ctx, login)
+	if err == nil {
+		err = a.record(ctx, AuditUserPasswordChanged, actor, u, map[string]any{"login": u.Email, "via": via, "sessionsEnded": ended})
+	}
+	if err != nil {
+		return ended, fmt.Errorf("the password was changed and %d browser session(s) ended, but the audit row was not written: %w", ended, err)
+	}
+	return ended, nil
+}
+
+func errNoAccountAudit(what string) error {
+	return domain.NewError(domain.CodeInternal, "account "+what+": no audit log to record it in", nil)
+}
+
+// record writes one account row: subject the account's identity in the form every identity-valued
+// audit subject is stored in (domain.CanonIdentity).
+func (a *Accounts) record(ctx context.Context, action, actor string, u store.User, data map[string]any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = a.Audit.AppendAudit(ctx, store.AuditRow{TS: a.now().UnixMilli(), Action: action, Actor: actor,
+		Subject: domain.CanonIdentity(u.ID), Result: store.AuditOK, Data: raw})
+	return err
+}
+
 // Lookup returns the user with this login, or NOT_FOUND.
 func (a *Accounts) Lookup(ctx context.Context, login string) (store.User, error) {
 	l, err := NormalizeLogin(login)
@@ -130,9 +257,11 @@ func (a *Accounts) Lookup(ctx context.Context, login string) (store.User, error)
 	return u, err
 }
 
-// Disable marks the user disabled. Their sessions and tokens stop resolving once the account cache
-// entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by default). Enable is the way
-// back.
+// Disable marks the user disabled. Their sessions, API tokens and OAuth access tokens stop
+// resolving once the account cache entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by
+// default), and their OAuth grants are not refreshed while it lasts. Nothing is deleted or
+// revoked: Enable is the way back, and what has not expired works again. It records nothing:
+// DisableAs does.
 func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error) {
 	u, err := a.Lookup(ctx, login)
 	if err != nil {
@@ -147,6 +276,7 @@ func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error
 // Enable clears the user's disabled mark, returning the user after and whether they were disabled;
 // enabling an enabled user changes nothing. Their unexpired sessions and tokens resolve again once
 // the account cache entry expires (AccountCacheTTL, 60 s by default), as Disable's take effect.
+// It records nothing: EnableAs does.
 func (a *Accounts) Enable(ctx context.Context, login string) (u store.User, wasDisabled bool, err error) {
 	u, err = a.Lookup(ctx, login)
 	if err != nil {
@@ -165,8 +295,11 @@ func (a *Accounts) Enable(ctx context.Context, login string) (u store.User, wasD
 // SetPassword replaces the user's password and ends every browser session of the user, returning
 // how many it ended: a reset after a leak must not leave a session the old password opened. The
 // hash is written first, so a sign-in with the old password cannot land between the two writes and
-// keep a session. API and OAuth tokens are separate credentials and stay (`token revoke` ends one;
-// `user disable` ends them all). Without Sessions it refuses before writing anything.
+// keep a session, and one whose check began before the write ends its own session when it reads
+// the user again (Service.Login). API tokens and OAuth grants are separate credentials and stay:
+// `token revoke` ends an API token, and `user disable` suspends both (Disable); no command ends one
+// OAuth grant, whose refresh token lapses 14 days after its last use. Without Sessions it refuses
+// before writing anything. It records nothing: SetPasswordAs does.
 func (a *Accounts) SetPassword(ctx context.Context, login, password string) (ended int64, err error) {
 	if a.Sessions == nil {
 		return 0, errors.New("auth: Accounts.Sessions is nil: a password change must end the user's sessions")
@@ -232,11 +365,20 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	if lim == nil {
 		lim = loginLimits
 	}
-	refund, err := lim.admit(addr, a.now())
+	known := lim.isKnown(addr, l, a.now())
+	refund, err := lim.admit(addr, known, a.now())
 	if err != nil {
 		return store.User{}, err
 	}
-	release, err := lim.acquire(ctx)
+	// Only a checked password that failed keeps the debit: a refusal for want of a verification
+	// slot, a store error and a success are refunded.
+	charged := false
+	defer func() {
+		if !charged {
+			refund()
+		}
+	}()
+	release, err := lim.acquire(ctx, known)
 	if err != nil {
 		return store.User{}, err
 	}
@@ -244,15 +386,17 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	u, err := a.Store.GetUserByEmail(ctx, l)
 	if errors.Is(err, store.ErrNotFound) {
 		_ = verify(password, dummyHash())
+		charged = true
 		return store.User{}, errUnauthenticated()
 	}
 	if err != nil {
 		return store.User{}, err
 	}
 	if !verify(password, u.PasswordHash) || u.DisabledAt != 0 {
+		charged = true
 		return store.User{}, errUnauthenticated()
 	}
-	refund()
+	lim.signedIn(addr, l, a.now())
 	return u, nil
 }
 

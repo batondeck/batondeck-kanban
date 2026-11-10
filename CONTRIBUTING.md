@@ -21,7 +21,7 @@ so the approach can be agreed before you spend time on it.
 ```
 make hooks    # once per clone: the pre-commit, commit-msg and pre-push hooks under githooks/
 make build    # the binary, with the web UI embedded from web/dist
-make check    # the gate; CI also runs make e2e and make e2e-ui on every pull request
+make check    # the gate; CI also runs make e2e, make e2e-ui, govulncheck and npm audit
 ```
 
 Run by hand, `make check` tests the Postgres engine only when `BATONDECK_TEST_POSTGRES_DSN` names
@@ -30,7 +30,10 @@ you, and CI runs both engines.
 
 `make check` is the gate: the pre-push hook runs it, and CI runs it again on every pull request,
 together with the end-to-end suites (`make e2e` for the MCP tools, `make e2e-ui` for the web UI in
-Chromium). Run what you changed first; for example `go test ./internal/service/...`, or
+Chromium). CI also fails a pull request on a vulnerability the Go code reaches (`govulncheck ./...`)
+and on a moderate or worse advisory in the web UI's runtime dependencies
+(`cd web && npm audit --omit=dev --audit-level=moderate`); the hook skips both, since they need the
+network. Run what you changed first; for example `go test ./internal/service/...`, or
 `cd web && npm test`.
 
 If you change anything under `web/src`, rebuild the embedded bundle with `cd web && npm run build`

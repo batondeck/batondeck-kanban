@@ -262,3 +262,87 @@ func TestAccountName(t *testing.T) {
 		})
 	}
 }
+
+// failingAudit is an audit log every append to fails.
+type failingAudit struct{ store.Audit }
+
+func (failingAudit) AppendAudit(context.Context, store.AuditRow) (int64, error) {
+	return 0, domain.NewError(domain.CodeInternal, "the audit log is down", nil)
+}
+
+// The recorded account changes refuse without an audit log, and leave no usable account or enable
+// unrecorded: an add whose row cannot be written leaves the account disabled, an enable leaves the
+// user disabled.
+func TestRecordedAccountChangesNeedTheirRow(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	acc := *f.svc.Accounts
+	if _, err := acc.AddAs(ctx, HostActor, "cli", "carol", "", "pw", false); err == nil {
+		t.Fatal("AddAs without an audit log: no error")
+	}
+	if _, err := acc.Lookup(ctx, "carol"); err == nil {
+		t.Fatal("AddAs without an audit log added the account")
+	}
+	acc.Audit = failingAudit{}
+	if _, err := acc.AddAs(ctx, HostActor, "cli", "carol", "", "pw", false); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("AddAs with a failing audit log: %v", err)
+	}
+	if u, err := acc.Lookup(ctx, "carol"); err != nil || u.DisabledAt == 0 {
+		t.Fatalf("the unrecorded account: %+v %v, want it disabled", u, err)
+	}
+	_, err := acc.Authenticate(ctx, "192.0.2.1", "carol", "pw")
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if _, _, err := acc.EnableAs(ctx, HostActor, "cli", "carol"); err == nil {
+		t.Fatal("EnableAs with a failing audit log: no error")
+	}
+	if u, _ := acc.Lookup(ctx, "carol"); u.DisabledAt == 0 {
+		t.Fatal("an unrecorded enable left the account enabled")
+	}
+	acc.Audit = f.st
+	if u, was, err := acc.EnableAs(ctx, HostActor, "cli", "carol"); err != nil || !was || u.DisabledAt != 0 {
+		t.Fatalf("EnableAs: %+v %t %v", u, was, err)
+	}
+}
+
+// A password change that lands while a sign-in with the old password is inside its check ends
+// that sign-in too: the sign-in read the old hash, so its session would otherwise be created after
+// SetPassword ended the user's sessions and outlive the reset.
+func TestPasswordChangeDuringASignInEndsItsSession(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.addUser(t, "alice", "old-password")
+	orig := verify
+	var ended int64 = -1
+	verify = func(p, h string) bool {
+		ok := orig(p, h)
+		if p == "old-password" && ended < 0 {
+			var err error
+			if ended, err = f.svc.Accounts.SetPassword(ctx, "alice", "new-password"); err != nil {
+				t.Error(err)
+			}
+		}
+		return ok
+	}
+	t.Cleanup(func() { verify = orig })
+	secret, _, err := f.svc.Login(ctx, "192.0.2.1", "alice", "old-password")
+	if err == nil {
+		_, _, rerr := f.svc.ResolveSession(ctx, secret)
+		t.Fatalf("the sign-in with the old password opened a session (SetPassword ended %d; it resolves: %v)", ended, rerr == nil)
+	}
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if n, err := f.st.DeleteUserSessions(ctx, f.mustLookup(t, "alice").ID); err != nil || n != 0 {
+		t.Fatalf("%d sessions of alice left behind (%v), want 0", n, err)
+	}
+	if _, _, err := f.svc.Login(ctx, "192.0.2.1", "alice", "new-password"); err != nil {
+		t.Fatalf("the new password: %v", err)
+	}
+}
+
+func (f *fixture) mustLookup(t *testing.T, login string) store.User {
+	t.Helper()
+	u, err := f.svc.Accounts.Lookup(context.Background(), login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}

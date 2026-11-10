@@ -76,6 +76,9 @@ func feedURI(projectID, boardID string) string {
 // identity-routed notifications hub): list_notifications {limit: 50} as the caller, once on open
 // and again per StreamCoalesce of the caller's notification rows, read from the bus by the
 // caller's identity scope. A notification row is never a board change.
+// A board frame that cannot be made (the re-resolve or a read failed, not FORBIDDEN or NOT_FOUND) is
+// tried again after the coalesce, doubling per failure up to the ping, so a store blip delays the
+// change instead of dropping it until the next one; so is a notifications frame.
 // The caller is resolved again before every ping, board, presence and notifications frame (P-219):
 // once the credential no longer resolves (a logout, a disabled user as of the account cache, a
 // revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
@@ -168,8 +171,11 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
+	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("Connection", "keep-alive")
+	// nginx buffers a proxied response unless told not to, which would hold every frame (and the
+	// pings the SPA's stall watchdog waits for) until its buffer fills.
+	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	out := &sse{w: w, f: flusher}
 	out.event("ready", 0, struct{}{})
@@ -230,19 +236,33 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sendPresence()
-	sendNotifications := func() {
+	// sendNotifications reports false when the frame could not be made (a failed read).
+	sendNotifications := func() bool {
 		if s.o.Services.Notifications == nil {
-			return
+			return true
 		}
 		snap, err := s.o.Services.Notifications.List(ctx, caller, service.ListNotificationsReq{Limit: service.FeedSnapshotLimit})
 		if err != nil {
 			logger.Printf("api: stream notifications frame for %s: %+v", caller.Identity, err)
-			return
+			return false
 		}
 		out.event("notifications", 0, snap)
+		return true
 	}
-	sendNotifications()
+	// A notifications frame that could not be made (a failed re-resolve or read) is tried again as a
+	// board frame is: after the coalesce, doubling per failure up to the ping, back to the coalesce
+	// once a frame goes out.
 	var feedFlush <-chan time.Time
+	feedRetry := s.coalesce
+	notified := func(ok bool) {
+		if ok {
+			feedRetry = s.coalesce
+			return
+		}
+		feedFlush = time.After(feedRetry)
+		feedRetry = min(feedRetry*2, s.ping)
+	}
+	notified(sendNotifications())
 
 	ping := time.NewTicker(s.ping)
 	defer ping.Stop()
@@ -259,6 +279,14 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if pending > 0 {
 		arm(0)
+	}
+	// retry is how long after a board frame that could not be made (a failed re-resolve or read)
+	// the next try comes: the coalesce, doubling per failure up to the ping, back to the coalesce
+	// once a frame goes out. The pending changes stay pending meanwhile.
+	retry := s.coalesce
+	failed := func() {
+		arm(retry)
+		retry = min(retry*2, s.ping)
 	}
 	for !out.failed {
 		select {
@@ -280,6 +308,7 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if closed, ok := recheck(); closed {
 				return
 			} else if !ok {
+				failed()
 				continue
 			}
 			frame, err := s.compose(ctx, caller, projectID, boardID)
@@ -288,8 +317,10 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return // the caller lost the board: a reconnect meets the pre-flight's 403
 				}
 				logger.Printf("api: stream board frame %s/%s: %+v", projectID, boardID, err)
+				failed()
 				continue
 			}
+			retry = s.coalesce
 			out.event("board", last, frame)
 			out.event("updated", 0, updatedFrame{URI: feedURI(projectID, boardID), Count: pending})
 			pending = 0
@@ -302,11 +333,11 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-feedFlush:
 			feedFlush = nil
-			if closed, ok := recheck(); closed {
+			closed, ok := recheck()
+			if closed {
 				return
-			} else if ok {
-				sendNotifications()
 			}
+			notified(ok && sendNotifications())
 		case <-ping.C:
 			if closed, ok := recheck(); closed {
 				return

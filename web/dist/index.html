@@ -10,12 +10,11 @@
     <!-- Paints the stored theme BEFORE the bundle loads. Without it a dark-mode user gets a
          white flash for the length of the JS download, which no in-app fix can reach. -->
     <script>try{var t=localStorage.getItem("bd.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="/assets/index-C2crs1qa.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-B0Z9INg1.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-mipaUliv.css">
+    <!-- No font link: Inter, JetBrains Mono and Newsreader are bundled (main.tsx imports them), so
+         the page asks no third-party host for anything. -->
+    <script type="module" crossorigin src="/assets/index-Bc26YdWd.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-BWaJ3C7D.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-BS0PEUZc.css">
   </head>
   <body>
     <!-- The preloader is a CHILD of the React root on purpose: `createRoot().render()` clears

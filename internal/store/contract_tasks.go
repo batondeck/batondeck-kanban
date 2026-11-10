@@ -119,9 +119,11 @@ type TaskPatch struct {
 }
 
 // StatusChange is what SetStatus writes. ColumnID "" keeps the task's column; OrderKey nil keeps
-// its order. BlockedReason is written only when Status is BLOCKED ("" is no reason); any other
-// status clears it. ClaimAttempts and NextEligibleAt nil keep them. Labels nil keeps them.
-// ClearClaim drops the lease. Unpoison takes a poisoned task (BLOCKED, reason "poison") out of
+// its order key, except that a write moving the task into another column without one lands it at
+// that column's head with a fresh key (HeadKey), before every key the column held. BlockedReason is written only when Status is BLOCKED ("" is no reason); any other
+// status clears it. ClaimAttempts and NextEligibleAt nil keep them. Labels nil keeps them; a write
+// that takes the task out of DONE drops the cancelled label from whatever labels it lands with
+// (domain.Reopened), whoever reopens it. ClearClaim drops the lease. Unpoison takes a poisoned task (BLOCKED, reason "poison") out of
 // quarantine: claim_attempts to 0, next_eligible_at NULL, the poisoned label removed
 // (domain.Unpoison); the role gate is the service's. Assignee, Deliverable and Review are written
 // with the status as TaskPatch writes them (nil keeps the column, a nil Value sets it NULL), so an
@@ -208,6 +210,10 @@ type Tasks interface {
 	// CountTasks is how many of the board's tasks match f, in one statement. An unknown board is
 	// NOT_FOUND.
 	CountTasks(ctx context.Context, projectID string, f TaskFilter) (int64, error)
+	// LastOrderKey is the last order key of the board's column, compared as bytes (the order
+	// ListTasks pages in), in one statement: what a task appended to the column goes after. A column
+	// with no task is "".
+	LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error)
 	// ListTasksByIDs is the project's tasks among ids, in the order of ids; an id with no task is
 	// left out, never an error. More than 200 ids is VALIDATION.
 	ListTasksByIDs(ctx context.Context, projectID string, ids []string) ([]Task, error)

@@ -222,7 +222,8 @@ func TestConcurrentReopeningFollowUpsAllLand(t *testing.T) {
 }
 
 // G3 (nul.py): a NUL character (U+0000) in any text argument is VALIDATION on every engine. Postgres
-// cannot store it and answered INTERNAL (retryable) on each of these; SQLite stored it.
+// cannot store it and answered INTERNAL (retryable) on each of these; SQLite stored it. A REST URL
+// value that is not UTF-8 is the same case.
 func TestNULInTextIsValidationOnEveryEngine(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		const nul = "a\u0000b"
@@ -263,9 +264,28 @@ func TestNULInTextIsValidationOnEveryEngine(t *testing.T) {
 			owner.call(c.tool, with(c.args, map[string]any{c.field: "ab"}))
 		}
 		// The REST BFF routes through the same check.
-		status, body := j.api(j.login("ada"), "POST", "/api/projects/"+b.project+"/tasks/"+id+"/comments", `{"body":"a\u0000b"}`)
+		ada := j.login("ada")
+		status, body := j.api(ada, "POST", "/api/projects/"+b.project+"/tasks/"+id+"/comments", `{"body":"a\u0000b"}`)
 		if status != http.StatusBadRequest || !strings.Contains(body, `"VALIDATION"`) {
 			t.Fatalf("REST comment with a NUL: %d %s, want 400 VALIDATION", status, body)
+		}
+		// A percent-decoded path or query value can carry bytes that are not UTF-8, which JSON
+		// arguments cannot (the decoder replaces them). Postgres refuses those as it refuses a NUL
+		// (SQLSTATE 22021, INTERNAL), so they are VALIDATION on every engine too, on the routes that
+		// read the URL themselves (the chronicle reads) as on the ones built from a tool's request.
+		for _, path := range []string{
+			"/api/projects/" + b.project + "/tasks/T%FF/comments",
+			"/api/projects/P-%FF/tasks/" + id + "/comments",
+			"/api/projects/" + b.project + "/tasks/" + id + "/comments?cursor=c%C3",
+			"/api/projects/" + b.project + "/chronicle/C%FF",
+			"/api/projects/" + b.project + "/chronicle/C%00",
+			"/api/projects/" + b.project + "/chronicle?cursor=c%00",
+			"/api/projects/" + b.project + "/chronicle/C-1/versions/V%FF",
+		} {
+			status, body := j.api(ada, "GET", path, "")
+			if status != http.StatusBadRequest || !strings.Contains(body, `"VALIDATION"`) {
+				t.Errorf("%s: REST GET %s: %d %s, want 400 VALIDATION", j.engine, path, status, body)
+			}
 		}
 	})
 }

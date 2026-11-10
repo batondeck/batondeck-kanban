@@ -193,6 +193,35 @@ describe('managing an existing integration', () => {
     expect((patch['auth'] as { apiKey: string }).apiKey.length).toBeGreaterThan(30);
   });
 
+  it('shows a new key set from Edit once — the server keeps only its hash and answers no secret', async () => {
+    // The shown-once panel sends people here ("if you lose it, set a new one from Edit"), and the
+    // field says "shown once". The update answer is `{integration}` only, so if the drawer does not
+    // hold the key it sent, the old key is dead and nobody knows the new one.
+    stub();
+    renderDrawer();
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true));
+    const patch = calls.find((c) => c.method === 'POST')!.body!['patch'] as Record<string, unknown>;
+    const sentKey = (patch['auth'] as { apiKey: string }).apiKey;
+    const panel = (await screen.findByText(/your api key — shown once/i)).closest('.record') as HTMLElement | null;
+    expect(panel, 'the shown-once panel').toBeTruthy();
+    expect(panel!.querySelector('code')?.textContent, 'the key SHOWN is the key SENT').toBe(sentKey);
+  });
+
+  it('a save that sets no new key shows no key panel', async () => {
+    stub();
+    renderDrawer();
+    await openEditor();
+    fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull());
+    expect(screen.queryByText(/shown once/i)).toBeNull();
+  });
+
   it('delete is two-step and carries the version on the query string', async () => {
     stub();
     renderDrawer();

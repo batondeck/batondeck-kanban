@@ -29,6 +29,7 @@ type Auth interface {
 	CSRF(next http.Handler) http.Handler
 	LoginHandler() http.Handler
 	LogoutHandler() http.Handler
+	PasswordChangeHandler() http.Handler
 	Reauthenticate(r *http.Request) (domain.Caller, error)
 }
 
@@ -67,10 +68,10 @@ type route struct {
 const maxBody = 1 << 20
 
 // Mount registers every BFF route on mux: /api/public-config and POST /api/login outside the
-// session check, every other path behind Authenticate and then CSRF.
+// session check, every other path behind Authenticate and then CSRF, and then urlText.
 func Mount(mux *http.ServeMux, o Options) {
 	for _, r := range table(&o) {
-		h := o.Auth.CSRF(r.h)
+		h := o.Auth.CSRF(urlText(r.Path, r.h, o.logger()))
 		if !r.public {
 			h = o.Auth.Authenticate(h)
 		}
@@ -220,7 +221,8 @@ func bodyArguments(w http.ResponseWriter, r *http.Request, spec in) (map[string]
 	if err := dec.Decode(&args); err != nil || args == nil {
 		return nil, domain.Validation("the body is not a JSON object", nil)
 	}
-	if dec.More() {
+	// Token, not More: More is false before a stray } or ], which would then go unread.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, domain.Validation("the body holds more than one JSON value", nil)
 	}
 	if spec.noBody && len(args) > 0 {

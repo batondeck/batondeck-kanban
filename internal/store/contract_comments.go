@@ -40,7 +40,8 @@ type CommentsPage struct {
 
 // Comments is the comment area. Keys: a comment is (project_id, task_id, id); a task is
 // (project_id, task_id), never a task id alone. Errors: a missing task is domain.NotFound("Task",
-// taskID); an empty body or author and a malformed cursor are domain.Validation. Comments are
+// taskID); a ParentCommentID that is not a comment of the same task is domain.NotFound("Comment",
+// id), and nothing is written; an empty body or author and a malformed cursor are domain.Validation. Comments are
 // appended, never edited; they leave with their task, by its cascade. Order is (ts, id) ascending; a
 // cursor is base64url JSON {order, id} with order the ts.
 type Comments interface {

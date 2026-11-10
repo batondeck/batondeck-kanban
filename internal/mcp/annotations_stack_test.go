@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,6 +25,10 @@ func TestReadEffectWritesNothing(t *testing.T) {
 			lease := str(c.call("claim_task", map[string]any{"projectId": p, "taskId": task})["leaseId"])
 			c.call("release_task", map[string]any{"projectId": p, "taskId": task, "leaseId": lease})
 		}
+		// An expired lease on the board's only task: the frontier is empty and there is something to
+		// reap, so a read that reaps (next_task's old lazy recovery) writes and is caught.
+		c.call("claim_task", map[string]any{"projectId": p, "taskId": task, "leaseSeconds": 1})
+		time.Sleep(1100 * time.Millisecond)
 		sprint := str(obj(c.call("create_sprint", map[string]any{"projectId": p, "boardId": b, "name": "S1", "goal": "g", "acceptance": "a"})["sprint"])["id"])
 		integration := str(obj(c.call("create_integration", map[string]any{"projectId": p, "name": "reads", "source": "generic", "boardId": b,
 			"auth": oncallSourceAuth["generic"], "routing": map[string]any{"mode": "broadcast"}})["integration"])["id"])

@@ -96,7 +96,7 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 	// TODO(spec): conductor's enforceTokenBudget warnings (the per-task chars budget) are not ported.
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_follow_up", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddFollowUpResp, error) {
 		pre := *t.Task
 		// A reopen hands the rework back to its completer (review.completedBy); with none on record it
@@ -161,10 +161,14 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 		switch {
 		case reopen && after.Assignee != nil && (pre.Assignee == nil || *pre.Assignee != *after.Assignee):
 			// RingFor rang the new assignee
-		case identity != nil:
+		case identity != nil && *identity != caller.Identity:
 			t.RingAssigned(*identity, after)
 		case target != nil:
-			t.RingAssigned(*target, after) // an agent label: its sessions' scope
+			// An agent label: its sessions' scope. That includes another agent of the caller's own
+			// account (targetIsCaller kept it), whose identity RingAssigned would drop as a self-ring.
+			// It gets no notification: notifications are per account, and nobody is notified of
+			// their own act (domain.NotificationsForEvent).
+			t.RingAssigned(*target, after)
 		}
 		out, err := withSummary(ctx, t.Tx, after)
 		if err != nil {

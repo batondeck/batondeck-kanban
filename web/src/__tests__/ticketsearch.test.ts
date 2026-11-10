@@ -116,7 +116,7 @@ describe('matchesFilters', () => {
   });
 
   it('matches the lease-holding agent when there is no assignee', () => {
-    const t = task({ assignee: null, claim: { owner: 'sa@x', agent: 'worthy-gayal', leaseId: 'l', expiresAt: '2099-01-01T00:00:00Z' } });
+    const t = task({ assignee: null, claim: { owner: 'sa@x', agent: 'worthy-gayal', expiresAt: '2099-01-01T00:00:00Z' } });
     expect(matchesFilters(t, parseTicketQuery('assignee:worthy'))).toBe(true);
   });
 });
@@ -171,9 +171,9 @@ describe('normalizeLink', () => {
 describe('ui settings', () => {
   it('merges overrides over defaults and resets cleanly', () => {
     expect(uiSettings()).toEqual(UI_DEFAULTS);
-    const merged = hydrateUiSettings({ searchK: 10, linkFavicons: false });
+    const merged = hydrateUiSettings({ searchK: 10, presenceWindowMs: 1000 });
     expect(merged.searchK).toBe(10);
-    expect(merged.linkFavicons).toBe(false);
+    expect(merged.presenceWindowMs).toBe(1000);
     expect(merged.taskPageLimit).toBe(UI_DEFAULTS.taskPageLimit);
     expect(uiSettings().searchK).toBe(10); // module store hydrated
     hydrateUiSettings(undefined);

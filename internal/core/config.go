@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -96,6 +97,11 @@ var DefaultRetention = Retention{ChangeLogDays: 7, ToolCallsDays: 45, Deliveries
 
 // DefaultBlobMaxBytes is blob.max_bytes unset: conductor's ATTACHMENT_MAX_BYTES, 50 MiB.
 const DefaultBlobMaxBytes = 50 << 20
+
+// BlobReserve is the free space serve keeps on the blob directory's volume: attach_file and an
+// upload that would leave less are refused (blob.Store.Reserve), so attachments cannot fill the disk
+// the SQLite file (beside the blobs by default) or a Postgres on the same disk writes to.
+const BlobReserve = 512 << 20
 
 // Blob is the `blob` object of the config file: the local blob store of attachments.
 type Blob struct {
@@ -292,10 +298,47 @@ func (c *Config) validate() error {
 		}
 		c.PublicURL = origin
 	}
-	if strings.Contains(c.Database.URL, "://") && c.Engine() != EnginePostgres {
-		return fmt.Errorf("%s: database.url %q is neither a file path nor a postgres:// URL", RuleDatabaseURL, c.Database.URL)
+	// database.url may carry the database password, so no message here quotes it.
+	if c.Engine() == EnginePostgres {
+		if _, _, ok := postgresHostDB(c.Database.URL); !ok {
+			return fmt.Errorf("%s: database.url is a postgres:// URL whose user:password@host/database does not split one way: percent-encode each '@' (%%40) and '/' (%%2F) in the user, the password or a parameter (the URL is not shown: it may hold a password)", RuleDatabaseURL)
+		}
+	} else if scheme, _, found := strings.Cut(c.Database.URL, "://"); found {
+		if urlScheme.MatchString(scheme) {
+			return fmt.Errorf("%s: database.url is a %q URL, neither a file path nor a postgres:// (postgresql://) URL (the rest is not shown: it may hold a password)", RuleDatabaseURL, scheme+"://")
+		}
+		return fmt.Errorf("%s: database.url holds \"://\" but is neither a file path nor a postgres:// (postgresql://) URL (it is not shown: it may hold a password)", RuleDatabaseURL)
 	}
 	return nil
+}
+
+// urlScheme is RFC 3986's scheme, short enough to be one: what a refused database.url is named by.
+var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]{0,31}$`)
+
+// postgresHostDB splits a postgres:// URL the way libpq and pgx read it: the userinfo is what comes
+// before the first '@' ahead of the first '/', the host list runs from there to the first '/' or '?',
+// and the database from that '/' to the '?'. ok is false unless the URL holds at most one '@', ahead
+// of that '/': otherwise the split may put part of a password in the host or the database (an
+// unencoded '@' or '/' in it), where an error message or a log line would show it.
+func postgresHostDB(raw string) (host, db string, ok bool) {
+	_, rest, _ := strings.Cut(raw, "://")
+	authority, path, _ := strings.Cut(rest, "/")
+	if strings.Count(rest, "@") > 1 || strings.Contains(path, "@") {
+		return "", "", false
+	}
+	if _, after, found := strings.Cut(authority, "@"); found {
+		authority = after
+	}
+	host, _, _ = strings.Cut(authority, "?")
+	db, _, _ = strings.Cut(path, "?")
+	return host, db, true
+}
+
+// PostgresHostDB is the host (with its port) and the database a postgres:// database.url names, as
+// libpq and pgx read it; never its user or password. It is meaningful only when Engine is postgres.
+func (c *Config) PostgresHostDB() (host, db string) {
+	host, db, _ = postgresHostDB(c.Database.URL)
+	return host, db
 }
 
 // ParseTrustedProxies reads trusted_proxies: each entry an IP address (its own /32 or /128) or a
@@ -351,6 +394,10 @@ func (c *Config) Engine() string {
 	}
 	return EngineSQLite
 }
+
+// DataDir is the default data dir as Load resolved it ("" when it could not be, which is an error
+// only where it is used).
+func (c *Config) DataDir() string { return c.dataDir }
 
 // SQLitePath is the SQLite file: database.url, or DefaultDBFile in the default data dir when it
 // is unset. It is meaningful only when Engine is sqlite.

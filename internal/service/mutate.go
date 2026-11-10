@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 
@@ -69,7 +71,9 @@ func doorbellsFor(before *store.Task, after store.Task, unblocked bool) []Doorbe
 // that loads no task (a create, a project or board change). Version is the caller's expected
 // version of that task; nil only on the paths that are not version-checked (the lease-guarded
 // ones). A supplied 0 is checked and is STALE, since versions start at 1, as conductor's
-// nonnegative version is. IdempotencyKey "" keeps nothing; a key is kept per tool. Access is authorize's decision; a grant check it left pending is
+// nonnegative version is. IdempotencyKey "" keeps nothing; a key is kept per tool and bound to
+// the call's arguments (Request, else Args): the same key with other arguments is another call, not
+// a replay of the first one's answer. Access is authorize's decision; a grant check it left pending is
 // finished against the loaded task.
 type mutation struct {
 	Tool           string
@@ -78,12 +82,16 @@ type mutation struct {
 	TaskID         string
 	Version        *int64
 	IdempotencyKey string
-	Access         access
+	// Request is the call's whole input, which an idempotency key is bound to (idempotencyScope),
+	// less any secret material it carries (create_integration's); nil binds it to Args.
+	Request any
+	Access  access
 	// LockProject serialises the mutation with every other that sets it in the project: the
 	// project lock (store.Locks) is the transaction's first statement, before the task is loaded or
 	// any task row locked, so lock order is project then tasks. add_dependency and remove_dependency
 	// set it: under Postgres READ COMMITTED two of them on disjoint pairs could each pass
-	// domain.CheckCycle and together close a cycle (P-110).
+	// domain.CheckCycle and together close a cycle (P-110); add_member and remove_member set it for
+	// the last-admin guard.
 	LockProject bool
 	// KeepVersion loads and checks the task but leaves its version where it was when fn wrote nothing
 	// to it: a write beside the task (a comment, a follow-up, an ack) is not a change of the task,
@@ -112,6 +120,8 @@ type txn struct {
 	// boards is every (project, board) the mutation's change rows name ("" board: the project),
 	// and its task's board: what mutate drops from the snapshot cache once the transaction commits.
 	boards [][2]string
+	// unchanged is NoChange: fn wrote nothing, so finish writes nothing.
+	unchanged bool
 }
 
 type pendingEvent struct {
@@ -126,6 +136,12 @@ func (t *txn) Wrote(task store.Task) { t.after = &task }
 
 // Deleted records that fn deleted the task: there is nothing to bump.
 func (t *txn) Deleted() { t.deleted = true }
+
+// NoChange records that fn found nothing to do and wrote nothing (an ingest whose delivery id was
+// recorded while it waited for the project lock): finish writes no bump, event, audit or change row,
+// so no board snapshot is dropped and no device is rung for a change that did not happen. fn having
+// recorded a write as well is a bug, INTERNAL.
+func (t *txn) NoChange() { t.unchanged = true }
 
 // Bump bumps the loaded task's version now and returns it, for an fn whose result carries the task
 // after a write that does not bump (context items, a heartbeat). It counts as fn's one bump.
@@ -252,16 +268,18 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		committed()
 		return out, nil
 	}
-	// The key is namespaced by tool, as conductor's `${tool}:${key}` (common.ts:216-219): one key
-	// sent to two tools must not replay one's result as the other's.
 	scope := m.ProjectID
 	if scope == "" {
 		scope = store.GlobalScope
 	}
+	key, err := idempotencyScope(m)
+	if err != nil {
+		return zero, c.mapErr(m.Tool, err)
+	}
 	var raw []byte
-	err := unversionedRetry(m, func() error {
+	err = unversionedRetry(m, func() error {
 		var err error
-		raw, err = c.store.WithIdempotency(ctx, scope, caller.Identity, m.Tool+":"+m.IdempotencyKey, c.idemTTL, func(tx store.Store) ([]byte, error) {
+		raw, err = c.store.WithIdempotency(ctx, scope, caller.Identity, key, c.idemTTL, func(tx store.Store) ([]byte, error) {
 			r, err := run(tx)
 			if err != nil {
 				return nil, err
@@ -279,6 +297,24 @@ func mutate[R any](ctx context.Context, c *Core, caller domain.Caller, m mutatio
 		return zero, c.mapErr(m.Tool, err)
 	}
 	return out, nil
+}
+
+// idempotencyScope is the key a mutation's idempotency entry is kept under. It is namespaced by tool,
+// as conductor's `${tool}:${key}` (common.ts:216-219): one key sent to two tools must not replay one's
+// result as the other's. It is bound to the call's arguments (a digest of Request, else Args): an agent
+// that reuses a short key ("done") on another task makes another call, rather than being answered the
+// first task's result as success while its own task is left untouched.
+func idempotencyScope(m mutation) (string, error) {
+	in := m.Request
+	if in == nil {
+		in = m.Args
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return m.Tool + ":" + hex.EncodeToString(sum[:12]) + ":" + m.IdempotencyKey, nil
 }
 
 // unversionedRetry runs a mutation's transaction again when it carries no expected version and a
@@ -299,8 +335,15 @@ func unversionedRetry(m mutation, run func() error) error {
 	return err
 }
 
-// finish writes what fn did not: the bump, the events, the audit row and the change-log rows.
+// finish writes what fn did not: the bump, the events, the audit row and the change-log rows;
+// nothing at all after NoChange.
 func (t *txn) finish(c *Core, m mutation) error {
+	if t.unchanged {
+		if t.after != nil || t.deleted || len(t.events) > 0 || len(t.bells) > 0 || len(t.notified) > 0 {
+			return internalf("mutate %s: fn recorded a write and NoChange", m.Tool)
+		}
+		return nil
+	}
 	if t.Task != nil && !t.deleted && !(m.KeepVersion && t.after == nil) {
 		switch {
 		case t.after == nil || t.after.Version == t.Task.Version:

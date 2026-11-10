@@ -23,7 +23,8 @@ export interface Claim {
   owner: string;
   /** Display name of the agent holding the lease (preferred over owner in the UI); null for human claims. */
   agent?: string | null;
-  leaseId: string;
+  // No lease id: the server never sends it here, only in the claim's own answer (see
+  // screens/task/leases.ts, which keeps it for this browser's claims).
   expiresAt: string;
 }
 export interface Task {
@@ -219,6 +220,8 @@ export interface MemoryEntry {
 }
 export interface Attachment {
   id: string;
+  /** The name attach_file was given; "" for an attachment from before names were kept. */
+  fileName?: string;
   mimeType: string;
   bytes: number;
   kind: 'file' | 'image' | 'audio' | 'video';
@@ -542,172 +545,15 @@ export interface CreateIntegrationBody {
   source: IntegrationSource;
   boardId: string;
   columnId?: string;
-  auth: { mode: IntegrationAuthMode; externalSecret?: string; apiKey?: string; jwt?: { issuer: string; audience: string; jwksUrl: string } };
+  auth: { mode: IntegrationAuthMode; externalSecret?: string; apiKey?: string; jwt?: { issuer: string; audience: string; jwksUrl: string; subject?: string; email?: string } };
   routing: { mode: RoutingMode; onCallAgent?: string | null; pdUserMap?: Record<string, string> };
   mapping?: IntegrationMappingBody;
   lifecycle?: LifecycleMode;
   limits?: { ratePerMin?: number; payloadCapKb?: number };
 }
 
-export type IntegrationPatchBody = Partial<Omit<CreateIntegrationBody, 'source'>> & {
+export type IntegrationPatchBody = Partial<Omit<CreateIntegrationBody, 'source' | 'columnId'>> & {
+  /** null clears the target column; absent leaves it as it is. */
+  columnId?: string | null;
   enabled?: boolean;
 };
-
-// ---- plugin studio (S3) --------------------------------------------------------------------
-// Mirrors of `src/domain/types.ts`. These are NOT among the six shapes `test/unit/architecture.test.ts`
-// pins against the core (Task, Project, Board, Column, Comment, Event), so they live here rather than
-// in a screen file — several screens read them and the wire shape is the core's, not the UI's.
-//
-// Read paths NEVER carry a credential: `McpConnection` has no `secretRef` and `GitDestination` no
-// `credentialRef`, because the core strips them at the Store boundary. Do not add them here — a field
-// the API cannot return is a field a screen will try to render.
-
-export type PluginTarget = 'claude-code' | 'cursor' | 'mcp-config';
-
-/** Seven states. `SCAN_FAILED` and `YANKED` are terminal — the fix is a new version, never a rescan. */
-export type PluginVersionState =
-  | 'DRAFT'
-  | 'SCANNING'
-  | 'AWAITING_APPROVAL'
-  | 'APPROVED'
-  | 'PUBLISHED'
-  | 'YANKED'
-  | 'SCAN_FAILED';
-
-export type RegistryScope = 'batondeck' | 'org';
-export type RegistryAssetType = 'skill' | 'command' | 'prompt' | 'hook' | 'integration-template' | 'agent';
-
-export interface Plugin {
-  id: string;
-  orgId: string;
-  name: string;
-  description?: string;
-  audiences: string[];
-  targets: PluginTarget[];
-  headVersionId: string | null;
-  draftVersionId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-}
-
-export interface ScanFinding {
-  check: string;
-  severity: 'error' | 'warning';
-  path?: string;
-  message: string;
-}
-
-export interface AssetRef {
-  scope: RegistryScope;
-  type: RegistryAssetType;
-  assetId: string;
-  semver: string;
-}
-
-export interface PluginVersion {
-  id: string;
-  orgId: string;
-  pluginId: string;
-  /** NULLABLE on the wire, not optional — a DRAFT has no semver until finalize names one. */
-  semver: string | null;
-  state: PluginVersionState;
-  fileCount: number;
-  totalBytes: number;
-  createdAt: string;
-  updatedAt: string;
-  version: number;
-  assetRefs?: AssetRef[];
-  /** Custom MCP connection names this draft delivers into `.mcp.json`. */
-  mcpNames?: string[];
-  assetSnapshots?: { scope: RegistryScope; type: RegistryAssetType; assetId: string; semver: string; paths: string[] }[];
-  finalizedAt?: string;
-  scanFindings?: ScanFinding[];
-  approvedAt?: string;
-  /** Recorded, not refused — a one-admin org is the common case and the audit must say which it was. */
-  selfApproved?: boolean;
-  submittedByAgent?: string;
-  yank?: { at: string; reason: string };
-  delivery?: { versionId: string; destinationId: string; commitSha: string; tag: string; deliveredAt: string };
-}
-
-export interface PluginFile {
-  path: string;
-  size: number;
-}
-
-export interface GitDestination {
-  id: string;
-  orgId: string;
-  tier: 'customer-remote' | 'managed-branch';
-  branch: string;
-  remoteUrl?: string;
-  audiences: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface McpConnection {
-  /** Present on custom-block connections: the pasted server JSON, delivered verbatim. */
-  configJson?: string;
-  id: string;
-  orgId: string;
-  name: string;
-  url: string;
-  mode: 'direct' | 'proxied';
-  authMode: 'none' | 'bearer' | 'header';
-  authHeader?: string;
-  rotatedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Audience {
-  id: string;
-  orgId: string;
-  name: string;
-  members: string[];
-  /** Bound IdP groups. INERT until Directory Sync lands — nothing produces a `grp` claim today. */
-  groupBindings: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface OrgSurfaceProfile {
-  mode: 'full' | 'router';
-}
-
-/** Shape only — an integration template never carries a credential. */
-export interface RegistryConnectionPreset {
-  name: string;
-  url: string;
-  mode: 'direct' | 'proxied';
-  authMode: 'none' | 'bearer' | 'header';
-  authHeader?: string;
-}
-
-/** A catalog row: metadata only, no bytes. Both scopes arrive in one list, tagged. */
-export interface RegistryAssetRow {
-  scope: RegistryScope;
-  id: string;
-  type: RegistryAssetType;
-  name: string;
-  description: string;
-  /** NULLABLE: an org asset that has been created but never had a version published has none. */
-  semver: string | null;
-  /** Harvest origin of a prebuilt pack (`mcp-registry`, `ecc`, `ai-dev-kit`); absent on org assets. */
-  source?: string;
-  /** Ready-to-connect preset for an HTTP MCP integration template. */
-  connection?: { name: string; url: string; mode: 'direct' | 'proxied'; authMode: 'none' | 'bearer' | 'header'; authHeader?: string };
-  /** Frontmatter refs (bare ids) from the published index — what the selection dialogs run on. */
-  uses?: { skills?: string[]; agent?: string };
-}
-
-export interface RegistryAssetContent {
-  id: string;
-  scope: RegistryScope;
-  type: RegistryAssetType;
-  semver: string;
-  files: { path: string; size: number; content: string }[];
-  connection?: RegistryConnectionPreset;
-}

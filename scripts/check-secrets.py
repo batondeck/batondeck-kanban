@@ -109,6 +109,14 @@ PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
         "bd_" + "e" * 32,
     ),
     (
+        # The compose .env line and the backup's copy of it (README): 32 random bytes in base64 is 44
+        # characters ending in '='. The key seals every integration secret and signs attachment
+        # links, and a rotated key loses the sealed secrets, so a committed one is not undone.
+        "BatonDeck master key",
+        re.compile(r"\bBATONDECK_MASTER_KEY\s*[=:]\s*[\"']?[A-Za-z0-9+/]{43}="),
+        "BATONDECK_MASTER_KEY=" + "A" * 43 + "=",
+    ),
+    (
         "JWT with a payload",
         re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",

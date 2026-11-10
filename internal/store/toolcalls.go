@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
@@ -51,6 +52,9 @@ func validToolCall(c ToolCall) error {
 		return domain.Validation("unknown tool-call outcome: "+string(c.Outcome), map[string]any{"outcome": c.Outcome})
 	case c.LatencyMs < 0:
 		return domain.Validation("a tool call's latency cannot be negative", map[string]any{"latencyMs": c.LatencyMs})
+	case strings.ContainsRune(c.Tool+c.Identity+c.Agent+c.Code+c.ProjectID, 0):
+		// Postgres cannot store a NUL in text; refused here, every engine refuses it alike.
+		return domain.Validation("a tool call's text cannot carry the NUL character (U+0000)", nil)
 	}
 	return nil
 }

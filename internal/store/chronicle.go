@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 
@@ -32,6 +33,7 @@ type chronicleQueries interface {
 	GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChronicleVersionParams) (sqlitedb.ChronicleVersion, error)
 	ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error)
 	InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error
+	InsertChronicleBlobRef(ctx context.Context, arg sqlitedb.InsertChronicleBlobRefParams) error
 	GetChronicleBlob(ctx context.Context, arg sqlitedb.GetChronicleBlobParams) (sqlitedb.ChronicleBlob, error)
 	DeleteChronicleBlobsByPage(ctx context.Context, arg sqlitedb.DeleteChronicleBlobsByPageParams) (int64, error)
 	CountChronicleVersionsNaming(ctx context.Context, arg sqlitedb.CountChronicleVersionsNamingParams) (int64, error)
@@ -242,6 +244,23 @@ func lostChronicleHead(ctx context.Context, q sqlQueries, projectID, pageID, exp
 	return domain.ChronicleStale(expected, p.HeadVersionID)
 }
 
+// chronicleBlobRefRE is a signed blob download URL's blob id, in the shape blob.Signer.URL writes
+// (`/blobs/<sha256>?exp=`), as it appears in a stored body (the JSON leaves `/` and `?` as they are).
+var chronicleBlobRefRE = regexp.MustCompile(`/blobs/([0-9a-f]{64})\?exp=`)
+
+// ChronicleBlobRefs is the blob ids a stored Chronicle body embeds a download URL of, each once, in
+// order of first appearance: the blobs that body holds against the blob GC (P-244: a read signs the
+// stored form afresh, so the file must outlive the attachment it came from).
+func ChronicleBlobRefs(body []byte) []string {
+	var out []string
+	for _, m := range chronicleBlobRefRE.FindAllSubmatch(body, -1) {
+		if id := string(m[1]); !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func putChronicleBody(ctx context.Context, q sqlQueries, projectID, key string, body []byte) error {
 	err := q.InsertChronicleBlob(ctx, sqlitedb.InsertChronicleBlobParams{ProjectID: projectID, ObjectKey: key, Body: body, CreatedAt: nowMillis()})
 	if isForeignKeyViolation(err) {
@@ -249,6 +268,12 @@ func putChronicleBody(ctx context.Context, q sqlQueries, projectID, key string, 
 	}
 	if err != nil {
 		return fmt.Errorf("store: put chronicle body: %w", err)
+	}
+	// The blobs it embeds, which the GC keeps while the body stands (the rows go with it).
+	for _, sha := range ChronicleBlobRefs(body) {
+		if err := q.InsertChronicleBlobRef(ctx, sqlitedb.InsertChronicleBlobRefParams{ProjectID: projectID, ObjectKey: key, BlobSha256: sha}); err != nil {
+			return fmt.Errorf("store: chronicle blob ref: %w", err)
+		}
 	}
 	return nil
 }
@@ -279,7 +304,7 @@ func dropChronicleBody(ctx context.Context, q sqlQueries, projectID, pageID stri
 
 func appendChronicleEvent(ctx context.Context, q sqlQueries, projectID, actor string, agent *string, typ domain.EventType, data map[string]any) error {
 	err := q.AppendChronicleEvent(ctx, sqlitedb.AppendChronicleEventParams{
-		ProjectID: projectID, ID: newID("E-", 24), Actor: actor, Agent: nullStr(agent), Type: string(typ), Data: jsonText(data), Ts: nowMillis(),
+		ProjectID: projectID, ID: NewEventID(), Actor: actor, Agent: nullStr(agent), Type: string(typ), Data: jsonText(data), Ts: nowMillis(),
 	})
 	if err != nil {
 		return fmt.Errorf("store: chronicle event: %w", err)
@@ -480,6 +505,12 @@ func appendChronicleVersion(ctx context.Context, e engine, projectID, pageID str
 		// (ts, id) order is the chain's order even when two land in one millisecond.
 		now := max(nowMillis(), p.UpdatedAt+1)
 		base := p.LastDerivedObject
+		if !in.HasDerived && p.Conflict != nil {
+			// A human write settles the standing conflict, whichever side it took: the derivation it
+			// was found against becomes the base, so that derivation is not flagged again.
+			settled := p.Conflict.TheirsObject
+			base = &settled
+		}
 		var derivedBody []byte
 		var conflict *ChronicleConflict
 		if in.HasDerived {
@@ -531,7 +562,7 @@ func appendChronicleVersion(ctx context.Context, e engine, projectID, pageID str
 		if conflict != nil {
 			newTheirs = &conflict.TheirsObject
 		}
-		if in.HasDerived {
+		if in.HasDerived || base != p.LastDerivedObject {
 			if err := dropChronicleBody(ctx, q, projectID, pageID, p.LastDerivedObject, base, newTheirs); err != nil {
 				return err
 			}
@@ -734,6 +765,10 @@ func (p pgQueries) GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChro
 func (p pgQueries) ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error) {
 	rows, err := p.q.ListChronicleVersions(ctx, pgdb.ListChronicleVersionsParams(arg))
 	return convert(rows, func(r pgdb.ChronicleVersion) sqlitedb.ChronicleVersion { return sqlitedb.ChronicleVersion(r) }), err
+}
+
+func (p pgQueries) InsertChronicleBlobRef(ctx context.Context, arg sqlitedb.InsertChronicleBlobRefParams) error {
+	return p.q.InsertChronicleBlobRef(ctx, pgdb.InsertChronicleBlobRefParams(arg))
 }
 
 func (p pgQueries) InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error {

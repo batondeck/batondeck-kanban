@@ -103,6 +103,40 @@ func events(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// One mutation stamps its events with one millisecond: the feeds still read them in the order
+	// they were appended (newest first), not in the order of a random id.
+	t.Run("EventsOfOneTimestampReadInTheOrderTheyWereAppended", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		task := f.add(t, "t", nil)
+		const pairs = 40
+		for i := range pairs {
+			for _, typ := range []domain.EventType{domain.EventTaskCreated, domain.EventTaskClaimed} {
+				_, err := f.s.AppendTaskEvent(ctx, f.event(task.ID, typ, taskClock+int64(i)))
+				mustOK(t, err)
+			}
+		}
+		var types []string
+		for _, page := range pageAll(t, 7, func(cursor string, limit int) (store.EventPage, error) {
+			return f.s.ListTaskEvents(ctx, f.project, task.ID, cursor, limit)
+		}) {
+			types = append(types, page...)
+		}
+		feed, err := f.s.ListBoardFeed(ctx, f.project, f.board, "", 200)
+		mustOK(t, err)
+		if len(types) != 2*pairs || !reflect.DeepEqual(eventTypes(feed.Events), types) {
+			t.Fatalf("task events %d, feed %v, want %d alike", len(types), eventTypes(feed.Events), 2*pairs)
+		}
+		flipped := 0
+		for i := 0; i < len(types); i += 2 {
+			if types[i] != "task.claimed" || types[i+1] != "task.created" {
+				flipped++
+			}
+		}
+		if flipped > 0 {
+			t.Fatalf("%d of %d same-millisecond pairs read the first-appended event as the newest", flipped, pairs)
+		}
+	})
+
 	t.Run("AppendTaskEventRefusals", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", nil)
@@ -208,7 +242,7 @@ func events(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeNotFound, "Task")
 		_, err = f.s.ListBoardFeed(ctx, f.project, "B-missing", "", 10)
 		wantCode(t, err, domain.CodeNotFound, "Board")
-		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("not-a-number", "E-1")} {
+		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("not-a-number", "E-1"), store.EncodeCursor("5", "E-\x001")} {
 			_, err = f.s.ListTaskEvents(ctx, f.project, task.ID, bad, 10)
 			wantCode(t, err, domain.CodeValidation, "")
 			_, err = f.s.ListBoardFeed(ctx, f.project, f.board, bad, 10)

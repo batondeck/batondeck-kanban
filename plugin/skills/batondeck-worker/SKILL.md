@@ -28,9 +28,14 @@ A task is in one of five states: `TODO · IN_PROGRESS · BLOCKED · REVIEW · DO
 - **Unwanted work is deleted**, `delete_task { projectId, taskId, version }` (master tier), or closed
   with `cancel_task { projectId, taskId, version, reason }`, which lands it in DONE with the reason as
   a note. Never park a task somewhere to mean "not now".
-- **Poisoned** is BLOCKED with `blockedReason: "poison"`: a task that failed too many times. Only a
-  master un-poisons it, with `move_task { projectId, taskId, version, toStatus: "TODO" }` after fixing
-  the brief; that also resets its attempt count.
+- **Poisoned** is BLOCKED with the label `poisoned`: a task that failed too many times (`next_task`
+  with `includeInbox` lists it in the `poisoned` bucket). Only a master un-poisons it, with
+  `move_task { projectId, taskId, version, toStatus: "TODO" }` after fixing the brief; that also
+  resets its attempt count.
+- **A block's reason** is not a field of the task: `block_task` records it in the board feed's
+  `task.blocked` event (the resource `batondeck://{projectId}/board/{boardId}/feed`, `data.reason`).
+  Blocking, also leave it as a note (`add_context_item { kind: "note" }`) so the next reader of
+  `get_task_context` sees it.
 - **Pick from `allowedMoves`.** `get_task_context` returns `workflow { status, allowedMoves, lanes }`;
   choose a move from `allowedMoves` rather than guessing. An illegal move is `INVALID_TRANSITION`.
 - Releases, handoffs, unblocks and lease expiry all land a task back on TODO. Auto-unblock runs when a
@@ -110,10 +115,18 @@ Turn a goal into a **dependency tree**, not a flat list:
 The board is the plan: the execution order falls out of the tree.
 
 **Sprints** wrap a durable objective: `create_sprint { projectId, boardId, name, goal, acceptance }`,
-then `create_task { …, sprintId }` per member. A cold session resumes from
+then `create_task { …, sprintId }` (or `set_sprint { …, action: "add" }`) per member. A sprint starts
+PROPOSED and is worked once ACTIVE: create a proposal task carrying the plan
+(`customFields: { sprintProposalFor: "<sprintId>" }`), bind it with
+`update_sprint { projectId, sprintId, version, patch: { proposalTaskId } }`, get it approved to DONE,
+and a project admin activates the sprint with `update_sprint { …, patch: { status: "ACTIVE" } }` (a
+master is refused). Only an ACTIVE sprint closes (`status: "CLOSED"`); one never activated ends
+`ABANDONED`. A member left unfinished by an ended sprint keeps it in `sprintIds` for history and joins
+a successor with `set_sprint { …, action: "add" }`. A cold session resumes from
 `list_sprints { projectId, boardId, status: "ACTIVE" }` and `get_sprint { projectId, sprintId }`
-(goal, counts, the frontier, what needs attention). While a sprint is ACTIVE, pass `sprintId` to
-`next_task`, `list_tasks` and `rank_tasks` so selection stays inside it.
+(goal, counts, the frontier with the runs of raced members, what needs attention). While a sprint is
+ACTIVE, pass `sprintId` to `claim_next`, `next_task`, `list_tasks` and `rank_tasks` so selection
+stays inside it.
 
 ## Populate every task
 
@@ -189,7 +202,9 @@ on the ticket.
    memory, the task's own `deliverable`, `openFollowUps` and, with `includeUpstream`, the **upstream**
    deliverables of the tasks this one depended on. Build on those instead of re-deriving them. Also
    `recall_memory { projectId }` for what earlier tasks learned. `get_task_context` carries no title or
-   description: read those with `get_task`.
+   description: read those with `get_task`. Its attachments carry no link either:
+   `list_attachments { projectId, taskId }` returns each ready one's `downloadUrl` (valid 15 minutes);
+   fetch the designs and specs and work from them.
 3. **Honour `modelHint`**: switch model, or run the task in a subagent of that size; if you cannot,
    `add_comment` saying so.
 4. **Clear open follow-ups**: for each entry in `openFollowUps`, do what it says, record it, then
