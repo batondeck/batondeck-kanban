@@ -863,7 +863,15 @@ export function Settings() {
                             <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{id}</span>
                           </span>
                         ) : (
-                          <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                          // memberDisplay names every account; a row it does not name is no account
+                          // (a login kept as given), so it grants nothing.
+                          <span
+                            style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}
+                            title="No account is this member, so the row grants nothing. Once a workspace admin adds the account under Users, add its login here again."
+                          >
+                            <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>no account · grants nothing</span>
+                          </span>
                         )}
                       </Cluster>
                     </td>

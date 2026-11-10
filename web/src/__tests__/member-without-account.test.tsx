@@ -5,7 +5,8 @@
  * row keyed by the typed login, which grants nothing, since every token resolves to an account id.
  * Settings cleared the field and said nothing, so the admin believed the teammate was in. It now
  * says that no account has that login yet, and what to do. A login that names an account (the
- * answer keys the member by the account's id) says nothing.
+ * answer keys the member by the account's id) says nothing. The row itself says it too, so a row
+ * seen after a reload, or added earlier, does not pass for a member either.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -22,10 +23,13 @@ afterEach(() => {
 
 const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b }) as Response;
 
-/** members is what add_member answers and the project then holds; display the accounts among them. */
-function mount(after: { members: Record<string, string>; display: Record<string, string> }): void {
+/**
+ * members is what add_member answers and the project then holds; display the accounts among them.
+ * held: the project holds after already, as on a reload after the add.
+ */
+function mount(after: { members: Record<string, string>; display: Record<string, string> }, held = false): void {
   localStorage.setItem('bd.projectId', 'p1');
-  let added = false;
+  let added = held;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -86,5 +90,14 @@ describe('adding a member by a login with no account', () => {
     await add('U-3');
     await screen.findByText('Carol');
     expect(screen.queryByText(/No account has the login/)).not.toBeInTheDocument();
+  });
+
+  it('marks a row no account is, after a reload too', async () => {
+    mount({ members: { 'U-1': 'admin', 'carol@example.com': 'member' }, display: { 'U-1': 'Ada Admin' } }, true);
+    await screen.findByText('Ada Admin');
+    const row = (await screen.findByText('carol@example.com')).closest('tr')!;
+    expect(row).toHaveTextContent('no account');
+    expect(screen.getByText('Ada Admin').closest('tr')).not.toHaveTextContent('no account');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
