@@ -26,6 +26,17 @@ import type { AgentSession } from '../types.js';
 // chroma, in the gap between --done (154) and --ready (263) that nothing else occupies.
 const PALETTE = ['#6A35FF', '#00C5D4', '#3BFFAD', '#AA3FFF', '#3F6FD9', '#FF426F'];
 
+/**
+ * Copy an id from a card. `navigator.clipboard` is undefined on a plain-HTTP origin that is not
+ * localhost, where reading `.writeText` off it threw; a refused write rejected unhandled. Both now
+ * say so, and the id stays on the card to select by hand.
+ */
+function copyId(id: string): void {
+  const fail = () => pushToast(`Could not copy — select ${id} and copy it manually.`);
+  if (!navigator.clipboard) { fail(); return; }
+  void navigator.clipboard.writeText(id).then(() => pushToast('Copied', 'info'), fail);
+}
+
 export function Projects() {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -203,7 +214,7 @@ export function Projects() {
                     style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, cursor: 'pointer' }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      void navigator.clipboard.writeText(b.id).then(() => pushToast('Copied', 'info'));
+                      copyId(b.id);
                     }}
                   >
                     {b.id}
@@ -246,7 +257,7 @@ export function Projects() {
                     style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, cursor: 'pointer' }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      void navigator.clipboard.writeText(p.projectId).then(() => pushToast('Copied', 'info'));
+                      copyId(p.projectId);
                     }}
                   >
                     {p.projectId}

@@ -431,10 +431,11 @@ function CliTokens() {
                     // Clipboard access can be denied or absent (insecure origin, permission). Falling
                     // back to "select it yourself" beats a button that silently does nothing — and on
                     // that path the value must STAY on screen, so `copied` is not set.
-                    void navigator.clipboard?.writeText(minted).then(
-                      () => setCopied(true),
-                      () => setErr('Could not copy — select the value above and copy it manually.'),
-                    );
+                    // `?.` alone short-circuited to undefined with no clipboard at all (a plain-HTTP
+                    // LAN origin), so neither callback ran and the button did nothing.
+                    const fail = () => setErr('Could not copy — select the value above and copy it manually.');
+                    if (!navigator.clipboard) { fail(); return; }
+                    void navigator.clipboard.writeText(minted).then(() => setCopied(true), fail);
                   }}
                 >
                   Copy

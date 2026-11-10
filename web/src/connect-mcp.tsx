@@ -57,7 +57,8 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
 }
 
 function CopyBlock({ label, text }: { label: string; text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
+  const pre = useRef<HTMLPreElement>(null);
   return (
     <div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{label}</div>
@@ -71,6 +72,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
         }}
       >
         <pre
+          ref={pre}
           className="mono"
           style={{ flex: 1, minWidth: 0, margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflowX: 'auto', whiteSpace: 'pre' }}
         >
@@ -80,13 +82,21 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
           className="btn secondary"
           style={{ fontSize: 12, padding: '4px 10px', margin: '0 8px', flexShrink: 0 }}
           onClick={() => {
-            void navigator.clipboard?.writeText(text).then(() => {
-              setCopied(true);
-              setTimeout(() => { setCopied(false); }, 1500);
-            });
+            const done = (r: 'yes' | 'failed', ms: number) => {
+              setCopied(r);
+              setTimeout(() => { setCopied(null); }, ms);
+            };
+            // No clipboard (a plain-HTTP LAN origin) or a refused write: select the snippet so the
+            // reader can copy it by hand, and say so, rather than a button that does nothing.
+            const fail = () => {
+              if (pre.current) window.getSelection()?.selectAllChildren(pre.current);
+              done('failed', 4000);
+            };
+            if (!navigator.clipboard) { fail(); return; }
+            void navigator.clipboard.writeText(text).then(() => done('yes', 1500), fail);
           }}
         >
-          {copied ? 'Copied' : 'Copy'}
+          {copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Select and copy' : 'Copy'}
         </button>
       </div>
     </div>

@@ -33,6 +33,7 @@ import { closedWhy, mayCall } from '../toolFloors.js';
 import { clearPalette, publishPalette } from '../palette.js';
 import { railsOf, sortByDate, type SortField } from '../chronicleSearch.js';
 import { CHRONICLE_KINDS, isAgent } from '../types.js';
+import { randomHex } from '../randomId.js';
 import type {
   ChronicleBlock,
   ChronicleBlockInput,
@@ -54,7 +55,7 @@ import type {
  * block a new identity each time, so every version would read as "everything deleted, everything
  * added" and the sweep would have nothing to match against.
  */
-const newBlockId = (): string => `a-${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+const newBlockId = (): string => `a-${randomHex(6)}`;
 
 /**
  * Fold the editor's `{id, text}` list back into full block inputs.
@@ -515,7 +516,7 @@ export function ChronicleNew() {
   const [note, setNote] = useState<string | null>(null);
   /** ONE key per form instance: a double-click or a retried POST replays the same create instead of
    *  bouncing the second attempt off the taken-slug refusal. */
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(() => randomHex(16));
 
   const effectiveSlug = slugTouched ? slug : slugify(title);
 

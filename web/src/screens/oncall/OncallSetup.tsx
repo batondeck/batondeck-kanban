@@ -32,10 +32,11 @@ import {
   patchBodyOf,
   type FormState,
 } from './IntegrationForm.js';
+import { randomHex } from '../../randomId.js';
 
 /** 256 bits of browser-generated key. The server stores only its hash, so this is the one moment it
  *  can be known at all — held in a ref until the create is confirmed (see `mintedApiKey`). */
-const mintKey = (): string => `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '');
+const mintKey = (): string => randomHex(32);
 
 /**
  * The refused payload of one delivery, in a dialog.
