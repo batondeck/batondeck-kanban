@@ -28,9 +28,14 @@ A task is in one of five states: `TODO · IN_PROGRESS · BLOCKED · REVIEW · DO
 - **Unwanted work is deleted**, `delete_task { projectId, taskId, version }` (master tier), or closed
   with `cancel_task { projectId, taskId, version, reason }`, which lands it in DONE with the reason as
   a note. Never park a task somewhere to mean "not now".
-- **Poisoned** is BLOCKED with `blockedReason: "poison"`: a task that failed too many times. Only a
-  master un-poisons it, with `move_task { projectId, taskId, version, toStatus: "TODO" }` after fixing
-  the brief; that also resets its attempt count.
+- **Poisoned** is BLOCKED with the label `poisoned`: a task that failed too many times (`next_task`
+  with `includeInbox` lists it in the `poisoned` bucket). Only a master un-poisons it, with
+  `move_task { projectId, taskId, version, toStatus: "TODO" }` after fixing the brief; that also
+  resets its attempt count.
+- **A block's reason** is not a field of the task: `block_task` records it in the board feed's
+  `task.blocked` event (the resource `batondeck://{projectId}/board/{boardId}/feed`, `data.reason`).
+  Blocking, also leave it as a note (`add_context_item { kind: "note" }`) so the next reader of
+  `get_task_context` sees it.
 - **Pick from `allowedMoves`.** `get_task_context` returns `workflow { status, allowedMoves, lanes }`;
   choose a move from `allowedMoves` rather than guessing. An illegal move is `INVALID_TRANSITION`.
 - Releases, handoffs, unblocks and lease expiry all land a task back on TODO. Auto-unblock runs when a
@@ -197,7 +202,9 @@ on the ticket.
    memory, the task's own `deliverable`, `openFollowUps` and, with `includeUpstream`, the **upstream**
    deliverables of the tasks this one depended on. Build on those instead of re-deriving them. Also
    `recall_memory { projectId }` for what earlier tasks learned. `get_task_context` carries no title or
-   description: read those with `get_task`.
+   description: read those with `get_task`. Its attachments carry no link either:
+   `list_attachments { projectId, taskId }` returns each ready one's `downloadUrl` (valid 15 minutes);
+   fetch the designs and specs and work from them.
 3. **Honour `modelHint`**: switch model, or run the task in a subagent of that size; if you cannot,
    `add_comment` saying so.
 4. **Clear open follow-ups**: for each entry in `openFollowUps`, do what it says, record it, then

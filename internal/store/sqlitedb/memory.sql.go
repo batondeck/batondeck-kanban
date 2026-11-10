@@ -115,22 +115,22 @@ SELECT t.id AS task_id, m.id, m.scope, m.key, m.value, m.blob_sha256, m.author, 
 FROM tasks t LEFT JOIN memory m ON m.id IN (
     SELECT w.id FROM memory w
     WHERE w.project_id = t.project_id AND w.task_id = t.id AND w.scope IN ('task', 'agent', 'shared')
+      AND (w.expires_at IS NULL OR w.expires_at > CAST(?1 AS INTEGER))
+      AND (CAST(?2 AS TEXT) = '' OR w.scope = CAST(?2 AS TEXT))
+      AND (CAST(?3 AS TEXT) = '' OR w.key = CAST(?3 AS TEXT))
+      AND (w.scope <> 'agent' OR w.author = CAST(?4 AS TEXT))
     ORDER BY w.ts DESC, w.id DESC
-    LIMIT ?1)
-  AND (m.expires_at IS NULL OR m.expires_at > CAST(?2 AS INTEGER))
-  AND (CAST(?3 AS TEXT) = '' OR m.scope = CAST(?3 AS TEXT))
-  AND (CAST(?4 AS TEXT) = '' OR m.key = CAST(?4 AS TEXT))
-  AND (m.scope <> 'agent' OR m.author = CAST(?5 AS TEXT))
+    LIMIT ?5)
 WHERE t.project_id = ?6 AND t.id = ?7
 ORDER BY m.ts DESC, m.id DESC
 `
 
 type ReadMemoryWindowParams struct {
-	WindowLimit int64
 	Now         int64
 	Scope       string
 	Key         string
 	Identity    string
+	WindowLimit int64
 	ProjectID   string
 	TaskID      string
 }
@@ -147,17 +147,18 @@ type ReadMemoryWindowRow struct {
 	ExpiresAt  sql.NullInt64
 }
 
-// ReadMemory in one statement, window first: the task's newest `window_limit` task, agent and
-// shared entries ((ts, id) descending, of every author, live or expired), and only then the TTL,
-// the scope and key filters and the agent scope's privacy. No row is a missing task; one row whose
-// entry columns are NULL is a task with nothing left after the filters.
+// ReadMemory in one statement, filters first: the task's task, agent and shared entries that are
+// live, match the scope and key filters and the reader may see (another author's agent entry is
+// not), and of those the newest `window_limit` ((ts, id) descending), so an entry the reader cannot
+// see never takes a slot. No row is a missing task; one row whose entry columns are NULL is a task
+// with nothing to read.
 func (q *Queries) ReadMemoryWindow(ctx context.Context, arg ReadMemoryWindowParams) ([]ReadMemoryWindowRow, error) {
 	rows, err := q.db.QueryContext(ctx, readMemoryWindow,
-		arg.WindowLimit,
 		arg.Now,
 		arg.Scope,
 		arg.Key,
 		arg.Identity,
+		arg.WindowLimit,
 		arg.ProjectID,
 		arg.TaskID,
 	)

@@ -54,7 +54,7 @@ type WriteMemoryInput struct {
 
 // ReadMemoryQuery filters a task's entries. Scope "" is all three task scopes; Key "" is every key.
 // Identity is the reader: agent entries of other authors are not returned. Limit <= 0 is 200 and a
-// limit above 200 is 200; it cuts the window the filters apply to (Memory.ReadMemory).
+// limit above 200 is 200; it counts only entries that pass the filters (Memory.ReadMemory).
 type ReadMemoryQuery struct {
 	Scope    MemoryScope
 	Key      string
@@ -86,10 +86,11 @@ type RecallMemoryQuery struct {
 type Memory interface {
 	// WriteMemory stores a new entry, stamped with a new id and the current time.
 	WriteMemory(ctx context.Context, in WriteMemoryInput) (MemoryEntry, error)
-	// ReadMemory is window first, then filter, conductor's order (store.ts readMemory): it takes the
-	// task's newest q.Limit task, agent and shared entries, of every author, live or expired, and
-	// only then applies q.Scope, q.Key, the agent privacy and the TTL to that window. A read can
-	// therefore return fewer than q.Limit entries while older matches exist.
+	// ReadMemory is filter first, then window: of the task's task, agent and shared entries it keeps
+	// the live ones matching q.Scope and q.Key that q.Identity may see (another author's agent entry
+	// is not), and returns the newest q.Limit of those. An entry the reader cannot see never takes a
+	// slot, so it cannot hide an older one the reader can. DEVIATION: conductor (store.ts readMemory)
+	// cuts the window first and filters it after.
 	ReadMemory(ctx context.Context, projectID, taskID string, q ReadMemoryQuery) ([]MemoryEntry, error)
 	// RecallMemory is the durable entries of one project or one identity, newest first, at most
 	// q.Limit, as conductor's recallFrom reads them. With no Key it takes the newest q.Limit entries

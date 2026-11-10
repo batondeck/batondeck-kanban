@@ -309,6 +309,41 @@ func chronicle(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("AHumanWriteSettlesARecordedConflictOnItsTheirs", func(t *testing.T) {
+			s, _, p, _ := seeded(t, newStore)
+			u := upsert(t, s, p, "adr/0001-a", domain.SourceSweep, cblock("a", "derived v1"))
+			v2, err := appendV(s, p, u.Page.ID, u.Page.HeadVersionID, cblock("a", "mine"))
+			noErr(t, err)
+			// The sweep found a conflict that changed nothing visible: recorded, no version, base kept.
+			noErr(t, s.RecordChronicleConflicts(ctx, p, u.Page.ID, store.RecordChronicleConflictsInput{
+				VersionID: v2.ID, Items: []domain.ChronicleConflictItem{{BlockID: "a", Kind: domain.MergeConflict}},
+				Theirs: []domain.ChronicleBlock{cblock("a", "derived v2")}, Actor: "sweeper",
+			}))
+			base, ok, err := s.GetChronicleBase(ctx, p, u.Page.ID)
+			noErr(t, err)
+			if !ok || base[0].Text != "derived v1" {
+				t.Fatalf("recording a conflict moved the base: %+v", base)
+			}
+			// The human write that clears it decided against (or for) that derivation: it is the base now,
+			// so the same derivation is not flagged again.
+			_, err = appendV(s, p, u.Page.ID, v2.ID, cblock("a", "mine, kept"))
+			noErr(t, err)
+			page, err := s.GetChroniclePage(ctx, p, u.Page.ID)
+			noErr(t, err)
+			if page.Conflict != nil {
+				t.Fatalf("a human write left the conflict standing: %+v", page.Conflict)
+			}
+			base, ok, err = s.GetChronicleBase(ctx, p, u.Page.ID)
+			noErr(t, err)
+			if !ok || len(base) != 1 || base[0].Text != "derived v2" {
+				t.Fatalf("the base after the resolving write = %+v, want the conflict's derivation", base)
+			}
+			// v1 (still named by v1), v2, v3 and the base: the old base was v1's own body, nothing orphaned.
+			if objs := pageObjects(t, s, p, u.Page.ID); len(objs) != 4 {
+				t.Fatalf("bodies = %v, want 4", objs)
+			}
+		})
+
 		t.Run("RecordConflictsIsAgainstTheHeadAndReplacesItsBody", func(t *testing.T) {
 			s, _, p, _ := seeded(t, newStore)
 			u := upsert(t, s, p, "adr/0001-a", domain.SourceSweep, cblock("a", "v1"))

@@ -13,6 +13,7 @@ const deleteUnreferencedBlob = `-- name: DeleteUnreferencedBlob :execrows
 DELETE FROM blobs WHERE sha256 = $1
   AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.blob_sha256 = blobs.sha256)
   AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.blob_sha256 = blobs.sha256)
+  AND NOT EXISTS (SELECT 1 FROM chronicle_blob_refs r WHERE r.blob_sha256 = blobs.sha256)
 `
 
 // The delete and its reference check in one statement, so a reference written beside it is never
@@ -47,8 +48,8 @@ type InsertBlobParams struct {
 	CreatedAt int64
 }
 
-// The blob table: content-addressed rows, written once. A blob is referenced while an attachment or
-// a memory entry names it.
+// The blob table: content-addressed rows, written once. A blob is referenced while an attachment, a
+// memory entry or a Chronicle body (chronicle_blob_refs) names it.
 func (q *Queries) InsertBlob(ctx context.Context, arg InsertBlobParams) error {
 	_, err := q.db.Exec(ctx, insertBlob, arg.Sha256, arg.Bytes, arg.CreatedAt)
 	return err
@@ -59,6 +60,7 @@ SELECT b.sha256, b.bytes, b.created_at FROM blobs b
 WHERE b.created_at < $1::bigint
   AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.blob_sha256 = b.sha256)
   AND NOT EXISTS (SELECT 1 FROM memory m WHERE m.blob_sha256 = b.sha256)
+  AND NOT EXISTS (SELECT 1 FROM chronicle_blob_refs r WHERE r.blob_sha256 = b.sha256)
 ORDER BY b.created_at, b.sha256 COLLATE "C" LIMIT $2::bigint
 `
 

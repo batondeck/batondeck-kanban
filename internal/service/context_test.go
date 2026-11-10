@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"slices"
 	"sync"
@@ -555,31 +556,71 @@ func completeOne(t *testing.T, e *env, reason string, want domain.Status) {
 	}
 }
 
-// AC4: an entry with a one-second ttl is read at once and gone two seconds later.
+// The memory window counts only what the reader may see: another author's private notes, expired
+// entries and entries of other keys never push a live shared entry out of the briefing or a keyed
+// read.
+func TestTaskMemoryWindowCountsWhatTheReaderSees(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		cx := e.c.Context()
+		task := e.task(t, domain.Todo)
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		write := func(c domain.Caller, scope domain.MemoryScope, key, ttl string) {
+			t.Helper()
+			if _, err := cx.WriteMemory(e.ctx, c, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: scope, Key: key, Value: "v", TTL: ttl}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(bob, domain.MemoryScopeShared, "handoff", "")
+		gone := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+		for i := range 20 {
+			write(e.alice, domain.MemoryScopeAgent, fmt.Sprintf("scratch-%d", i), "")
+			write(e.alice, domain.MemoryScopeTask, fmt.Sprintf("expired-%d", i), gone)
+		}
+		got, err := cx.GetTaskContext(e.ctx, bob, GetTaskContextReq{ProjectID: e.project, TaskID: task.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Memory) != 1 || got.Memory[0].Key != "handoff" {
+			t.Fatalf("bob's briefing memory = %+v, want his live shared entry: alice's private and expired entries took the window", got.Memory)
+		}
+		for range 200 {
+			write(bob, domain.MemoryScopeTask, "newer", "")
+		}
+		keyed, err := cx.ReadMemory(e.ctx, bob, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID, Key: "handoff"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(keyed.Entries) != 1 {
+			t.Fatalf("read_memory {key: handoff} behind 200 newer entries = %+v, want the entry", keyed.Entries)
+		}
+	})
+}
+
+// AC4: an entry with a ttl is read, with its ttl, while it is live, and an entry past its ttl is
+// gone on read before any sweep. Both instants are far from now (an hour each way), so no wall-clock
+// window has to hold on a loaded runner.
 func TestWriteMemoryTTLExpiresOnRead(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		t.Parallel()
 		cx := e.c.Context()
 		task := e.task(t, domain.Todo)
-		ttl := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
-		w, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "short", Value: "v", TTL: ttl})
-		if err != nil {
-			t.Fatal(err)
-		}
-		read := func() []MemoryEntry {
-			got, err := cx.ReadMemory(e.ctx, e.alice, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID})
+		write := func(key string, at time.Time) string {
+			t.Helper()
+			w, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: key, Value: "v",
+				TTL: at.UTC().Format(time.RFC3339Nano)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			return got.Entries
+			return w.EntryID
 		}
-		at := read()
-		if len(at) != 1 || at[0].ID != w.EntryID || at[0].TTL == nil {
-			t.Fatalf("at once: %+v, want the entry with its ttl", at)
+		live := write("live", time.Now().Add(time.Hour))
+		write("expired", time.Now().Add(-time.Hour))
+		got, err := cx.ReadMemory(e.ctx, e.alice, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID})
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(2 * time.Second)
-		if later := read(); len(later) != 0 {
-			t.Fatalf("after 2 s: %+v, want none", later)
+		if len(got.Entries) != 1 || got.Entries[0].ID != live || got.Entries[0].TTL == nil {
+			t.Fatalf("read %+v, want the live entry with its ttl and the expired one gone", got.Entries)
 		}
 		_, err = cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "k", TTL: "1000"})
 		wantCode(t, err, domain.CodeValidation)

@@ -11,9 +11,11 @@ import (
 )
 
 // The comment area of contract_comments.go, on both engines. Each call is one statement: the insert
-// and the page both start FROM the task, so a missing task is their own empty answer.
+// and the page both start FROM the task, so a missing task is their own empty answer. A reply adds
+// one read of its parent, in the insert's transaction.
 
 type commentQueries interface {
+	GetComment(ctx context.Context, arg sqlitedb.GetCommentParams) (sqlitedb.Comment, error)
 	InsertComment(ctx context.Context, arg sqlitedb.InsertCommentParams) (sqlitedb.Comment, error)
 	ListCommentsOldest(ctx context.Context, arg sqlitedb.ListCommentsOldestParams) ([]sqlitedb.ListCommentsOldestRow, error)
 }
@@ -41,11 +43,25 @@ func addComment(ctx context.Context, e engine, in AddCommentInput) (Comment, err
 	case in.Author == "":
 		return Comment{}, domain.Validation("a comment needs an author", nil)
 	}
-	row, err := e.queries(true).InsertComment(ctx, sqlitedb.InsertCommentParams{
-		ID: newID("CM-", 16), Author: in.Author, Body: in.Body, ParentCommentID: nullStr(in.ParentCommentID),
-		Mentions: jsonList(in.Mentions), Ts: nowMillis(), ProjectID: in.ProjectID, TaskID: in.TaskID,
+	var row sqlitedb.Comment
+	err := e.Atomically(ctx, func(tx Store) error {
+		q := on(tx).queries(true)
+		var err error
+		row, err = q.InsertComment(ctx, sqlitedb.InsertCommentParams{
+			ID: newID("CM-", 16), Author: in.Author, Body: in.Body, ParentCommentID: nullStr(in.ParentCommentID),
+			Mentions: jsonList(in.Mentions), Ts: nowMillis(), ProjectID: in.ProjectID, TaskID: in.TaskID,
+		})
+		if err := found(err, "Task", in.TaskID); err != nil {
+			return err
+		}
+		if p := in.ParentCommentID; p != nil {
+			// After the insert, so a missing task is still NotFound Task; a missing parent rolls it back.
+			_, err := q.GetComment(ctx, sqlitedb.GetCommentParams{ProjectID: in.ProjectID, TaskID: in.TaskID, ID: *p})
+			return found(err, "Comment", *p)
+		}
+		return nil
 	})
-	if err := found(err, "Task", in.TaskID); err != nil {
+	if err != nil {
 		return Comment{}, err
 	}
 	mentions, err := readList(row.Mentions)
@@ -91,6 +107,11 @@ func listComments(ctx context.Context, e engine, projectID, taskID string, q Com
 }
 
 // --- the Postgres queries in sqlitedb's types ---
+
+func (p pgQueries) GetComment(ctx context.Context, arg sqlitedb.GetCommentParams) (sqlitedb.Comment, error) {
+	r, err := p.q.GetComment(ctx, pgdb.GetCommentParams(arg))
+	return sqlitedb.Comment(r), err
+}
 
 func (p pgQueries) InsertComment(ctx context.Context, arg sqlitedb.InsertCommentParams) (sqlitedb.Comment, error) {
 	r, err := p.q.InsertComment(ctx, pgdb.InsertCommentParams(arg))

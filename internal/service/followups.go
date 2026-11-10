@@ -161,10 +161,14 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 		switch {
 		case reopen && after.Assignee != nil && (pre.Assignee == nil || *pre.Assignee != *after.Assignee):
 			// RingFor rang the new assignee
-		case identity != nil:
+		case identity != nil && *identity != caller.Identity:
 			t.RingAssigned(*identity, after)
 		case target != nil:
-			t.RingAssigned(*target, after) // an agent label: its sessions' scope
+			// An agent label: its sessions' scope. That includes another agent of the caller's own
+			// account (targetIsCaller kept it), whose identity RingAssigned would drop as a self-ring.
+			// It gets no notification: notifications are per account, and nobody is notified of
+			// their own act (domain.NotificationsForEvent).
+			t.RingAssigned(*target, after)
 		}
 		out, err := withSummary(ctx, t.Tx, after)
 		if err != nil {

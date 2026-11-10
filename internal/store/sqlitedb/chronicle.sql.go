@@ -224,6 +224,24 @@ func (q *Queries) InsertChronicleBlob(ctx context.Context, arg InsertChronicleBl
 	return err
 }
 
+const insertChronicleBlobRef = `-- name: InsertChronicleBlobRef :exec
+INSERT INTO chronicle_blob_refs (project_id, object_key, blob_sha256) VALUES (?, ?, ?)
+ON CONFLICT (project_id, object_key, blob_sha256) DO NOTHING
+`
+
+type InsertChronicleBlobRefParams struct {
+	ProjectID  string
+	ObjectKey  string
+	BlobSha256 string
+}
+
+// A blob a body embeds (a signed download URL, P-244): the blob GC keeps a blob any row names. The
+// row goes with its body (the foreign key cascades).
+func (q *Queries) InsertChronicleBlobRef(ctx context.Context, arg InsertChronicleBlobRefParams) error {
+	_, err := q.db.ExecContext(ctx, insertChronicleBlobRef, arg.ProjectID, arg.ObjectKey, arg.BlobSha256)
+	return err
+}
+
 const insertChroniclePage = `-- name: InsertChroniclePage :execrows
 INSERT INTO chronicle_pages (project_id, id, kind, slug, title, head_version_id, source_path, last_derived_object,
   conflict, topics, coverage, superseded_by, updated_by, deleting, created_at, updated_at)

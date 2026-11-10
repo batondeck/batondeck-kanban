@@ -78,12 +78,13 @@ func memory(t *testing.T, newStore Factory) {
 			}
 		})
 
-		t.Run("ReadTakesTheNewestWindowFirstThenFilters", func(t *testing.T) {
+		t.Run("ReadFiltersFirstThenTakesTheNewestLimit", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			task := seedTasks(t, sd, p, b, "a")[0]
 			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "old"})
 			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryShared, Key: "n1"})
 			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryAgent, Key: "bobs", Author: "bob"})
+			write(t, s, store.WriteMemoryInput{ProjectID: p, TaskID: task, Scope: store.MemoryTask, Key: "expired", ExpiresAt: 1})
 			read := func(q store.ReadMemoryQuery) []string {
 				t.Helper()
 				q.Identity = "alice"
@@ -91,14 +92,19 @@ func memory(t *testing.T, newStore Factory) {
 				noErr(t, err)
 				return keys(es)
 			}
-			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 2}); len(got) != 0 {
-				t.Fatalf("key old in a window of 2 reads %v, want none: the window [bobs n1] is cut before the key filter", got)
+			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 1}); !slices.Equal(got, []string{"old"}) {
+				t.Fatalf("key old with limit 1 reads %v, want [old]: newer entries of other keys took the slot", got)
 			}
-			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 3}); !slices.Equal(got, []string{"old"}) {
-				t.Fatalf("key old in a window of 3 reads %v, want [old]", got)
+			// The on-call auto-close's question (service incidentKeeps): does the task hold a live
+			// task-scope entry? Newer entries of other scopes, private or expired, do not hide it.
+			if got := read(store.ReadMemoryQuery{Scope: store.MemoryTask, Limit: 1}); !slices.Equal(got, []string{"old"}) {
+				t.Fatalf("scope task with limit 1 reads %v, want [old]: newer entries of other scopes took the slot", got)
 			}
-			if got := read(store.ReadMemoryQuery{Limit: 1}); len(got) != 0 {
-				t.Fatalf("alice with a window of 1 reads %v, want none: bob's private entry holds the slot", got)
+			if got := read(store.ReadMemoryQuery{Limit: 1}); !slices.Equal(got, []string{"n1"}) {
+				t.Fatalf("alice with limit 1 reads %v, want [n1]: an expired entry or bob's private one took the slot", got)
+			}
+			if got := read(store.ReadMemoryQuery{Limit: 2}); !slices.Equal(got, []string{"n1", "old"}) {
+				t.Fatalf("alice with limit 2 reads %v, want [n1 old]", got)
 			}
 		})
 

@@ -66,6 +66,12 @@ LIMIT sqlc.arg(page_limit)::bigint;
 INSERT INTO chronicle_blobs (project_id, object_key, body, created_at) VALUES ($1, $2, $3, $4)
 ON CONFLICT (project_id, object_key) DO NOTHING;
 
+-- A blob a body embeds (a signed download URL, P-244): the blob GC keeps a blob any row names. The
+-- row goes with its body (the foreign key cascades).
+-- name: InsertChronicleBlobRef :exec
+INSERT INTO chronicle_blob_refs (project_id, object_key, blob_sha256) VALUES ($1, $2, $3)
+ON CONFLICT (project_id, object_key, blob_sha256) DO NOTHING;
+
 -- name: GetChronicleBlob :one
 SELECT * FROM chronicle_blobs WHERE project_id = $1 AND object_key = $2;
 

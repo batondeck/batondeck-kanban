@@ -93,6 +93,30 @@ func blobs(t *testing.T, newStore Factory) {
 			}
 		})
 
+		t.Run("AChronicleBodyThatEmbedsABlobHoldsIt", func(t *testing.T) {
+			s, _, p, _ := seeded(t, newStore)
+			put(t, s, hash("a"))
+			put(t, s, hash("b"))
+			url := func(c string) string { return "/blobs/" + hash(c) + "?exp=0&sig=" + hash("f") }
+			u, err := s.UpsertChroniclePage(ctx, store.UpsertChroniclePageInput{ProjectID: p, Kind: domain.ChronicleADR, Slug: "adr/0001-shot", Title: "Shot",
+				Blocks: []domain.ChronicleBlock{{ID: "a-1", Text: "![d](" + url("a") + ")"}}, Source: domain.SourceHuman, Author: "alice"})
+			noErr(t, err)
+			wantErr(t, s.DeleteBlob(ctx, hash("a")), domain.CodeValidation, "")
+			bs, err := s.ListUnreferencedBlobs(ctx, time.Now().Add(time.Second).UnixMilli(), 10)
+			noErr(t, err)
+			if len(bs) != 1 || bs[0].SHA256 != hash("b") {
+				t.Fatalf("unreferenced %+v, want only b: the page's body holds a", bs)
+			}
+			// An older version still names it after an edit drops it: every version reads it afresh.
+			_, err = s.AppendChronicleVersion(ctx, p, u.Page.ID, store.AppendChronicleVersionInput{ExpectedParentVersionID: u.Page.HeadVersionID,
+				Blocks: []domain.ChronicleBlock{{ID: "a-1", Text: "no image"}}, Source: domain.SourceHuman, Author: "alice"})
+			noErr(t, err)
+			wantErr(t, s.DeleteBlob(ctx, hash("a")), domain.CodeValidation, "")
+			// The page's deletion lets it go.
+			noErr(t, s.DeleteChroniclePage(ctx, p, u.Page.ID, "", "alice", nil))
+			noErr(t, s.DeleteBlob(ctx, hash("a")))
+		})
+
 		t.Run("TheRefusals", func(t *testing.T) {
 			s := migrated(t, newStore)
 			for _, sha := range []string{"", "abc", strings.Repeat("A", 64), strings.Repeat("g", 64), strings.Repeat("a", 65)} {
