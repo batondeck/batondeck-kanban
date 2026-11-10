@@ -343,9 +343,20 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 // are promoted onto the parent (promoteArtifacts), so a picked parent is not a second completion path
 // that lands REVIEW or DONE carrying no evidence (conductor T-52).
 func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq) (PickRunResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "pick_run", domain.GrantSubject{}, true)
+	// The landing is the project's reviewEnabled, which a statuses grant needs to decide (as
+	// complete_task's): the settings are read first, and their error answered after authorize.
+	ps, settings, serr := s.runSettings(ctx, req.ProjectID)
+	subject := domain.GrantSubject{}
+	if serr == nil {
+		rev := ps.ReviewEnabled
+		subject.ReviewEnabled = &rev
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "pick_run", subject, true)
 	if err != nil {
 		return PickRunResp{}, err
+	}
+	if serr != nil {
+		return PickRunResp{}, s.c.mapErr("pick_run", serr)
 	}
 	if err := required("taskId", req.TaskID); err != nil {
 		return PickRunResp{}, err
@@ -355,10 +366,6 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 	}
 	if req.Version < 0 {
 		return PickRunResp{}, domain.Validation("version must be a nonnegative integer", map[string]any{"field": "version"})
-	}
-	ps, settings, err := s.runSettings(ctx, req.ProjectID)
-	if err != nil {
-		return PickRunResp{}, s.c.mapErr("pick_run", err)
 	}
 	target := domain.Done
 	if ps.ReviewEnabled {

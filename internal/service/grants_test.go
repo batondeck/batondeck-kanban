@@ -100,3 +100,63 @@ func TestDetectAnomaliesUnderABoardsGrant(t *testing.T) {
 		t.Fatalf("details %+v, want board:%s", e.Details, other.ID)
 	}
 }
+
+// pick_run lands where a completion does, which is the project's reviewEnabled: a statuses grant
+// holding that landing permits it, as complete_task's does. It was refused "status:*" (an
+// undecidable landing) under every statuses grant, one listing all five included.
+func TestPickRunUnderAStatusesGrant(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		statuses []domain.Status
+		review   bool
+		want     string // "" permitted, else the requiredCapability
+	}{
+		{"every status", []domain.Status{domain.Todo, domain.InProgress, domain.Blocked, domain.Review, domain.Done}, true, ""},
+		{"no DONE, review on", []domain.Status{domain.Todo, domain.InProgress, domain.Review}, true, ""},
+		{"no DONE, review off", []domain.Status{domain.Todo, domain.InProgress, domain.Review}, false, "status:DONE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, Options{})
+			grant := domain.CapabilityGrant{Statuses: tc.statuses}
+			old := f.c
+			f.c = New(f.st, Options{Grants: func(_ context.Context, _, identity string) (domain.CapabilityGrant, bool, error) {
+				return grant, identity == "mona", nil
+			}, ToolCallFlush: -1})
+			if err := old.Close(f.ctx); err != nil {
+				t.Fatal(err)
+			}
+			mona := f.addMember(t, "mona", domain.RoleMaster)
+			if _, err := f.c.Projects().UpdateSettings(f.ctx, f.alice, UpdateSettingsReq{ProjectID: f.project.ID, ReviewEnabled: Optional[bool]{Set: true, V: tc.review}}); err != nil {
+				t.Fatal(err)
+			}
+			parent := f.task(t, domain.Todo, nil)
+			started, err := f.c.Runs().Start(f.ctx, f.alice, StartRunsReq{ProjectID: f.project.ID, TaskID: parent.ID, Version: parent.Version, Count: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := started.Runs[0].ID
+			claim, err := f.c.Lifecycle().Claim(f.ctx, f.alice, ClaimTaskReq{ProjectID: f.project.ID, TaskID: run})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.c.Lifecycle().Complete(f.ctx, f.alice, CompleteTaskReq{ProjectID: f.project.ID, TaskID: run, LeaseID: claim.LeaseID, Deliverable: "the fix"}); err != nil {
+				t.Fatal(err)
+			}
+			cur, err := f.st.GetTask(f.ctx, f.project.ID, parent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.c.Runs().Pick(f.ctx, mona, PickRunReq{ProjectID: f.project.ID, TaskID: parent.ID, RunTaskID: run, Version: cur.Version})
+			t.Logf("pick_run under statuses %v: %v", tc.statuses, err)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("pick_run is refused: %v", err)
+				}
+				return
+			}
+			if e := wantCode(t, err, domain.CodeForbidden); e.Details["requiredCapability"] != tc.want {
+				t.Fatalf("details %+v, want %s", e.Details, tc.want)
+			}
+		})
+	}
+}
