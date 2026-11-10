@@ -23,8 +23,9 @@ func runChronicleBlobRefsMigration(t *testing.T, db *sql.DB, p *goose.Provider) 
 	a, b := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	sig := "&sig=" + strings.Repeat("f", 64)
 	bodies := map[string]string{
-		// Go's JSON writes & as &; the id and its ?exp= are as written.
-		"CP-1/one":  `[{"id":"a-1","text":"![x](/blobs/` + a + `?exp=0&sig=` + strings.Repeat("f", 64) + `) and ![y](http://h/blobs/` + b + `?exp=0` + sig + `) and again /blobs/` + a + `?exp=99` + sig + `"}]`,
+		// Go's JSON writes & as \u0026, as the first URL is here; the id and its ?exp= are as
+		// written either way.
+		"CP-1/one":  `[{"id":"a-1","text":"![x](/blobs/` + a + `?exp=0\u0026sig=` + strings.Repeat("f", 64) + `) and ![y](http://h/blobs/` + b + `?exp=0` + sig + `) and again /blobs/` + a + `?exp=99` + sig + `"}]`,
 		"CP-1/none": `[{"id":"a-1","text":"no image, /blobs/ alone, /blobs/` + strings.Repeat("A", 64) + `?exp=0 and /blobs/` + a[:63] + `?exp=0"}]`,
 		"CP-2/b":    `[{"id":"a-1","text":"/blobs/` + b + `?exp=0` + sig + `"}]`,
 	}
