@@ -97,7 +97,7 @@ type HookResult struct {
 // presented (before any read), the integration by its id alone (unknown, tombstoned or disabled is
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
-// <source id or the body's hash>#<fingerprint or index>. The delivery is charged to the
+// <source id or the body's hash>#<fingerprint or index> (a part over idPartMax bytes hashed). The delivery is charged to the
 // integration's rate budget before it is verified, so a refused sender cannot buy an outbound JWKS
 // fetch past the budget (P-231); a verification or parse failure is paid by that charge and is a
 // rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
@@ -174,7 +174,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	if err != nil {
 		return badRequest("unrecognized_payload: " + err.Error())
 	}
-	base := conn.DeliveryID(payload, cc)
+	base := idPart(conn.DeliveryID(payload, cc))
 	if base == "" {
 		base = bodyHash
 	}
@@ -185,7 +185,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	out := HookOutcome{Results: []HookResult{}}
 	for i, ev := range events {
 		// The fingerprint qualifies the id, so a grouped delivery's alerts never collapse into one.
-		key := ev.Fingerprint
+		key := idPart(ev.Fingerprint)
 		if key == "" {
 			key = strconv.Itoa(i)
 		}
@@ -196,7 +196,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))
 				return out, nil
 			}
-			c.log.Printf("ingest: integration %s delivery %s refused: %s %s", integration.ID, deliveryID, e.Code, e.Message)
+			c.log.Printf("ingest: integration %s delivery %q refused: %s %q", integration.ID, deliveryID, e.Code, e.Message)
 			if e.Retryable {
 				// Nothing of this event landed (its transaction rolled back), and the events before it
 				// are recorded, so the sender's retry replays them and lands this one once.
@@ -213,10 +213,24 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		if got.TaskID != nil {
 			task = *got.TaskID
 		}
-		c.log.Printf("ingest: integration %s delivery %s %s task %s doorbell %s replayed %t", integration.ID, deliveryID, got.Result, task, got.Doorbell, got.Replayed)
+		c.log.Printf("ingest: integration %s delivery %q %s task %s doorbell %s replayed %t", integration.ID, deliveryID, got.Result, task, got.Doorbell, got.Replayed)
 		out.Results = append(out.Results, HookResult{DeliveryID: deliveryID, Result: string(got.Result), TaskID: got.TaskID, Replayed: got.Replayed})
 	}
 	return out, nil
+}
+
+// idPartMax is the most bytes of a sender's delivery id or fingerprint a delivery id carries as
+// sent; a longer one is replaced by idPart's hash.
+const idPartMax = 200
+
+// idPart is s as one part of a delivery id: as sent when it is at most idPartMax bytes, else
+// "sha256:" and 32 hex of its hash, so the id stays within replay_delivery's and read_delivery_raw's
+// 1024 characters and the same long id still names the same delivery.
+func idPart(s string) string {
+	if len(s) <= idPartMax {
+		return s
+	}
+	return "sha256:" + connectors.Sha256Hex([]byte(s))[:32]
 }
 
 // verifyHook verifies r by integration's auth mode: "" when it passes, else the reason, and

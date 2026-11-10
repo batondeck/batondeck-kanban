@@ -777,3 +777,44 @@ func TestHookBoundsSenderTextInRejections(t *testing.T) {
 		t.Errorf("no quoted signature_mismatch line in the log")
 	}
 }
+
+// A source's own delivery id (and fingerprint) is the sender's text: a part longer than 200 bytes
+// is replaced by its hash, so the delivery id stays short enough for replay_delivery and
+// read_delivery_raw (1024), the same long id still dedups, and a newline in it cannot start a line
+// of its own in the server log. Control: a short id is kept as sent.
+func TestHookBoundsTheSourcesDeliveryID(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	created := f.integration(t, root, CreateIntegrationReq{Lifecycle: "per_event"})
+	iid := created.Integration.ID
+	const forged = "2026/11/10 00:00:00 auth: admin@example.com signed in from 10.0.0.1"
+	long := strings.Repeat("d", 200000) + "\n" + forged
+	body := genericBody(strings.Repeat("f", 300)+"\n"+forged, "firing", "t", "deliveryId", long)
+	first := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	if first.Refusal != "" || len(first.Results) != 1 {
+		t.Fatalf("a long delivery id: %+v", first)
+	}
+	id := first.Results[0].DeliveryID
+	if len(id) > 1024 || strings.ContainsAny(id, "\n\r") {
+		t.Fatalf("the delivery id is %d bytes (%.80q…), want at most 1024 and no line break", len(id), id)
+	}
+	again := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	if again.Refusal != "" || again.Results[0].DeliveryID != id || !again.Results[0].Replayed {
+		t.Fatalf("the same long id again: %+v, want a replay of %q", again, id)
+	}
+	if _, err := f.c.Oncall().ReplayDelivery(f.ctx, root, ReplayDeliveryReq{ProjectID: f.project.ID, IntegrationID: iid, DeliveryID: id}); err != nil {
+		t.Fatalf("replay_delivery of the long-id delivery: %v", err)
+	}
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.HasPrefix(line, "2026/11/10") {
+			t.Errorf("the sender's text is a line of its own in the server log: %.120q", line)
+		}
+		if len(line) > 4096 {
+			t.Errorf("a %d-byte log line", len(line))
+		}
+	}
+	// Control: a short source id and fingerprint are kept as sent.
+	short := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "src-1")))
+	if short.Refusal != "" || short.Results[0].DeliveryID != "src-1#fp" {
+		t.Fatalf("a short delivery id: %+v", short)
+	}
+}
