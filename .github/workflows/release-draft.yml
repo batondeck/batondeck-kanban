@@ -18,6 +18,13 @@
 # it refuses a candidate that is not on main. With `replace`, an existing v<version> release and its
 # tag are deleted just before the draft is created, so a published version can be re-cut from a later
 # commit; release-publish then creates the tag again at the new candidate.
+#
+# THREE JOBS, AND ONLY TWO WRITE. `build` (steps 1 and 4 and the notes) runs under a read-only token;
+# `image` (step 5) alone holds packages: write, and `release` (step 6, and `replace`) alone holds
+# contents: write. Every action is named by its commit SHA (the tag in the comment beside it), so a
+# tag moved on an action's repository runs nothing here, and nothing in the build holds a token that
+# can push the image or touch a release. The image runs after the build and the release after both, so
+# a failed build pushes no image and a failed image creates no draft.
 name: release-draft
 
 on:
@@ -40,21 +47,23 @@ on:
         default: false
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 defaults:
   run:
     shell: bash
 
+env:
+  VERSION: ${{ inputs.version }}
+  CANDIDATE: ${{ inputs.candidate }}
+
 jobs:
-  draft:
+  build:
     runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ inputs.version }}
-      CANDIDATE: ${{ inputs.candidate }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.candidate }}
           fetch-depth: 0
@@ -69,7 +78,7 @@ jobs:
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$CANDIDATE" origin/main || { echo "candidate is not on main"; exit 1; }
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
@@ -100,30 +109,84 @@ jobs:
           make -C "$dir2" dist VERSION="$VERSION"
           diff dist/SHA256SUMS "$dir2/dist/SHA256SUMS" && echo reproduced
 
-      - uses: docker/setup-buildx-action@v3
-        if: ${{ inputs.push_image }}
+      - name: Step 6, the notes from CHANGELOG.md
+        run: |
+          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 { f = 1; next } /^(## |### )/ { f = 0 } f' CHANGELOG.md > notes.md
+          cat notes.md
 
-      - uses: docker/login-action@v3
-        if: ${{ inputs.push_image }}
+      # The release job publishes these; they leave this job as an artifact, not with a write token.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ inputs.version }}-${{ inputs.candidate }}
+          path: |
+            dist/
+            notes.md
+          if-no-files-found: error
+
+  image:
+    needs: build
+    if: ${{ inputs.push_image }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      # No git command here reaches origin, so the token is not left in .git/config.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.candidate }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Local annotated tag, so make image's tree check passes
+        run: |
+          git config user.name "release-draft"
+          git config user.email "release-draft@users.noreply.github.com"
+          if [ "${{ inputs.replace }}" = true ]; then git tag -d "v$VERSION" 2>/dev/null || true; fi
+          git tag -a "v$VERSION" -m "batondeck-kanban $VERSION — CHANGELOG.md has the notes" "$CANDIDATE"
+          test "$(git rev-parse "v$VERSION^{commit}")" = "$CANDIDATE"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
       - name: Step 5, make image for linux/amd64 and linux/arm64, pushed
-        if: ${{ inputs.push_image }}
+        id: push
         run: |
           make image VERSION="$VERSION" PUSH=1
           docker buildx imagetools inspect "ghcr.io/batondeck/batondeck-kanban:$VERSION" | tee image-inspect.txt
           grep -q 'linux/amd64' image-inspect.txt
           grep -q 'linux/arm64' image-inspect.txt
-          sed -n 's/^Digest: *//p' image-inspect.txt | head -1 > image-digest.txt
+          echo "digest=$(sed -n 's/^Digest: *//p' image-inspect.txt | head -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Step 6, the notes from CHANGELOG.md
+  release:
+    needs: [build, image]
+    # image is skipped without push_image; then the draft needs the build alone.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.image.result == 'success' || needs.image.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.candidate }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-${{ inputs.version }}-${{ inputs.candidate }}
+
+      - name: Step 6, the image in the notes
+        env:
+          DIGEST: ${{ needs.image.outputs.digest }}
         run: |
-          awk -v v="$VERSION" 'index($0, "## [" v "]") == 1 { f = 1; next } /^(## |### )/ { f = 0 } f' CHANGELOG.md > notes.md
-          if [ -s image-digest.txt ]; then
-            printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` (%s), linux/amd64 and linux/arm64.\n' "$VERSION" "$(cat image-digest.txt)" >> notes.md
+          if [ -n "$DIGEST" ]; then
+            printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` (%s), linux/amd64 and linux/arm64.\n' "$VERSION" "$DIGEST" >> notes.md
           else
             printf '\nImage: `ghcr.io/batondeck/batondeck-kanban:%s` for linux/amd64 and linux/arm64, built from this tag with `make image VERSION=%s`.\n' "$VERSION" "$VERSION" >> notes.md
           fi
@@ -152,12 +215,3 @@ jobs:
             --title "v$VERSION" --notes-file notes.md \
             dist/batondeck-kanban_${VERSION}_* dist/SHA256SUMS dist/sbom.cdx.json THIRD_PARTY_NOTICES
           gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish,assets --jq '{isDraft, targetCommitish, assets: [.assets[].name]}'
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ inputs.version }}-${{ inputs.candidate }}
-          path: |
-            dist/
-            notes.md
-            image-inspect.txt
-          if-no-files-found: error

@@ -56,7 +56,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    # By digest (Postgres 16.15's multi-platform index), so a moved tag cannot change the image that
+    # holds the database, and `docker compose pull` fetches this image and no other. A release moves it
+    # to a newer 16.x, which starts on the same volume.
+    image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
     environment:
       POSTGRES_USER: batondeck
       POSTGRES_PASSWORD: ${BATONDECK_POSTGRES_PASSWORD:?set BATONDECK_POSTGRES_PASSWORD, for example in .env beside compose.yaml - openssl rand -hex 24 (hex, since it goes into the URL unescaped)}
