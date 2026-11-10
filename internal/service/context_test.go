@@ -596,31 +596,31 @@ func TestTaskMemoryWindowCountsWhatTheReaderSees(t *testing.T) {
 	})
 }
 
-// AC4: an entry with a one-second ttl is read at once and gone two seconds later.
+// AC4: an entry with a ttl is read, with its ttl, while it is live, and an entry past its ttl is
+// gone on read before any sweep. Both instants are far from now (an hour each way), so no wall-clock
+// window has to hold on a loaded runner.
 func TestWriteMemoryTTLExpiresOnRead(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		t.Parallel()
 		cx := e.c.Context()
 		task := e.task(t, domain.Todo)
-		ttl := time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
-		w, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "short", Value: "v", TTL: ttl})
-		if err != nil {
-			t.Fatal(err)
-		}
-		read := func() []MemoryEntry {
-			got, err := cx.ReadMemory(e.ctx, e.alice, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID})
+		write := func(key string, at time.Time) string {
+			t.Helper()
+			w, err := cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: key, Value: "v",
+				TTL: at.UTC().Format(time.RFC3339Nano)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			return got.Entries
+			return w.EntryID
 		}
-		at := read()
-		if len(at) != 1 || at[0].ID != w.EntryID || at[0].TTL == nil {
-			t.Fatalf("at once: %+v, want the entry with its ttl", at)
+		live := write("live", time.Now().Add(time.Hour))
+		write("expired", time.Now().Add(-time.Hour))
+		got, err := cx.ReadMemory(e.ctx, e.alice, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID})
+		if err != nil {
+			t.Fatal(err)
 		}
-		time.Sleep(2 * time.Second)
-		if later := read(); len(later) != 0 {
-			t.Fatalf("after 2 s: %+v, want none", later)
+		if len(got.Entries) != 1 || got.Entries[0].ID != live || got.Entries[0].TTL == nil {
+			t.Fatalf("read %+v, want the live entry with its ttl and the expired one gone", got.Entries)
 		}
 		_, err = cx.WriteMemory(e.ctx, e.alice, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: domain.MemoryScopeTask, Key: "k", TTL: "1000"})
 		wantCode(t, err, domain.CodeValidation)
