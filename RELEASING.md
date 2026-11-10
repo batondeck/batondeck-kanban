@@ -152,7 +152,11 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
 
 7. **Visibility is the organisation owner's, not this sequence's.** The owner sets the repository's
    visibility (the README's download URLs and `git clone` need it public) and the image package's,
-   in the package's settings on GitHub (an anonymous `docker pull` needs it public).
+   in the package's settings on GitHub (an anonymous `docker pull` needs it public). Two settings go
+   with making the repository public, and neither can be set while it is private: private
+   vulnerability reporting (Settings, then Code security; `SECURITY.md` sends reporters to it, and
+   until it is on they have no private channel), and a branch protection rule on `main` that
+   requires a pull request and the `check` and `e2e` statuses.
 
 ## Verifying a release you downloaded
 
