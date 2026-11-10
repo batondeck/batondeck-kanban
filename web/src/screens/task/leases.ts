@@ -10,8 +10,10 @@
  *
  * localStorage, so a reload or another tab of the same browser keeps it; a Map beside it, so a
  * browser that refuses storage (private mode, blocked site data) still keeps it while the page lives.
- * An entry is only a hint: the ticket hook offers it only while the server says the live claim is
- * this identity's with no agent named, and the server checks it on every call.
+ * Storage is read on every recall and a miss is never remembered, so a tab that showed the ticket
+ * before another tab claimed it picks the lease up (`onLeaseStorage` re-renders it when that tab
+ * writes). An entry is only a hint: the ticket hook offers it only while the server says the live
+ * claim is this identity's with no agent named, and the server checks it on every call.
  */
 export interface LeaseEntry {
   leaseId: string;
@@ -20,38 +22,39 @@ export interface LeaseEntry {
 }
 
 const PREFIX = 'batondeck.lease:';
-const mem = new Map<string, LeaseEntry | null>();
+/** The leases storage refused to hold, for this page only. */
+const mem = new Map<string, LeaseEntry>();
 const keyOf = (identity: string, projectId: string, taskId: string): string => PREFIX + JSON.stringify([identity, projectId, taskId]);
+
+/** The storage key of one identity's lease on one ticket (another tab writes the same key). */
+export const leaseStorageKey = keyOf;
 
 export function recallLease(identity: string, projectId: string, taskId: string): LeaseEntry | null {
   const k = keyOf(identity, projectId, taskId);
-  if (mem.has(k)) return mem.get(k) ?? null;
-  let entry: LeaseEntry | null = null;
   try {
     const raw = localStorage.getItem(k);
     const v = raw ? (JSON.parse(raw) as Partial<LeaseEntry>) : null;
-    if (v && typeof v.leaseId === 'string' && typeof v.at === 'number') entry = { leaseId: v.leaseId, at: v.at };
+    if (v && typeof v.leaseId === 'string' && typeof v.at === 'number') return { leaseId: v.leaseId, at: v.at };
   } catch {
-    // storage refused or a corrupt entry: nothing remembered
+    // storage refused or a corrupt entry: the Map's copy, if any
   }
-  mem.set(k, entry);
-  return entry;
+  return mem.get(k) ?? null;
 }
 
 export function rememberLease(identity: string, projectId: string, taskId: string, leaseId: string): void {
   const k = keyOf(identity, projectId, taskId);
   const entry: LeaseEntry = { leaseId, at: Date.now() };
-  mem.set(k, entry);
   try {
     localStorage.setItem(k, JSON.stringify(entry));
+    mem.delete(k);
   } catch {
-    // the Map above still holds it for this page
+    mem.set(k, entry); // this page still holds it
   }
 }
 
 export function forgetLease(identity: string, projectId: string, taskId: string): void {
   const k = keyOf(identity, projectId, taskId);
-  mem.set(k, null);
+  mem.delete(k);
   try {
     localStorage.removeItem(k);
   } catch {
@@ -59,7 +62,16 @@ export function forgetLease(identity: string, projectId: string, taskId: string)
   }
 }
 
-/** Test seam: drop the in-page copy so the next read goes to storage, as a reload would. */
+/** Calls cb when another tab of this browser stores or drops a lease; returns the unsubscribe. */
+export function onLeaseStorage(cb: () => void): () => void {
+  const on = (e: StorageEvent): void => {
+    if (e.key === null || e.key.startsWith(PREFIX)) cb();
+  };
+  window.addEventListener('storage', on);
+  return () => window.removeEventListener('storage', on);
+}
+
+/** Test seam: drop the in-page copies (the leases storage refused), as a reload would. */
 export function resetLeaseMemory(): void {
   mem.clear();
 }

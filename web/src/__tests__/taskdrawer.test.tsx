@@ -9,7 +9,7 @@ import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-li
 import { TaskDrawer } from '../screens/TaskDrawer.js';
 import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
-import { resetLeaseMemory } from '../screens/task/leases.js';
+import { leaseStorageKey, resetLeaseMemory } from '../screens/task/leases.js';
 import type { Task } from '../types.js';
 
 const now = Date.now();
@@ -621,7 +621,7 @@ describe('a web claim survives the drawer remounting', () => {
     const call = fm.mock.calls.find(([u]) => String(u).endsWith(suffix));
     return call ? JSON.parse(String((call[1] as RequestInit).body)) : undefined;
   };
-  beforeEach(() => { try { localStorage.clear(); } catch { /* none */ } });
+  beforeEach(() => { resetLeaseMemory(); try { localStorage.clear(); } catch { /* none */ } });
   afterEach(() => { try { localStorage.clear(); } catch { /* none */ } });
 
   it('reopened, the holder can still complete with the lease the claim returned', async () => {
@@ -651,6 +651,32 @@ describe('a web claim survives the drawer remounting', () => {
     expect(screen.queryByRole('button', { name: /Mark complete/ })).not.toBeInTheDocument();
     // The Lease panel prints no empty lease-id row: the server never sends one.
     expect(screen.queryByText('leaseId')).not.toBeInTheDocument();
+  });
+
+  it('a claim made in another tab of this browser is offered here once that tab stores its lease', async () => {
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    // This tab read the ticket before the other tab's claim answered: no lease here yet.
+    expect(await screen.findByText(/You hold this claim from another browser or session/)).toBeInTheDocument();
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    const value = JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 1000 });
+    localStorage.setItem(key, value);
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
+    expect(await screen.findByRole('button', { name: /Mark complete/ })).toBeInTheDocument();
+  });
+
+  it("the lease bar measures this browser's claim against its own length, not five minutes", async () => {
+    const half = 30 * 60_000;
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: new Date(Date.now() + half).toISOString() } as Task['claim'] };
+    localStorage.setItem(leaseStorageKey('alice@example.com', 'p1', 'T-1'), JSON.stringify({ leaseId: 'L-abc', at: Date.now() - half }));
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    const label = await screen.findByText(/remaining$/);
+    const fill = label.closest('.bar-h')!.querySelector('.bar i') as HTMLElement;
+    const pct = parseFloat(fill.style.width);
+    expect(pct).toBeGreaterThan(45);
+    expect(pct).toBeLessThan(55);
   });
 });
 

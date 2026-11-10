@@ -25,7 +25,7 @@ import { closedWhy, mayCall, type GatedTool } from '../../toolFloors.js';
 import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
-import { forgetLease, recallLease, rememberLease } from './leases.js';
+import { forgetLease, onLeaseStorage, recallLease, rememberLease } from './leases.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -49,9 +49,11 @@ export interface EditDraft { title: string; description: string; version: number
 export type Run = <T>(p: Promise<T>, onSuccess?: (r: T) => void) => Promise<void>;
 
 // Live ticking lease countdown ("4m 12s") + fraction remaining for the progress bar. Recomputes once
-// a second off a now() tick; assumes the core's default 5-minute lease window (LEASE_DEFAULT_SECONDS)
-// for the bar fill (purely cosmetic — same window the board card's lease bar uses).
-function useLeaseCountdown(expiresAt: string | null | undefined): { label: string; frac: number; expired: boolean } {
+// a second off a now() tick. The claim on the wire carries its expiry, not its length, so the bar
+// measures this browser's own claim from when it answered (`since`: a browser claim holds an hour)
+// and any other against the server's default 5-minute lease (purely cosmetic — the window the board
+// card's lease bar uses).
+function useLeaseCountdown(expiresAt: string | null | undefined, since: number | null): { label: string; frac: number; expired: boolean } {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!expiresAt) return;
@@ -61,7 +63,8 @@ function useLeaseCountdown(expiresAt: string | null | undefined): { label: strin
   if (!expiresAt) return { label: '', frac: 0, expired: true };
   const ms = new Date(expiresAt).getTime() - now;
   if (ms <= 0) return { label: 'expired', frac: 0, expired: true };
-  const total = 5 * 60 * 1000;
+  const end = new Date(expiresAt).getTime();
+  const total = since !== null && end > since ? end - since : 5 * 60 * 1000;
   const s = Math.floor(ms / 1000);
   const label = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
   return { label, frac: Math.max(0, Math.min(1, ms / total)), expired: false };
@@ -75,6 +78,8 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // the page following a link to another ticket reads that ticket's entry, not this one's.
   const [, leaseChanged] = useReducer((n: number) => n + 1, 0);
   const leaseEntry = identity ? recallLease(identity, projectId, taskId) : null;
+  // Another tab of this browser claimed or released: read the entry again.
+  useEffect(() => onLeaseStorage(leaseChanged), []);
   const setLease = (leaseId: string | null): void => {
     if (!identity) return;
     if (leaseId) rememberLease(identity, projectId, taskId, leaseId);
@@ -225,13 +230,12 @@ export function useTaskDetail(projectId: string, taskId: string) {
     (to, t) => tasksApi.moveTask(projectId, t.id, t.version, { toStatus: to }),
   );
 
-  const countdown = useLeaseCountdown(task?.claim?.expiresAt);
-
   // The remembered lease is offered only while the live claim is this identity's with no agent named
   // (a claim that names an agent is that agent's, even under this identity's token: P-320). A claim
   // with no lease here is someone else's, or this identity's from another browser or session.
   const claimIsMine = !!task?.claim && !!identity && task.claim.owner === identity && !task.claim.agent;
   const myLease = claimIsMine && leaseEntry ? leaseEntry.leaseId : null;
+  const countdown = useLeaseCountdown(task?.claim?.expiresAt, myLease ? leaseEntry!.at : null);
   const heldByOther = !!task?.claim && !myLease;
   // Drop a remembered lease once a read of the task made after the claim shows the claim gone or not
   // this browser's (released, completed or reaped elsewhere), so storage does not collect them.
