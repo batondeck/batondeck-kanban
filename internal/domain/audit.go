@@ -19,8 +19,9 @@ type AuditDescriptor struct {
 // sensitiveActions is the one place a sensitive tool is declared, and the opposite polarity to
 // grants: a tool absent here is not audited, because auditing every call would bury the actions that
 // change who may do what, or destroy data. Conductor's rows for the tools in scope, with
-// update_settings no longer recording transitionTable (the table is fixed), set_transitions gone with
-// its tool, and delete_task added.
+// update_settings no longer recording transitionTable (the table is fixed) and recording
+// checkpointPolicy, tokenPolicy and maxTicketTokens, set_transitions gone with its tool, and
+// delete_task and delete_chronicle_page added.
 var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	// Project membership and privilege.
 	"add_member": func(a map[string]any) AuditDescriptor {
@@ -40,13 +41,18 @@ var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	"delete_task": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "task.deleted", Subject: str(a, "taskId"), Data: map[string]any{}}
 	},
+	// A chronicle page's delete removes every version and body; its event names no board or task, so
+	// no feed reads it back.
+	"delete_chronicle_page": func(a map[string]any) AuditDescriptor {
+		return AuditDescriptor{Action: "chronicle.page_deleted", Subject: str(a, "pageId"), Data: map[string]any{}}
+	},
 
 	// Configuration that changes who can do what. color is cosmetic and not recorded.
 	"update_settings": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "settings.updated", Subject: str(a, "projectId"), Data: pick(a,
 			"reviewEnabled", "quotaEnabled", "txnCap", "artifactPolicy", "selfApprovalPolicy",
 			"defaultReviewer", "selectionWeights", "agingCeilingMs", "capabilityAliases", "retryPolicy",
-			"anomalyPolicy", "maxRunsPerTask")}
+			"anomalyPolicy", "maxRunsPerTask", "checkpointPolicy", "tokenPolicy", "maxTicketTokens")}
 	},
 
 	// Revocation, keyed on the identity: the agent rides in data so a search by account finds it.

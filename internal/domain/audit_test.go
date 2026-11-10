@@ -13,8 +13,8 @@ import (
 
 func TestAuditCoveragePinned(t *testing.T) {
 	want := []string{
-		"add_member", "create_integration", "delete_integration", "delete_project", "delete_task",
-		"disconnect_agent", "grant_capabilities", "remove_member", "rotate_integration_secret",
+		"add_member", "create_integration", "delete_chronicle_page", "delete_integration", "delete_project",
+		"delete_task", "disconnect_agent", "grant_capabilities", "remove_member", "rotate_integration_secret",
 		"update_integration", "update_settings",
 	}
 	if got := AuditedTools(); !reflect.DeepEqual(got, want) {
@@ -41,6 +41,11 @@ func TestDescribeAudit(t *testing.T) {
 	if !ok || !reflect.DeepEqual(d, AuditDescriptor{Action: "task.deleted", Subject: "T-7", Data: map[string]any{}}) {
 		t.Fatalf("delete_task: %+v %v", d, ok)
 	}
+	// A chronicle page's delete removes every version and body irreversibly: this row is its trace.
+	d, ok = DescribeAudit("delete_chronicle_page", map[string]any{"projectId": "P-1", "pageId": "CP-abc"})
+	if !ok || !reflect.DeepEqual(d, AuditDescriptor{Action: "chronicle.page_deleted", Subject: "CP-abc", Data: map[string]any{}}) {
+		t.Fatalf("delete_chronicle_page: %+v %v", d, ok)
+	}
 	d, _ = DescribeAudit("remove_member", map[string]any{"projectId": "P-1", "identityId": " Bob@X.com "})
 	if d.Action != "member.removed" || d.Subject != "bob@x.com" {
 		t.Fatalf("an identity subject is canonicalised as the handler does: %+v", d)
@@ -65,5 +70,13 @@ func TestAuditCuratesThePayload(t *testing.T) {
 	want := map[string]any{"reviewEnabled": false, "retryPolicy": map[string]any{"poisonAfterAttempts": 3}}
 	if d.Action != "settings.updated" || !reflect.DeepEqual(d.Data, want) {
 		t.Fatalf("update_settings records the policy fields, not transitionTable or color: %+v", d)
+	}
+	// checkpointPolicy is enforced by complete_task; tokenPolicy and maxTicketTokens are policy too.
+	d, _ = DescribeAudit("update_settings", map[string]any{
+		"projectId": "P-1", "checkpointPolicy": "off", "tokenPolicy": "off", "maxTicketTokens": 1000000,
+	})
+	want = map[string]any{"checkpointPolicy": "off", "tokenPolicy": "off", "maxTicketTokens": 1000000}
+	if !reflect.DeepEqual(d.Data, want) {
+		t.Fatalf("update_settings records checkpointPolicy, tokenPolicy and maxTicketTokens: %+v", d)
 	}
 }
