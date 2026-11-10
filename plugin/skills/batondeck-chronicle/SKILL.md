@@ -1,6 +1,6 @@
 ---
 name: batondeck-chronicle
-description: "Sweep a batondeck-kanban board's DONE tasks into Chronicle decision records: read the cursor from project memory, list the tasks that reached DONE since it (every page, following nextCursor to the end), pull each task's description, deliverable, checkpoints and artifacts, lay them out as cited blocks and ingest each page with ingest_chronicle_page, then advance the cursor once, after the whole window is ingested. Invoked by /batondeck-kanban:chronicle."
+description: "Sweep a batondeck-kanban board's DONE tasks into Chronicle decision records: read the board's cursor from project memory and note the sweep's start in the server's clock, list the tasks that reached DONE since the cursor (every page, following nextCursor to the end), pull each task's description, deliverable, checkpoints and artifacts, lay them out as cited blocks and ingest each page with ingest_chronicle_page, then move the cursor to the sweep's start less a minute, once, after the whole window is ingested. Invoked by /batondeck-kanban:chronicle."
 ---
 
 # batondeck-kanban chronicle
@@ -15,14 +15,26 @@ field. When the evidence is missing, the record says so in a coverage block ("No
 rejected alternatives"), and only after you read the field and found it empty: claiming an absence
 you did not verify is the one failure this procedure cannot survive.
 
-## 1. Read the cursor
+## 1. Read the cursor, then note the start
 
 ```
-recall_memory { projectId, scope: "project", key: "chronicle.cursor" }
+recall_memory { projectId, scope: "project", key: "chronicle.cursor.<boardId>" }
 ```
 
-The cursor is `entries[0].value`, an ISO instant: the newest `updatedAt` a previous sweep processed.
-No entry means genesis. It lives in project memory, not a file, so two checkouts cannot fork it.
+The cursor is `entries[0].value`, an ISO instant: where the previous sweep of this board left off. No
+entry means genesis. There is one cursor per board, because `list_tasks` reads one board: a cursor one
+board moved would pass over the other boards' tasks. It lives in project memory, not a file, so two
+checkouts cannot fork it.
+
+Then, before the first `list_tasks` call, note the sweep's start in the server's clock:
+
+```
+write_memory  { projectId, scope: "project", key: "chronicle.start.<boardId>", value: "<the cursor, or genesis>" }   → entryId
+recall_memory { projectId, scope: "project", key: "chronicle.start.<boardId>", k: 5 }   → the entry whose id is that entryId
+```
+
+That entry's `ts` is **the start**. Take it from the server, never from your own clock: the server
+writes every `updatedAt` you compare it with.
 
 ## 2. Take the window
 
@@ -34,10 +46,14 @@ Genesis: the same call without `updatedSince`. **The window is every page, not t
 `list_tasks` pages in board order, not by time, and applies `updatedSince` to each page after paging,
 so a page can come back short or even empty while `nextCursor` is still set, and the most recently
 finished task can sit on any page. Keep calling with `cursor: "<nextCursor>"` until a response carries
-no `nextCursor`, taking steps 3 to 5 for the tasks of each page as it comes, and keep the newest
-`updatedAt` among every task you listed. The filter is inclusive at the boundary, so re-reading your
-own instant costs one duplicate task, which ingests as unchanged. Only when the whole window listed
-no task at all: stop and say so, having written nothing.
+no `nextCursor`, taking steps 3 to 5 for the tasks of each page as it comes.
+
+Workers keep finishing tasks while you page, and a finished task keeps its place in board order. One
+that finishes on a page you have already read is not listed this time, while one that finishes on a
+page still ahead is: that is expected, and step 6's cursor leaves the first in the next window. The
+window overlaps the previous one by a minute, and the filter is inclusive at the boundary, so a task
+listed by both ingests as unchanged. Only when the whole window listed no task at all: stop and say
+so, leaving the cursor where it is.
 
 ## 3. Pull each task's evidence: two calls, and it has to be two
 
@@ -82,15 +98,22 @@ resolve. Report conflicts; do not resolve them. `unchanged: true` means nothing 
 ## 6. Advance the cursor last
 
 ```
-write_memory { projectId, scope: "project", key: "chronicle.cursor", value: "<newest updatedAt of the whole window>" }
+write_memory { projectId, scope: "project", key: "chronicle.cursor.<boardId>", value: "<the start less one minute>" }
 ```
 
-Once, after the **last page** of the window is listed and every task on every page ingested. Never
-after one page, and never when the sweep stops early: the pages are in board order, so a cursor
-written mid-window passes over every task on the pages not yet read, for good. A sweep that stops or
-dies before the end leaves the cursor where the last complete sweep put it, and the next run lists
-the whole window again; the slug is a function of the task, so the failure mode is a repeated ingest
-(unchanged), never a skipped task.
+The value is step 1's `ts` less one minute, in the same form: `2026-11-10T09:00:30.000Z` becomes
+`2026-11-10T08:59:30.000Z`. **Never the newest `updatedAt` you listed.** A task that finished
+mid-sweep on a page already read was not listed, and one that finished after it on a page ahead was,
+so the newest `updatedAt` you saw can be later than the task you missed, and a window from it never
+lists that task again. Every task that finishes after the start carries an `updatedAt` after it, so
+the window from the start holds it; the minute covers a write that was still landing as the sweep
+began.
+
+Write it once, after the **last page** of the window is listed and every task on every page
+ingested. Never after one page, and never when the sweep stops early: a cursor written mid-window
+passes over every task on the pages not yet read. A sweep that stops or dies before the end leaves
+the cursor where the last complete sweep put it, and the next run lists the whole window again; the
+slug is a function of the task, so that repeat costs unchanged ingests, never a skipped task.
 
 ## Report
 

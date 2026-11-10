@@ -11,7 +11,10 @@ It runs as you, in this session, when asked; nothing schedules it.
 
 The shape (the batondeck-chronicle skill is the full procedure — follow it):
 
-1. `recall_memory { projectId, scope: "project", key: "chronicle.cursor" }` → the cursor, or genesis.
+1. `recall_memory { projectId, scope: "project", key: "chronicle.cursor.<boardId>" }` → the board's
+   cursor, or genesis. Then note the start in the server's clock: `write_memory` the key
+   `chronicle.start.<boardId>` and `recall_memory` it; the `ts` of the entry with that `entryId` is the
+   start.
 2. `list_tasks { projectId, boardId, status: "DONE", updatedSince: "<cursor>", limit: 50 }`, then
    every further page by `nextCursor` until none comes back: a page can be short or empty and still
    carry one, because pages are in board order and the filter applies after paging.
@@ -20,8 +23,10 @@ The shape (the batondeck-chronicle skill is the full procedure — follow it):
 4. Compose one page per task from the task's own fields, verbatim, every block citing the task.
 5. `ingest_chronicle_page { projectId, kind: "adr", slug: "adr/<taskId>", title, blocks }`; report any
    `conflicts`.
-6. `write_memory { projectId, scope: "project", key: "chronicle.cursor", value }`, the newest
-   `updatedAt` of the whole window, once, after its last page is ingested; never after a partial window.
+6. `write_memory { projectId, scope: "project", key: "chronicle.cursor.<boardId>", value }`, the start
+   less one minute, once, after the last page is ingested; never after a partial window, and never the
+   newest `updatedAt` listed: a task that finished mid-sweep behind the page being read is listed only
+   by the next window, and a later `updatedAt` seen ahead of it would pass over it for good.
 
 Report one line per page, the cursor you wrote or why not, any conflicts, and what remains.
 
