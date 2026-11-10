@@ -125,7 +125,7 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
                 variant="primary"
                 onClick={() =>
                   void run(lifecycleApi.claimTask(projectId, taskId), (r) => {
-                    if (r) setLease(r.leaseId);
+                    if (r) setLease({ leaseId: r.leaseId, version: r.task.version });
                   })
                 }
               >

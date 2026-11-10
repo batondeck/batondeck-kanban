@@ -17,8 +17,15 @@
  */
 export interface LeaseEntry {
   leaseId: string;
-  /** When the claim answered (ms), so a read of the task older than the claim does not drop it. */
+  /** When the claim answered (ms): the lease bar measures this browser's claim from it. */
   at: number;
+  /**
+   * The task's version in the claim's answer (a claim moves it). A read of an older version was made
+   * before the claim, so it cannot say the claim is gone: in another tab of this browser, a read sent
+   * before this claim committed can answer after the claim stored its lease. The version, not when a
+   * read answered, decides which reads may drop the entry.
+   */
+  version: number;
 }
 
 const PREFIX = 'batondeck.lease:';
@@ -34,16 +41,19 @@ export function recallLease(identity: string, projectId: string, taskId: string)
   try {
     const raw = localStorage.getItem(k);
     const v = raw ? (JSON.parse(raw) as Partial<LeaseEntry>) : null;
-    if (v && typeof v.leaseId === 'string' && typeof v.at === 'number') return { leaseId: v.leaseId, at: v.at };
+    if (v && typeof v.leaseId === 'string' && typeof v.at === 'number' && typeof v.version === 'number') {
+      return { leaseId: v.leaseId, at: v.at, version: v.version };
+    }
   } catch {
     // storage refused or a corrupt entry: the Map's copy, if any
   }
   return mem.get(k) ?? null;
 }
 
-export function rememberLease(identity: string, projectId: string, taskId: string, leaseId: string): void {
+/** `version`: the task's version in the claim's answer. */
+export function rememberLease(identity: string, projectId: string, taskId: string, leaseId: string, version: number): void {
   const k = keyOf(identity, projectId, taskId);
-  const entry: LeaseEntry = { leaseId, at: Date.now() };
+  const entry: LeaseEntry = { leaseId, at: Date.now(), version };
   try {
     localStorage.setItem(k, JSON.stringify(entry));
     mem.delete(k);

@@ -85,9 +85,10 @@ export function useTaskDetail(projectId: string, taskId: string, { refreshBoard 
   const leaseEntry = identity ? recallLease(identity, projectId, taskId) : null;
   // Another tab of this browser claimed or released: read the entry again.
   useEffect(() => onLeaseStorage(leaseChanged), []);
-  const setLease = (leaseId: string | null): void => {
+  /** Remember the claim's lease (with the task's version in the claim's answer), or forget it (null). */
+  const setLease = (claim: { leaseId: string; version: number } | null): void => {
     if (!identity) return;
-    if (leaseId) rememberLease(identity, projectId, taskId, leaseId);
+    if (claim) rememberLease(identity, projectId, taskId, claim.leaseId, claim.version);
     else forgetLease(identity, projectId, taskId);
     leaseChanged();
   };
@@ -247,8 +248,11 @@ export function useTaskDetail(projectId: string, taskId: string, { refreshBoard 
   const countdown = useLeaseCountdown(task?.claim?.expiresAt, myLease ? leaseEntry!.at : null);
   const heldByOther = !!task?.claim && !myLease;
   // Drop a remembered lease once a read of the task made after the claim shows the claim gone or not
-  // this browser's (released, completed or reaped elsewhere), so storage does not collect them.
-  const staleLease = !!leaseEntry && !!task && !claimIsMine && taskQ.dataUpdatedAt > leaseEntry.at;
+  // this browser's (released, completed or reaped elsewhere), so storage does not collect them. "Made
+  // after the claim" is the task's version, not when the read answered: a read another tab of this
+  // browser sent before the claim committed can answer after the claim stored its lease, and it holds
+  // the older version. A read at the claim's own version or later was made after it, hence `>=`.
+  const staleLease = !!leaseEntry && !!task && !claimIsMine && task.version >= leaseEntry.version;
   useEffect(() => {
     if (staleLease && identity) { forgetLease(identity, projectId, taskId); leaseChanged(); }
   }, [staleLease, identity, projectId, taskId]);

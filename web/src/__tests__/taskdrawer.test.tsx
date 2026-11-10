@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
 import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
@@ -662,16 +662,63 @@ describe('a web claim survives the drawer remounting', () => {
     // This tab read the ticket before the other tab's claim answered: no lease here yet.
     expect(await screen.findByText(/You hold this claim from another browser or session/)).toBeInTheDocument();
     const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
-    const value = JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 1000 });
-    localStorage.setItem(key, value);
-    window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
-    expect(await screen.findByRole('button', { name: /Mark complete/ })).toBeInTheDocument();
+    const value = JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 1000, version: 3 });
+    act(() => {
+      localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
+    });
+    // At once: the storage event re-renders this tab. (Waiting would let the lease countdown's
+    // one-second tick re-read storage and hide a missing listener.)
+    expect(screen.getByRole('button', { name: /Mark complete/ })).toBeInTheDocument();
+  });
+
+  it("a read sent before another tab's claim answered does not drop that tab's lease", async () => {
+    // This tab's read of T-1 left before the other tab's claim committed and answers after that tab
+    // stored its lease: it shows the task as it was before the claim, which says nothing about it.
+    const claimed: Task = { ...task, status: 'IN_PROGRESS', version: 4, claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    const base = routeFetch();
+    let answer: (() => void) | null = null;
+    let afterClaim = false;
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(String(input)) && (init?.method ?? 'GET') === 'GET') {
+        if (afterClaim) return json({ task: claimed });
+        await new Promise<void>((r) => { answer = r; });
+        return json({ task: { ...task, claim: null } }); // version 3, TODO
+      }
+      return base(input, init);
+    });
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    await waitFor(() => expect(answer).not.toBeNull());
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    localStorage.setItem(key, JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 5, version: 4 }));
+    answer!();
+    expect(await screen.findByRole('button', { name: /Claim to work/ })).toBeInTheDocument();
+    expect(localStorage.getItem(key)).not.toBeNull();
+    // The next read shows the claim: this tab offers its outcomes with the other tab's lease.
+    afterClaim = true;
+    await act(() => qc.invalidateQueries({ queryKey: ['task', 'p1', 'T-1'] }));
+    fireEvent.click(await screen.findByRole('button', { name: /Mark complete/ }));
+    await waitFor(() => expect(bodyOf(fm, '/tasks/T-1/complete')).toEqual({ leaseId: 'L-other-tab' }));
+  });
+
+  it.each([
+    ["at the claim's own version", 4],
+    ['moved on since (released, completed, reaped)', 5],
+  ])('a read showing the claim gone drops the stored lease: the task %s', async (_why, version) => {
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    localStorage.setItem(key, JSON.stringify({ leaseId: 'L-abc', at: Date.now() - 60_000, version: 4 }));
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: { ...task, status: 'TODO', version, claim: null } } } }));
+    renderDrawer();
+    expect(await screen.findByRole('button', { name: /Claim to work/ })).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(key)).toBeNull());
   });
 
   it("the lease bar measures this browser's claim against its own length, not five minutes", async () => {
     const half = 30 * 60_000;
     const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: new Date(Date.now() + half).toISOString() } as Task['claim'] };
-    localStorage.setItem(leaseStorageKey('alice@example.com', 'p1', 'T-1'), JSON.stringify({ leaseId: 'L-abc', at: Date.now() - half }));
+    localStorage.setItem(leaseStorageKey('alice@example.com', 'p1', 'T-1'), JSON.stringify({ leaseId: 'L-abc', at: Date.now() - half, version: 3 }));
     vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
     renderDrawer();
     const label = await screen.findByText(/remaining$/);
