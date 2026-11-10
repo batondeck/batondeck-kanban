@@ -901,6 +901,50 @@ func TestStreamRetriesABoardFrameThatFailedOnce(t *testing.T) {
 	})
 }
 
+// api-http#6 (review): the notifications frame, like a board frame, is retried when the re-resolve
+// before it fails once, so the bell still hears the notification without waiting for another one.
+func TestStreamRetriesANotificationsFrameThatFailedOnce(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{})
+		flaky := &flakyAuth{Auth: l.auth}
+		mux := http.NewServeMux()
+		Mount(mux, Options{Services: s.Services, Bus: s.Bus, Auth: flaky, Users: l.auth.Accounts, Tokens: l.auth.Tokens, Logger: log.New(io.Discard, "", 0), Ping: time.Minute})
+		l.srv = httptest.NewServer(mux)
+		t.Cleanup(l.srv.Close)
+		pid, bid := seedBoard(t, l.harness, l.core, "Blip")
+		bob := l.as("bob")
+		ctx := context.Background()
+		if _, err := l.core.Projects().AddMember(ctx, l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+			t.Fatal(err)
+		}
+		task, err := l.core.Tasks().Create(ctx, l.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: "for bob"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.core.Tasks().Update(ctx, l.caller(), service.UpdateTaskReq{ProjectID: pid, TaskID: task.Task.ID, Version: int64(task.Task.Version),
+			Patch: service.TaskPatch{Assignee: service.Value(bob.userID)}}); err != nil {
+			t.Fatal(err)
+		}
+		mine := bob.stream(t, "", nil)
+		if mine.status != http.StatusOK {
+			t.Fatalf("stream: %d %s", mine.status, mine.body)
+		}
+		if f := mine.nextNote(t, time.Second); f.Unread != 0 {
+			t.Fatalf("bob's feed on open %+v, want empty", f)
+		}
+		flaky.fails.Store(1)
+		if _, err := l.core.FollowUps().AddFollowUp(ctx, l.caller(), service.AddFollowUpReq{ProjectID: pid, TaskID: task.Task.ID, Body: "your turn"}); err != nil {
+			t.Fatal(err)
+		}
+		if f := mine.nextNote(t, 3*time.Second); f.Unread != 1 || len(f.Notifications) != 1 {
+			t.Fatalf("bob's frame after the follow-up %+v, want the one notification", f)
+		}
+		if flaky.fails.Load() >= 0 {
+			t.Fatalf("the failure was never met (fails %d)", flaky.fails.Load())
+		}
+	})
+}
+
 // api-http#13: the stream tells a buffering reverse proxy (nginx) not to hold its frames, and any
 // proxy not to transform it.
 func TestStreamAsksProxiesNotToBuffer(t *testing.T) {

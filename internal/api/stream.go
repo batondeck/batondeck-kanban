@@ -78,7 +78,7 @@ func feedURI(projectID, boardID string) string {
 // caller's identity scope. A notification row is never a board change.
 // A board frame that cannot be made (the re-resolve or a read failed, not FORBIDDEN or NOT_FOUND) is
 // tried again after the coalesce, doubling per failure up to the ping, so a store blip delays the
-// change instead of dropping it until the next one.
+// change instead of dropping it until the next one; so is a notifications frame.
 // The caller is resolved again before every ping, board, presence and notifications frame (P-219):
 // once the credential no longer resolves (a logout, a disabled user as of the account cache, a
 // revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
@@ -236,19 +236,33 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sendPresence()
-	sendNotifications := func() {
+	// sendNotifications reports false when the frame could not be made (a failed read).
+	sendNotifications := func() bool {
 		if s.o.Services.Notifications == nil {
-			return
+			return true
 		}
 		snap, err := s.o.Services.Notifications.List(ctx, caller, service.ListNotificationsReq{Limit: service.FeedSnapshotLimit})
 		if err != nil {
 			logger.Printf("api: stream notifications frame for %s: %+v", caller.Identity, err)
-			return
+			return false
 		}
 		out.event("notifications", 0, snap)
+		return true
 	}
-	sendNotifications()
+	// A notifications frame that could not be made (a failed re-resolve or read) is tried again as a
+	// board frame is: after the coalesce, doubling per failure up to the ping, back to the coalesce
+	// once a frame goes out.
 	var feedFlush <-chan time.Time
+	feedRetry := s.coalesce
+	notified := func(ok bool) {
+		if ok {
+			feedRetry = s.coalesce
+			return
+		}
+		feedFlush = time.After(feedRetry)
+		feedRetry = min(feedRetry*2, s.ping)
+	}
+	notified(sendNotifications())
 
 	ping := time.NewTicker(s.ping)
 	defer ping.Stop()
@@ -319,11 +333,11 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-feedFlush:
 			feedFlush = nil
-			if closed, ok := recheck(); closed {
+			closed, ok := recheck()
+			if closed {
 				return
-			} else if ok {
-				sendNotifications()
 			}
+			notified(ok && sendNotifications())
 		case <-ping.C:
 			if closed, ok := recheck(); closed {
 				return
