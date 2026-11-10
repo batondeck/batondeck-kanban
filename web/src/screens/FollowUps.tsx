@@ -14,7 +14,7 @@ import * as followupsApi from '../api/followups.js';
 import { Avatar, personName, timeAgo, type DisplayNames } from '../components.js';
 import { useDisplayNames } from '../displayNames.js';
 import type { FollowUp, Status, Task } from '../types.js';
-import { Stack } from '../ui.js';
+import { ReadFailed, Stack } from '../ui.js';
 
 /** Mono pill used for Open (amber) / N-open badges and the Acked (green) badge. */
 function MiniBadge({ tone, children }: { tone: 'open' | 'acked'; children: React.ReactNode }) {
@@ -187,7 +187,11 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
       </p>
 
       <Stack gap={8}>
-        {followUps.length === 0 && (
+        {/* A failed read says so; "No follow-ups yet." only once a read has answered with none. */}
+        {followUpsQ.isError && (
+          <ReadFailed what="the follow-ups" error={followUpsQ.error} stale={!!followUpsQ.data} onRetry={() => void followUpsQ.refetch()} />
+        )}
+        {followUpsQ.isSuccess && followUps.length === 0 && (
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No follow-ups yet.</p>
         )}
         {followUps.map((fu) => (

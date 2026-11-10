@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Command } from 'cmdk';
+import { Command, defaultFilter } from 'cmdk';
 import * as boardsApi from './api/boards.js';
 import * as mediaApi from './api/media.js';
 import * as projectsApi from './api/projects.js';
@@ -20,6 +20,23 @@ import type { ChroniclePage } from './types.js';
 
 /** Chronicle hits per kind. Truncation is stated in the heading — a silent cut is a false absence. */
 const CHRONICLE_SHOWN = 6;
+
+/**
+ * cmdk's filter, with the ticket search's hits never filtered out.
+ *
+ * The server matched those (on title and description), so cmdk's own pass over the row's text must
+ * not veto one, but the commands around them must stay filtered. The palette turned cmdk's filtering
+ * OFF whenever the search had answered, which listed every command unfiltered with the selection on
+ * the first: Enter then ran the board's "Open T-n" action, or went to Projects, instead of the match.
+ * A hit is ranked by how well its row matches what was typed, and never below TASK_HIT_FLOOR, which
+ * sits under a command matched at a word start (about 0.89), so "settings" still selects Go to Settings.
+ */
+const TASK_HIT = '\u0001task-hit';
+const TASK_HIT_FLOOR = 0.5;
+export function paletteFilter(value: string, search: string, keywords?: string[]): number {
+  if (!keywords?.includes(TASK_HIT)) return defaultFilter(value, search, keywords);
+  return Math.max(TASK_HIT_FLOOR, defaultFilter(value, search, keywords.filter((k) => k !== TASK_HIT)));
+}
 
 export interface PaletteAction {
   id: string;
@@ -160,7 +177,7 @@ export function CommandPalette() {
   return (
     <div className="palette-overlay" onClick={close}>
       <div className="palette" onClick={(e) => e.stopPropagation()}>
-        <Command label="Command palette" shouldFilter={!searchQ.data}>
+        <Command label="Command palette" filter={paletteFilter}>
           <Command.Input
             autoFocus
             value={query}
@@ -244,6 +261,7 @@ export function CommandPalette() {
                       <Command.Item
                         key={t.id}
                         value={`${t.id} ${t.title}`}
+                        keywords={[TASK_HIT]}
                         onSelect={() => pick(() => void nav(`/projects/${projectId}/boards/${t.boardId}?task=${t.id}`))}
                       >
                         Open <span className="mono" style={{ fontSize: 11 }}>{t.id}</span> — {t.title}

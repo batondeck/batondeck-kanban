@@ -10,7 +10,7 @@ import * as commentsApi from '../api/comments.js';
 import { Avatar, mdComponents, mdPlugins, personName, timeAgo, type DisplayNames } from '../components.js';
 import { useDisplayNames } from '../displayNames.js';
 import type { Comment } from '../types.js';
-import { Cluster, Stack } from '../ui.js';
+import { Cluster, ReadFailed, Stack } from '../ui.js';
 import { InlineLoader } from '../brand.js';
 
 const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-muted)' };
@@ -284,7 +284,11 @@ export function Comments({
     <section>
       <h3 style={{ ...label, margin: '0 0 8px' }}>Comments</h3>
       <Stack gap={4}>
-        {threads.length === 0 && (
+        {/* A failed read says so; "No comments yet." only once a read has answered with none. */}
+        {commentsQ.isError && (
+          <ReadFailed what="the comments" error={commentsQ.error} stale={!!commentsQ.data} onRetry={() => void commentsQ.refetch()} />
+        )}
+        {commentsQ.isSuccess && threads.length === 0 && (
           <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>No comments yet.</p>
         )}
         {threads.map((t) => (

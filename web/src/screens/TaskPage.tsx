@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router';
 import * as boardsApi from '../api/boards.js';
 import { Icon } from '../icons.js';
-import { pushToast } from '../toast.js';
+import { copyLink } from '../clipboard.js';
 import { PageHeader, personName, timeAgo } from '../components.js';
 import { RoleBadge, SideWide, Tabs, roleOf } from '../ui.js';
 import {
@@ -85,11 +85,7 @@ function TicketRef({ projectId, boardId, taskId }: { projectId: string; boardId:
         className="ticket-ref-copy"
         title="Copy link to this ticket"
         aria-label="Copy link to this ticket"
-        onClick={() => {
-          void navigator.clipboard
-            .writeText(window.location.href)
-            .then(() => pushToast(`Link to ${taskId} copied`, 'info'));
-        }}
+        onClick={() => copyLink(window.location.href, `Link to ${taskId} copied`)}
       >
         <Icon name="link" size={12} />
       </button>

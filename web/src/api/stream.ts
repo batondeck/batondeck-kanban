@@ -151,49 +151,72 @@ type Sub = { key: { projectId?: string; boardId?: string }; h: StreamHandlers };
 const subs = new Set<Sub>();
 let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
+/** The board the open socket streams, or null for a socket that names none. */
+let servedBoard: { projectId: string; boardId: string } | null = null;
 
-/** The board the shared socket should be scoped to: whichever subscriber named one. */
-function desiredUrl(): string {
-  for (const s of subs) {
-    if (s.key.projectId && s.key.boardId) {
-      return `/api/stream?projectId=${encodeURIComponent(s.key.projectId)}&boardId=${encodeURIComponent(s.key.boardId)}`;
-    }
-  }
-  return '/api/stream';
+/**
+ * ONE BOARD PER SOCKET. The server streams the board the URL names and drops every other board's
+ * changes (internal/api/stream.go), so the shared socket is scoped to the FIRST subscriber that names a
+ * board. A subscriber naming another board is not served: it gets no board frames, nudges or resyncs
+ * (the first board's snapshot used to land in its cache keys), and its `onLive` says false, so it
+ * polls. When the served board's last subscriber leaves, the socket is rebuilt for the next one.
+ */
+function boardOf(s: Sub): { projectId: string; boardId: string } | null {
+  return s.key.projectId && s.key.boardId ? { projectId: s.key.projectId, boardId: s.key.boardId } : null;
+}
+function served(s: Sub): boolean {
+  const b = boardOf(s);
+  return !b || (!!servedBoard && b.projectId === servedBoard.projectId && b.boardId === servedBoard.boardId);
 }
 
-function fanout<K extends keyof StreamHandlers>(name: K, apply: (h: StreamHandlers) => void): void {
+/** The board the shared socket should be scoped to: the first subscriber that named one. */
+function desiredBoard(): { projectId: string; boardId: string } | null {
+  for (const s of subs) {
+    const b = boardOf(s);
+    if (b) return b;
+  }
+  return null;
+}
+function urlOf(b: { projectId: string; boardId: string } | null): string {
+  return b ? `/api/stream?projectId=${encodeURIComponent(b.projectId)}&boardId=${encodeURIComponent(b.boardId)}` : '/api/stream';
+}
+
+/** Hand a frame to every subscriber, or (`boardOnly`) to those whose board this socket streams. */
+function fanout(apply: (h: StreamHandlers, s: Sub) => void, boardOnly = false): void {
   for (const s of [...subs]) {
+    if (boardOnly && (!boardOf(s) || !served(s))) continue;
     try {
-      apply(s.h);
+      apply(s.h, s);
     } catch {
       /* one bad subscriber must not stop the others */
     }
   }
-  void name;
 }
 
 function reconcile(): void {
-  const want = subs.size === 0 ? '' : desiredUrl();
+  const board = subs.size === 0 ? null : desiredBoard();
+  const want = subs.size === 0 ? '' : urlOf(board);
   if (want === currentUrl) return;
   closeCurrent?.();
   closeCurrent = undefined;
   currentUrl = want;
+  servedBoard = board;
   if (!want) return;
   closeCurrent = sseConnect(
     want,
-    (live) => fanout('onLive', (h) => h.onLive?.(live)),
+    // An unserved board subscriber is never live: its board is not on this socket.
+    (live) => fanout((h, sub) => h.onLive?.(live && served(sub))),
     {
-      updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
-      board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
-      presence: (d) => fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
+      updated: () => fanout((h) => h.onUpdate?.(), true),
+      board: (d) => fanout((h) => h.onBoard?.(d), true),
+      presence: (d) => fanout((h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
       // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
-      notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
-      resync: () => fanout('onResync', (h) => h.onResync?.()),
+      notifications: (d) => fanout((h) => h.onNotifications?.(d)),
+      resync: () => fanout((h) => h.onResync?.(), true),
     },
     () => {
-      fanout('onUpdate', (h) => h.onUpdate?.());
-      fanout('onResync', (h) => h.onResync?.());
+      fanout((h) => h.onUpdate?.(), true);
+      fanout((h) => h.onResync?.(), true);
     },
   );
 }
@@ -238,6 +261,14 @@ export function joinStream(key: { projectId?: string; boardId?: string }, h: Str
   const sub: Sub = { key, h };
   subs.add(sub);
   reconcile();
+  // Another board holds the socket: say so now, or the caller believes it is live and never polls.
+  if (!served(sub)) {
+    try {
+      h.onLive?.(false);
+    } catch {
+      /* as in fanout */
+    }
+  }
   return () => {
     subs.delete(sub);
     reconcile();
@@ -272,7 +303,8 @@ export function userStream(handlers: { onPresence?: (sessions: AgentSession[]) =
 
 /**
  * Board updates + presence. Shares the SAME socket as `userStream` — naming a board just scopes the
- * shared connection, it does not open a second one.
+ * shared connection, it does not open a second one. One board at a time: while another board's
+ * subscriber holds the socket this one gets no board frames and `onLive(false)` (see `served`).
  */
 export function stream(
   projectId: string,
