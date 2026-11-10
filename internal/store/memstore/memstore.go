@@ -206,7 +206,7 @@ func (s *Store) Migrate(ctx context.Context) (store.Migrated, error) {
 		return store.Migrated{Version: 1}, nil
 	}
 	s.db.st.migrated = true
-	return store.Migrated{Applied: 1, Version: 1}, nil
+	return store.Migrated{Applied: 1, Version: 1, Fresh: true}, nil
 }
 
 // MigrateDown empties the store and marks it unmigrated, as the engines' down migrations drop every

@@ -90,6 +90,9 @@ type Migrated struct {
 	// Applied counts the migrations this call applied; Version is the schema version after it.
 	Applied int
 	Version int64
+	// Fresh is true when the schema was empty before this call: it applied every migration the
+	// binary carries.
+	Fresh bool
 }
 
 // migrator is one engine's migrations as goose sees them: the handle it runs on, the dialect, the
@@ -133,7 +136,7 @@ func (m migrator) up(ctx context.Context) (Migrated, error) {
 	if err != nil {
 		return Migrated{}, fmt.Errorf("store: schema version: %w", err)
 	}
-	return Migrated{Applied: len(res), Version: v}, nil
+	return Migrated{Applied: len(res), Version: v, Fresh: len(res) > 0 && len(res) == len(p.ListSources())}, nil
 }
 
 func (m migrator) downToZero(ctx context.Context) error {

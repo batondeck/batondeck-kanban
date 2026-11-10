@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -624,5 +626,45 @@ func TestServeSweepsAtTheRetentionBounds(t *testing.T) {
 	}
 	if len(left) != 2 || strings.Contains(logs.String(), "retention:") {
 		t.Fatalf("a sweep at the bounds left %+v and logged %q; want both rows and no failed step", left, logs.String())
+	}
+}
+
+// serve says when it creates master.key: one line beside a database it has just made, and a WARN
+// beside one made before, which ran under some key: the secrets sealed under that one (on-call
+// integration secrets, inbox tokens) no longer open, and a delivery to an HMAC-signed integration is
+// refused 401 with nothing else in the log to say why. A key it reads, or the environment's, is not
+// mentioned.
+func TestServeSaysWhenItCreatesTheMasterKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BATONDECK_DATABASE_URL", filepath.Join(dir, "bk.db"))
+	cfg, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noEnv := func(string) (string, bool) { return "", false }
+	open := func(fresh bool, lookup func(string) (string, bool)) string {
+		t.Helper()
+		var buf bytes.Buffer
+		if _, err := openKeyring(cfg, "", lookup, log.New(&buf, "", 0), fresh); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	keyPath := filepath.Join(dir, "master.key")
+	if got := open(true, noEnv); !strings.Contains(got, "serve: created the master key "+keyPath) || strings.Contains(got, "WARN") {
+		t.Fatalf("a new database: %q", got)
+	}
+	if got := open(false, noEnv); got != "" {
+		t.Fatalf("the key read back: %q", got)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := open(false, noEnv); !strings.Contains(got, "serve: WARN created a new master key "+keyPath+" for a database that was not new") {
+		t.Fatalf("a database made before: %q", got)
+	}
+	env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32))
+	if got := open(false, func(k string) (string, bool) { return env, k == core.MasterKeyEnv }); got != "" {
+		t.Fatalf("the environment's key: %q", got)
 	}
 }

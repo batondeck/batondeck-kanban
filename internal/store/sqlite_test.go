@@ -207,3 +207,35 @@ func TestOpenSQLiteCreatesTheFilesPrivate(t *testing.T) {
 		}
 	}
 }
+
+// Migrate says whether it found the schema empty (Fresh), on both engines: serve tells a master key
+// made for a new database from one made for a database that ran before.
+func TestMigrateSaysWhetherTheSchemaWasEmpty(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenSQLite(filepath.Join(t.TempDir(), "fresh.db"), "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	engines := map[string]interface {
+		Migrate(context.Context) (Migrated, error)
+	}{"sqlite": s}
+	if os.Getenv("BATONDECK_TEST_POSTGRES_DSN") != "" {
+		pg, err := OpenPostgres(ctx, postgresDB(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pg.Close()
+		engines["postgres"] = pg
+	}
+	for name, st := range engines {
+		first, err := st.Migrate(ctx)
+		if err != nil || !first.Fresh || first.Applied == 0 {
+			t.Fatalf("%s: the first Migrate: %+v, %v; want Fresh", name, first, err)
+		}
+		again, err := st.Migrate(ctx)
+		if err != nil || again.Fresh || again.Applied != 0 {
+			t.Fatalf("%s: a second Migrate: %+v, %v; want not Fresh", name, again, err)
+		}
+	}
+}

@@ -298,10 +298,10 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 	}
 	defer st.Close()
 	line := "migrated by the serve already holding the data dir"
+	var migrated store.Migrated
 	if lock == nil || lock.Exclusive() {
-		var m store.Migrated
-		if m, err = st.Migrate(context.Background()); err == nil {
-			line = migratedLine(m)
+		if migrated, err = st.Migrate(context.Background()); err == nil {
+			line = migratedLine(migrated)
 		}
 	}
 	if err == nil {
@@ -320,7 +320,7 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 			log.Printf("serve: WARN %s", w)
 		}
 	}
-	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
+	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log, migrated.Fresh)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1

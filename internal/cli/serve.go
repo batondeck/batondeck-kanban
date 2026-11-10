@@ -205,8 +205,10 @@ var requestReadTimeout = 30 * time.Second
 // source): core.OpenKeyring from
 // BATONDECK_MASTER_KEY, else from master.key beside the SQLite file, or on Postgres beside the
 // config file. On Postgres with neither, serve runs without one (an inbox token is then refused)
-// and says so once.
-func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger) (*core.Keyring, error) {
+// and says so once. A key file it creates is logged: a line beside a database this start made
+// (fresh), and a WARN beside one made before, whose sealed values, if it ran under another key,
+// no longer open.
+func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger, fresh bool) (*core.Keyring, error) {
 	var path string
 	_, fromEnv := lookup(core.MasterKeyEnv)
 	switch {
@@ -219,7 +221,15 @@ func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, 
 		logger.Printf("serve: WARN no keyring: set %s (or run with -config) to register a wake session with an inbox token", core.MasterKeyEnv)
 		return nil, nil
 	}
-	return core.OpenKeyring(path, lookup)
+	keys, err := core.OpenKeyring(path, lookup)
+	switch {
+	case err != nil || !keys.Created():
+	case fresh:
+		logger.Printf("serve: created the master key %s; back it up with the database (README: Backup and restore)", path)
+	default:
+		logger.Printf("serve: WARN created a new master key %s for a database that was not new: if the database ran under an earlier key (a master.key not restored with it, or %s no longer set), the secrets sealed under that key (on-call integration secrets, wake-session inbox tokens) do not open, so every delivery to an HMAC-signed integration is refused 401, and the attachment links it signed are refused; stop serve and put the earlier key back, or rotate each integration's secret", path, core.MasterKeyEnv)
+	}
+	return keys, err
 }
 
 // mediaOptions is the blob store at cfg.BlobDir() and, with a keyring, the URL signer keyed by its
