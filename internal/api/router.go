@@ -220,7 +220,8 @@ func bodyArguments(w http.ResponseWriter, r *http.Request, spec in) (map[string]
 	if err := dec.Decode(&args); err != nil || args == nil {
 		return nil, domain.Validation("the body is not a JSON object", nil)
 	}
-	if dec.More() {
+	// Token, not More: More is false before a stray } or ], which would then go unread.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, domain.Validation("the body holds more than one JSON value", nil)
 	}
 	if spec.noBody && len(args) > 0 {
