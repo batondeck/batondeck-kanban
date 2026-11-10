@@ -286,7 +286,7 @@ export function IntegrationForm({
             label="Target column id"
             value={form.columnId}
             onChange={(columnId) => set({ columnId })}
-            placeholder="leave blank for the board's first column"
+            placeholder="leave blank for the board's first TODO column"
           />
         </Stack>
       </Panel>

@@ -215,6 +215,10 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 				out.Refusal, out.Code, out.Detail, out.RetryAfter = HookUnavailable, string(e.Code), e.Message, 1
 				return out, nil
 			}
+			// Not retryable: the sender drops it, so the refusal is recorded where the operator looks.
+			if err := c.reject(ctx, integration, r.Body, e.Message, now); err != nil {
+				return HookOutcome{}, err
+			}
 			out.Refusal, out.Detail = HookBadRequest, e.Message
 			return out, nil
 		}

@@ -255,6 +255,95 @@ func TestMutateNoChangeWritesNothing(t *testing.T) {
 	}
 }
 
+// An incident is filed in a TODO column. create_integration and update_integration refuse a target
+// column that is not one (every delivery to it was refused); a target column re-statused or removed
+// after the fact sends the alerts to the board's first TODO column instead of refusing each one; and
+// a verified delivery whose ingest is refused all the same (the board has no TODO column left) is a
+// rejected row on the delivery log, not a 400 with no trace.
+func TestHookIncidentLandsInATodoColumn(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	columns := func() map[domain.Status]string {
+		t.Helper()
+		b, _, err := f.st.GetBoard(f.ctx, f.project.ID, f.board.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[domain.Status]string{}
+		for _, c := range b.Columns {
+			if _, ok := out[c.Status]; !ok {
+				out[c.Status] = c.ID
+			}
+		}
+		return out
+	}
+	cols := columns()
+	_, err := f.c.Oncall().CreateIntegration(f.ctx, root, CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Source: "generic",
+		ColumnID: cols[domain.InProgress], Auth: IntegrationAuthInput{Mode: "hmac"}, Routing: IntegrationRouting{Mode: "broadcast"}})
+	if e := wantCode(t, err, domain.CodeValidation); !strings.Contains(e.Message, cols[domain.InProgress]) {
+		t.Fatalf("create_integration on an IN_PROGRESS column: %v", e)
+	}
+	incidents, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "Incidents", Status: domain.Todo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := incidents.Column.ID
+	created := f.integration(t, root, CreateIntegrationReq{ColumnID: target})
+	iid := created.Integration.ID
+	_, err = f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: 1,
+		Patch: IntegrationPatch{ColumnID: Value(cols[domain.Done])}})
+	if e := wantCode(t, err, domain.CodeValidation); !strings.Contains(e.Message, cols[domain.Done]) {
+		t.Fatalf("update_integration to a DONE column: %v", e)
+	}
+	landsIn := func(fp, want string) {
+		t.Helper()
+		out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody(fp, "firing", "t")))
+		if out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+			t.Fatalf("%s: %+v", fp, out)
+		}
+		task, err := f.st.GetTask(f.ctx, f.project.ID, *out.Results[0].TaskID)
+		if err != nil || task.ColumnID != want || task.Status != domain.Todo {
+			t.Fatalf("%s: the ticket = %+v, %v; want TODO in column %s", fp, task, err, want)
+		}
+	}
+	landsIn("a", target)
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: target, Status: domain.InProgress}); err != nil {
+		t.Fatal(err)
+	}
+	landsIn("b", cols[domain.Todo])
+	empty, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "Pager", Status: domain.Todo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pager := empty.Column.ID
+	row, _ := f.st.GetIntegration(f.ctx, f.project.ID, iid)
+	if _, err := f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: row.Version,
+		Patch: IntegrationPatch{ColumnID: Value(pager)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: pager}); err != nil {
+		t.Fatal(err)
+	}
+	landsIn("c", cols[domain.Todo])
+
+	// No TODO column left: the refusal is a rejected row naming why.
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: cols[domain.Todo], Status: domain.Blocked}); err != nil {
+		t.Fatal(err)
+	}
+	out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("d", "firing", "t")))
+	if out.Refusal != HookBadRequest || !strings.Contains(out.Detail, "no TODO column") {
+		t.Fatalf("a board with no TODO column: %+v", out)
+	}
+	var refused *store.Delivery
+	for _, d := range f.deliveries(t, iid) {
+		if d.Kind == store.DeliveryRejected {
+			refused = &d
+		}
+	}
+	if refused == nil || refused.Error == nil || !strings.Contains(*refused.Error, "no TODO column") {
+		t.Fatalf("the refusal's row: %+v", refused)
+	}
+}
+
 // A delivery id the server derives from the body's hash (the source sent none of its own) answers
 // as a retry only while the delivery is one: within the retry window, and while it is still the
 // alert's latest delivery. An uptime check that goes down, up and down again posts the same body

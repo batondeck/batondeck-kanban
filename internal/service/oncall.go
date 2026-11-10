@@ -252,21 +252,49 @@ func integrationOut(i store.Integration) (Integration, error) {
 	return out, nil
 }
 
-// checkTarget is the board, which must exist, and the column, which must be on it.
+// checkTarget is the board, which must exist, and the column an incident is filed in: the one
+// named, which must be on the board and a TODO column (an incident is filed TODO), else the board's
+// first TODO column, which must exist.
 func checkTarget(ctx context.Context, tx store.Store, projectID, boardID string, columnID *string) error {
 	b, _, err := tx.GetBoard(ctx, projectID, boardID)
 	if err != nil {
 		return err
 	}
 	if columnID == nil {
+		if incidentColumn(b, nil) == nil {
+			return domain.Validation("An incident is filed in a TODO column, and board "+b.ID+" has none: add one, or name the column", map[string]any{"field": "boardId", "boardId": b.ID})
+		}
 		return nil
 	}
 	for _, c := range b.Columns {
 		if c.ID == *columnID {
+			if c.Status != domain.Todo {
+				return domain.Validation(fmt.Sprintf("An incident is filed in a TODO column; column %s is %s", c.ID, c.Status), map[string]any{"field": "columnId", "columnId": c.ID, "status": c.Status})
+			}
 			return nil
 		}
 	}
 	return domain.NotFound("Column", *columnID)
+}
+
+// incidentColumn is the column of b an incident is filed in: the one named while it is still on
+// the board and a TODO column, else (none named, or the named one removed or re-statused since the
+// integration was saved) the board's first TODO column; nil when b has no TODO column.
+func incidentColumn(b store.Board, columnID *string) *store.Column {
+	var first *store.Column
+	for i := range b.Columns {
+		c := &b.Columns[i]
+		if c.Status != domain.Todo {
+			continue
+		}
+		if columnID != nil && c.ID == *columnID {
+			return c
+		}
+		if first == nil {
+			first = c
+		}
+	}
+	return first
 }
 
 func (s oncallSvc) boardEvent(t *txn, typ domain.EventType, boardID string, data map[string]any) error {
@@ -1240,24 +1268,19 @@ func incidentSnapshot(ev oncall.Event, allowlist []string) string {
 // snapshotMaxChars bounds one event's ticket snapshot (conductor SNAPSHOT_MAX_CHARS).
 const snapshotMaxChars = 8000
 
-// fileIncident creates the incident ticket for ev on the integration's target and rings it.
+// fileIncident creates the incident ticket for ev on the integration's target (incidentColumn) and
+// rings it.
 func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integration, mapping IntegrationMapping, routing IntegrationRouting, ev oncall.Event, actor string) (store.Task, error) {
 	board, _, err := t.Tx.GetBoard(ctx, integration.ProjectID, integration.BoardID)
 	if err != nil {
 		return store.Task{}, err
 	}
-	var col *store.Column
-	for i := range board.Columns {
-		if integration.ColumnID == nil && board.Columns[i].Status == domain.Todo || integration.ColumnID != nil && board.Columns[i].ID == *integration.ColumnID {
-			col = &board.Columns[i]
-			break
-		}
-	}
+	col := incidentColumn(board, integration.ColumnID)
 	if col == nil {
-		return store.Task{}, domain.Validation("The integration's board has no TODO column / its column is gone", map[string]any{"boardId": board.ID})
+		return store.Task{}, domain.Validation("An incident is filed in a TODO column, and the integration's board has no TODO column", map[string]any{"boardId": board.ID})
 	}
-	if col.Status != domain.Todo {
-		return store.Task{}, domain.Validation(fmt.Sprintf("An incident is filed in a TODO column; column %s is %s", col.ID, col.Status), map[string]any{"columnId": col.ID, "status": col.Status})
+	if integration.ColumnID != nil && col.ID != *integration.ColumnID {
+		c.log.Printf("ingest: integration %s: its column %s is gone or no longer TODO; the incident is filed in column %s", integration.ID, *integration.ColumnID, col.ID)
 	}
 	order, err := headOfColumn(ctx, t.Tx, integration.ProjectID, board.ID, col.ID)
 	if err != nil {
