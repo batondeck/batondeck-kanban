@@ -309,6 +309,7 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		if err != nil {
 			return store.Task{}, err
 		}
+		reopened := t.Status == domain.Done && c.Status != domain.Done
 		if c.ColumnID != "" {
 			if err := st.columnOn(projectID, t.BoardID, c.ColumnID); err != nil {
 				return store.Task{}, err
@@ -342,6 +343,9 @@ func (s *Store) SetStatus(ctx context.Context, projectID, taskID string, expecte
 		setNullable(&t.NextEligibleAt, c.NextEligibleAt)
 		if c.Labels != nil {
 			t.Labels = list(c.Labels)
+		}
+		if reopened {
+			t.Labels = list(domain.Reopened(t.Labels))
 		}
 		if c.ClearClaim {
 			t.Claim = nil

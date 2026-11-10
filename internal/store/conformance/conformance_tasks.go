@@ -392,6 +392,30 @@ func tasks(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeValidation, "")
 	})
 
+	t.Run("SetStatusLeavingDoneDropsTheCancelledLabel", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Labels = []string{"keep"} })
+		cancelled, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{
+			Status: domain.Done, ColumnID: f.col[domain.Done], Labels: domain.WithLabel(task.Labels, domain.LabelCancelled), UpdatedBy: "bob", UpdatedAt: taskClock + 1,
+		})
+		mustOK(t, err)
+		// A write that stays DONE (a reorder) keeps it.
+		reordered, err := f.s.SetStatus(ctx, f.project, task.ID, 2, store.StatusChange{Status: domain.Done, OrderKey: ptr("a1"), UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		mustOK(t, err)
+		if !reflect.DeepEqual(cancelled.Labels, []string{"keep", domain.LabelCancelled}) || !reflect.DeepEqual(reordered.Labels, cancelled.Labels) {
+			t.Fatalf("cancelled %v, reordered %v, want [keep cancelled] both", cancelled.Labels, reordered.Labels)
+		}
+		// Leaving DONE is a reopen: the task is no longer abandoned, whoever writes it.
+		reopened, err := f.s.SetStatus(ctx, f.project, task.ID, 3, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 3})
+		mustOK(t, err)
+		if !reflect.DeepEqual(reopened.Labels, []string{"keep"}) {
+			t.Fatalf("reopened labels %v, want [keep]", reopened.Labels)
+		}
+		got, err := f.s.GetTask(ctx, f.project, task.ID)
+		mustOK(t, err)
+		sameTask(t, got, reopened)
+	})
+
 	t.Run("SetStatusWritesTheHandoverFields", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Assignee = ptr("ann") })

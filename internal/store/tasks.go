@@ -450,6 +450,7 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		}
 	}
 	return versioned(ctx, e, projectID, taskID, expectedVersion, func(q sqlQueries, t Task) (Task, error) {
+		reopened := t.Status == domain.Done && c.Status != domain.Done
 		if c.ColumnID != "" {
 			if err := columnOn(ctx, q, projectID, t.BoardID, c.ColumnID); err != nil {
 				return Task{}, err
@@ -483,6 +484,9 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		setNullable(&t.NextEligibleAt, c.NextEligibleAt)
 		if c.Labels != nil {
 			t.Labels = c.Labels
+		}
+		if reopened {
+			t.Labels = domain.Reopened(t.Labels)
 		}
 		if c.ClearClaim {
 			t.Claim = nil

@@ -120,8 +120,9 @@ type TaskPatch struct {
 
 // StatusChange is what SetStatus writes. ColumnID "" keeps the task's column; OrderKey nil keeps
 // its order. BlockedReason is written only when Status is BLOCKED ("" is no reason); any other
-// status clears it. ClaimAttempts and NextEligibleAt nil keep them. Labels nil keeps them.
-// ClearClaim drops the lease. Unpoison takes a poisoned task (BLOCKED, reason "poison") out of
+// status clears it. ClaimAttempts and NextEligibleAt nil keep them. Labels nil keeps them; a write
+// that takes the task out of DONE drops the cancelled label from whatever labels it lands with
+// (domain.Reopened), whoever reopens it. ClearClaim drops the lease. Unpoison takes a poisoned task (BLOCKED, reason "poison") out of
 // quarantine: claim_attempts to 0, next_eligible_at NULL, the poisoned label removed
 // (domain.Unpoison); the role gate is the service's. Assignee, Deliverable and Review are written
 // with the status as TaskPatch writes them (nil keeps the column, a nil Value sets it NULL), so an
