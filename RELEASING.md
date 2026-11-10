@@ -1,18 +1,22 @@
 # Releasing, and verifying a release
 
-Releases are cut locally, by a maintainer, from a tag: a release is built where its gate runs, on
-the machine that pushes, and the `release-draft` workflow below runs the same build steps on demand,
-without the gate. batondeck-kanban holds a team's tasks and
-its agents' credentials, so "download this binary" has to be checkable: the checksums are published,
-and anyone can rebuild a tag and compare. One binary ships; there is no sidecar.
+A release is cut either locally, by a maintainer, from a tag (built where its gate runs, on the
+machine that pushes), or by the `release-draft` and `release-publish` workflows below, which run the
+same build steps on GitHub's runners from a candidate commit the gate has already passed.
+batondeck-kanban holds a team's tasks and its agents' credentials, so "download this binary" has to
+be checkable: the checksums are published, and anyone can rebuild a tag and compare. One binary
+ships; there is no sidecar.
 
-No release has been cut yet. This is the sequence for v0.1.0, line by line; a later release runs
-the same lines with its own version. Steps 1, 4, 5 and 6 also run on demand as the
-`release-draft` workflow (`.github/workflows/release-draft.yml`, `workflow_dispatch` with the
-candidate's full SHA), with step 3's tag made locally in the runner only: it ends in a draft release
-with the assets and the pushed image, and a maintainer publishes the draft, which creates the tag at
-the candidate; the `release-publish` workflow (`.github/workflows/release-publish.yml`) does that
-publish on demand too, after checking the draft targets the candidate and carries the seven assets.
+v0.1.0 is released, cut by the two workflows (so its tag is lightweight). What follows is the local
+sequence, written with v0.1.0's values; a later release runs the same lines with its own version.
+From v0.1.0 on, a published release is not replaced: a fix ships as the next patch version, with its
+own tag, and `release-draft`'s `replace` input is not used on a published release. Steps 1, 4, 5
+and 6 also run on demand as the `release-draft` workflow (`.github/workflows/release-draft.yml`,
+`workflow_dispatch` with the candidate's full SHA), with step 3's tag made locally in the runner
+only: it ends in a draft release with the assets and the pushed image, and a maintainer publishes the
+draft, which creates the tag at the candidate (a lightweight tag, where step 3 makes an annotated
+one); the `release-publish` workflow (`.github/workflows/release-publish.yml`) does that publish on
+demand too, after checking the draft targets the candidate and carries the seven assets.
 The draft workflow runs no gate (`make check`) and no `docker run … version` smoke, so the
 candidate must be a commit whose tree the gate has passed (every commit on `main` lands through a
 gated push); step 2, `make bench`, stays on the baseline machine. The Makefile's `dist`, `sbom` and `image` targets and
@@ -144,9 +148,9 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
    platform in the Makefile's `PLATFORMS`; `make notices-check`, in the gate, holds it to that list
    and to `go.sum`.
 
-7. **Visibility is the organisation owner's, not this sequence's.** The repository is private until
-   the owner makes it public at v0.1.0 (the README's download URLs and `git clone` need that), and
-   the package's visibility is set on its page on ghcr.io after the first push.
+7. **Visibility is the organisation owner's, not this sequence's.** The owner sets the repository's
+   visibility (the README's download URLs and `git clone` need it public) and the image package's,
+   in the package's settings on GitHub (an anonymous `docker pull` needs it public).
 
 ## Verifying a release you downloaded
 
@@ -175,13 +179,14 @@ prints `batondeck-kanban 1.2.3`), and the release notes carry the manifest diges
 under. The image is not reproducible byte for byte: of the `Dockerfile`'s two base images only the
 Go one is named by digest; `gcr.io/distroless/static-debian12:nonroot` is named by tag, so a rebuild
 later may start from other bytes. What ties it to the tag is that it was built by `make image` from
-a fresh clone of it.
+the tag's commit, in a fresh clone or in the `release-draft` workflow's checkout of the candidate.
 
 **SBOM:** `sbom.cdx.json` (CycloneDX 1.6) lists the Go modules `cmd/batondeck-kanban` links
 (`cyclonedx-gomod app`).
 
 ## What this does not prove
 
-There is no build-provenance or SBOM attestation: releases are built on a maintainer's machine, so
-nothing binds a binary to a hosted build. A matching rebuild says only that the artifact matches
-this repository at that commit — nothing about whether the code is correct or the design sound.
+There is no build-provenance or SBOM attestation: whether a release is built on a maintainer's
+machine or by the `release-draft` workflow, nothing signed binds a binary to that build. A matching
+rebuild says only that the artifact matches this repository at that commit — nothing about whether
+the code is correct or the design sound.
