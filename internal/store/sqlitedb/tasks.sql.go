@@ -336,6 +336,28 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (InsertT
 	return i, err
 }
 
+const lastOrderKey = `-- name: LastOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = ?1 AND board_id = ?2 AND column_id = ?3
+ORDER BY order_key DESC, id DESC
+LIMIT 1
+`
+
+type LastOrderKeyParams struct {
+	ProjectID string
+	BoardID   string
+	ColumnID  string
+}
+
+// The column's last order key, bytes order (SQLite's BINARY collation): what a task appended to the
+// column goes after. No row is an empty column.
+func (q *Queries) LastOrderKey(ctx context.Context, arg LastOrderKeyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lastOrderKey, arg.ProjectID, arg.BoardID, arg.ColumnID)
+	var order_key string
+	err := row.Scan(&order_key)
+	return order_key, err
+}
+
 const listTasks = `-- name: ListTasks :many
 SELECT project_id, id, board_id, column_id, title, description, status, blocked_reason, priority, assignee, labels, required_capabilities, estimate, due_at, parent_task_id, order_key, custom_fields, blocked_by, blocks, deliverable, reviewer, review, chars, model_hint, run_of, sprint_ids, racing, race_opened_at, claim_attempts, next_eligible_at, score, search_tokens, claim_owner, claim_agent, claim_agent_id, lease_id, lease_expires_at, version, created_by, created_by_agent, created_at, updated_by, updated_at
 FROM tasks t

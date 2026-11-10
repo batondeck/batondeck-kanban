@@ -476,6 +476,21 @@ func (s *Store) CountTasks(ctx context.Context, projectID string, f store.TaskFi
 	})
 }
 
+func (s *Store) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	return get(ctx, s, func(st *state) (string, error) {
+		var last *store.Task
+		for _, t := range st.tasks {
+			if t.ProjectID == projectID && t.BoardID == boardID && t.ColumnID == columnID && (last == nil || byOrderKey(t, *last) > 0) {
+				last = &t
+			}
+		}
+		if last == nil {
+			return "", nil
+		}
+		return last.OrderKey, nil
+	})
+}
+
 func (s *Store) ListTasksByIDs(ctx context.Context, projectID string, ids []string) ([]store.Task, error) {
 	if len(ids) > 200 {
 		return nil, domain.Validation("at most 200 ids", map[string]any{"ids": len(ids)})

@@ -1185,7 +1185,7 @@ func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integ
 	if col.Status != domain.Todo {
 		return store.Task{}, domain.Validation(fmt.Sprintf("An incident is filed in a TODO column; column %s is %s", col.ID, col.Status), map[string]any{"columnId": col.ID, "status": col.Status})
 	}
-	order, err := headOfColumn(ctx, t.Tx, integration.ProjectID, board.ID, col.ID)
+	order, err := endOfColumn(ctx, t.Tx, integration.ProjectID, board.ID, col.ID)
 	if err != nil {
 		return store.Task{}, err
 	}

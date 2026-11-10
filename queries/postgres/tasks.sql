@@ -49,6 +49,14 @@ WHERE t.project_id = sqlc.arg(project_id) AND t.board_id = sqlc.arg(board_id)
 ORDER BY t.order_key COLLATE "C", t.id COLLATE "C"
 LIMIT sqlc.arg(page_limit)::bigint;
 
+-- The column's last order key, as bytes (COLLATE "C"): what a task appended to the column goes
+-- after. No row is an empty column.
+-- name: LastOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND board_id = sqlc.arg(board_id) AND column_id = sqlc.arg(column_id)
+ORDER BY order_key COLLATE "C" DESC, id COLLATE "C" DESC
+LIMIT 1;
+
 -- How many of the board's tasks match, and whether the board is the project's, in one statement.
 -- name: CountTasks :one
 SELECT

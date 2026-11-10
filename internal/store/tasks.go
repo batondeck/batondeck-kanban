@@ -24,6 +24,7 @@ type taskQueries interface {
 	WriteTaskState(ctx context.Context, arg sqlitedb.WriteTaskStateParams) (sqlitedb.WriteTaskStateRow, error)
 	ListTasks(ctx context.Context, arg sqlitedb.ListTasksParams) ([]sqlitedb.ListTasksRow, error)
 	CountTasks(ctx context.Context, arg sqlitedb.CountTasksParams) (sqlitedb.CountTasksRow, error)
+	LastOrderKey(ctx context.Context, arg sqlitedb.LastOrderKeyParams) (string, error)
 	ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByIDsParams) ([]sqlitedb.ListTasksByIDsRow, error)
 	DeleteTask(ctx context.Context, arg sqlitedb.DeleteTaskParams) (int64, error)
 	GetColumn(ctx context.Context, arg sqlitedb.GetColumnParams) (sqlitedb.Column, error)
@@ -91,6 +92,14 @@ func (s *SQLite) CountTasks(ctx context.Context, projectID string, f TaskFilter)
 
 func (s *Postgres) CountTasks(ctx context.Context, projectID string, f TaskFilter) (int64, error) {
 	return countTasks(ctx, s, projectID, f)
+}
+
+func (s *SQLite) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	return lastOrderKey(ctx, s, projectID, boardID, columnID)
+}
+
+func (s *Postgres) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	return lastOrderKey(ctx, s, projectID, boardID, columnID)
 }
 
 func (s *SQLite) ListTasksByIDs(ctx context.Context, projectID string, ids []string) ([]Task, error) {
@@ -602,6 +611,18 @@ func countTasks(ctx context.Context, e engine, projectID string, f TaskFilter) (
 	return r.TaskCount, nil
 }
 
+// lastOrderKey is the column's last order key in one statement; an empty column is "".
+func lastOrderKey(ctx context.Context, e engine, projectID, boardID, columnID string) (string, error) {
+	key, err := e.queries(false).LastOrderKey(ctx, sqlitedb.LastOrderKeyParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
+	switch {
+	case isNoRows(err):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("store: last order key: %w", err)
+	}
+	return key, nil
+}
+
 func listTasksByIDs(ctx context.Context, e engine, projectID string, ids []string) ([]Task, error) {
 	if len(ids) > 200 {
 		return nil, domain.Validation("at most 200 ids", map[string]any{"ids": len(ids)})
@@ -790,6 +811,10 @@ func (p pgQueries) ListTasks(ctx context.Context, arg sqlitedb.ListTasksParams) 
 func (p pgQueries) CountTasks(ctx context.Context, arg sqlitedb.CountTasksParams) (sqlitedb.CountTasksRow, error) {
 	r, err := p.q.CountTasks(ctx, pgdb.CountTasksParams(arg))
 	return sqlitedb.CountTasksRow(r), err
+}
+
+func (p pgQueries) LastOrderKey(ctx context.Context, arg sqlitedb.LastOrderKeyParams) (string, error) {
+	return p.q.LastOrderKey(ctx, pgdb.LastOrderKeyParams(arg))
 }
 
 func (p pgQueries) ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByIDsParams) ([]sqlitedb.ListTasksByIDsRow, error) {

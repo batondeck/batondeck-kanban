@@ -284,3 +284,46 @@ func TestAnIdempotencyKeyReusedOnAnotherTaskIsAnotherCall(t *testing.T) {
 		}
 	})
 }
+
+// A created task lands at the END of its column, so column order is creation order and claim_next
+// and next_task's "fifo" serve the oldest first. Before, every create landed at the column's head
+// (no last-key read), and the frontier's order key put the newest first: old tasks starved.
+func TestFifoServesTheOldestTaskFirst(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		var ids []string
+		for _, title := range []string{"one", "two", "three", "four"} {
+			r, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: title})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, r.Task.ID)
+			e.clock.advance(time.Hour)
+		}
+		lc := e.c.Lifecycle()
+		peek, err := lc.Next(e.ctx, e.alice, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, Strategy: "fifo"})
+		if err != nil || peek.Task == nil || peek.Task.ID != ids[0] {
+			t.Fatalf("next_task fifo = %+v (err %v), want %s", peek.Task, err, ids[0])
+		}
+		var claimed []string
+		for range ids {
+			r, err := lc.ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID})
+			if err != nil || r.Task == nil {
+				t.Fatalf("claim_next: %+v %v", r.Task, err)
+			}
+			claimed = append(claimed, r.Task.ID)
+		}
+		t.Logf("created %v; claim_next took %v", ids, claimed)
+		if !slices.Equal(claimed, ids) {
+			t.Fatalf("claim_next took %v, want creation order %v", claimed, ids)
+		}
+		// A subtask lands at its column's end too.
+		sub, err := e.c.Context().AddSubtask(e.ctx, e.alice, AddSubtaskReq{ProjectID: e.project, ParentTaskID: ids[0], Title: "child"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := e.st.ListTasks(e.ctx, e.project, store.TaskFilter{BoardID: e.board.ID, ColumnID: sub.Task.ColumnID}, "", 200)
+		if err != nil || len(page.Tasks) == 0 || page.Tasks[len(page.Tasks)-1].ID != sub.Task.ID {
+			t.Fatalf("the subtask %s is not last in its column: %v (err %v)", sub.Task.ID, page.Tasks, err)
+		}
+	})
+}

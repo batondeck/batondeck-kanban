@@ -78,6 +78,11 @@ func (s *countingStore) ListTasks(ctx context.Context, projectID string, f store
 	return s.Store.ListTasks(ctx, projectID, f, cursor, limit)
 }
 
+func (s *countingStore) LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error) {
+	s.n.hit("LastOrderKey")
+	return s.Store.LastOrderKey(ctx, projectID, boardID, columnID)
+}
+
 func (s *countingStore) ReadChanges(ctx context.Context, since int64, limit int) ([]store.Change, error) {
 	s.n.hit("ReadChanges")
 	return s.Store.ReadChanges(ctx, since, limit)

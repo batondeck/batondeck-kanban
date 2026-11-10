@@ -140,8 +140,8 @@ func callerAgent(c domain.Caller) *string {
 }
 
 // Create is create_task (conductor tasks.ts:102-160): the task lands TODO (ADR-0005), in columnId,
-// which must be a TODO column, or the board's first TODO column; its T-n is the project's next (the
-// store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
+// which must be a TODO column, or the board's first TODO column, after the column's last task
+// (endOfColumn); its T-n is the project's next (the store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
 // assignee). With sprintId the task is created a member of that sprint in the same transaction, as
 // set_sprint add makes one (P-239): the sprint must exist (NOT_FOUND), be on the task's board
 // (VALIDATION) and pass domain.CheckSprintMembership; its memberCount moves by one and the task gets
@@ -243,7 +243,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 			}
 			sprintIDs = []string{sprint.ID}
 		}
-		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
+		order, err := endOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return CreateTaskResp{}, err
 		}
@@ -546,7 +546,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		}
 		order := d.Order
 		if order == "" && d.NeedsEndOfColumnOrder {
-			if order, err = headOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
+			if order, err = endOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
 				return MoveTaskResp{}, err
 			}
 		}
