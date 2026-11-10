@@ -163,8 +163,13 @@ func ownedAgent(ctx context.Context, st store.Store, claim *store.TaskClaim, cal
 // replace as the caller's own (the same identity under the same agent, claimInput's AgentID), on a
 // task it would still claim.
 func heldBy(t store.Task, caller domain.Caller, now int64) bool {
-	return t.Status == domain.InProgress && liveLease(t, now) && t.Claim.Owner == caller.Identity &&
-		sameAgentID(t.Claim.AgentID, callerAgent(caller)) && !t.Racing && len(t.BlockedBy) == 0
+	return t.Status == domain.InProgress && sameHolder(t, caller, now) && !t.Racing && len(t.BlockedBy) == 0
+}
+
+// sameHolder is store.ClaimTask's "mine" on a live lease: the caller's identity under the claim's
+// agent, by name (sameAgentID). Claim asks ownedAgent too before it acts on it.
+func sameHolder(t store.Task, caller domain.Caller, now int64) bool {
+	return liveLease(t, now) && t.Claim.Owner == caller.Identity && sameAgentID(t.Claim.AgentID, callerAgent(caller))
 }
 
 // sameAgentID is store's sameAgent: two agent handles, nil only equal to nil.
@@ -302,7 +307,9 @@ func replayedLease(task *Task, now time.Time) error {
 // and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
 // (G6): one agent in several sessions never mints a second lease that would silently end the
 // first. Another agent of the same identity (Caller.Agent, P-257) is another holder and is refused
-// CONFLICT_LOCKED, as conductor does for two distinct handles. Below master, a task assigned to
+// CONFLICT_LOCKED, as conductor does for two distinct handles, and so is a client that registered or
+// declared the label a live API token of its identity carries (ownedAgent, P-277): it is not that
+// token, so it is neither handed the token's lease nor lets ClaimTask replace it. Below master, a task assigned to
 // someone else is refused FORBIDDEN by claim_next's rule, ownAssignee (P-334, P-297; owner ruling
 // 2026-10-30): another account's id or login, another member's id, or another agent's label. An
 // unassigned task, the caller's own id or login, its own label on that label's token, and a string
@@ -334,6 +341,19 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if as := cur.Assignee; as != nil && *as != "" {
 				if err := l.ownAssignee(ctx, t.Tx, txMember(t.Tx), caller, a, req.ProjectID, *as); err != nil {
 					return ClaimTaskResp{}, err
+				}
+			}
+			if now := t.Now.UnixMilli(); sameHolder(cur, caller, now) {
+				// A live lease store.ClaimTask takes as the caller's own (the re-claim below hands
+				// back its leaseId, and ClaimTask would replace it) is the caller's only when the
+				// caller is the claim's agent by P-277's rule: a client named like a live token
+				// label of its identity is not that token. One read, for an unlabelled caller only.
+				owned, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				if !owned {
+					return ClaimTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 				}
 			}
 			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
