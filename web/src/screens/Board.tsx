@@ -1405,6 +1405,9 @@ export function Board() {
               try {
                 order = generateKeyBetween(prev, next);
               } catch {
+                // No key sorts between two equal keys (a board written before the server gave every
+                // landed card a key of its own can hold such a pair): say so rather than snap back.
+                setMoveErr('Cannot place the card there: the two cards around that spot share one position. Drop it above or below them, or move one of them first.');
                 return;
               }
               // Ripple immediately (the drop happened), spinner until the server agrees.
