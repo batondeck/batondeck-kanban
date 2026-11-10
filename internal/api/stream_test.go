@@ -855,3 +855,20 @@ func TestStreamClosesOnANotificationAfterLogout(t *testing.T) {
 		}
 	})
 }
+
+// api-http#13: the stream tells a buffering reverse proxy (nginx) not to hold its frames, and any
+// proxy not to transform it.
+func TestStreamAsksProxiesNotToBuffer(t *testing.T) {
+	l := newLive(t, servicetest.Open(t, servicetest.Memstore), Options{Ping: time.Minute})
+	req := l.request("GET", "/api/stream", "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("X-Accel-Buffering") != "no" || resp.Header.Get("Cache-Control") != "no-cache, no-transform" {
+		t.Fatalf("stream %d, X-Accel-Buffering %q, Cache-Control %q", resp.StatusCode, resp.Header.Get("X-Accel-Buffering"), resp.Header.Get("Cache-Control"))
+	}
+}

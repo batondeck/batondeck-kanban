@@ -128,6 +128,11 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
 client reached the server at, so behind a proxy that rewrites the Host header, set it.
 
+The web UI's live board is a server-sent event stream, `/api/stream`, with a `ping` every 20 s. The
+server asks nginx not to buffer it (`X-Accel-Buffering: no`); behind another proxy, turn response
+buffering off for `/api/stream` and keep its read timeout above 20 s, or the board stops updating
+live and keeps reconnecting.
+
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
 address) would count all your users as one: ten mistyped passwords lock everyone out until the

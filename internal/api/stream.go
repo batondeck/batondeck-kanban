@@ -168,8 +168,11 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
+	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("Connection", "keep-alive")
+	// nginx buffers a proxied response unless told not to, which would hold every frame (and the
+	// pings the SPA's stall watchdog waits for) until its buffer fills.
+	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	out := &sse{w: w, f: flusher}
 	out.event("ready", 0, struct{}{})
