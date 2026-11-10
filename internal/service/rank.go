@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"math"
 	"slices"
@@ -237,7 +238,11 @@ func factorsOut(sc domain.TaskScore) ScoreFactors {
 
 // Orchestrate is orchestrate_subtasks.
 func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req OrchestrateSubtasksReq) (OrchestrateSubtasksResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "orchestrate_subtasks", domain.GrantSubject{}, true)
+	written := make([]domain.Priority, 0, len(req.Children))
+	for _, c := range req.Children {
+		written = append(written, cmp.Or(c.Priority, domain.PriorityNormal))
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "orchestrate_subtasks", domain.GrantSubject{Priorities: written}, true)
 	if err != nil {
 		return OrchestrateSubtasksResp{}, err
 	}

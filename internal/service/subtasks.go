@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -18,7 +19,8 @@ const listByIDsMax = 200
 // The parent's BLOCKED landing is orchestrate_subtasks (R2.3), not this. A grant check pending on a
 // task is finished against the parent.
 func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req AddSubtaskReq) (AddSubtaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_subtask", domain.GrantSubject{}, true)
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_subtask",
+		domain.GrantSubject{Priorities: []domain.Priority{cmp.Or(req.Priority, domain.PriorityNormal)}}, true)
 	if err != nil {
 		return AddSubtaskResp{}, err
 	}
