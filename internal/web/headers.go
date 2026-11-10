@@ -16,13 +16,16 @@ const AppCSP = "default-src 'self'; " +
 	"connect-src 'self'; " +
 	"object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 
-// SecurityHeaders sets nosniff, no-referrer, X-Frame-Options DENY and AppCSP on every response. They
-// are set before next runs, so a handler may narrow them (the OAuth pages set a stricter policy).
+// SecurityHeaders sets nosniff, Referrer-Policy same-origin, X-Frame-Options DENY and AppCSP on every
+// response. They are set before next runs, so a handler may narrow them (the OAuth pages set a
+// stricter policy). same-origin sends no Referer to any other origin, as no-referrer would, and lets
+// the app's own POSTs carry their Origin: under no-referrer a browser sends `Origin: null`, which the
+// CSRF check cannot tell from another site's form where no Fetch Metadata is sent (plain http).
 func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Content-Security-Policy", AppCSP)
 		next.ServeHTTP(w, r)

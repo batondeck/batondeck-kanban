@@ -78,7 +78,8 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data any
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
-	h.Set("Referrer-Policy", "no-referrer")
+	// same-origin, not no-referrer: the sign-in form's POST must carry its Origin (auth.CSRF).
+	h.Set("Referrer-Policy", "same-origin")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }

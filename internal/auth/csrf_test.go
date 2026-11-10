@@ -169,3 +169,35 @@ func TestAnonymousRefusalsAreAuditedWithinABudget(t *testing.T) {
 		t.Fatalf("a minute later: %d, %d rows, want %d", resp.StatusCode, len(f.audited()), n+2)
 	}
 }
+
+// `Origin: null` is what a page with referrer policy no-referrer sends on a cross-site form POST,
+// and it is no evidence of where the request came from. A request with no credential (the
+// sign-in routes) is then refused, so another site cannot sign a browser in where no Fetch
+// Metadata is sent (plain http); a session request still has its CSRF token judge it, and a
+// bearer request carries no ambient credential to forge.
+func TestOriginNullIsCrossSiteWithoutACredential(t *testing.T) {
+	f := newFixture(t)
+	u := f.addUser(t, "alice", "pw")
+	null := map[string]string{"Origin": "null"}
+	n := len(f.audited())
+	if resp := f.login(t, "alice", "pw", null, false); resp.StatusCode != http.StatusForbidden || cookie(resp, SessionCookie) != nil {
+		t.Fatalf("a sign-in with Origin null: %d %v, want 403 and no cookie", resp.StatusCode, resp.Cookies())
+	}
+	if a := f.audited(); len(a) != n+1 || a[n].Data["reason"] != "cross_site" {
+		t.Fatalf("audit %+v", a)
+	}
+	if resp := f.login(t, "alice", "pw", map[string]string{"Origin": "http://board.test"}, false); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("a sign-in with its own Origin: %d", resp.StatusCode)
+	}
+	sess, csrf := f.session(t, "alice")
+	if w := f.post(req{session: sess, hdr: null}); w.Code != http.StatusForbidden {
+		t.Fatalf("a session POST with Origin null and no token: %d", w.Code)
+	}
+	if w := f.post(req{session: sess, csrf: csrf, hdr: null}); w.Code != http.StatusOK {
+		t.Fatalf("a session POST with Origin null and the token: %d", w.Code)
+	}
+	tok, _, _ := f.svc.Tokens.Create(t.Context(), u.ID, u.Email, "cli", 0)
+	if w := f.post(req{bearer: tok, hdr: null}); w.Code != http.StatusOK {
+		t.Fatalf("a bearer POST with Origin null: %d", w.Code)
+	}
+}

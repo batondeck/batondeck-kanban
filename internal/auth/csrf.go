@@ -78,18 +78,28 @@ func (s *Service) anonymousRefusalAllowed() bool {
 	return ok
 }
 
-// sameOrigin is hdtp's: Fetch Metadata when present, else Origin when present and not "null", else
-// true (no browser, or one that says nothing, which the CSRF token then judges). Origin is this
-// server's own when it is the origin r reached (RequestOrigin) or public_url's: behind a proxy
-// the forwarded Host and scheme may be the proxy's upstream, not what the browser saw.
+// sameOrigin is hdtp's: Fetch Metadata when present, else Origin when present, else true (no
+// browser, or one that says nothing, which the CSRF token then judges). Origin is this server's own
+// when it is the origin r reached (RequestOrigin) or public_url's: behind a proxy the forwarded Host
+// and scheme may be the proxy's upstream, not what the browser saw. Origin "null" says nothing about
+// where a request came from (a page with referrer policy no-referrer sends it on a cross-site POST;
+// this server's own pages send their origin, web.SecurityHeaders' same-origin policy): it passes
+// only a request with a credential on its context, a session, which the CSRF token then judges, or
+// a bearer, which is no ambient credential. A sign-in route has neither, so a page of another site
+// cannot sign a browser in where no Fetch Metadata is sent (plain http).
 func (s *Service) sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin" || site == "none"
 	}
-	if o := r.Header.Get("Origin"); o != "" && o != "null" {
+	switch o := r.Header.Get("Origin"); o {
+	case "":
+		return true
+	case "null":
+		_, ok := CallerFrom(r.Context())
+		return ok
+	default:
 		return o == RequestOrigin(r) || (o == s.publicOrigin() && o != "")
 	}
-	return true
 }
 
 // RequestOrigin is the scheme://host r reached the server at: https when r arrived over TLS or says

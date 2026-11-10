@@ -98,7 +98,7 @@ func TestSecurityHeaders(t *testing.T) {
 		if got := h.Get("Content-Security-Policy"); got != c.csp {
 			t.Errorf("%s %s (%d): CSP %q, want %q", c.method, c.path, resp.StatusCode, got, c.csp)
 		}
-		for k, want := range map[string]string{"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY"} {
+		for k, want := range map[string]string{"X-Content-Type-Options": "nosniff", "Referrer-Policy": "same-origin", "X-Frame-Options": "DENY"} {
 			if got := h.Get(k); got != want {
 				t.Errorf("%s %s (%d): %s %q, want %q", c.method, c.path, resp.StatusCode, k, got, want)
 			}
