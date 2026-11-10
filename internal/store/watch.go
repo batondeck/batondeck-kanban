@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
 )
@@ -18,9 +20,11 @@ import (
 // INSERT: inside Atomically on the same transaction, so Postgres delivers it at that commit;
 // outside, as a statement of its own once the INSERT has committed. Every process sharing the
 // database is heard.
-// SQLite has no notification: its wake is in-process, fired after the commit of a write connection
-// opened on the same file in this process. A second process writing the same file (several
-// `serve` on one host, core/lock.go) is NOT heard by it.
+// SQLite has no notification. Its wake is in-process, fired after the commit of a write connection
+// opened on the same file in this process, and, for a second process writing the same file (several
+// `serve` on one host, core/lock.go), the watch asks `PRAGMA data_version` every sqliteWatchPoll on
+// a connection of its own, which moves when another connection commits: that process's commits are
+// heard within the poll.
 type ChangeWatcher interface {
 	WatchChanges(ctx context.Context, wake func()) error
 }
@@ -66,9 +70,51 @@ func (s *SQLite) noteAppended() {
 	s.sig.fire()
 }
 
-// WatchChanges registers wake on the file's in-process signal until ctx ends.
+// sqliteWatchPoll is how often a SQLite watch asks whether another process committed: the longest
+// another serve's write on the same file waits to be heard (the bus's own PollInterval).
+const sqliteWatchPoll = 250 * time.Millisecond
+
+// WatchChanges wakes on the file's in-process signal, and on another process's commit, until ctx
+// ends. The second it hears by `PRAGMA data_version` every sqliteWatchPoll, on a connection of its
+// own (not one of the read pool's, and outside the statement count): the value moves when any other
+// connection commits, this process's write connection included, so after each in-process wake the
+// value it left is read before wake is called, and only another process's commit moves it from
+// there. An idle watch costs that one pragma per poll and no read of the change log.
 func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
-	w := &wake
+	db, err := sql.Open("sqlite", s.watchDSN)
+	if err != nil {
+		return fmt.Errorf("store: watch changes: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("store: watch changes: %w", err)
+	}
+	defer conn.Close()
+	dataVersion := func() (int64, error) {
+		var v int64
+		err := conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&v)
+		return v, err
+	}
+	seen, err := dataVersion()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("store: watch changes: %w", err)
+	}
+	local := make(chan struct{}, 1)
+	signal := func() {
+		select {
+		case local <- struct{}{}:
+		default:
+		}
+	}
+	w := &signal
 	s.sig.mu.Lock()
 	s.sig.wakes[w] = struct{}{}
 	s.sig.mu.Unlock()
@@ -78,8 +124,30 @@ func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 		s.sig.mu.Unlock()
 	}()
 	wake()
-	<-ctx.Done()
-	return nil
+	tick := time.NewTicker(sqliteWatchPoll)
+	defer tick.Stop()
+	for {
+		var polled bool
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-local:
+		case <-tick.C:
+			polled = true
+		}
+		v, err := dataVersion()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("store: watch changes: %w", err)
+		}
+		moved := v != seen
+		seen = v
+		if !polled || moved {
+			wake()
+		}
+	}
 }
 
 // notifyChanges sends the NOTIFY WatchChanges listens for: on Atomically's transaction when there
