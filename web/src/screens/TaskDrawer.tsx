@@ -25,35 +25,7 @@ import {
 } from './task/panels.js';
 import { TicketRail } from './task/TicketRail.js';
 import { SECTIONS, useSectionNav } from './task/TicketBody.js';
-
-/** What Tab can reach inside the dialog (a display:none element, the hidden file input, cannot). */
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * Keep Tab inside the modal: past its last control to its first, Shift+Tab from its first (or from the
- * dialog itself, focused on open) to its last, and from outside it to its first. Without this Tab walked
- * out into the board under the overlay, where the keyboard user could no longer see what was focused.
- */
-function trapTab(e: KeyboardEvent, root: HTMLElement | null): void {
-  if (!root) return;
-  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.closest('[style*="display: none"]'));
-  if (items.length === 0) return;
-  const first = items[0]!;
-  const last = items[items.length - 1]!;
-  const active = document.activeElement;
-  if (!root.contains(active)) {
-    // A dialog opened over this one (the command palette) keeps its own Tab.
-    if (active && active !== document.body && active.closest('[role="dialog"]')) return;
-    e.preventDefault();
-    first.focus();
-  } else if (e.shiftKey && (active === first || active === root)) {
-    e.preventDefault();
-    last.focus();
-  } else if (!e.shiftKey && active === last) {
-    e.preventDefault();
-    first.focus();
-  }
-}
+import { trapTab } from './task/trapTab.js';
 
 /**
  * The overlay closes the drawer only on a press that both starts and ends on it. A drag that starts in
@@ -108,14 +80,21 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   // Focus once the dialog actually exists: on a cold open the first render is the skeleton (no
   // dialogRef), so a mount-only effect would strand focus in the background page behind aria-modal.
+  // The skeleton is a dialog of its own and holds the focus meanwhile (on a j/k walk it would sit on
+  // the previous card behind the overlay, where Tab walked the board).
   const loaded = !!task;
+  const loading = !task && !taskQ.isError;
+  const loadingRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (loaded) dialogRef.current?.focus();
   }, [loaded, taskId]);
   useEffect(() => {
+    if (loading) loadingRef.current?.focus();
+  }, [loading, taskId]);
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Tab') {
-        trapTab(e, dialogRef.current ?? errDialogRef.current);
+        trapTab(e, dialogRef.current ?? errDialogRef.current ?? loadingRef.current);
         return;
       }
       if (e.key !== 'Escape') return;
@@ -161,7 +140,8 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
     }
     return (
       <div className="drawer-overlay" {...overlay}>
-        <div className="drawer" onClick={(e) => e.stopPropagation()} style={{ padding: 18 }}>
+        <div className="drawer" role="dialog" aria-modal="true" aria-busy="true" aria-label={`Loading ${taskId}`} tabIndex={-1} ref={loadingRef}
+          onClick={(e) => e.stopPropagation()} style={{ padding: 18 }}>
           <div className="skeleton" style={{ width: 90, height: 12, marginBottom: 14 }} />
           <div className="skeleton" style={{ width: '75%', height: 22, marginBottom: 12 }} />
           <div className="skeleton" style={{ width: 180, height: 22, marginBottom: 22 }} />
