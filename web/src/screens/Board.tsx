@@ -1591,16 +1591,28 @@ export function Board() {
             <header><span>Activity</span></header>
             <div className="cards">
               {feedQ.isLoading && [0, 1, 2].map((i) => <div key={i} className="skeleton" style={{ height: 34 }} />)}
-              {(feedQ.data?.events ?? []).map((e: ActivityEvent) => (
-                <div key={e.id} className="row" style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, minWidth: 0 }}>
-                  <Avatar id={eventActor(e, displayNames)} />
-                  <Marquee label={eventActor(e, displayNames)} style={{ maxWidth: 120 }}>{eventActor(e, displayNames).split('@')[0]}</Marquee>
-                  <span className="muted" style={{ whiteSpace: 'nowrap' }}>{eventVerb(e.type)}</span>
-                  {e.taskId && <span className="mono" style={{ whiteSpace: 'nowrap' }}>{e.taskId}</span>}
-                  <span style={{ flex: 1 }} />
-                  <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
-                </div>
-              ))}
+              {/* WHO GETS A LINE OF ITS OWN. The row was one nowrap line (avatar, name, verb, task id,
+                  time) in which only the name could shrink, so beside a long verb ("updated an
+                  attachment on") it was cut to a few letters and claude-code read as claude-codex.
+                  The name now shares its line with the time only; the action goes underneath. */}
+              {(feedQ.data?.events ?? []).map((e: ActivityEvent) => {
+                const actor = eventActor(e, displayNames);
+                return (
+                  <div key={e.id} className="row" style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, minWidth: 0 }}>
+                    <Avatar id={actor} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 7, alignItems: 'center', minWidth: 0 }}>
+                        <Marquee label={actor} style={{ flex: 1 }}>{actor.split('@')[0]}</Marquee>
+                        <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
+                      </div>
+                      <div className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {eventVerb(e.type)}
+                        {e.taskId && <> <span className="mono" style={{ color: 'var(--text)' }}>{e.taskId}</span></>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
               {feedQ.data && feedQ.data.events.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No activity yet.</div>}
             </div>
           </div>
