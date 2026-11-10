@@ -82,7 +82,8 @@ type Boards interface {
 	// AddColumn adds a column to the board. Under opts.IdempotencyKey it is replayed for
 	// (projectID, opts.Identity, key) within opts.IdempotencyTTL.
 	AddColumn(ctx context.Context, projectID, boardID string, in ColumnInput, opts WriteOptions) (Column, error)
-	// UpdateColumn applies patch to the column and returns the board after it.
+	// UpdateColumn applies patch to the column and returns the board after it. A status change on a
+	// column that holds a task is VALIDATION and nothing changes: its tasks would disagree with it.
 	UpdateColumn(ctx context.Context, projectID, boardID, columnID string, patch ColumnPatch) (Board, error)
 	// RemoveColumn removes an empty column and returns the board after it. A column holding a
 	// task, or the board's last column, is VALIDATION and nothing changes.

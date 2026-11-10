@@ -17,8 +17,16 @@ ORDER BY created_at, id;
 INSERT INTO columns (project_id, board_id, id, name, position, status, wip_limit)
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
+-- The column a write puts a task into, its row held FOR KEY SHARE to the transaction: remove_column
+-- (LockColumn, FOR UPDATE) waits for the write and then counts its task, or the write waits for
+-- remove_column and then finds no column. Concurrent writes into one column do not wait on each other.
 -- name: GetColumn :one
-SELECT * FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3;
+SELECT * FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3 FOR KEY SHARE;
+
+-- The column remove_column and update_column judge, locked to the transaction before they count its
+-- tasks: a write that holds it (GetColumn) commits first, and one that comes later waits.
+-- name: LockColumn :one
+SELECT * FROM columns WHERE project_id = $1 AND board_id = $2 AND id = $3 FOR UPDATE;
 
 -- name: ListColumns :many
 SELECT project_id, board_id, id, name, position, status, wip_limit

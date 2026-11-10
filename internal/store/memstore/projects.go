@@ -407,6 +407,17 @@ func (s *Store) UpdateColumn(ctx context.Context, projectID, boardID, columnID s
 		if err := validColumn(next); err != nil {
 			return store.Board{}, err
 		}
+		if next.Status != c.Status {
+			var n int64
+			for k, t := range st.tasks {
+				if k[0] == projectID && t.BoardID == boardID && t.ColumnID == columnID {
+					n++
+				}
+			}
+			if n > 0 {
+				return store.Board{}, store.ColumnHoldsTasks(columnID, n, c.Status, next.Status)
+			}
+		}
 		b.Columns[i] = store.Column{ID: c.ID, Name: next.Name, Order: *next.Order, Status: next.Status, WIPLimit: clonePtr(next.WIPLimit)}
 		st.boards[[2]string{projectID, boardID}] = cloneBoard(b)
 		return sortedBoard(b), nil

@@ -718,4 +718,32 @@ func tasks(t *testing.T, newStore Factory) {
 		_, err = f.s.RemoveColumn(ctx, f.project, f.board, f.col[domain.Blocked])
 		mustOK(t, err)
 	})
+
+	t.Run("UpdateColumnRefusesAStatusChangeWhileItHoldsTasks", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		done := f.add(t, "done", func(in *store.CreateTaskInput) { in.Status = domain.Done; in.ColumnID = f.col[domain.Done] })
+		// Its tasks would disagree with it: DONE work under a TODO column.
+		_, err := f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Status: ptr(domain.Todo)})
+		wantCode(t, err, domain.CodeValidation, "")
+		b, _, err := f.s.GetBoard(ctx, f.project, f.board)
+		mustOK(t, err)
+		for _, c := range b.Columns {
+			if c.ID == f.col[domain.Done] && c.Status != domain.Done {
+				t.Fatalf("a refused status change wrote %s", c.Status)
+			}
+		}
+		// A rename, or naming the status it has, is no status change.
+		_, err = f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Name: ptr("Shipped"), Status: ptr(domain.Done)})
+		mustOK(t, err)
+		// Emptied, it may change status.
+		_, err = f.s.SetStatus(ctx, f.project, done.ID, done.Version, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+		mustOK(t, err)
+		got, err := f.s.UpdateColumn(ctx, f.project, f.board, f.col[domain.Done], store.ColumnPatch{Status: ptr(domain.Review)})
+		mustOK(t, err)
+		for _, c := range got.Columns {
+			if c.ID == f.col[domain.Done] && (c.Status != domain.Review || c.Name != "Shipped") {
+				t.Fatalf("emptied column after the change: %+v", c)
+			}
+		}
+	})
 }

@@ -34,7 +34,8 @@ WHERE t.id = (
     AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND ($1::text = '' OR EXISTS (
-      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text
+      FOR KEY SHARE))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
@@ -123,7 +124,9 @@ type ClaimNextRow struct {
 // foreign key check takes on the task (a comment, an event) does not conflict with it, so that task
 // is not skipped (P-96). column_id ” keeps the task's column; landing_order_key ” keeps its order
 // key, another is the caller's fresh key at the head of the column the task lands in. A column that
-// is not the board's matches no row, and the caller tells that apart from an empty frontier.
+// is not the board's matches no row, and the caller tells that apart from an empty frontier. The
+// column's row is read FOR KEY SHARE, as GetColumn reads it, so remove_column waits for the claim
+// (and then sees its task) or the claim waits for remove_column (and then finds no column).
 func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNextRow, error) {
 	row := q.db.QueryRow(ctx, claimNext,
 		arg.ColumnID,
@@ -214,7 +217,8 @@ WHERE t.id = (
     AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND ($1::text = '' OR EXISTS (
-      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text))
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = $1::text
+      FOR KEY SHARE))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
