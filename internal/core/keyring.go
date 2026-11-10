@@ -106,6 +106,9 @@ func CheckMasterKey(path string, lookup func(string) (string, bool)) (fromEnv, m
 // processes making it at once (two replicas' first start, with no data-dir lock between them) one
 // wins and the others read the winner's key instead of writing their own over it.
 func loadOrCreateKeyFile(path string) (key []byte, created bool, err error) {
+	if path == "" {
+		return nil, false, fmt.Errorf("keyring: no key file and no %s", MasterKeyEnv)
+	}
 	k, err := readKeyFile(path)
 	if !errors.Is(err, fs.ErrNotExist) {
 		return k, false, err
