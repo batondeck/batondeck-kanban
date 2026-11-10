@@ -11,6 +11,7 @@ import { Icon } from '../../icons.js';
 import ReactMarkdown from 'react-markdown';
 import * as contextApi from '../../api/context.js';
 import * as tasksApi from '../../api/tasks.js';
+import { onOwnOrigin } from '../../api/media.js';
 import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, personName, timeAgo } from '../../components.js';
 import { AppLinkCard, normalizeLink } from '../../AppLink.js';
 import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
@@ -531,7 +532,7 @@ export function FilesPanel({ d }: P) {
           );
           // Signed download URLs open in a new tab — same-tab navigation would dump the SPA onto GCS.
           return a.downloadUrl ? (
-            <a key={a.id} href={a.downloadUrl} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
+            <a key={a.id} href={onOwnOrigin(a.downloadUrl)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
           ) : (
             <div key={a.id}>{tile}</div>
           );

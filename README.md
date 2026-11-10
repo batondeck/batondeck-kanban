@@ -126,7 +126,8 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 ```
 
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
-client reached the server at, so behind a proxy that rewrites the Host header, set it.
+client reached the server at, so behind a proxy that rewrites the Host header, set it. The web UI
+uploads and shows attachments at whatever address it was opened at, `public_url` or not.
 
 The web UI's live board is a server-sent event stream, `/api/stream`, with a `ping` every 20 s. The
 server asks nginx not to buffer it (`X-Accel-Buffering: no`); behind another proxy, turn response

@@ -168,7 +168,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     void run(
       mediaApi
         .createAttachment(projectId, taskId, { fileName: file.name, mimeType, kind, bytes: file.size })
-        .then((r) => fetch(r.uploadUrl, { method: 'PUT', headers: { 'content-type': mimeType }, body: file }))
+        .then((r) => fetch(mediaApi.onOwnOrigin(r.uploadUrl), { method: 'PUT', headers: { 'content-type': mimeType }, body: file }))
         // Surface a failed object-store PUT instead of leaving the attachment "pending" forever with no feedback.
         .then((res) => { if (!res.ok) throw new Error(`Upload failed (${res.status})`); }),
     );
