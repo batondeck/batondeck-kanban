@@ -200,13 +200,16 @@ func TestHookRateLimit(t *testing.T) {
 	}
 }
 
-// A delivery whose id was recorded answers that outcome and files no second ticket.
+// A delivery whose id was recorded answers that outcome and files no second ticket. It writes
+// nothing either: no change row (which would drop the project's board snapshots and ring every
+// master session for no change), no event, no audit row.
 func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 	f, _, root := oncallFixture(t)
 	created := f.integration(t, root, CreateIntegrationReq{Lifecycle: "per_event"})
 	iid := created.Integration.ID
 	body := genericBody("fp", "firing", "t", "deliveryId", "src-1")
 	first := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	before := f.count(t)
 	again := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
 	if first.Refusal != "" || again.Refusal != "" || again.Results[0].DeliveryID != "src-1#fp" || !again.Results[0].Replayed ||
 		*again.Results[0].TaskID != *first.Results[0].TaskID {
@@ -215,10 +218,328 @@ func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 	if n := f.taskCount(t); n != 1 {
 		t.Fatalf("%d tickets, want 1", n)
 	}
+	if after := f.count(t); after != before {
+		t.Fatalf("a replayed delivery wrote rows (events, audit, changes): %+v -> %+v", before, after)
+	}
 	// control: a new delivery id under per_event files a second ticket.
 	f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "src-2")))
 	if n := f.taskCount(t); n != 2 {
 		t.Fatalf("%d tickets after a new delivery id, want 2", n)
+	}
+}
+
+// A refusal is on the delivery log as it happens. An operator re-posting one sample body sees a
+// new row when the reason changes (a wrong key, then the body itself), and a sender stuck retrying
+// one body shows a row each hour, not one from weeks ago; one body refused again for the same
+// reason within the hour is still one row.
+func TestHookRefusalsOfOneBodyStayVisible(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	// Five minutes into an hour: the minute steps below stay in it, and the hour step leaves it.
+	f.clock.mu.Lock()
+	f.clock.t = f.clock.t.Truncate(time.Hour).Add(5 * time.Minute)
+	f.clock.mu.Unlock()
+	iid := f.integration(t, root, CreateIntegrationReq{Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"}}).Integration.ID
+	body := []byte(`{"fingerprint":"f","status":"firing","severity":"s","title":"t","titel":"x"}`)
+	post := func(key string) HookOutcome {
+		h := http.Header{}
+		h.Set(HeaderAPIKey, key)
+		return f.hook(t, iid, HookRequest{Header: h.Get, Body: body})
+	}
+	refusals := func() []string {
+		t.Helper()
+		var out []string
+		for _, d := range f.deliveries(t, iid) {
+			out = append(out, *d.Error)
+		}
+		return out
+	}
+	if out := post("key-wrong-0123"); out.Refusal != HookUnauthorized {
+		t.Fatalf("a wrong key: %+v", out)
+	}
+	f.clock.advance(time.Minute)
+	if out := post("key-0123456789"); out.Refusal != HookBadRequest {
+		t.Fatalf("the right key: %+v", out)
+	}
+	got := refusals()
+	if len(got) != 2 || got[0] != "unrecognized_payload: generic payload: unknown keys: titel" || got[1] != "api_key_mismatch" {
+		t.Fatalf("the refusals after the key was fixed: %q, want the new reason on top of the old", got)
+	}
+	f.clock.advance(time.Minute)
+	post("key-0123456789")
+	if n := len(refusals()); n != 2 {
+		t.Fatalf("the same refusal again within the hour: %d rows, want 2", n)
+	}
+	f.clock.advance(time.Hour)
+	post("key-0123456789")
+	if got := refusals(); len(got) != 3 || got[0] != "unrecognized_payload: generic payload: unknown keys: titel" {
+		t.Fatalf("the same refusal an hour later: %q, want a new row", got)
+	}
+}
+
+// The race half of a replay: an ingest that finds its delivery id recorded only inside its
+// transaction (another took the project lock first) marks the mutation NoChange, and mutate writes
+// nothing for it; NoChange beside a recorded write is INTERNAL.
+func TestMutateNoChangeWritesNothing(t *testing.T) {
+	f := newFixture(t, Options{})
+	before := f.count(t)
+	got, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "ingest", ProjectID: f.project.ID, LockProject: true}, func(x *txn) (int, error) {
+		x.NoChange()
+		return 7, nil
+	})
+	if err != nil || got != 7 {
+		t.Fatalf("a NoChange mutation = %d, %v", got, err)
+	}
+	if after := f.count(t); after != before {
+		t.Fatalf("a NoChange mutation wrote rows: %+v -> %+v", before, after)
+	}
+	_, err = mutate(f.ctx, f.c, f.alice, mutation{Tool: "ingest", ProjectID: f.project.ID}, func(x *txn) (int, error) {
+		x.BoardEvent(store.EventInput{BoardID: f.board.ID, Type: domain.EventIncidentDelivery, Data: json.RawMessage(`{}`)})
+		x.NoChange()
+		return 0, nil
+	})
+	wantCode(t, err, domain.CodeInternal)
+	if after := f.count(t); after != before {
+		t.Fatalf("a refused NoChange mutation wrote rows: %+v -> %+v", before, after)
+	}
+}
+
+// An incident is filed in a TODO column. create_integration and update_integration refuse a target
+// column that is not one (every delivery to it was refused); a target column re-statused or removed
+// after the fact sends the alerts to the board's first TODO column instead of refusing each one; and
+// a verified delivery whose ingest is refused all the same (the board has no TODO column left) is a
+// rejected row on the delivery log, not a 400 with no trace.
+func TestHookIncidentLandsInATodoColumn(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	columns := func() map[domain.Status]string {
+		t.Helper()
+		b, _, err := f.st.GetBoard(f.ctx, f.project.ID, f.board.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[domain.Status]string{}
+		for _, c := range b.Columns {
+			if _, ok := out[c.Status]; !ok {
+				out[c.Status] = c.ID
+			}
+		}
+		return out
+	}
+	cols := columns()
+	_, err := f.c.Oncall().CreateIntegration(f.ctx, root, CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "x", Source: "generic",
+		ColumnID: cols[domain.InProgress], Auth: IntegrationAuthInput{Mode: "hmac"}, Routing: IntegrationRouting{Mode: "broadcast"}})
+	if e := wantCode(t, err, domain.CodeValidation); !strings.Contains(e.Message, cols[domain.InProgress]) {
+		t.Fatalf("create_integration on an IN_PROGRESS column: %v", e)
+	}
+	incidents, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "Incidents", Status: domain.Todo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := incidents.Column.ID
+	created := f.integration(t, root, CreateIntegrationReq{ColumnID: target})
+	iid := created.Integration.ID
+	_, err = f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: 1,
+		Patch: IntegrationPatch{ColumnID: Value(cols[domain.Done])}})
+	if e := wantCode(t, err, domain.CodeValidation); !strings.Contains(e.Message, cols[domain.Done]) {
+		t.Fatalf("update_integration to a DONE column: %v", e)
+	}
+	landsIn := func(fp, want string) {
+		t.Helper()
+		out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody(fp, "firing", "t")))
+		if out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+			t.Fatalf("%s: %+v", fp, out)
+		}
+		task, err := f.st.GetTask(f.ctx, f.project.ID, *out.Results[0].TaskID)
+		if err != nil || task.ColumnID != want || task.Status != domain.Todo {
+			t.Fatalf("%s: the ticket = %+v, %v; want TODO in column %s", fp, task, err, want)
+		}
+	}
+	landsIn("a", target)
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: target, Status: domain.InProgress}); err != nil {
+		t.Fatal(err)
+	}
+	landsIn("b", cols[domain.Todo])
+	// An edit that sends the stored target back unchanged (the web form sends boardId and columnId
+	// on every save) is not refused for it: the ingest already files past the re-statused column.
+	row, _ := f.st.GetIntegration(f.ctx, f.project.ID, iid)
+	if _, err := f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: row.Version,
+		Patch: IntegrationPatch{Name: "renamed", BoardID: f.board.ID, ColumnID: Value(target)}}); err != nil {
+		t.Fatalf("a rename sending the re-statused column back unchanged: %v", err)
+	}
+	empty, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "Pager", Status: domain.Todo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pager := empty.Column.ID
+	row, _ = f.st.GetIntegration(f.ctx, f.project.ID, iid)
+	if _, err := f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: row.Version,
+		Patch: IntegrationPatch{ColumnID: Value(pager)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: pager}); err != nil {
+		t.Fatal(err)
+	}
+	landsIn("c", cols[domain.Todo])
+
+	// No TODO column left: the refusal is a rejected row naming why.
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: cols[domain.Todo], Status: domain.Blocked}); err != nil {
+		t.Fatal(err)
+	}
+	out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("d", "firing", "t")))
+	if out.Refusal != HookBadRequest || !strings.Contains(out.Detail, "no TODO column") {
+		t.Fatalf("a board with no TODO column: %+v", out)
+	}
+	var refused *store.Delivery
+	for _, d := range f.deliveries(t, iid) {
+		if d.Kind == store.DeliveryRejected {
+			refused = &d
+		}
+	}
+	if refused == nil || refused.Error == nil || !strings.Contains(*refused.Error, "no TODO column") {
+		t.Fatalf("the refusal's row: %+v", refused)
+	}
+}
+
+// A delivery id the server derives from the body's hash (the source sent none of its own) answers
+// as a retry only while the delivery is one: within the retry window, and while it is still the
+// alert's latest delivery. An uptime check that goes down, up and down again posts the same body
+// twice, and the second outage files again; so does the same body after the window. Without alert
+// state (per_event) the window alone decides. A retry of each new delivery is still a replay.
+func TestHookBodyHashIDIsARetryOnlyWhileItIsOne(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := map[string]string{HeaderAPIKey: "key-0123456789"}
+	hdr := func(name string) string { return key[name] }
+	integration := func(name, lifecycle string) string {
+		return f.integration(t, root, CreateIntegrationReq{Name: name, Source: "webhook", Lifecycle: IntegrationLifecycle(lifecycle),
+			Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+			Mapping: IntegrationMapping{Extract: MappingExtract{Fingerprint: []string{"monitor"}, Title: []string{"monitor"}, Status: []string{"status"}},
+				StatusMap: map[string]AlertStatus{"down": "firing", "up": "resolved"}}}).Integration.ID
+	}
+	send := func(iid, body string) HookResult {
+		t.Helper()
+		out := f.hook(t, iid, HookRequest{Header: hdr, Body: []byte(body)})
+		if out.Refusal != "" || len(out.Results) != 1 {
+			t.Fatalf("%s: %+v", body, out)
+		}
+		f.clock.advance(time.Second)
+		return out.Results[0]
+	}
+	const down, up = `{"monitor":"api","status":"down"}`, `{"monitor":"api","status":"up"}`
+	auto := integration("auto", "autoclose")
+	first := send(auto, down)
+	if first.Result != "created" || first.Replayed {
+		t.Fatalf("the first outage: %+v", first)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != first.DeliveryID || *r.TaskID != *first.TaskID {
+		t.Fatalf("its retry: %+v, want the first replayed", r)
+	}
+	if r := send(auto, up); r.Result != "closed" || r.Replayed {
+		t.Fatalf("the recovery: %+v", r)
+	}
+	second := send(auto, down)
+	if second.Result != "created" || second.Replayed || *second.TaskID == *first.TaskID || second.DeliveryID == first.DeliveryID {
+		t.Fatalf("the second outage, the same body after a recovery: %+v, want a new ticket", second)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != second.DeliveryID || *r.TaskID != *second.TaskID {
+		t.Fatalf("the second outage's retry: %+v, want it replayed", r)
+	}
+	// A sender that posts no recovery: the same body after the retry window is a new delivery.
+	f.clock.advance(retryWindow)
+	later := send(auto, down)
+	if later.Result != "appended" || later.Replayed || *later.TaskID != *second.TaskID {
+		t.Fatalf("the same body after the retry window: %+v, want it appended to the open ticket", later)
+	}
+	if r := send(auto, down); !r.Replayed || r.DeliveryID != later.DeliveryID {
+		t.Fatalf("its retry: %+v, want it replayed", r)
+	}
+
+	each := integration("each", "per_event")
+	one := send(each, down)
+	if r := send(each, down); one.Result != "created" || !r.Replayed || *r.TaskID != *one.TaskID {
+		t.Fatalf("per_event: %+v then %+v, want created then replayed", one, r)
+	}
+	f.clock.advance(retryWindow)
+	two := send(each, down)
+	if two.Result != "created" || two.Replayed || *two.TaskID == *one.TaskID {
+		t.Fatalf("per_event, the same body after the retry window: %+v, want a second ticket", two)
+	}
+	if r := send(each, down); !r.Replayed || *r.TaskID != *two.TaskID {
+		t.Fatalf("per_event, its retry: %+v, want it replayed", r)
+	}
+
+	// A resolve of an alert with no state (it never fired here) writes none to point at, so its
+	// retry is found by the window alone, as under per_event: recorded once, not on every retry.
+	corr := integration("corr", "correlate")
+	idle := send(corr, up)
+	if idle.Result != "recorded" || idle.Replayed {
+		t.Fatalf("a recovery of an alert never seen: %+v, want recorded", idle)
+	}
+	if r := send(corr, up); !r.Replayed || r.DeliveryID != idle.DeliveryID {
+		t.Fatalf("its retry: %+v, want it replayed", r)
+	}
+	f.clock.advance(retryWindow)
+	if r := send(corr, up); r.Result != "recorded" || r.Replayed || r.DeliveryID == idle.DeliveryID {
+		t.Fatalf("the same recovery after the retry window: %+v, want a new delivery", r)
+	}
+}
+
+// Under correlate (the default lifecycle) an alert's resolve is its latest delivery even when its
+// ticket is already done or gone, so the same body-hash firing after it is a second outage, not a
+// retry of the first: down, the ticket DONE (or deleted), up, then down again within the retry
+// window files a new ticket, and a retry of that is replayed.
+func TestHookBodyHashIDAfterADoneOrGoneTicket(t *testing.T) {
+	for _, end := range []string{"done", "gone"} {
+		t.Run(end, func(t *testing.T) {
+			f, _, root := oncallFixture(t)
+			key := map[string]string{HeaderAPIKey: "key-0123456789"}
+			hdr := func(name string) string { return key[name] }
+			iid := f.integration(t, root, CreateIntegrationReq{Source: "webhook", Lifecycle: "correlate",
+				Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+				Mapping: IntegrationMapping{Extract: MappingExtract{Fingerprint: []string{"monitor"}, Title: []string{"monitor"}, Status: []string{"status"}},
+					StatusMap: map[string]AlertStatus{"down": "firing", "up": "resolved"}}}).Integration.ID
+			send := func(body string) HookResult {
+				t.Helper()
+				out := f.hook(t, iid, HookRequest{Header: hdr, Body: []byte(body)})
+				if out.Refusal != "" || len(out.Results) != 1 {
+					t.Fatalf("%s: %+v", body, out)
+				}
+				f.clock.advance(time.Second)
+				return out.Results[0]
+			}
+			const down, up = `{"monitor":"api","status":"down"}`, `{"monitor":"api","status":"up"}`
+			first := send(down)
+			if first.Result != "created" || first.Replayed {
+				t.Fatalf("the first outage: %+v", first)
+			}
+			if end == "done" {
+				for _, to := range []domain.Status{domain.InProgress, domain.Review, domain.Done} {
+					task, err := f.st.GetTask(f.ctx, f.project.ID, *first.TaskID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := f.c.Tasks().Move(f.ctx, f.alice, MoveTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version, ToStatus: to}); err != nil {
+						t.Fatalf("move to %s: %v", to, err)
+					}
+				}
+			} else {
+				task, err := f.st.GetTask(f.ctx, f.project.ID, *first.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.c.Tasks().Delete(f.ctx, f.alice, DeleteTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version}); err != nil {
+					t.Fatalf("delete the ticket: %v", err)
+				}
+			}
+			if r := send(up); r.Result != "recorded" || r.Replayed {
+				t.Fatalf("the recovery after the ticket was %s: %+v, want recorded", end, r)
+			}
+			second := send(down)
+			if second.Result != "created" || second.Replayed || second.TaskID == nil || *second.TaskID == *first.TaskID || second.DeliveryID == first.DeliveryID {
+				t.Fatalf("the second outage, the ticket %s and a recovery between: %+v, want a new ticket", end, second)
+			}
+			if r := send(down); !r.Replayed || r.DeliveryID != second.DeliveryID || *r.TaskID != *second.TaskID {
+				t.Fatalf("the second outage's retry: %+v, want it replayed", r)
+			}
+		})
 	}
 }
 
@@ -426,9 +747,15 @@ func TestHookToleratesAnUnopenablePreviousSecret(t *testing.T) {
 	if out := f.hook(t, iid, signedHook(rot.Secret, f.clock.now(), genericBody("b", "firing", "t"))); out.Refusal != HookUnauthorized {
 		t.Fatalf("an unopenable current secret: %+v", out)
 	}
-	ds := f.deliveries(t, iid)
-	if ds[0].Kind != store.DeliveryRejected || *ds[0].Error != "secret_unavailable" {
-		t.Fatalf("the refusal's row: %+v", ds[0])
+	// The accepted row and the refusal share a timestamp: find the refusal by its kind.
+	var refused *store.Delivery
+	for _, d := range f.deliveries(t, iid) {
+		if d.Kind == store.DeliveryRejected {
+			refused = &d
+		}
+	}
+	if refused == nil || *refused.Error != "secret_unavailable" {
+		t.Fatalf("the refusal's row: %+v", refused)
 	}
 }
 
@@ -459,6 +786,177 @@ func TestHookRecordsUnparsableDeliveries(t *testing.T) {
 	if _, err := f.c.Oncall().CreateIntegration(f.ctx, root, CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "w", Source: "webhook",
 		Auth: IntegrationAuthInput{Mode: "hmac"}, Routing: IntegrationRouting{Mode: "broadcast"}, Mapping: IntegrationMapping{Extract: MappingExtract{Fingerprint: []string{"a[0].b"}}}}); err != nil {
 		t.Fatalf("a good mapping path (control): %v", err)
+	}
+}
+
+// One verified delivery buys a bounded amount of work. Events whose delivery id repeats within the
+// delivery are ingested once (600 copies of one alert: one ingest, not 600 transactions and change
+// rows on a single rate token), and of a delivery carrying more distinct events than
+// maxEventsPerDelivery the first are filed and the rest dropped, a rejected row naming the cut.
+func TestHookBoundsTheEventsOfOneDelivery(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "alertmanager", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"},
+		Limits: IntegrationLimitsIn{RatePerMin: 6000}}).Integration.ID
+	group := func(n int, alert func(i int) string) []byte {
+		entries := make([]string, n)
+		for i := range entries {
+			entries[i] = alert(i)
+		}
+		return []byte(`{"groupKey":"g","alerts":[` + strings.Join(entries, ",") + `]}`)
+	}
+	before := f.count(t)
+	out := f.hook(t, iid, HookRequest{Header: key, Body: group(600, func(int) string { return `{}` })})
+	if out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+		t.Fatalf("600 copies of one alert: %d results, refusal %q; want one created", len(out.Results), out.Refusal)
+	}
+	if after := f.count(t); after.changes-before.changes > 2 {
+		t.Fatalf("600 copies of one alert wrote %d change rows", after.changes-before.changes)
+	}
+	// Past the bound the first maxEventsPerDelivery land, and the cut is a rejected row naming it:
+	// a refusal would have Alertmanager drop the whole group in the outage that made it this big.
+	over := maxEventsPerDelivery + 5
+	out = f.hook(t, iid, HookRequest{Header: key, Body: group(over, func(i int) string { return fmt.Sprintf(`{"fingerprint":"f%d"}`, i) })})
+	created := 0
+	for _, r := range out.Results {
+		if r.Result == "created" && !r.Replayed {
+			created++
+		}
+	}
+	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery || created != maxEventsPerDelivery {
+		t.Fatalf("%d distinct alerts: refusal %q %s, %d results, %d created; want the first %d filed",
+			over, out.Refusal, out.Detail, len(out.Results), created, maxEventsPerDelivery)
+	}
+	if last := out.Results[maxEventsPerDelivery-1].DeliveryID; !strings.Contains(last, fmt.Sprintf("#f%d@", maxEventsPerDelivery-1)) {
+		t.Fatalf("the last alert filed is %s, want the delivery's alert %d", last, maxEventsPerDelivery-1)
+	}
+	rejected := func() []store.Delivery {
+		t.Helper()
+		page, err := f.st.ListDeliveries(f.ctx, f.project.ID, iid, store.DeliveryFilter{Kind: store.DeliveryRejected}, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page.Deliveries
+	}
+	cut := rejected()
+	if len(cut) != 1 || !strings.Contains(*cut[0].Error, fmt.Sprintf("%d distinct alerts", over)) || !strings.Contains(*cut[0].Error, "5 dropped") {
+		t.Fatalf("the cut's row: %+v", cut)
+	}
+	// control: exactly the bound lands, with no cut.
+	out = f.hook(t, iid, HookRequest{Header: key, Body: group(maxEventsPerDelivery, func(i int) string { return fmt.Sprintf(`{"fingerprint":"g%d"}`, i) })})
+	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery || len(rejected()) != 1 {
+		t.Fatalf("%d distinct alerts: %d results, refusal %q, rejected rows %d", maxEventsPerDelivery, len(out.Results), out.Refusal, len(rejected()))
+	}
+}
+
+// A Datadog multi-alert monitor notifies each group under its one alert_id: host A's recovery
+// closes host A's ticket and leaves host B's, still alerting, open.
+func TestHookDatadogGroupsAreSeparateAlerts(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "dd-key-0123456789"}[name] }
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "datadog", Lifecycle: "autoclose", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "dd-key-0123456789"}}).Integration.ID
+	send := func(group, transition string) HookResult {
+		t.Helper()
+		out := f.hook(t, iid, HookRequest{Header: key, Body: fmt.Appendf(nil, `{"alert_id":7001,"aggreg_key":%q,"transition":%q,"title":"disk > 90%% on %s"}`, group, transition, group)})
+		if out.Refusal != "" || len(out.Results) != 1 {
+			t.Fatalf("%s %s: %+v", group, transition, out)
+		}
+		return out.Results[0]
+	}
+	a, b := send("host-a", "Triggered"), send("host-b", "Triggered")
+	if a.Result != "created" || b.Result != "created" || *a.TaskID == *b.TaskID {
+		t.Fatalf("two groups: %+v, %+v; want two tickets", a, b)
+	}
+	if r := send("host-a", "Recovered"); r.Result != "closed" || *r.TaskID != *a.TaskID {
+		t.Fatalf("host A's recovery: %+v, want host A's ticket closed", r)
+	}
+	if _, err := f.st.GetTask(f.ctx, f.project.ID, *b.TaskID); err != nil {
+		t.Fatalf("host B's ticket after host A's recovery: %v", err)
+	}
+}
+
+// A PagerDuty subscription may carry every event type. A note added to an incident, a service
+// event and the subscription's test ping are accepted (202) as no event: no ticket filed for a note
+// as if it were a new incident, no 400 for the ping during setup, no rejected row.
+func TestHookPagerDutyFilesIncidentsOnly(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	const secret = "pd-secret-0123"
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "pagerduty", Lifecycle: "autoclose", Auth: IntegrationAuthInput{Mode: "hmac", ExternalSecret: secret}}).Integration.ID
+	send := func(body string) HookOutcome {
+		t.Helper()
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write([]byte(body))
+		h := http.Header{}
+		h.Set(HeaderPagerDuty, "v1="+hex.EncodeToString(m.Sum(nil)))
+		return f.hook(t, iid, HookRequest{Header: h.Get, Body: []byte(body)})
+	}
+	if out := send(`{"event":{"id":"E1","event_type":"incident.triggered","resource_type":"incident","data":{"id":"PGR0VU2","type":"incident","title":"API down"}}}`); out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+		t.Fatalf("incident.triggered: %+v", out)
+	}
+	for _, body := range []string{
+		`{"event":{"id":"E2","event_type":"incident.annotated","resource_type":"incident","data":{"id":"PWL7QXS","type":"incident_note","content":"looking","incident":{"id":"PGR0VU2","type":"incident_reference"}}}}`,
+		`{"event":{"id":"E3","event_type":"service.updated","resource_type":"service","data":{"id":"PF9KMXH","type":"service","name":"API"}}}`,
+		`{"event":{"id":"E4","event_type":"pagey.ping","resource_type":"pagey","data":{"message":"Hello from your friend Pagey!","type":"ping"}}}`,
+	} {
+		if out := send(body); out.Refusal != "" || len(out.Results) != 0 {
+			t.Fatalf("%s: %+v, want accepted with no event", body, out)
+		}
+	}
+	if n, ds := f.taskCount(t), f.deliveries(t, iid); n != 1 || len(ds) != 1 || ds[0].Kind == store.DeliveryRejected {
+		t.Fatalf("%d tickets and deliveries %+v, want the one incident", n, ds)
+	}
+}
+
+// alertmanagerBody is an Alertmanager webhook_config delivery of one group, groupKey g, holding one
+// alert (fingerprint fp) in status, started at startsAt and, resolved, ended at endsAt.
+func alertmanagerBody(g, fp, status, startsAt, endsAt string) []byte {
+	if endsAt == "" {
+		endsAt = "0001-01-01T00:00:00Z"
+	}
+	b, _ := json.Marshal(map[string]any{"version": "4", "groupKey": g, "status": status, "receiver": "batondeck",
+		"alerts": []any{map[string]any{"status": status, "labels": map[string]string{"alertname": "HighLatency", "severity": "critical"},
+			"annotations": map[string]string{"summary": "p99 latency above 2s"}, "startsAt": startsAt, "endsAt": endsAt, "fingerprint": fp}}})
+	return b
+}
+
+// Alertmanager's groupKey names the aggregation group, the same on every notification of it, so it
+// is no delivery id: one alert of one group fires (filed), resolves (closed under autoclose,
+// annotated under correlate) and fires again the next day (filed again); a repeat notification of
+// one state of the alert, and a sender's retry, still replay.
+func TestHookAlertmanagerResolveAndRefireAreNewDeliveries(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+	for _, lifecycle := range []string{"autoclose", "correlate"} {
+		iid := f.integration(t, root, CreateIntegrationReq{Name: lifecycle, Source: "alertmanager", Lifecycle: IntegrationLifecycle(lifecycle),
+			Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"}}).Integration.ID
+		send := func(body []byte) HookResult {
+			t.Helper()
+			out := f.hook(t, iid, HookRequest{Header: key, Body: body})
+			if out.Refusal != "" || len(out.Results) != 1 {
+				t.Fatalf("%s: %+v", lifecycle, out)
+			}
+			f.clock.advance(time.Minute)
+			return out.Results[0]
+		}
+		const g = `{}:{alertname="HighLatency"}`
+		firing := alertmanagerBody(g, "a1b2c3d4", "firing", "2026-10-24T08:00:00Z", "")
+		opened := send(firing)
+		if opened.Result != "created" || opened.Replayed {
+			t.Fatalf("%s: the firing: %+v", lifecycle, opened)
+		}
+		if r := send(firing); !r.Replayed || *r.TaskID != *opened.TaskID {
+			t.Fatalf("%s: a repeat notification of the firing: %+v, want it replayed", lifecycle, r)
+		}
+		wantResolve := map[string]string{"autoclose": "closed", "correlate": "annotated"}[lifecycle]
+		resolved := send(alertmanagerBody(g, "a1b2c3d4", "resolved", "2026-10-24T08:00:00Z", "2026-10-24T09:00:00Z"))
+		if resolved.Result != wantResolve || resolved.Replayed || *resolved.TaskID != *opened.TaskID {
+			t.Fatalf("%s: the resolve: %+v, want %s", lifecycle, resolved, wantResolve)
+		}
+		wantRefire := map[string]string{"autoclose": "created", "correlate": "appended"}[lifecycle]
+		refired := send(alertmanagerBody(g, "a1b2c3d4", "firing", "2026-10-25T08:00:00Z", ""))
+		if refired.Result != wantRefire || refired.Replayed {
+			t.Fatalf("%s: the next day's firing: %+v, want %s", lifecycle, refired, wantRefire)
+		}
 	}
 }
 
@@ -511,6 +1009,87 @@ func TestHookOverTheEngines(t *testing.T) {
 			page, err := st.ListDeliveries(ctx, p.ProjectID, in.Integration.ID, store.DeliveryFilter{}, "", 10)
 			if err != nil || len(page.Deliveries) != 3 || page.Deliveries[0].TaskID == nil || *page.Deliveries[0].TaskID != taskID {
 				t.Fatalf("deliveries %+v, %v", page, err)
+			}
+		})
+	}
+}
+
+// A NUL (U+0000) in a verified payload is no poison pill: Postgres cannot store one in text, so the
+// ingest drops it from everything it keeps (title, labels, the delivery id, a refusal's reason) and
+// both engines answer alike. An Alertmanager group whose second alert carries one lands all three
+// alerts (on Postgres it was 503 forever, the third never filed), and lands once; a generic body
+// with one in an unknown key is a 400 with one rejected row (on Postgres it was a 500).
+func TestHookDropsNULOverTheEngines(t *testing.T) {
+	for _, e := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			c := New(st, Options{ToolCallFlush: -1, Sealer: oncallKeyring(t)})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			carol := domain.Caller{Identity: "carol", Agent: "claude", TokenScope: "carol", WorkspaceAdmin: true}
+			p, err := c.Projects().Create(ctx, carol, CreateProjectReq{Name: "Q"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := c.Boards().Create(ctx, carol, CreateBoardReq{ProjectID: p.ProjectID, Name: "B"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration := func(source string, a IntegrationAuthInput) CreateIntegrationResp {
+				t.Helper()
+				in, err := c.Oncall().CreateIntegration(ctx, carol, CreateIntegrationReq{ProjectID: p.ProjectID, BoardID: b.Board.ID, Name: source,
+					Source: IntegrationSource(source), Auth: a, Routing: IntegrationRouting{Mode: "broadcast"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return in
+			}
+			am := integration("alertmanager", IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"})
+			key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+			alert := func(fp, summary string) map[string]any {
+				return map[string]any{"status": "firing", "labels": map[string]string{"alertname": "A", "err\u0000": "binary \u0000 junk"},
+					"annotations": map[string]string{"summary": summary}, "startsAt": "2026-10-24T08:00:00Z", "fingerprint": fp}
+			}
+			group, _ := json.Marshal(map[string]any{"groupKey": "g", "alerts": []any{alert("f1", "one"), alert("f2\u0000", "binary junk \u0000 here"), alert("f3", "three")}})
+			for i, wantReplayed := range []bool{false, true} {
+				out, err := c.Hook(ctx, am.Integration.ID, HookRequest{Header: key, Body: group})
+				if err != nil || out.Refusal != "" || len(out.Results) != 3 {
+					t.Fatalf("post %d of the group: %+v, %v", i+1, out, err)
+				}
+				for _, r := range out.Results {
+					if r.Replayed != wantReplayed || r.Result != "created" || strings.ContainsRune(r.DeliveryID, 0) {
+						t.Fatalf("post %d of the group: result %+v, want created, replayed %t", i+1, r, wantReplayed)
+					}
+				}
+				if i == 0 {
+					task, err := st.GetTask(ctx, p.ProjectID, *out.Results[1].TaskID)
+					if err != nil || task.Title != "binary junk  here" || strings.ContainsRune(string(task.CustomFields), 0) {
+						t.Fatalf("the second alert's ticket: %q %s, %v", task.Title, task.CustomFields, err)
+					}
+				}
+			}
+
+			gen := integration("generic", IntegrationAuthInput{Mode: "hmac"})
+			body := []byte(`{"fingerprint":"f","status":"firing","severity":"s","title":"t","bad\u0000key":"x"}`)
+			out, err := c.Hook(ctx, gen.Integration.ID, signedHook(gen.Secret, time.Now(), body))
+			if err != nil || out.Refusal != HookBadRequest || strings.ContainsRune(out.Detail, 0) {
+				t.Fatalf("a NUL in an unknown key: %+v, %v", out, err)
+			}
+			page, err := st.ListDeliveries(ctx, p.ProjectID, gen.Integration.ID, store.DeliveryFilter{}, "", 10)
+			if err != nil || len(page.Deliveries) != 1 || page.Deliveries[0].Kind != store.DeliveryRejected ||
+				*page.Deliveries[0].Error != "unrecognized_payload: generic payload: unknown keys: badkey" {
+				t.Fatalf("the refusal's row: %+v, %v", page.Deliveries, err)
+			}
+			named := genericBody("f\u0000", "firing", "t\u0000", "deliveryId", "src\u0000-1")
+			if out, err := c.Hook(ctx, gen.Integration.ID, signedHook(gen.Secret, time.Now(), named)); err != nil || out.Refusal != "" ||
+				len(out.Results) != 1 || out.Results[0].DeliveryID != "src-1#f" || out.Results[0].Result != "created" {
+				t.Fatalf("a NUL in the delivery id, fingerprint and title: %+v, %v", out, err)
 			}
 		})
 	}

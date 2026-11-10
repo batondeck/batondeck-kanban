@@ -15,6 +15,11 @@ type Event struct {
 	// UpstreamAssignee is the source's assignee (PagerDuty's user id), the upstream routing input.
 	UpstreamAssignee string `json:"upstreamAssignee,omitempty"`
 	OccurredAt       string `json:"occurredAt"`
+	// DeliveryKey is the source's id for this one event's notification when a delivery carries
+	// several and its own id names none of them (Alertmanager's groupKey names the group, the same on
+	// every notification of it): the delivery id is <DeliveryKey>#<fingerprint>. "" is none. Never
+	// stored: a delivery row is under its delivery id.
+	DeliveryKey string `json:"-"`
 }
 
 // The event statuses.
