@@ -14190,6 +14190,11 @@
                     "string"
                   ]
                 },
+                "fileName": {
+                  "typeSet": [
+                    "string"
+                  ]
+                },
                 "gcsUri": {
                   "typeSet": [
                     "string"
@@ -14254,6 +14259,7 @@
                 "createdBy",
                 "downloadUrl",
                 "extractedText",
+                "fileName",
                 "gcsUri",
                 "id",
                 "kind",

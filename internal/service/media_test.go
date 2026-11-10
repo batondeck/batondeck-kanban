@@ -596,3 +596,24 @@ func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
 		}
 	})
 }
+
+// api-http#4: list_attachments answers the fileName attach_file was given, pending and ready.
+func TestListAttachmentsAnswersTheFileNameOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		body := []byte("pdf")
+		r, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "spec v2.pdf", MimeType: "application/pdf", Kind: "file", Bytes: int64(len(body))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if list := m.list(t, task.ID); len(list) != 1 || list[0].FileName != "spec v2.pdf" || list[0].Status != "pending" {
+			t.Fatalf("pending: %+v", list)
+		}
+		if err := m.upload(t, r.UploadURL, body); err != nil {
+			t.Fatal(err)
+		}
+		if list := m.list(t, task.ID); len(list) != 1 || list[0].FileName != "spec v2.pdf" || list[0].Status != "ready" {
+			t.Fatalf("ready: %+v", list)
+		}
+	})
+}

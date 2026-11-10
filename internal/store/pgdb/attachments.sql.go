@@ -28,7 +28,7 @@ func (q *Queries) DeleteAttachmentsByTask(ctx context.Context, arg DeleteAttachm
 }
 
 const getAttachment = `-- name: GetAttachment :one
-SELECT project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
+SELECT project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts, file_name
 FROM attachments WHERE project_id = $1 AND task_id = $2 AND id = $3
 `
 
@@ -52,15 +52,16 @@ func (q *Queries) GetAttachment(ctx context.Context, arg GetAttachmentParams) (A
 		&i.Status,
 		&i.CreatedBy,
 		&i.Ts,
+		&i.FileName,
 	)
 	return i, err
 }
 
 const insertAttachment = `-- name: InsertAttachment :one
 
-INSERT INTO attachments (project_id, task_id, id, mime_type, bytes, kind, status, created_by, ts)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)
-RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
+INSERT INTO attachments (project_id, task_id, id, mime_type, bytes, kind, status, created_by, ts, file_name)
+VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
+RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts, file_name
 `
 
 type InsertAttachmentParams struct {
@@ -72,6 +73,7 @@ type InsertAttachmentParams struct {
 	Kind      string
 	CreatedBy string
 	Ts        int64
+	FileName  string
 }
 
 // The attachment area. A row is created pending with no blob, and made ready on its uploaded blob
@@ -86,6 +88,7 @@ func (q *Queries) InsertAttachment(ctx context.Context, arg InsertAttachmentPara
 		arg.Kind,
 		arg.CreatedBy,
 		arg.Ts,
+		arg.FileName,
 	)
 	var i Attachment
 	err := row.Scan(
@@ -99,12 +102,13 @@ func (q *Queries) InsertAttachment(ctx context.Context, arg InsertAttachmentPara
 		&i.Status,
 		&i.CreatedBy,
 		&i.Ts,
+		&i.FileName,
 	)
 	return i, err
 }
 
 const listAttachments = `-- name: ListAttachments :many
-SELECT t.id AS task_id, a.id, a.blob_sha256, a.mime_type, a.bytes, a.kind, a.status, a.created_by, a.ts
+SELECT t.id AS task_id, a.id, a.blob_sha256, a.mime_type, a.bytes, a.kind, a.status, a.created_by, a.ts, a.file_name
 FROM tasks t LEFT JOIN attachments a ON a.project_id = t.project_id AND a.task_id = t.id
 WHERE t.project_id = $1 AND t.id = $2
 ORDER BY a.ts, a.id COLLATE "C"
@@ -125,6 +129,7 @@ type ListAttachmentsRow struct {
 	Status     sql.NullString
 	CreatedBy  sql.NullString
 	Ts         sql.NullInt64
+	FileName   sql.NullString
 }
 
 // The task's attachments, oldest first, in one statement: no row is a missing task, one row whose
@@ -148,6 +153,7 @@ func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams
 			&i.Status,
 			&i.CreatedBy,
 			&i.Ts,
+			&i.FileName,
 		); err != nil {
 			return nil, err
 		}
@@ -162,7 +168,7 @@ func (q *Queries) ListAttachments(ctx context.Context, arg ListAttachmentsParams
 const setAttachmentReady = `-- name: SetAttachmentReady :one
 UPDATE attachments SET blob_sha256 = $1, status = 'ready'
 WHERE project_id = $2 AND task_id = $3 AND id = $4 AND status = 'pending'
-RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts
+RETURNING project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts, file_name
 `
 
 type SetAttachmentReadyParams struct {
@@ -191,6 +197,7 @@ func (q *Queries) SetAttachmentReady(ctx context.Context, arg SetAttachmentReady
 		&i.Status,
 		&i.CreatedBy,
 		&i.Ts,
+		&i.FileName,
 	)
 	return i, err
 }

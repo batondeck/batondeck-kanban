@@ -21,6 +21,7 @@ const (
 )
 
 // Attachment is one file on a task. BlobSHA256 is "" while pending. TS is Unix milliseconds.
+// FileName is the name attach_file was given, "" on a row from before it was kept.
 type Attachment struct {
 	ProjectID  string
 	TaskID     string
@@ -32,6 +33,7 @@ type Attachment struct {
 	Status     AttachmentStatus
 	CreatedBy  string
 	TS         int64
+	FileName   string
 }
 
 // CreateAttachmentInput is an attachment to create, pending.
@@ -42,6 +44,7 @@ type CreateAttachmentInput struct {
 	Bytes     int64
 	Kind      AttachmentKind
 	CreatedBy string
+	FileName  string
 }
 
 // Attachments is the attachment area. Keys: (project_id, task_id, id). Errors: a missing task is

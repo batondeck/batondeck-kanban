@@ -72,6 +72,24 @@ func attachments(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// api-http#4: the name attach_file was given is kept, returned by the create, the ready and
+		// the list.
+		t.Run("TheFileNameIsKept", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			a, err := s.CreateAttachment(ctx, store.CreateAttachmentInput{ProjectID: p, TaskID: task, MimeType: "application/pdf", Bytes: 42, Kind: store.AttachmentFile, CreatedBy: "alice", FileName: "spec v2.pdf"})
+			noErr(t, err)
+			_, err = s.PutBlob(ctx, sha, 42)
+			noErr(t, err)
+			ready, err := s.SetAttachmentReady(ctx, p, task, a.ID, sha)
+			noErr(t, err)
+			list, err := s.ListAttachments(ctx, p, task)
+			noErr(t, err)
+			if a.FileName != "spec v2.pdf" || ready.FileName != "spec v2.pdf" || len(list) != 1 || list[0].FileName != "spec v2.pdf" {
+				t.Fatalf("created %q, ready %q, listed %+v: want the name kept", a.FileName, ready.FileName, list)
+			}
+		})
+
 		t.Run("ATaskIDIsScopedByItsProject", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			q, qb, err := sd.seedProject(ctx)

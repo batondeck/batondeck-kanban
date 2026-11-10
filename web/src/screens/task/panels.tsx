@@ -525,14 +525,19 @@ export function FilesPanel({ d }: P) {
                   </>
                 )}
               </div>
+              {a.fileName ? (
+                <p style={{ fontSize: 12, margin: '4px 0 0', overflowWrap: 'anywhere' }}>{a.fileName}</p>
+              ) : null}
               <p className="mono" style={{ fontSize: 10, color: a.status === 'failed' ? 'var(--blocked)' : 'var(--text-muted)', margin: '4px 0 0' }}>
                 {a.kind} · {fmtBytes(a.bytes)}{a.status !== 'ready' ? ` · ${a.status}` : ''}
               </p>
             </>
           );
           // Signed download URLs open in a new tab — same-tab navigation would dump the SPA onto GCS.
+          // `download` names the saved file: the server's Content-Disposition carries no filename,
+          // and the URL (made same-origin by onOwnOrigin) is the blob's hash.
           return a.downloadUrl ? (
-            <a key={a.id} href={onOwnOrigin(a.downloadUrl)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
+            <a key={a.id} href={onOwnOrigin(a.downloadUrl)} {...(a.fileName ? { download: a.fileName } : {})} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
           ) : (
             <div key={a.id}>{tile}</div>
           );

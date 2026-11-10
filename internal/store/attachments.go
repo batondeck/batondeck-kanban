@@ -59,6 +59,7 @@ func attachmentFrom(r sqlitedb.Attachment) Attachment {
 	return Attachment{
 		ProjectID: r.ProjectID, TaskID: r.TaskID, ID: r.ID, BlobSHA256: r.BlobSha256.String, MimeType: r.MimeType,
 		Bytes: r.Bytes, Kind: AttachmentKind(r.Kind), Status: AttachmentStatus(r.Status), CreatedBy: r.CreatedBy, TS: r.Ts,
+		FileName: r.FileName,
 	}
 }
 
@@ -75,7 +76,7 @@ func createAttachment(ctx context.Context, e engine, in CreateAttachmentInput) (
 	}
 	r, err := e.queries(true).InsertAttachment(ctx, sqlitedb.InsertAttachmentParams{
 		ProjectID: in.ProjectID, TaskID: in.TaskID, ID: newID("A-", 16), MimeType: in.MimeType, Bytes: in.Bytes,
-		Kind: string(in.Kind), CreatedBy: in.CreatedBy, Ts: nowMillis(),
+		Kind: string(in.Kind), CreatedBy: in.CreatedBy, Ts: nowMillis(), FileName: in.FileName,
 	})
 	if isForeignKeyViolation(err) {
 		return Attachment{}, domain.NotFound("Task", in.TaskID)
@@ -134,7 +135,7 @@ func listAttachments(ctx context.Context, e engine, projectID, taskID string) ([
 		out = append(out, Attachment{
 			ProjectID: projectID, TaskID: taskID, ID: r.ID.String, BlobSHA256: r.BlobSha256.String, MimeType: r.MimeType.String,
 			Bytes: r.Bytes.Int64, Kind: AttachmentKind(r.Kind.String), Status: AttachmentStatus(r.Status.String),
-			CreatedBy: r.CreatedBy.String, TS: r.Ts.Int64,
+			CreatedBy: r.CreatedBy.String, TS: r.Ts.Int64, FileName: r.FileName.String,
 		})
 	}
 	return out, nil

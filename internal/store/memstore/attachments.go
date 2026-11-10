@@ -32,7 +32,7 @@ func (s *Store) CreateAttachment(ctx context.Context, in store.CreateAttachmentI
 		}
 		a := store.Attachment{
 			ProjectID: in.ProjectID, TaskID: in.TaskID, ID: newID("A-", 16), MimeType: in.MimeType, Bytes: in.Bytes,
-			Kind: in.Kind, Status: store.AttachmentPending, CreatedBy: in.CreatedBy, TS: nowMillis(),
+			Kind: in.Kind, Status: store.AttachmentPending, CreatedBy: in.CreatedBy, TS: nowMillis(), FileName: in.FileName,
 		}
 		st.attachments[[3]string{a.ProjectID, a.TaskID, a.ID}] = a
 		return a, nil

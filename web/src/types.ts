@@ -219,6 +219,8 @@ export interface MemoryEntry {
 }
 export interface Attachment {
   id: string;
+  /** The name attach_file was given; "" for an attachment from before names were kept. */
+  fileName?: string;
   mimeType: string;
   bytes: number;
   kind: 'file' | 'image' | 'audio' | 'video';

@@ -131,7 +131,7 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 	}, func(t *txn) (AttachFileResp, error) {
 		att, err := t.Tx.CreateAttachment(ctx, store.CreateAttachmentInput{
 			ProjectID: req.ProjectID, TaskID: req.TaskID, MimeType: req.MimeType, Bytes: req.Bytes,
-			Kind: store.AttachmentKind(req.Kind), CreatedBy: caller.Identity,
+			Kind: store.AttachmentKind(req.Kind), CreatedBy: caller.Identity, FileName: req.FileName,
 		})
 		if err != nil {
 			return AttachFileResp{}, err
@@ -149,7 +149,8 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 	})
 }
 
-// ListAttachments is list_attachments: the task's attachments, oldest first, each ready one with a
+// ListAttachments is list_attachments: the task's attachments, oldest first, each with the fileName
+// attach_file was given ("" for one attached before names were kept) and each ready one with a
 // download URL valid for BlobURLTTL. gcsUri is "blob:" and the attachment's upload ref, the
 // locator conductor's gs:// URI was; thumbUri and extractedText are null (no media function).
 func (m media) ListAttachments(ctx context.Context, caller domain.Caller, req ListAttachmentsReq) (ListAttachmentsResp, error) {
@@ -168,7 +169,7 @@ func (m media) ListAttachments(ctx context.Context, caller domain.Caller, req Li
 	out := make([]Attachment, 0, len(atts))
 	for _, a := range atts {
 		row := Attachment{
-			Bytes: float64(a.Bytes), CreatedBy: a.CreatedBy, GCSURI: "blob:" + blob.Ref{ProjectID: a.ProjectID, TaskID: a.TaskID, AttachmentID: a.ID}.String(),
+			Bytes: float64(a.Bytes), CreatedBy: a.CreatedBy, FileName: a.FileName, GCSURI: "blob:" + blob.Ref{ProjectID: a.ProjectID, TaskID: a.TaskID, AttachmentID: a.ID}.String(),
 			ID: a.ID, Kind: MediaKind(a.Kind), MimeType: a.MimeType, Status: AttachmentStatus(a.Status), TaskID: a.TaskID, Ts: isoMs(a.TS),
 		}
 		if a.Status == store.AttachmentReady {

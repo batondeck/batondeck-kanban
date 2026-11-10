@@ -86,6 +86,7 @@ type Attachment struct {
 	Status     string
 	CreatedBy  string
 	Ts         int64
+	FileName   string
 }
 
 type AuditLog struct {
