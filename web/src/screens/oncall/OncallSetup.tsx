@@ -3,11 +3,13 @@
  * the ones that exist, and read each one's delivery log.
  *
  * TWO SAFETY PROPERTIES THIS FILE OWNS, both about bytes we did not write:
- *  1. A REJECTED delivery's payload is never rendered. The error string is shown as an escaped text
- *     node (React's default), and the payload itself is only ever reachable through a real
- *     navigation to the attachment route — never fetched and injected.
- *  2. A minted credential is displayed EXACTLY ONCE, in a panel the operator must dismiss. Nothing
- *     re-reads it, because nothing can: the server keeps only an encrypted or hashed copy.
+ *  1. A REJECTED delivery's payload is never rendered as markup. The error string and the payload
+ *     the refused-payload dialog fetches are shown as escaped text nodes (React's default), never
+ *     injected (see `RawPayloadDialog`).
+ *  2. A minted credential is displayed EXACTLY ONCE, in a panel that stays until the operator says
+ *     they stored it: while it shows, a click on the overlay and Escape are ignored, and only the
+ *     drawer's explicit Close button leaves without that confirmation. Nothing re-reads it, because
+ *     nothing can: the server keeps only an encrypted or hashed copy.
  *
  * THE SOURCE LIST IS NO LONGER HERE. It was — a hand-mirrored copy of the core's catalog, including
  * each vendor's auth capability, kept honest by a lexical drift test. It now arrives from
@@ -503,7 +505,10 @@ export function OncallSetup({
     },
     // Tier refusals come from the CORE and are shown verbatim — the drawer never guesses at a
     // caller's role, which would be a second authorization model to keep in sync.
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      mintedApiKey.current = null;
+      setError(e.message);
+    },
   });
   const save = useMutation({
     gcTime: 0, // a secret in the response or the variables leaves memory with the drawer

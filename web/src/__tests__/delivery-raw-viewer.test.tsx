@@ -1,11 +1,12 @@
 /**
  * THE REFUSED PAYLOAD IS VIEWED, NOT DOWNLOADED — and the viewer explains an absence.
  *
- * The delivery LOG ENTRY is kept for `INGEST_DELIVERY_RETENTION_DAYS` (30). The raw body it refused
- * is kept for `INGEST_RAW_RETENTION_DAYS` (7). The row therefore outlives its payload by 23 days,
- * and for all of those days the UI offered a Download link that navigated to a bare 404. Reported
- * from staging as "download button doesn't work" — it worked exactly as built; what was wrong was
- * offering an action whose data had already been deleted, with nothing on screen saying so.
+ * The delivery LOG ENTRY is kept for `BATONDECK_RETENTION_DELIVERIES_DAYS` (default 30). The raw body
+ * it refused is kept for `BATONDECK_RETENTION_RAW_BODIES_DAYS` (default 7). On the defaults the row
+ * outlives its payload by 23 days, and for all of those days the UI offered a Download link that
+ * navigated to a bare 404. Reported from staging as "download button doesn't work" — it worked
+ * exactly as built; what was wrong was offering an action whose data had already been deleted, with
+ * nothing on screen saying so.
  *
  * A navigation cannot explain a 404. A dialog can, which is why this is a dialog.
  */
