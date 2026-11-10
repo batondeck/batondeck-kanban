@@ -855,7 +855,7 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		}
 	}
 	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), c.now(), deliveryID) {
-		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %s refused", integration.ID, int(limits.RatePerMin), deliveryID)
+		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %q refused", integration.ID, int(limits.RatePerMin), deliveryID)
 		return Ingested{}, domain.NewError(domain.CodeRateLimited, "Rate limit exceeded for integration "+integration.ID,
 			map[string]any{"integrationId": integration.ID, "ratePerMin": limits.RatePerMin})
 	}

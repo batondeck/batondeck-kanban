@@ -752,6 +752,12 @@ func TestHookBoundsSenderTextInRejections(t *testing.T) {
 	if out := f.hook(t, hm.Integration.ID, signedHook(hm.Secret, f.clock.now(), unknown)); out.Refusal != HookBadRequest {
 		t.Fatalf("an unknown key: %+v", out)
 	}
+	// A short unknown key is kept whole by the cut, newline and all: only the refusal line's quoting
+	// keeps it off a line of its own.
+	shortUnknown := fmt.Appendf(nil, `{"fingerprint":"f","status":"firing","severity":"s","title":"t",%q:"x"}`, "u\n"+forged)
+	if out := f.hook(t, hm.Integration.ID, signedHook(hm.Secret, f.clock.now(), shortUnknown)); out.Refusal != HookBadRequest {
+		t.Fatalf("a short unknown key: %+v", out)
+	}
 	for _, iid := range []string{jwtInt.Integration.ID, hm.Integration.ID} {
 		for _, d := range f.deliveries(t, iid) {
 			if d.Error == nil {
@@ -780,8 +786,9 @@ func TestHookBoundsSenderTextInRejections(t *testing.T) {
 
 // A source's own delivery id (and fingerprint) is the sender's text: a part longer than 200 bytes
 // is replaced by its hash, so the delivery id stays short enough for replay_delivery and
-// read_delivery_raw (1024), the same long id still dedups, and a newline in it cannot start a line
-// of its own in the server log. Control: a short id is kept as sent.
+// read_delivery_raw (1024), and the same long id still dedups. A short one is kept as sent, so a
+// newline in it reaches every ingest log line that names a delivery (accepted, over the rate budget,
+// refused): none of them lets it start a line of its own. Control: a short id is kept as sent.
 func TestHookBoundsTheSourcesDeliveryID(t *testing.T) {
 	f, _, root := oncallFixture(t)
 	created := f.integration(t, root, CreateIntegrationReq{Lifecycle: "per_event"})
@@ -803,6 +810,42 @@ func TestHookBoundsTheSourcesDeliveryID(t *testing.T) {
 	}
 	if _, err := f.c.Oncall().ReplayDelivery(f.ctx, root, ReplayDeliveryReq{ProjectID: f.project.ID, IntegrationID: iid, DeliveryID: id}); err != nil {
 		t.Fatalf("replay_delivery of the long-id delivery: %v", err)
+	}
+	// A short id is kept as sent, newline and all, so each ingest line that names a delivery quotes
+	// it. The accepted line:
+	shortForged := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp\n"+forged, "firing", "t", "deliveryId", "d1\n"+forged)))
+	if shortForged.Refusal != "" || len(shortForged.Results) != 1 || shortForged.Results[0].DeliveryID != "d1\n"+forged+"#fp\n"+forged {
+		t.Fatalf("a short delivery id with a newline: %+v", shortForged)
+	}
+	// The rate-limit line ingest writes itself: a verified Alertmanager group of five alerts on a
+	// budget of four a minute (a burst of one) overruns it on its second alert, whose id is the group
+	// key and its fingerprint.
+	am := f.integration(t, root, CreateIntegrationReq{Name: "am", Source: "alertmanager", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+		Limits: IntegrationLimitsIn{RatePerMin: 4}})
+	var alerts []string
+	for i := range 5 {
+		alerts = append(alerts, fmt.Sprintf(`{"status":"firing","labels":{"alertname":"A%d","severity":"critical"},"annotations":{},"startsAt":"2026-10-24T08:00:00.000Z","fingerprint":"fp%d"}`, i, i))
+	}
+	group := fmt.Appendf(nil, `{"version":"4","groupKey":%q,"status":"firing","receiver":"b","groupLabels":{},"commonLabels":{},"commonAnnotations":{},"externalURL":"http://am","alerts":[%s]}`,
+		"g\n"+forged, strings.Join(alerts, ","))
+	amKey := http.Header{}
+	amKey.Set(HeaderAPIKey, "key-0123456789")
+	if out := f.hook(t, am.Integration.ID, HookRequest{Header: amKey.Get, Body: group}); out.Refusal != HookRateLimited || len(out.Results) != 1 {
+		t.Fatalf("a group of five on a burst of one: %+v, want one result and rate_limited", out)
+	}
+	// The per-event refusal line: the integration's column left TODO after it was set, so filing
+	// is refused.
+	board, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "B2", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo := board.Columns[0].ID
+	moved := f.integration(t, root, CreateIntegrationReq{Name: "moved", BoardID: board.ID, ColumnID: todo})
+	if _, err := f.c.Boards().UpdateColumn(f.ctx, root, UpdateColumnReq{ProjectID: f.project.ID, BoardID: board.ID, ColumnID: todo, Status: domain.InProgress}); err != nil {
+		t.Fatalf("update_column: %v", err)
+	}
+	if out := f.hook(t, moved.Integration.ID, signedHook(moved.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "d2\n"+forged))); out.Refusal != HookBadRequest {
+		t.Fatalf("a delivery to a column that left TODO: %+v, want bad_request", out)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.HasPrefix(line, "2026/11/10") {
