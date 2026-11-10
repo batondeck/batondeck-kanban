@@ -153,10 +153,11 @@ export function LeasePanel({ d }: P) {
       </div>
       <KV k="holder">
         <Cluster gap={4}>
-          <Avatar id={task.claim.agent || task.claim.owner} active />
-          <span>{claimIsMine ? 'you' : task.claim.agent || task.claim.owner}</span>
-          {/* The account behind the agent, by name, never its raw id (P-314, P-457). */}
-          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted" title={task.claim.owner}>· for {personName(task.claim.owner, names)}</span>}
+          {/* The agent, else the account by name; the account behind an agent too. Never a raw id
+              (P-314, P-457). */}
+          <Avatar id={task.claim.agent || task.claim.owner} label={task.claim.agent || personName(task.claim.owner, names)} nameOnly active />
+          <span>{claimIsMine ? 'you' : task.claim.agent || personName(task.claim.owner, names)}</span>
+          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted" title={personName(task.claim.owner, names, { full: true })}>· for {personName(task.claim.owner, names)}</span>}
         </Cluster>
       </KV>
       <KV k="on expiry">returns to <span className="role ready">To do</span>, unclaimed</KV>
@@ -339,7 +340,7 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
 
 /** Notes / decisions / fields. Link-kind items render in LinksPanel. */
 export function ContextPanel({ d }: P) {
-  const { projectId, taskId, task, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, task, ctx, run, canAnnotate, why, names } = d;
   const [note, setNote] = useState('');
   // A note is `add_context_item`, tier write (P-440).
   const noteWhy = why('add_context_item', 'add notes');
@@ -365,7 +366,7 @@ export function ContextPanel({ d }: P) {
         {items.map((i) => (
           <div key={i.id} className="card" style={{ padding: 10 }}>
             <Cluster gap={4}>
-              <Avatar id={i.author} /> <span className="chip">{i.kind}</span> <span className="muted" style={{ fontSize: 11 }}>{timeAgo(i.ts)}</span>
+              <Avatar id={i.author} label={personName(i.author, names)} nameOnly /> <span className="chip">{i.kind}</span> <span className="muted" style={{ fontSize: 11 }}>{timeAgo(i.ts)}</span>
             </Cluster>
             <div style={{ marginTop: 4, fontSize: 14, whiteSpace: 'pre-wrap' }}>{i.body}</div>
           </div>
@@ -382,7 +383,7 @@ export function ContextPanel({ d }: P) {
 
 /** External artifacts (Lucid, Google Docs, Figma, …) as smart link cards. */
 export function LinksPanel({ d }: P) {
-  const { projectId, taskId, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, ctx, run, canAnnotate, why, names } = d;
   const [link, setLink] = useState('');
   // A link is a context item too: `add_context_item`, tier write (P-440).
   const linkWhy = why('add_context_item', 'attach links');
@@ -392,7 +393,7 @@ export function LinksPanel({ d }: P) {
     <Panel title="Links" right={<span className="mono">{links.length}</span>} pad>
       <Stack gap={4}>
         {links.map((i) => (
-          <AppLinkCard key={i.id} url={i.body} meta={`${i.author.split('@')[0]} · ${timeAgo(i.ts)}`} />
+          <AppLinkCard key={i.id} url={i.body} meta={`${personName(i.author, names)} · ${timeAgo(i.ts)}`} />
         ))}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 8 }}>

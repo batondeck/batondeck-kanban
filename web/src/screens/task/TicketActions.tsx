@@ -22,6 +22,7 @@ import * as lifecycleApi from '../../api/lifecycle.js';
 import { AgentSelect } from '../../AgentSelect.js';
 import { Button, Cluster, Panel, Stack } from '../../ui.js';
 import { Icon } from '../../icons.js';
+import { personName } from '../../components.js';
 import type { Status } from '../../types.js';
 import { NOT_A_MEMBER } from '../../displayNames.js';
 import { notMemberWhy } from '../../toolFloors.js';
@@ -37,7 +38,7 @@ const label = {
 };
 
 export function TicketActions({ d }: { d: LoadedTaskDetail }) {
-  const { task, projectId, taskId, run, move, myLease, claimIsMine, heldByOther, setLease, colFor, moveTargets, agentList, myRole, canMove, canClaim } = d;
+  const { task, projectId, taskId, run, move, myLease, claimIsMine, heldByOther, setLease, colFor, moveTargets, agentList, myRole, canMove, canClaim, names } = d;
   const [handoff, setHandoff] = useState<{ to: string; note: string } | null>(null);
   const pretty = (s: string): string => s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ');
   const readyName = colFor('TODO')?.name ?? 'To do';
@@ -150,7 +151,8 @@ export function TicketActions({ d }: { d: LoadedTaskDetail }) {
             </span>
           ) : (
             <span className="muted" style={{ fontSize: 12 }}>
-              Held by <strong style={{ color: 'var(--text-2)' }}>{task.claim?.agent || task.claim?.owner}</strong> — wait for release to claim it.
+              {/* The agent's name, else the account's by name, never its raw id (P-314). */}
+              Held by <strong style={{ color: 'var(--text-2)' }}>{task.claim?.agent || personName(task.claim?.owner ?? '', names)}</strong> — wait for release to claim it.
             </span>
           ))}
           {task.status !== 'TODO' && !task.claim && (
