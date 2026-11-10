@@ -30,7 +30,7 @@ import { ApiError, isLocalEdit } from '../api/http.js';
 import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
-import { boardTasksKey, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
+import { TEMP_TASK_ID, boardTasksKey, isTempTaskId, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
 import { TaskDrawer } from './TaskDrawer.js';
 import { type AgentEntry, STATE_META, agentKey, buildAgentList, busyAgentKeys, isLiveEntry } from '../agentStatus.js';
 import { uiSettings } from '../settings.js';
@@ -278,7 +278,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         </span>
       )}
       <div className="row" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span className="id">{t.id}</span>
+        <span className="id">{isTempTaskId(t.id) ? TEMP_TASK_ID : t.id}</span>
         <PriorityDot priority={t.priority} />
       </div>
       <div className="title">{t.title}</div>
@@ -370,7 +370,9 @@ function DraggableCard({ canMove, ...props }: Parameters<typeof TaskCard>[0] & {
       {...listeners}
       onKeyDown={onKeyDown}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
-      exit={{ opacity: 0 }}
+      // A create's placeholder leaves at once: it is replaced by the server's card, which enters as it
+      // goes, and a fade would show the task twice for its length.
+      exit={isTempTaskId(props.t.id) ? undefined : { opacity: 0 }}
       transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
     >
       <TaskCard {...props} />

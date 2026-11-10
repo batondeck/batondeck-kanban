@@ -149,8 +149,16 @@ export function useTaskAction<TVars>(
   });
 }
 
+/**
+ * The optimistic placeholder's id: this prefix, which a card shows as its id, and a number of its own,
+ * so two quick creates are two React keys (one shared 'T-…' made React drop the second card).
+ */
+export const TEMP_TASK_ID = 'T-…';
+let tempSeq = 0;
+export const isTempTaskId = (id: string): boolean => id.startsWith(TEMP_TASK_ID);
+
 /** Optimistic create: a temp-ID card appears instantly in the target board list and is replaced by the
- * server's real task on settle (the invalidate swaps it). */
+ * server's real task when the create answers (`onSuccess`), before the settle refetch. */
 export function useTaskCreate(projectId: string, boardId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -159,8 +167,9 @@ export function useTaskCreate(projectId: string, boardId: string) {
       await qc.cancelQueries({ queryKey: ['tasks', projectId, boardId] });
       // Must match the Task interface exactly (no phantom/missing fields) — this short-lived placeholder is
       // replaced by the server's real task on settle. The `: Task` annotation (no cast) enforces the shape.
+      const tempId = `${TEMP_TASK_ID}${++tempSeq}`;
       const temp: Task = {
-        id: `T-…`,
+        id: tempId,
         projectId,
         boardId,
         columnId: '',
@@ -195,7 +204,20 @@ export function useTaskCreate(projectId: string, boardId: string) {
         snapshot.push([key, data]);
         qc.setQueryData<TaskPage>(key, { ...data, tasks: [temp, ...data.tasks] });
       }
-      return { snapshot };
+      return { snapshot, tempId };
+    },
+    // THE SWAP IS ONE WRITE. The placeholder becomes the server's task in place, or is dropped where a
+    // board frame already brought that task, so no list holds both (the board showed the task twice).
+    onSuccess: (res, _body, ctx) => {
+      if (!ctx?.tempId || !res?.task) return;
+      for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId, boardId] })) {
+        if (!Array.isArray(data?.tasks) || !data.tasks.some((t) => t.id === ctx.tempId)) continue;
+        const arrived = data.tasks.some((t) => t.id === res.task.id);
+        qc.setQueryData<TaskPage>(key, {
+          ...data,
+          tasks: arrived ? data.tasks.filter((t) => t.id !== ctx.tempId) : data.tasks.map((t) => (t.id === ctx.tempId ? res.task : t)),
+        });
+      }
     },
     onError: (_e, _v, ctx) => restore(qc, ctx?.snapshot),
     onSettled: () => reconcile(qc, projectId),
