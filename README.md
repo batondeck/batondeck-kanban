@@ -8,6 +8,11 @@ next ready task instead of picking its own, so two agents never take the same ta
 before its prerequisites are done; what it decided and tried stays on the task for the next session.
 With the Claude Code plugin, new work wakes an idle session on the same machine.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/board-dark.png">
+  <img alt="A board with three tasks blocked on dependencies, one claimed by an agent under a five-minute lease, and one waiting in Review" src="docs/images/board-light.png">
+</picture>
+
 ## What you get
 
 - **A board.** Five states (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE), drag and drop, live updates.
