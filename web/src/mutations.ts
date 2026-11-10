@@ -61,7 +61,7 @@ export function mergeSnapshotPreservingLocalEdits(
  *      from, so the optimistic patch went to an entry nobody read and the rollback snapshot came back
  *      undefined. `invalidateQueries` matches by PREFIX and did hit the real entry, so the card moved on
  *      the settle refetch — a broken optimistic update looked merely slow.
- *   2. `assignMut` had the identical defect twenty lines below, and worse: `Analytics.tsx` DECLARES a
+ *   2. `assignMut` had the identical defect twenty lines below, and worse: `Analytics.tsx` then DECLARED a
  *      query at exactly that key, so on a single-board project it patched another screen's cache.
  *   3. A bespoke key-BUILDING helper fixed both and still failed when `limit` changed mid-flight —
  *      "Load more" then drag, and the new entry does not exist yet, so the updater returns `old`,
@@ -73,7 +73,10 @@ export function patchTaskCaches(qc: QueryClient, projectId: string, taskId: stri
   const snapshot: Snapshot = [];
   // every board list under this project: ['tasks', projectId, *]
   for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId] })) {
-    if (!data) continue;
+    // Only flat pages: a screen that keys another shape under this prefix (an infinite query's
+    // `{pages, pageParams}`, as the Analytics census once did) is left alone rather than thrown on,
+    // which would fail the write before its request is sent.
+    if (!data || !Array.isArray(data.tasks)) continue;
     snapshot.push([key, data]);
     qc.setQueryData<TaskPage>(key, { ...data, tasks: data.tasks.map((t) => (t.id === taskId ? patch(t) : t)) });
   }
@@ -173,7 +176,7 @@ export function useTaskCreate(projectId: string, boardId: string) {
       // stays correct whatever suffix the board's key grows next.
       const snapshot: Snapshot = [];
       for (const [key, data] of qc.getQueriesData<TaskPage>({ queryKey: ['tasks', projectId, boardId] })) {
-        if (!data) continue;
+        if (!data || !Array.isArray(data.tasks)) continue; // flat pages only, as in patchTaskCaches
         snapshot.push([key, data]);
         qc.setQueryData<TaskPage>(key, { ...data, tasks: [temp, ...data.tasks] });
       }

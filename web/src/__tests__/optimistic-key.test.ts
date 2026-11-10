@@ -56,12 +56,27 @@ describe('patchTaskCaches — the optimistic write reaches what the board render
     expect(pageAt(qc, boardTasksKey(P, B, 400)).find((t) => t.id === 'T-1')!.columnId).toBe('C-review');
   });
 
-  it('a screen keyed 3-segment (Analytics) is patched CONSISTENTLY, not instead of the board', () => {
+  it('a flat page keyed 3-segment is patched CONSISTENTLY, not instead of the board', () => {
     const qc = seeded();
     qc.setQueryData(['tasks', P, B], { tasks: [task('T-1'), task('T-2')] });
     patchTaskCaches(qc, P, 'T-1', (t) => ({ ...t, columnId: 'C-review' }));
     expect(pageAt(qc, boardTasksKey(P, B, 200)).find((t) => t.id === 'T-1')!.columnId, 'the board must move').toBe('C-review');
     expect(pageAt(qc, ['tasks', P, B]).find((t) => t.id === 'T-1')!.columnId, 'and stay consistent with it').toBe('C-review');
+  });
+
+  /**
+   * An INFINITE query under the prefix — the shape the Analytics census had when it was keyed
+   * `['tasks', P, B]`. It outlived the screen by gcTime, and the flat-page map threw on it, so every
+   * optimistic write in the project failed before its request was sent. A screen that keys a
+   * non-page entry under the prefix again must cost it nothing more than not being patched.
+   */
+  it('a NON-PAGE entry under the prefix (an infinite query) is skipped, not thrown on', () => {
+    const qc = seeded();
+    const infinite = { pages: [{ tasks: [task('T-1')] }], pageParams: [''] };
+    qc.setQueryData(['tasks', P, B], infinite);
+    expect(() => patchTaskCaches(qc, P, 'T-1', (t) => ({ ...t, columnId: 'C-review' }))).not.toThrow();
+    expect(pageAt(qc, boardTasksKey(P, B, 200)).find((t) => t.id === 'T-1')!.columnId, 'the board must still move').toBe('C-review');
+    expect(qc.getQueryData(['tasks', P, B]), 'the foreign entry is left as it was').toEqual(infinite);
   });
 
   it('the SNAPSHOT round-trips: restore() undoes the patch across every entry', () => {

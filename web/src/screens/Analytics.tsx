@@ -94,9 +94,14 @@ export function Analytics() {
    *
    * `MAX_PAGES` bounds the drain; `truncated` below says so rather than letting a capped number read
    * as complete.
+   *
+   * KEYED `task-census`, NOT `tasks`, and it is the key `/reports` uses, so the two tabs share one
+   * drain. Every optimistic board write walks `['tasks', projectId]` and expects a flat `{tasks}`
+   * page there (mutations.ts); this entry is `{pages, pageParams}` and outlives the screen, so under
+   * that prefix it made every card move, assign and create in the project throw before it was sent.
    */
   const censusQ = useInfiniteQuery({
-    queryKey: ['tasks', projectId, boardId],
+    queryKey: ['task-census', projectId, boardId],
     initialPageParam: '',
     queryFn: ({ pageParam }) =>
       boardsApi.listTasks(projectId, boardId!, {
