@@ -303,3 +303,46 @@ func TestRecordedAccountChangesNeedTheirRow(t *testing.T) {
 		t.Fatalf("EnableAs: %+v %t %v", u, was, err)
 	}
 }
+
+// A password change that lands while a sign-in with the old password is inside its check ends
+// that sign-in too: the sign-in read the old hash, so its session would otherwise be created after
+// SetPassword ended the user's sessions and outlive the reset.
+func TestPasswordChangeDuringASignInEndsItsSession(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.addUser(t, "alice", "old-password")
+	orig := verify
+	var ended int64 = -1
+	verify = func(p, h string) bool {
+		ok := orig(p, h)
+		if p == "old-password" && ended < 0 {
+			var err error
+			if ended, err = f.svc.Accounts.SetPassword(ctx, "alice", "new-password"); err != nil {
+				t.Error(err)
+			}
+		}
+		return ok
+	}
+	t.Cleanup(func() { verify = orig })
+	secret, _, err := f.svc.Login(ctx, "192.0.2.1", "alice", "old-password")
+	if err == nil {
+		_, _, rerr := f.svc.ResolveSession(ctx, secret)
+		t.Fatalf("the sign-in with the old password opened a session (SetPassword ended %d; it resolves: %v)", ended, rerr == nil)
+	}
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if n, err := f.st.DeleteUserSessions(ctx, f.mustLookup(t, "alice").ID); err != nil || n != 0 {
+		t.Fatalf("%d sessions of alice left behind (%v), want 0", n, err)
+	}
+	if _, _, err := f.svc.Login(ctx, "192.0.2.1", "alice", "new-password"); err != nil {
+		t.Fatalf("the new password: %v", err)
+	}
+}
+
+func (f *fixture) mustLookup(t *testing.T, login string) store.User {
+	t.Helper()
+	u, err := f.svc.Accounts.Lookup(context.Background(), login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}

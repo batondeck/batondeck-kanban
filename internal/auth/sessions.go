@@ -57,6 +57,20 @@ func (s *Service) Login(ctx context.Context, addr, login, password string) (secr
 	if err := s.Sessions.CreateSession(ctx, sess); err != nil {
 		return "", store.Session{}, err
 	}
+	// The password was checked against the hash read before the session existed. A password change
+	// (SetPassword: hash, then the user's sessions) or a disable that landed since would not see this
+	// session, so read the user again and end it unless the hash and the enabled state still stand:
+	// a change written before this read ends it here, one written after deletes it there.
+	fresh, err := s.Accounts.Store.GetUser(ctx, u.ID)
+	if err != nil || fresh.PasswordHash != u.PasswordHash || fresh.DisabledAt != 0 {
+		if derr := s.Sessions.DeleteSession(context.WithoutCancel(ctx), sess.IDHash); derr != nil {
+			return "", store.Session{}, errors.Join(err, derr)
+		}
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return "", store.Session{}, err
+		}
+		return "", store.Session{}, errUnauthenticated()
+	}
 	return secret, sess, nil
 }
 

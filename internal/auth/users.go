@@ -278,7 +278,8 @@ func (a *Accounts) Enable(ctx context.Context, login string) (u store.User, wasD
 // SetPassword replaces the user's password and ends every browser session of the user, returning
 // how many it ended: a reset after a leak must not leave a session the old password opened. The
 // hash is written first, so a sign-in with the old password cannot land between the two writes and
-// keep a session. API and OAuth tokens are separate credentials and stay (`token revoke` ends one;
+// keep a session, and one whose check began before the write ends its own session when it reads
+// the user again (Service.Login). API and OAuth tokens are separate credentials and stay (`token revoke` ends one;
 // `user disable` ends them all). Without Sessions it refuses before writing anything. It records
 // nothing: SetPasswordAs does.
 func (a *Accounts) SetPassword(ctx context.Context, login, password string) (ended int64, err error) {
