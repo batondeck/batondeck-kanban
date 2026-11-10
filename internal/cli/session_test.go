@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
