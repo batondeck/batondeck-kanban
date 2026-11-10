@@ -67,14 +67,15 @@ var wakeForbidden = regexp.MustCompile(`Pub/Sub|/wake|channel|resources/subscrib
 
 // TestInstructionsNameBothWakes: initialize carries the instructions, which name the socket
 // doorbell and its two calls for a device CLI, the board taken from the doorbell (P-191), and "pull
-// each turn" for a hosted client, and none of the dropped wakes or retired states.
+// each turn" for a hosted client, where an attachment's link comes from (the context carries none),
+// and none of the dropped wakes or retired states.
 func TestInstructionsNameBothWakes(t *testing.T) {
 	h := bootHarness(t, servicefake.New().Services(), resolver())
 	got := h.connect(t, tokenAda).InitializeResult().Instructions
 	if got != Instructions {
 		t.Fatalf("initialize instructions = %q, want Instructions", got)
 	}
-	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "calling list_notifications, then claim_next { projectId, boardId } (no assignee needed)", "never another's", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context"} {
+	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "calling list_notifications, then claim_next { projectId, boardId } (no assignee needed)", "never another's", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context", "list_attachments"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions lack %q", want)
 		}
