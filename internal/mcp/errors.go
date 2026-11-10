@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -61,9 +63,9 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
-// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
-// and the projectId the call named when countsInProject allows it, which the operations summary
-// groups by.
+// client received (for a protocol error, whose result go-sdk hands back as a typed nil, VALIDATION
+// when it is invalid params, as an unknown tool's -32602 is, else INTERNAL), and the projectId the
+// call named when countsInProject allows it, which the operations summary groups by.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
@@ -72,10 +74,13 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 			s.log.Printf("mcp: recording tool call %s panicked: %v\n%s", toolName(req), p, debug.Stack())
 		}
 	}()
-	row := service.RecordToolCallReq{Tool: toolName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds()}
+	row := service.RecordToolCallReq{Tool: s.registeredName(req), Outcome: "ok", Code: "OK", LatencyMs: took.Milliseconds()}
 	r, _ := res.(*mcp.CallToolResult)
 	if err != nil || r == nil || r.IsError {
 		row.Outcome, row.Code = "error", string(domain.CodeInternal)
+		if rpc, ok := err.(*jsonrpc.Error); ok && rpc.Code == jsonrpc.CodeInvalidParams {
+			row.Code = string(domain.CodeValidation)
+		}
 		if err == nil && r != nil {
 			if e, ok := domain.AsBatonDeckError(r.GetError()); ok {
 				row.Code = string(e.Code)
@@ -90,6 +95,10 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 		s.log.Printf("mcp: recording tool call %s failed: %+v", row.Tool, rerr)
 	}
 }
+
+// unknownTool is the name a tools/call of a tool nobody registered is recorded and counted under
+// (tool_calls, agent_sessions.tool_counts): the name it sent is the caller's free text (P-115).
+const unknownTool = "(unknown)"
 
 // errorResult is e as a tool result.
 func errorResult(e *domain.BatonDeckError) *mcp.CallToolResult {
@@ -114,7 +123,25 @@ func (s *Server) countsInProject(row service.RecordToolCallReq) bool {
 	return s.tools.known[row.Tool]
 }
 
-// projectOf is the call's projectId argument, the row's project; "" when it names none or no string.
+// registeredName is the call's tool as the bookkeeping writes it: its name when a tool of that name
+// is registered, else unknownTool, so no caller text reaches tool_calls or agent_sessions.
+func (s *Server) registeredName(req mcp.Request) string {
+	name := toolName(req)
+	s.tools.mu.Lock()
+	defer s.tools.mu.Unlock()
+	if s.tools.known[name] {
+		return name
+	}
+	return unknownTool
+}
+
+// idMaxBytes bounds an id the bookkeeping takes from a call's arguments: the server's own are a
+// dozen bytes ("P-" and twelve), so a longer one is a caller's free text.
+const idMaxBytes = 64
+
+// projectOf is the call's projectId argument, the row's project; "" when it names none, no string,
+// or nothing id-shaped: longer than idMaxBytes, or carrying a control character (a NUL, which
+// Postgres cannot store, would refuse the whole tool_calls batch the row rides in).
 func projectOf(req mcp.Request) string {
 	p, ok := req.GetParams().(*mcp.CallToolParamsRaw)
 	if !ok || len(p.Arguments) == 0 {
@@ -125,6 +152,9 @@ func projectOf(req mcp.Request) string {
 	}
 	_ = json.Unmarshal(p.Arguments, &args)
 	id, _ := args.ProjectID.(string)
+	if len(id) > idMaxBytes || strings.ContainsFunc(id, unicode.IsControl) {
+		return ""
+	}
 	return id
 }
 

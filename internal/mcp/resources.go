@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"runtime/debug"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -114,13 +115,16 @@ func readFeed(ctx context.Context, svc service.Services, c domain.Caller, p stri
 }
 
 // registerResources adds the resource templates, each reading through srv's services as the
-// request's caller.
+// request's caller. The ids and the cursor taken from the URI pass domain.CheckText first, as a
+// tool's arguments do (a NUL, or a percent-decoded byte that is not UTF-8, is VALIDATION, never a
+// store error), and a panic in the read is INTERNAL with its stack logged, as a tool's is: go-sdk
+// recovers no handler panic.
 func registerResources(srv *Server) {
 	for _, r := range resources {
 		srv.sdk.AddResourceTemplate(&mcp.ResourceTemplate{
 			Name: r.name, Title: r.title, Description: r.description, MIMEType: "application/json",
 			URITemplate: Scheme + "://" + r.path,
-		}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		}, func(ctx context.Context, req *mcp.ReadResourceRequest) (res *mcp.ReadResourceResult, err error) {
 			uri := req.Params.URI
 			projectID, vars, cursor, ok := r.match(uri)
 			if !ok {
@@ -130,6 +134,15 @@ func registerResources(srv *Server) {
 			if !ok {
 				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "no caller on the request"}
 			}
+			if err := domain.CheckText(r.args(projectID, vars, cursor)); err != nil {
+				return nil, readError(uri, err)
+			}
+			defer func() {
+				if p := recover(); p != nil {
+					srv.log.Printf("mcp: resource %s read panicked: %v\n%s", uri, p, debug.Stack())
+					res, err = nil, readError(uri, domain.NewError(domain.CodeInternal, "internal error", nil))
+				}
+			}()
 			out, err := r.read(ctx, srv.services, caller, projectID, vars, cursor)
 			if err == nil {
 				var text []byte
@@ -143,6 +156,20 @@ func registerResources(srv *Server) {
 			return nil, readError(uri, err)
 		})
 	}
+}
+
+// args is a read's URI values by their template names (projectId, taskId, ..., cursor), for
+// domain.CheckText to name the one it refuses.
+func (r resource) args(projectID string, vars []string, cursor string) map[string]any {
+	out := map[string]any{"projectId": projectID, "cursor": cursor}
+	i := 0
+	for _, seg := range strings.Split(r.path, "/")[1:] {
+		if name, ok := strings.CutPrefix(seg, "{"); ok && i < len(vars) {
+			out[strings.TrimSuffix(name, "}")] = vars[i]
+			i++
+		}
+	}
+	return out
 }
 
 // match splits uri into the project id, the variables of r's path in order and the cursor query

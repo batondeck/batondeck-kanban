@@ -69,6 +69,12 @@ func (s sessions) TouchAgentSession(ctx context.Context, caller domain.Caller, r
 	if !slices.Contains(SessionKindValues, req.Kind) {
 		return resp, domain.Validation("unknown session kind: "+string(req.Kind), map[string]any{"field": "kind", "allowed": SessionKindValues})
 	}
+	// The transport cleans and bounds what a client sends; this is the second line, so a NUL never
+	// reaches the store (Postgres refuses it) and no field grows the row past a name's length.
+	if why := badText("sessionKey", req.SessionKey, "agentName", req.AgentName, "clientName", req.ClientName, "clientVersion", req.ClientVersion,
+		"oauthClientId", req.OAuthClientID, "tool", req.Tool, "projectId", req.ProjectID); why != "" {
+		return resp, domain.Validation(why, nil)
+	}
 	at := s.c.nowMs()
 	if req.Tool == "" {
 		_, err = s.c.store.UpsertAgentSession(ctx, store.AgentSessionStart{

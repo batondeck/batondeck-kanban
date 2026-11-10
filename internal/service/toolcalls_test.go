@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"log"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
+	"github.com/batondeck/batondeck-kanban/internal/store/memstore"
+	"github.com/batondeck/batondeck-kanban/internal/store/storetest"
 )
 
 func (f *fixture) toolCallRows(t *testing.T) int64 {
@@ -71,6 +75,58 @@ func TestToolCallsABadRowDoesNotSinkTheBatch(t *testing.T) {
 	}
 	if n := f.toolCallRows(t); n != 2 || strings.Count(f.logs.String(), "dropped a row") != 4 {
 		t.Fatalf("%d rows landed (want 2); log %q", n, f.logs.String())
+	}
+}
+
+// A row carrying a NUL in its tool, agent or project, or a field longer than any name the server
+// gives, is dropped on Record on every engine: on Postgres it used to refuse the whole batch at the
+// flush, so one caller's NUL-named call erased every other caller's rows riding with it.
+func TestToolCallsANULRowDoesNotSinkTheBatchOnAnyEngine(t *testing.T) {
+	for _, e := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"memstore", func(t *testing.T) store.Store { s := memstore.New(); _, _ = s.Migrate(context.Background()); return s }},
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			logs := &logBuf{}
+			c := New(e.open(t), Options{ToolCallFlush: -1, Logger: log.New(logs, "", 0)})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			alice := domain.Caller{Identity: "alice", Agent: "claude", TokenScope: "alice"}
+			long := strings.Repeat("x", 300)
+			for _, rec := range []struct {
+				caller domain.Caller
+				req    RecordToolCallReq
+			}{
+				{alice, okCall},
+				{alice, RecordToolCallReq{Tool: "a\x00b", Outcome: "error", Code: "INTERNAL"}},
+				{alice, RecordToolCallReq{Tool: "get_project", Outcome: "error", Code: "VALIDATION", ProjectID: "P\x00"}},
+				{domain.Caller{Identity: "alice", Agent: "c\x00"}, okCall},
+				{alice, RecordToolCallReq{Tool: long, Outcome: "error", Code: "INTERNAL"}},
+				{alice, RecordToolCallReq{Tool: "get_project", Outcome: "error", Code: "NOT_FOUND", ProjectID: long}},
+				{alice, okCall},
+			} {
+				if _, err := c.ToolCalls().Record(ctx, rec.caller, rec.req); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := c.FlushToolCalls(ctx); err != nil {
+				t.Fatalf("flush: %v (log %q)", err, logs.String())
+			}
+			n, err := c.store.DeleteToolCallsOlderThan(ctx, 1<<62, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != 2 || strings.Count(logs.String(), "dropped a row") != 5 {
+				t.Fatalf("%d rows landed (want the 2 good ones); log %q", n, logs.String())
+			}
+			if strings.Contains(logs.String(), long) {
+				t.Errorf("the drop log repeats a 300-byte field whole: %q", logs.String())
+			}
+		})
 	}
 }
 

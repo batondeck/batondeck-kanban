@@ -30,6 +30,11 @@ const DefaultSessionIdle = 30 * time.Minute
 // DefaultMaxSessions bounds the live sessions; an initialize past it is refused.
 const DefaultMaxSessions = 1000
 
+// DefaultMaxSessionsPerIdentity bounds one identity's live sessions, so that one token holder (or a
+// client that never ends its sessions) cannot fill the table and lock every other client out: an
+// initialize past it closes that identity's longest-idle session to make room.
+const DefaultMaxSessionsPerIdentity = 64
+
 // Options builds a Server.
 type Options struct {
 	// Version is the binary's version, reported as serverInfo.version.
@@ -48,6 +53,8 @@ type Options struct {
 	SessionIdle time.Duration
 	// MaxSessions: 0 means DefaultMaxSessions.
 	MaxSessions int
+	// MaxSessionsPerIdentity: 0 means DefaultMaxSessionsPerIdentity.
+	MaxSessionsPerIdentity int
 	// Logger receives refusals, bookkeeping failures and recovered panics; nil discards them.
 	Logger *log.Logger
 	// HiddenTools is what a caller's capability grants leave out of its tools/list
@@ -79,12 +86,17 @@ func New(o Options) *Server {
 	if o.MaxSessions == 0 {
 		o.MaxSessions = DefaultMaxSessions
 	}
+	if o.MaxSessionsPerIdentity == 0 {
+		o.MaxSessionsPerIdentity = DefaultMaxSessionsPerIdentity
+	}
 	if o.Logger == nil {
 		o.Logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{services: o.Services, log: o.Logger}
 	s.halted, s.halt = context.WithCancel(context.Background())
-	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}, keys: map[string]string{}, ending: map[string]string{}, inflight: map[string]struct{}{}}
+	s.sessions = &sessionTable{max: o.MaxSessions, perIdentity: o.MaxSessionsPerIdentity, live: map[string]*mcp.ServerSession{},
+		owner: map[string]string{}, seen: map[string]time.Time{}, calls: map[string]int{}, evicting: map[string]struct{}{},
+		agents: map[string]int{}, keys: map[string]string{}, ending: map[string]string{}, inflight: map[string]struct{}{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log,
 		hidden: o.HiddenTools}
@@ -95,6 +107,7 @@ func New(o Options) *Server {
 			Prompts:   &mcp.PromptCapabilities{ListChanged: true},
 			Resources: &mcp.ResourceCapabilities{ListChanged: true},
 		},
+		SetCacheable: privateCache,
 	})
 	// The sending handler, kept to notify one session (go-sdk exports no per-session list_changed).
 	s.sdk.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler { s.tools.send = next; return next })
@@ -113,6 +126,11 @@ func New(o Options) *Server {
 	s.handler = hostCheck(o.PublicURL)(requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(s.closeEnding(streamable)))
 	return s
 }
+
+// privateCache labels every list and resources/read result private, ttlMs left 0: each is the
+// caller's own (tools/list is filtered per audience, a resource is read as one member), and go-sdk
+// otherwise fills in the protocol default "public", which lets a cache shared across callers serve it.
+func privateCache(_ context.Context, _ mcp.Request, c *mcp.Cacheable) { c.CacheScope = "private" }
 
 // Close refuses new sessions, ends every live one, each as any other end does (its agent session's
 // row kept for the retention sweep, P-264), and waits for that bookkeeping or ctx. A session's end
