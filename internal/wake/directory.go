@@ -98,8 +98,13 @@ func (e *entry) kind(r row) string {
 // Directory is the device session directory and its dispatcher. Make one with NewDirectory, then
 // Start it; it implements service.DeviceSessions.
 type Directory struct {
-	o       Options
-	watch   *core.ExitWatcher
+	o     Options
+	watch *core.ExitWatcher
+	// reg is held by a register from its read of the pid's entry through its put, and by every
+	// drop: a drop judged on an entry that a register in flight replaces would delete the row the
+	// register just wrote (the same id, for the same process) and stop watching its pid. It is
+	// taken before mu.
+	reg     sync.Mutex
 	mu      sync.Mutex
 	entries map[int64]*entry          // pid → entry
 	index   map[string]map[int64]bool // recipient key → pids
@@ -298,45 +303,10 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 	if err != nil {
 		return RegisterResp{}, err
 	}
-	d.mu.Lock()
-	var old entry // a copy: the dispatcher writes lastCursor under mu
-	cur := d.entries[req.PID]
-	found := cur != nil
-	if found {
-		old = *cur
-	}
-	d.mu.Unlock()
-	id, cursor := "", req.Cursor
-	if found {
-		if old.identity != caller.Identity {
-			return RegisterResp{}, domain.NewError(domain.CodeForbidden, fmt.Sprintf("pid %d is registered by another identity", req.PID), nil)
-		}
-		if old.procStart == reg.ProcStart {
-			id, cursor = old.id, max(cursor, old.lastCursor)
-		} else {
-			d.drop(ctx, cur, "re-registered by another process")
-		}
-	}
-	if err := d.watch.Add(int(req.PID)); err != nil {
-		if errors.Is(err, core.ErrNoProcess) {
-			return RegisterResp{}, domain.Validation(fmt.Sprintf("pid %d is not a live process", req.PID), map[string]any{"field": "pid"})
-		}
-		return RegisterResp{}, domain.NewError(domain.CodeInternal, "watching the pid failed", nil)
-	}
-	resp, err := d.o.Sessions.RegisterWakeSession(ctx, caller, service.RegisterWakeSessionReq{
-		ID: id, PID: req.PID, Role: req.Role, Agent: req.Agent, SocketPath: req.Socket, SocketToken: req.Token,
-		ClientSessionID: reg.SessionID, ProcStart: reg.ProcStart, Cursor: cursor, Bearer: bearer,
-	})
+	e, cursor, expires, err := d.replace(ctx, caller, bearer, req, reg, adapter, scopes)
 	if err != nil {
-		if !found || old.id != id {
-			d.watch.Remove(int(req.PID))
-		}
 		return RegisterResp{}, err
 	}
-	e := &entry{id: resp.ID, identity: caller.Identity, agent: resp.AgentID, role: req.Role, pid: req.PID, socket: req.Socket,
-		socketToken: req.Token, adapter: adapter, clientSession: reg.SessionID, procStart: reg.ProcStart, bearer: bearer,
-		scopes: scopes, lastCursor: cursor, registered: time.Now()}
-	d.put(e)
 	d.o.Logger.Printf("wake: registered pid %d (%s, %s, agent %s, adapter %q) from peer pid %d", e.pid, e.role, e.identity, e.agent, adapter, peer.PID)
 	if d.gen.Load() != gen {
 		select {
@@ -348,18 +318,69 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 	if cursor > 0 {
 		d.catchUp(ctx, e)
 	}
-	return RegisterResp{ID: resp.ID, PID: req.PID, Role: req.Role, AgentID: resp.AgentID, Adapter: adapter, ExpiresAt: resp.ExpiresAt}, nil
+	return RegisterResp{ID: e.id, PID: req.PID, Role: req.Role, AgentID: e.agent, Adapter: adapter, ExpiresAt: expires}, nil
+}
+
+// replace is Register's write under reg: it reads the pid's entry, watches the pid, writes the row
+// and puts the new entry, so no drop runs between the read and the put. cursor is the new entry's
+// last delivered cursor.
+func (d *Directory) replace(ctx context.Context, caller domain.Caller, bearer string, req RegisterReq, reg registryEntry, adapter string, scopes []string) (e *entry, cursor int64, expires string, err error) {
+	d.reg.Lock()
+	defer d.reg.Unlock()
+	d.mu.Lock()
+	var old entry // a copy: the dispatcher writes lastCursor under mu
+	cur := d.entries[req.PID]
+	found := cur != nil
+	if found {
+		old = *cur
+	}
+	d.mu.Unlock()
+	id := ""
+	cursor = req.Cursor
+	if found {
+		if old.identity != caller.Identity {
+			return nil, 0, "", domain.NewError(domain.CodeForbidden, fmt.Sprintf("pid %d is registered by another identity", req.PID), nil)
+		}
+		if old.procStart == reg.ProcStart {
+			id, cursor = old.id, max(cursor, old.lastCursor)
+		} else {
+			d.dropLocked(ctx, cur, "re-registered by another process")
+		}
+	}
+	if err := d.watch.Add(int(req.PID)); err != nil {
+		if errors.Is(err, core.ErrNoProcess) {
+			return nil, 0, "", domain.Validation(fmt.Sprintf("pid %d is not a live process", req.PID), map[string]any{"field": "pid"})
+		}
+		return nil, 0, "", domain.NewError(domain.CodeInternal, "watching the pid failed", nil)
+	}
+	resp, err := d.o.Sessions.RegisterWakeSession(ctx, caller, service.RegisterWakeSessionReq{
+		ID: id, PID: req.PID, Role: req.Role, Agent: req.Agent, SocketPath: req.Socket, SocketToken: req.Token,
+		ClientSessionID: reg.SessionID, ProcStart: reg.ProcStart, Cursor: cursor, Bearer: bearer,
+	})
+	if err != nil {
+		if !found || old.id != id {
+			d.watch.Remove(int(req.PID))
+		}
+		return nil, 0, "", err
+	}
+	e = &entry{id: resp.ID, identity: caller.Identity, agent: resp.AgentID, role: req.Role, pid: req.PID, socket: req.Socket,
+		socketToken: req.Token, adapter: adapter, clientSession: reg.SessionID, procStart: reg.ProcStart, bearer: bearer,
+		scopes: scopes, lastCursor: cursor, registered: time.Now()}
+	d.put(e)
+	return e, cursor, resp.ExpiresAt, nil
 }
 
 // Unregister drops caller's entry for pid; NOT_FOUND when caller has none there.
 func (d *Directory) Unregister(ctx context.Context, caller domain.Caller, pid int64) error {
+	d.reg.Lock()
+	defer d.reg.Unlock()
 	d.mu.Lock()
 	e := d.entries[pid]
 	d.mu.Unlock()
 	if e == nil || e.identity != caller.Identity {
 		return domain.NotFound("WakeSession", fmt.Sprint(pid))
 	}
-	d.drop(ctx, e, "unregistered")
+	d.dropLocked(ctx, e, "unregistered")
 	return nil
 }
 
@@ -400,8 +421,16 @@ func (d *Directory) signal() {
 }
 
 // drop removes e and its row, and stops watching its pid, unless a register has replaced e
-// meanwhile: the verdict of a recheck that read e is e's, never its replacement's.
+// meanwhile: the verdict of a recheck that read e is e's, never its replacement's. A register of
+// e's pid in flight finishes first (reg).
 func (d *Directory) drop(ctx context.Context, e *entry, why string) {
+	d.reg.Lock()
+	defer d.reg.Unlock()
+	d.dropLocked(ctx, e, why)
+}
+
+// dropLocked is drop with reg held.
+func (d *Directory) dropLocked(ctx context.Context, e *entry, why string) {
 	pid := e.pid
 	d.mu.Lock()
 	if d.entries[pid] != e {
@@ -543,12 +572,7 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription, missed []re
 				d.deliver(ctx, r)
 			}
 		case pid := <-d.watch.Exited():
-			d.mu.Lock()
-			e := d.entries[int64(pid)]
-			d.mu.Unlock()
-			if e != nil {
-				d.drop(ctx, e, "the process exited")
-			}
+			d.exited(ctx, int64(pid))
 		case pid := <-d.rescope:
 			d.mu.Lock()
 			e := d.entries[pid]
@@ -565,6 +589,19 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription, missed []re
 			d.sweep(ctx) // a dropped change may be a membership's (P-229)
 			d.ringAll(co)
 		}
+	}
+}
+
+// exited drops pid's entry: whichever entry holds the pid once a register of it in flight has put
+// its own, since the exit is the pid's, not one entry's.
+func (d *Directory) exited(ctx context.Context, pid int64) {
+	d.reg.Lock()
+	defer d.reg.Unlock()
+	d.mu.Lock()
+	e := d.entries[pid]
+	d.mu.Unlock()
+	if e != nil {
+		d.dropLocked(ctx, e, "the process exited")
 	}
 }
 
