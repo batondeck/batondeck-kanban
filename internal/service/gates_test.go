@@ -316,6 +316,20 @@ func TestRemovingATodoDependentsLastBlockerRingsItsWorker(t *testing.T) {
 		if rd != ChangeKindChanged+"@project:"+e.project {
 			t.Fatalf("%s rang %q, want a changed row alone: it was claimable before", d.ID, rd)
 		}
+
+		// Nor does it unblock a task BLOCKED for a reason of its own: y's gate on g cleared, then g's
+		// worker blocked it with no blocker named. Removing the cleared edge leaves it BLOCKED.
+		y, g := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		e.dependOn(t, y.ID, g.ID)
+		e.complete(t, y.ID)
+		lease := e.claim(t, e.alice, g.ID, 0)
+		if _, err := e.c.Lifecycle().Block(e.ctx, e.alice, BlockTaskReq{ProjectID: e.project, TaskID: g.ID, LeaseID: lease.LeaseID, Reason: "waits on a human"}); err != nil {
+			t.Fatalf("block_task %s: %v", g.ID, err)
+		}
+		remove(g.ID)
+		if got := e.get(t, g.ID); got.Status != domain.Blocked {
+			t.Fatalf("remove_dependency of a cleared edge moved %s, BLOCKED for its own reason, to %s", g.ID, got.Status)
+		}
 	})
 }
 
