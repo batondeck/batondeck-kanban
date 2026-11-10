@@ -28,7 +28,7 @@ import (
 // one outbound network call ingest makes, and it is logged as such (plan §Clarifications 8). The
 // URL is operator input fetched server-side, so the fetch holds conductor's SSRF posture: https
 // only; the host resolved once and refused when any address is private, loopback, link-local,
-// unspecified or the metadata host; the connection pinned to the vetted address (no second
+// unspecified, reserved (carrier-grade NAT among them) or the metadata host; the connection pinned to the vetted address (no second
 // resolution to rebind); no redirects; 64 KiB and 5 s.
 
 // JWT is an integration's jwt block.
@@ -297,12 +297,37 @@ func parseJWKS(body []byte) (map[string]*rsa.PublicKey, error) {
 	return out, nil
 }
 
+// reservedPrefixes are the ranges ForbiddenAddress refuses beyond the net/netip classes: 0.0.0.0/8,
+// carrier-grade NAT (a tailnet's and some clouds' internal services), IETF protocol assignments,
+// benchmarking, class E and broadcast, and the v6 prefixes that embed a v4 address and so can reach
+// any of the above (NAT64, local-use NAT64, 6to4, Teredo).
+var reservedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("2001::/32"),
+}
+
 // ForbiddenAddress reports whether the fetch must never reach a: private, loopback, link-local,
-// unspecified, unique-local, or one of those inside a v4-mapped v6 address.
+// unspecified, unique-local, multicast, a reservedPrefixes range, or one of those inside a
+// v4-mapped v6 address.
 func ForbiddenAddress(a netip.Addr) bool {
 	a = a.Unmap()
-	return !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
-		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() || (a.Is4() && a.As4()[0] == 0)
+	if !a.IsValid() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
+		a.IsUnspecified() || a.IsMulticast() || a.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, p := range reservedPrefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 var forbiddenHosts = map[string]bool{"metadata.google.internal": true, "metadata.google.internal.": true, "localhost": true}
