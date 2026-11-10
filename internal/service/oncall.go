@@ -903,15 +903,16 @@ func deliveryRecord(ctx context.Context, s store.Store, integration store.Integr
 	return id, nil, nil
 }
 
-// ingest files one verified, normalized event against integration under deliveryID, in one
-// transaction under the project lock (two firings of one fingerprint must not both find no open
-// ticket and both file one): a delivery id already recorded answers its recorded outcome and writes
-// nothing, not even a change row (it is looked up before the charge and the transaction, and again
-// inside it for one recorded while this one waited for the lock); otherwise the fingerprint's alert
-// state names the open ticket (one not DONE), oncall.Decide picks the action (incident.ts:167-182),
-// the action's writes land, and the delivery row and the incident.delivery event record it. Before
-// the transaction a new delivery is charged to the integration's rate budget, which POST /hooks,
-// send_test_event and replay_delivery share: over it is RATE_LIMITED and nothing is written. A created incident lands TODO on the integration's column
+// ingest files one verified, normalized event against integration under deliveryID (hashed: the
+// body's hash, deliveryRecord), in one transaction under the project lock (two firings of one
+// fingerprint must not both find no open ticket and both file one): a delivery id already recorded
+// answers its recorded outcome and writes nothing, not even a change row (it is looked up before the
+// charge and the transaction, and again inside it for one recorded while this one waited for the
+// lock); otherwise the fingerprint's alert state names the open ticket (one not DONE), oncall.Decide
+// picks the action (incident.ts:167-182), the action's writes land, and the delivery row and the
+// incident.delivery event record it. Before the transaction a new delivery is charged to the
+// integration's rate budget, which POST /hooks, send_test_event and replay_delivery share: over it
+// is RATE_LIMITED and nothing is written. A created incident lands TODO on the integration's column
 // (or the board's first TODO column), labelled incident (and test for a test event), and rings its
 // routed assignee assigned, else the project broadcast; an append, annotation or close rings nobody.
 // A close deletes an untouched ticket through delete_task's cascade (its delivery rows keep the
@@ -1054,8 +1055,8 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 			if err := c.resolveEvent(t, integration, ev, nil, store.ResultClosed); err != nil {
 				return Ingested{}, err
 			}
-			id := open.ID
-			out.Result, out.TaskID = store.ResultClosed, &id
+			closed := open.ID
+			out.Result, out.TaskID = store.ResultClosed, &closed
 		}
 		// A resolve of an alert whose ticket is done or gone is the alert's latest delivery too.
 		if state.TaskID != "" && ev.Status == oncall.StatusResolved {
