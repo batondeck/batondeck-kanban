@@ -20,7 +20,7 @@ type AuditDescriptor struct {
 // grants: a tool absent here is not audited, because auditing every call would bury the actions that
 // change who may do what, or destroy data. Conductor's rows for the tools in scope, with
 // update_settings no longer recording transitionTable (the table is fixed), set_transitions gone with
-// its tool, and delete_task added.
+// its tool, and delete_task and delete_chronicle_page added.
 var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	// Project membership and privilege.
 	"add_member": func(a map[string]any) AuditDescriptor {
@@ -39,6 +39,10 @@ var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	},
 	"delete_task": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "task.deleted", Subject: str(a, "taskId"), Data: map[string]any{}}
+	},
+	// A deleted Chronicle page keeps no version, so this row is the trace; the row carries the project.
+	"delete_chronicle_page": func(a map[string]any) AuditDescriptor {
+		return AuditDescriptor{Action: "chronicle.page_deleted", Subject: str(a, "pageId"), Data: map[string]any{}}
 	},
 
 	// Configuration that changes who can do what. color is cosmetic and not recorded.

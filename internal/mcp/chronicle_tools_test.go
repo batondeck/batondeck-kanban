@@ -16,6 +16,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/mcp/tools"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // The Chronicle tools on the real stack, every selected engine (BATONDECK_TEST_ENGINE): each tool's
@@ -341,6 +342,21 @@ func TestChronicleDeletePage(t *testing.T) {
 			t.Fatalf("after the delete: %d versions, version %v, %d bodies of the page, %d of the kept page", len(hist.Versions), ver.Version, bodies(page), bodies(kept))
 		}
 		t.Logf("%s: %d bodies before the delete, 0 after; 0 versions; the other page keeps %d", r.engine, before, bodies(kept))
+		// No version is left to say the page existed, so the audit log does: who, which page, which
+		// project. The STALE refusal above wrote none.
+		audit, ok := r.store.(interface {
+			ListAuditLog(ctx context.Context, f store.AuditFilter, cursor string, limit int) (store.AuditPage, error)
+		})
+		if !ok {
+			t.Fatalf("%T reads no audit log", r.store)
+		}
+		rows, err := audit.ListAuditLog(context.Background(), store.AuditFilter{Action: "chronicle.page_deleted"}, "", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows.Rows) != 1 || rows.Rows[0].Actor != "u-ada" || rows.Rows[0].Subject != page || rows.Rows[0].ProjectID != r.p || rows.Rows[0].Result != store.AuditOK {
+			t.Fatalf("audit rows for the delete: %+v, want one chronicle.page_deleted by u-ada on %s in %s", rows.Rows, page, r.p)
+		}
 		t.Run("NOT_FOUND: a page already deleted", func(t *testing.T) {
 			r.wantCode(r.ada, "delete_chronicle_page", map[string]any{"projectId": r.p, "pageId": page}, "NOT_FOUND")
 		})
