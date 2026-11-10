@@ -5,8 +5,9 @@
 //   node tools/kit.mjs fetch <x.y.z>   download the release with gh, check it against its manifest, vendor it
 //   node tools/kit.mjs check           THE GATE, hermetic: the vendored bytes, the lock, the manifest
 //
-// This app takes the brand files and nothing else: the fonts, the stylesheet, analytics.js, mixpanel
-// and waitlist.js are not used here.
+// This app takes its own brand files and nothing else: the fonts, the stylesheet, analytics.js,
+// mixpanel and waitlist.js are not used here, and neither are the marks of the kit's other products
+// (kit/brand/hdtp-*), which a BatonDeck binary has no page for.
 //
 //   kit/brand/*      ->  public/brand/        served at /brand/
 //   manifest.json    ->  kit/manifest.json    the release's own, verbatim
@@ -27,7 +28,10 @@ const LOCK = join(APP, 'kit/kit.lock')
 const MANIFEST = join(APP, 'kit/manifest.json')
 
 const sha256 = (b) => createHash('sha256').update(b).digest('hex')
+/** The kit's other products' marks: under a taken path, and not taken. */
+const NOT_TAKEN = /^kit\/brand\/hdtp-/
 const destOf = (path) => {
+  if (NOT_TAKEN.test(path)) return null
   for (const [from, to] of TAKE) if (path === from || (from.endsWith('/') && path.startsWith(from))) return to + path.slice(from.length)
   return null
 }
@@ -86,7 +90,7 @@ export function lockProblems(app = APP) {
   const manifest = JSON.parse(rawManifest)
   if (sha256(rawManifest) !== lock.manifest_sha256) out.push('kit/manifest.json is not the manifest the lock pinned')
   if (manifest.version !== lock.version) out.push(`the manifest is ${manifest.version}, the lock ${lock.version}`)
-  // Every release file under a taken path is vendored — the whole brand set, not a pick of it.
+  // Every release file destOf takes is vendored: the whole of this app's brand set, not a pick of it.
   const want = Object.keys(manifest.files).filter((p) => destOf(p)).sort()
   const got = Object.keys(lock.files).sort()
   if (JSON.stringify(want) !== JSON.stringify(got)) out.push(`the lock lists ${got.length} files, the release has ${want.length} under the taken paths`)

@@ -5,10 +5,4 @@ web/public/brand/apple-touch-icon.png
 web/public/brand/batondeck-inline-dark.svg
 web/public/brand/batondeck-inline.svg
 web/public/brand/favicon.svg
-web/public/brand/hdtp-gateway-inline-dark.svg
-web/public/brand/hdtp-gateway-inline.svg
-web/public/brand/hdtp-identity-inline-dark.svg
-web/public/brand/hdtp-identity-inline.svg
-web/public/brand/hdtp-inline-dark.svg
-web/public/brand/hdtp-inline.svg
 web/public/brand/mark.svg
