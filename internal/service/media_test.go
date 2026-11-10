@@ -350,6 +350,51 @@ func TestDeleteTaskCollectsItsBlobsOverTheEngines(t *testing.T) {
 	})
 }
 
+// A Chronicle record that embeds an attachment holds its blob: deleting the source task (or a losing
+// run) frees the attachment, not the file the record shows. Deleting the record lets the next GC
+// collect it.
+func TestAChronicleRecordHoldsItsEmbeddedBlobOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		// A page body is capped by blob.max_bytes too: room for one block with a URL.
+		if err := m.c.Close(m.ctx); err != nil {
+			t.Fatal(err)
+		}
+		m.c = New(m.st, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1,
+			Media: MediaOptions{Files: m.files, BaseURL: "http://bk.test", MaxBytes: 4096, Signer: m.signer}})
+		task := m.newTask(t)
+		body := []byte("diagram")
+		if err := m.upload(t, m.attach(t, task.ID, int64(len(body))).UploadURL, body); err != nil {
+			t.Fatal(err)
+		}
+		atts := m.list(t, task.ID)
+		if len(atts) != 1 || atts[0].DownloadURL == nil {
+			t.Fatalf("attachments %+v, want one with a download URL", atts)
+		}
+		page, err := m.c.Chronicle().CreatePage(m.ctx, m.alice, CreateChroniclePageReq{ProjectID: m.project, Kind: "adr", Slug: "adr/0001-shot", Title: "Shot",
+			Blocks: []ChronicleBlockInput{{ID: "a-1", Text: "![d](" + *atts[0].DownloadURL + ")"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.c.Tasks().Delete(m.ctx, m.alice, DeleteTaskReq{ProjectID: m.project, TaskID: task.ID, Version: m.get(t, task.ID).Version}); err != nil {
+			t.Fatal(err)
+		}
+		sha := hashOf(body)
+		if _, err := m.st.GetBlob(m.ctx, sha); err != nil || !m.onDisk(sha) {
+			t.Fatalf("after delete_task the record's blob: row %v, on disk %v; want both kept", err, m.onDisk(sha))
+		}
+		if left, err := m.st.ListUnreferencedBlobs(m.ctx, time.Now().Add(time.Hour).UnixMilli(), 10); err != nil || len(left) != 0 {
+			t.Fatalf("unreferenced blobs %+v %v, want none: retention would collect the record's image", left, err)
+		}
+		if _, err := m.c.Chronicle().DeletePage(m.ctx, m.alice, DeleteChroniclePageReq{ProjectID: m.project, PageID: page.PageID}); err != nil {
+			t.Fatal(err)
+		}
+		m.c.CollectBlobs(m.ctx, []string{sha})
+		if _, err := m.st.GetBlob(m.ctx, sha); err == nil || m.onDisk(sha) {
+			t.Fatal("the blob outlived the last record that named it")
+		}
+	})
+}
+
 // Two uploads of one attachment at once, different bytes: one wins, the other is INVALID_TRANSITION,
 // and the loser's file is not left on disk.
 func TestConcurrentUploadsOneWinnerOverTheEngines(t *testing.T) {

@@ -139,6 +139,12 @@ type ChronicleBlob struct {
 	CreatedAt int64
 }
 
+type ChronicleBlobRef struct {
+	ProjectID  string
+	ObjectKey  string
+	BlobSha256 string
+}
+
 type ChroniclePage struct {
 	ProjectID         string
 	ID                string

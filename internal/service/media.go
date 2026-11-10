@@ -272,7 +272,7 @@ func (c *Core) unlinkUnreferenced(ctx context.Context, sha string) {
 
 // CollectBlobs is the blob GC (Options.BlobGC's default, and retention's for the unreferenced
 // blobs it lists): for each hash, under its lock, the row is deleted
-// unless an attachment or memory entry still names it, and then the file. A hash still referenced
+// unless an attachment, a memory entry or a Chronicle body still names it, and then the file. A hash still referenced
 // keeps both; one with no row left loses its file.
 func (c *Core) CollectBlobs(ctx context.Context, sha256s []string) {
 	for _, sha := range sha256s {

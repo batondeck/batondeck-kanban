@@ -22,6 +22,11 @@ func (st *state) blobReferenced(sha string) bool {
 			return true
 		}
 	}
+	for _, body := range st.chronicleObjects {
+		if slices.Contains(store.ChronicleBlobRefs(body), sha) {
+			return true
+		}
+	}
 	return false
 }
 

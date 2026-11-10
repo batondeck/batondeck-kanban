@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 
@@ -32,6 +33,7 @@ type chronicleQueries interface {
 	GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChronicleVersionParams) (sqlitedb.ChronicleVersion, error)
 	ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error)
 	InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error
+	InsertChronicleBlobRef(ctx context.Context, arg sqlitedb.InsertChronicleBlobRefParams) error
 	GetChronicleBlob(ctx context.Context, arg sqlitedb.GetChronicleBlobParams) (sqlitedb.ChronicleBlob, error)
 	DeleteChronicleBlobsByPage(ctx context.Context, arg sqlitedb.DeleteChronicleBlobsByPageParams) (int64, error)
 	CountChronicleVersionsNaming(ctx context.Context, arg sqlitedb.CountChronicleVersionsNamingParams) (int64, error)
@@ -242,6 +244,23 @@ func lostChronicleHead(ctx context.Context, q sqlQueries, projectID, pageID, exp
 	return domain.ChronicleStale(expected, p.HeadVersionID)
 }
 
+// chronicleBlobRefRE is a signed blob download URL's blob id, in the shape blob.Signer.URL writes
+// (`/blobs/<sha256>?exp=`), as it appears in a stored body (the JSON leaves `/` and `?` as they are).
+var chronicleBlobRefRE = regexp.MustCompile(`/blobs/([0-9a-f]{64})\?exp=`)
+
+// ChronicleBlobRefs is the blob ids a stored Chronicle body embeds a download URL of, each once, in
+// order of first appearance: the blobs that body holds against the blob GC (P-244: a read signs the
+// stored form afresh, so the file must outlive the attachment it came from).
+func ChronicleBlobRefs(body []byte) []string {
+	var out []string
+	for _, m := range chronicleBlobRefRE.FindAllSubmatch(body, -1) {
+		if id := string(m[1]); !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func putChronicleBody(ctx context.Context, q sqlQueries, projectID, key string, body []byte) error {
 	err := q.InsertChronicleBlob(ctx, sqlitedb.InsertChronicleBlobParams{ProjectID: projectID, ObjectKey: key, Body: body, CreatedAt: nowMillis()})
 	if isForeignKeyViolation(err) {
@@ -249,6 +268,12 @@ func putChronicleBody(ctx context.Context, q sqlQueries, projectID, key string, 
 	}
 	if err != nil {
 		return fmt.Errorf("store: put chronicle body: %w", err)
+	}
+	// The blobs it embeds, which the GC keeps while the body stands (the rows go with it).
+	for _, sha := range ChronicleBlobRefs(body) {
+		if err := q.InsertChronicleBlobRef(ctx, sqlitedb.InsertChronicleBlobRefParams{ProjectID: projectID, ObjectKey: key, BlobSha256: sha}); err != nil {
+			return fmt.Errorf("store: chronicle blob ref: %w", err)
+		}
 	}
 	return nil
 }
@@ -740,6 +765,10 @@ func (p pgQueries) GetChronicleVersion(ctx context.Context, arg sqlitedb.GetChro
 func (p pgQueries) ListChronicleVersions(ctx context.Context, arg sqlitedb.ListChronicleVersionsParams) ([]sqlitedb.ChronicleVersion, error) {
 	rows, err := p.q.ListChronicleVersions(ctx, pgdb.ListChronicleVersionsParams(arg))
 	return convert(rows, func(r pgdb.ChronicleVersion) sqlitedb.ChronicleVersion { return sqlitedb.ChronicleVersion(r) }), err
+}
+
+func (p pgQueries) InsertChronicleBlobRef(ctx context.Context, arg sqlitedb.InsertChronicleBlobRefParams) error {
+	return p.q.InsertChronicleBlobRef(ctx, pgdb.InsertChronicleBlobRefParams(arg))
 }
 
 func (p pgQueries) InsertChronicleBlob(ctx context.Context, arg sqlitedb.InsertChronicleBlobParams) error {
