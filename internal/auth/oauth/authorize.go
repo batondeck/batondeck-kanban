@@ -87,6 +87,11 @@ func (s *Server) parseAuthorize(r *http.Request, v url.Values) (authRequest, *re
 	if !slices.Contains(c.RedirectURIs, redirectURI) {
 		return authRequest{}, &refusal{direct: true, code: "invalid_request", desc: "redirect_uri is not registered for this client"}
 	}
+	// Judged again as registration judges it: a registration made before a rule (userinfo) was
+	// added is still in the store.
+	if why := badRedirectURI(redirectURI); why != "" {
+		return authRequest{}, &refusal{direct: true, code: "invalid_request", desc: why + "; register again"}
+	}
 	state := v.Get("state")
 	fail := func(code, desc string) (authRequest, *refusal) {
 		return authRequest{}, &refusal{code: code, desc: desc, redirectURI: redirectURI, state: state}

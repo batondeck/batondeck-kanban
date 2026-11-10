@@ -120,8 +120,11 @@ func checkRegistration(req registration) (code, desc string) {
 			return "invalid_client_metadata", "response_types may hold only code"
 		}
 	}
-	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, unicode.IsControl) >= 0 {
-		return "invalid_client_metadata", fmt.Sprintf("client_name is at most %d characters, none of them a control character", maxClientNameLen)
+	// A format character (unicode.Cf: a bidi override, a zero-width joiner) is refused with the
+	// control characters: the name is shown on the sign-in and consent pages, where one can make it
+	// read as another.
+	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
+		return "invalid_client_metadata", fmt.Sprintf("client_name is at most %d characters, none of them a control or format character", maxClientNameLen)
 	}
 	if len(req.Scope) > maxScopeLen {
 		return "invalid_client_metadata", fmt.Sprintf("scope is at most %d characters", maxScopeLen)
@@ -130,7 +133,7 @@ func checkRegistration(req registration) (code, desc string) {
 }
 
 // badRedirectURI says why u cannot be a redirect URI, "" when it can: an absolute URI with no
-// fragment (RFC 6749 §3.1.2), https, or http only to a loopback host (RFC 8252 §7.3), or an app's
+// fragment (RFC 6749 §3.1.2) and no userinfo, https, or http only to a loopback host (RFC 8252 §7.3), or an app's
 // private-use scheme (§7.1); never a scheme that runs or reads in the browser.
 func badRedirectURI(u string) string {
 	if len(u) > maxRedirectURILen {
@@ -142,6 +145,11 @@ func badRedirectURI(u string) string {
 	}
 	if p.Fragment != "" || strings.Contains(u, "#") {
 		return "a redirect URI must not carry a fragment"
+	}
+	if p.User != nil {
+		// "https://claude.ai@evil.example/cb" goes to evil.example but reads as claude.ai on the
+		// consent page's "Returns to".
+		return "a redirect URI must not carry a user name or password"
 	}
 	switch strings.ToLower(p.Scheme) {
 	case "https":

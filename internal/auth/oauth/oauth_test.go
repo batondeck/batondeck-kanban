@@ -102,7 +102,9 @@ func TestRegisterLimitIsPerAddress(t *testing.T) {
 
 func TestRegisterRefusesUnsafeRedirectURIs(t *testing.T) {
 	f := newFixture(t)
-	for _, u := range []string{"http://evil.example/cb", "https://app.example/cb#frag", "javascript:alert(1)", "/relative", "data:text/html,x"} {
+	for _, u := range []string{"http://evil.example/cb", "https://app.example/cb#frag", "javascript:alert(1)", "/relative", "data:text/html,x",
+		// userinfo: the consent page's "Returns to" would read as claude.ai while the code goes to evil.example
+		"https://claude.ai@evil.example/api/mcp/auth_callback", "http://claude.ai:x@127.0.0.1:9/cb"} {
 		resp, err := http.Post(f.srv.URL+"/register", "application/json", strings.NewReader(`{"redirect_uris":["`+u+`"]}`))
 		if err != nil {
 			t.Fatal(err)
@@ -730,5 +732,51 @@ func TestSignInPageSaysWhyItIsBack(t *testing.T) {
 	}
 	if p := page(""); strings.Contains(p, limited) || strings.Contains(p, mismatch) {
 		t.Fatalf("a first visit: %s", p)
+	}
+}
+
+// A client_name is shown on the sign-in and consent pages: one holding a Unicode format character
+// (a bidi override such as U+202E, a zero-width joiner) can make the page read another name, so it
+// is refused as a control character is.
+func TestRegisterRefusesFormatCharactersInClientName(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"Claude\u202egnp.exe", "Cla\u200bude", "tab\there"} {
+		resp, err := http.Post(f.srv.URL+"/register", "application/json",
+			strings.NewReader(`{"client_name":"`+name+`","redirect_uris":["`+callbackURI+`"]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := decode(t, resp); resp.StatusCode != http.StatusBadRequest || m["error"] != "invalid_client_metadata" {
+			t.Fatalf("client_name %q: %d %v, want 400 invalid_client_metadata", name, resp.StatusCode, m)
+		}
+	}
+	resp, err := http.Post(f.srv.URL+"/register", "application/json",
+		strings.NewReader(`{"client_name":"Claude Desktop – Mac","redirect_uris":["`+callbackURI+`"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := decode(t, resp); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a plain client_name: %d %v, want 201", resp.StatusCode, m)
+	}
+}
+
+// A registration made before the userinfo rule (still in the store) is refused at /authorize too,
+// directly: no page names its redirect URI and nothing is sent there.
+func TestAuthorizeRefusesAStoredRedirectURIWithUserinfo(t *testing.T) {
+	f := newFixture(t)
+	const spoof = "https://claude.ai@evil.example/cb"
+	if err := f.st.CreateOAuthClient(context.Background(), store.OAuthClient{ClientID: "bdc_old", ClientName: "Claude",
+		RedirectURIs: []string{spoof}, CreatedAt: f.clk.now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	b := f.browser(t)
+	f.signIn(t, b)
+	resp, err := b.Get(f.srv.URL + "/authorize?" + authQuery("bdc_old", spoof, challenge, nil).Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page := body(t, resp); resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Location") != "" || strings.Contains(page, "Allow") {
+		t.Fatalf("authorize with a stored userinfo redirect URI: %d %q %s, want a direct 400", resp.StatusCode, resp.Header.Get("Location"), page)
 	}
 }
