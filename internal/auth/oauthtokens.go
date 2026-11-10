@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -82,7 +83,7 @@ func (s *Service) resolveOAuth(ctx context.Context, bearer string) (domain.Calle
 const maxClientNames = 1024
 
 // oauthClientName is the agent an OAuth client's registered client_name names (audit B1), through
-// domain.AgentLabel. A client's name never changes after registration, so it is read once per
+// domain.AgentLabel; a name starting "id:" names none, as a token label of that shape does. A client's name never changes after registration, so it is read once per
 // client and kept: the per-request resolution, and the wake Sweep's 3 statements per entry, do not
 // grow. A client that is gone names no agent (its tokens went with it).
 func (s *Service) oauthClientName(ctx context.Context, clientID string) (string, error) {
@@ -100,6 +101,9 @@ func (s *Service) oauthClientName(ctx context.Context, clientID string) (string,
 		return "", err
 	}
 	name = domain.AgentLabel(cl.ClientName)
+	if strings.HasPrefix(name, "id:") {
+		name = "" // "id:<identity>" is the id AgentID derives, never a name a client registers
+	}
 	s.mu.Lock()
 	if s.clientNames == nil || len(s.clientNames) >= maxClientNames {
 		s.clientNames = map[string]string{}

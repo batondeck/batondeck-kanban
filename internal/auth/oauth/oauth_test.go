@@ -258,7 +258,9 @@ func TestConsentRowNamesTheRedirectURI(t *testing.T) {
 
 func TestRegisterRefusesUnsafeRedirectURIs(t *testing.T) {
 	f := newFixture(t)
-	for _, u := range []string{"http://evil.example/cb", "https://app.example/cb#frag", "javascript:alert(1)", "/relative", "data:text/html,x"} {
+	for _, u := range []string{"http://evil.example/cb", "https://app.example/cb#frag", "javascript:alert(1)", "/relative", "data:text/html,x",
+		// userinfo: the consent page's "Returns to" would read as claude.ai while the code goes to evil.example
+		"https://claude.ai@evil.example/api/mcp/auth_callback", "http://claude.ai:x@127.0.0.1:9/cb"} {
 		resp, err := http.Post(f.srv.URL+"/register", "application/json", strings.NewReader(`{"redirect_uris":["`+u+`"]}`))
 		if err != nil {
 			t.Fatal(err)
@@ -860,4 +862,129 @@ func TestSignInAndConsentPagesCannotBeFramed(t *testing.T) {
 	check("Sign in to BatonDeck")
 	f.signIn(t, b)
 	check("Allow test client?")
+}
+
+// The sign-in page says why it is back. login=failed is a login and password that did not
+// match; login=limited is the sign-in limit, where no password was checked, so it says to wait
+// rather than that the password was wrong.
+func TestSignInPageSaysWhyItIsBack(t *testing.T) {
+	f := newFixture(t)
+	clientID := f.register(t, callbackURI)
+	_, challenge := pkce(t)
+	page := func(login string) string {
+		t.Helper()
+		resp, err := http.Get(f.srv.URL + "/authorize?" + authQuery(clientID, callbackURI, challenge, map[string]string{"login": login}).Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body(t, resp)
+	}
+	const mismatch, limited = "did not match an account", "Too many sign-in attempts"
+	if p := page("failed"); !strings.Contains(p, mismatch) || strings.Contains(p, limited) {
+		t.Fatalf("login=failed page: %s", p)
+	}
+	if p := page("limited"); !strings.Contains(p, limited) || strings.Contains(p, mismatch) {
+		t.Fatalf("login=limited page: %s", p)
+	}
+	if p := page(""); strings.Contains(p, limited) || strings.Contains(p, mismatch) {
+		t.Fatalf("a first visit: %s", p)
+	}
+}
+
+// A client_name is shown on the sign-in and consent pages: one holding a Unicode format character
+// (a bidi override such as U+202E, a zero-width joiner) can make the page read another name, so it
+// is refused as a control character is.
+func TestRegisterRefusesFormatCharactersInClientName(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"Claude\u202egnp.exe", "Cla\u200bude", "tab\there"} {
+		resp, err := http.Post(f.srv.URL+"/register", "application/json",
+			strings.NewReader(`{"client_name":"`+name+`","redirect_uris":["`+callbackURI+`"]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := decode(t, resp); resp.StatusCode != http.StatusBadRequest || m["error"] != "invalid_client_metadata" {
+			t.Fatalf("client_name %q: %d %v, want 400 invalid_client_metadata", name, resp.StatusCode, m)
+		}
+	}
+	resp, err := http.Post(f.srv.URL+"/register", "application/json",
+		strings.NewReader(`{"client_name":"Claude Desktop – Mac","redirect_uris":["`+callbackURI+`"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := decode(t, resp); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a plain client_name: %d %v, want 201", resp.StatusCode, m)
+	}
+}
+
+// A registration made before the userinfo rule (still in the store) is refused at /authorize too,
+// directly: no page names its redirect URI and nothing is sent there.
+func TestAuthorizeRefusesAStoredRedirectURIWithUserinfo(t *testing.T) {
+	f := newFixture(t)
+	const spoof = "https://claude.ai@evil.example/cb"
+	if err := f.st.CreateOAuthClient(context.Background(), store.OAuthClient{ClientID: "bdc_old", ClientName: "Claude",
+		RedirectURIs: []string{spoof}, CreatedAt: f.clk.now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	b := f.browser(t)
+	f.signIn(t, b)
+	resp, err := b.Get(f.srv.URL + "/authorize?" + authQuery("bdc_old", spoof, challenge, nil).Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page := body(t, resp); resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Location") != "" || strings.Contains(page, "Allow") {
+		t.Fatalf("authorize with a stored userinfo redirect URI: %d %q %s, want a direct 400", resp.StatusCode, resp.Header.Get("Location"), page)
+	}
+}
+
+// A client_name stored before /register refused format characters is shown without them: the
+// sign-in and consent pages never render a bidi override or a zero-width character that could make
+// the name read as another.
+func TestAuthorizeShowsAStoredClientNameWithoutFormatCharacters(t *testing.T) {
+	f := newFixture(t)
+	const redirect = "https://claude.ai/api/mcp/auth_callback"
+	if err := f.st.CreateOAuthClient(context.Background(), store.OAuthClient{ClientID: "bdc_old", ClientName: "Claude\u202egnp.exe\u200b",
+		RedirectURIs: []string{redirect}, CreatedAt: f.clk.now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	b := f.browser(t)
+	u := f.srv.URL + "/authorize?" + authQuery("bdc_old", redirect, challenge, nil).Encode()
+	for _, step := range []string{"sign-in", "consent"} {
+		if step == "consent" {
+			f.signIn(t, b)
+		}
+		resp, err := b.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := body(t, resp)
+		if resp.StatusCode != http.StatusOK || strings.ContainsAny(page, "\u202e\u200b") || !strings.Contains(page, "Claudegnp.exe") {
+			t.Fatalf("%s page for a stored client_name with format characters: %d, want 200 naming %q with none of them:\n%s", step, resp.StatusCode, "Claudegnp.exe", page)
+		}
+	}
+}
+
+// A disabled user's grant does not refresh: the refresh token is refused (invalid_grant) and kept,
+// so the grant cannot slide its 14 days forward while the account is disabled, and a code issued
+// before the disable is not exchanged. Once the user is enabled again the unexpired refresh token
+// works, as their API tokens resolve again (user enable).
+func TestADisabledUsersGrantDoesNotRefresh(t *testing.T) {
+	f := newFixture(t)
+	clientID, code, verifier := f.authorize(t, "worker", nil)
+	_, first := f.exchange(t, clientID, code, verifier)
+	laterClient, laterCode, laterVerifier := f.authorize(t, "worker", nil)
+	if _, err := f.svc.Accounts.Disable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	st, m := f.refreshCall(t, clientID, first["refresh_token"].(string))
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	st, m = f.exchange(t, laterClient, laterCode, laterVerifier)
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	if _, _, err := f.svc.Accounts.Enable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if st, m := f.refreshCall(t, clientID, first["refresh_token"].(string)); st != http.StatusOK {
+		t.Fatalf("the refresh once alice is enabled again: %d %v", st, m)
+	}
 }

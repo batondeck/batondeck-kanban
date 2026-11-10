@@ -114,27 +114,62 @@ func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.
 // leaseYields is the lease test of the routes that end or drop a lease without a lease id (P-399):
 // cancel_task, move_task, start_runs, and delete_task over every task it would delete. A lapsed
 // lease yields to anyone. A live one yields to its holder, the owning identity under the agent the
-// claim recorded (leaseAgent, P-320), and, at master, to the owning identity's caller that names no
+// claim recorded (ownedAgent: leaseAgent, P-320, where a name the caller's client chose is not a
+// token's label, P-277), and, at master, to the owning identity's caller that names no
 // agent: its browser's Status select is how a self-hoster frees a task its own agent is stuck on.
 // Another agent of that identity is another holder, as another identity is. The role clause is a
 // guard no caller reaches today: all four routes are master tier or refuse a non-holder below
 // master first; it is kept so a later caller below master is not handed another agent's lease.
-func leaseYields(t store.Task, caller domain.Caller, role domain.Role, now int64) bool {
+// st is the store it reads through (a transaction's own).
+func leaseYields(ctx context.Context, st store.Store, t store.Task, caller domain.Caller, role domain.Role, now int64) (bool, error) {
 	if !liveLease(t, now) {
-		return true
+		return true, nil
 	}
 	if t.Claim.Owner != caller.Identity {
-		return false
+		return false, nil
 	}
-	return leaseAgent(t.Claim, caller) || (caller.Agent == "" && domain.RoleMeetsTier(role, domain.TierMaster))
+	if caller.Agent == "" && domain.RoleMeetsTier(role, domain.TierMaster) {
+		return true, nil
+	}
+	return ownedAgent(ctx, st, t.Claim, caller, now)
+}
+
+// ownedAgent is leaseAgent with P-277's rule on labels: a claim's agent that a live API
+// token of the caller's identity carries as its label is that token's agent, so a caller whose
+// client registered (an OAuth client_name) or declared (clientInfo.name) the same name, and is not
+// that token (Caller.Labelled), does not hold the lease by it. One read of the identity's tokens,
+// made only when an unlabelled caller's name is the claim's agent; the lease-id outcomes do not
+// call it (the lease id is their guard), so their statement pins do not move.
+func ownedAgent(ctx context.Context, st store.Store, claim *store.TaskClaim, caller domain.Caller, now int64) (bool, error) {
+	if !leaseAgent(claim, caller) {
+		return false, nil
+	}
+	if claim.AgentID == nil || caller.Labelled {
+		return true, nil
+	}
+	tokens, err := st.ListTokens(ctx, caller.Identity)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tokens {
+		if t.IdentityID == caller.Identity && t.RevokedAt == 0 && t.ExpiresAt > now && domain.TokenAgent(t.Label) == *claim.AgentID {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // heldBy is whether t is IN_PROGRESS under a live lease of the caller that store.ClaimTask would
 // replace as the caller's own (the same identity under the same agent, claimInput's AgentID), on a
 // task it would still claim.
 func heldBy(t store.Task, caller domain.Caller, now int64) bool {
-	return t.Status == domain.InProgress && liveLease(t, now) && t.Claim.Owner == caller.Identity &&
-		sameAgentID(t.Claim.AgentID, callerAgent(caller)) && !t.Racing && len(t.BlockedBy) == 0
+	return t.Status == domain.InProgress && sameHolder(t, caller, now) && !t.Racing && len(t.BlockedBy) == 0
+}
+
+// sameHolder is store.ClaimTask's "mine" on a live lease: the caller's identity under the claim's
+// agent, by name (sameAgentID). Claim asks ownedAgent too before it acts on it.
+func sameHolder(t store.Task, caller domain.Caller, now int64) bool {
+	return liveLease(t, now) && t.Claim.Owner == caller.Identity && sameAgentID(t.Claim.AgentID, callerAgent(caller))
 }
 
 // sameAgentID is store's sameAgent: two agent handles, nil only equal to nil.
@@ -272,7 +307,9 @@ func replayedLease(task *Task, now time.Time) error {
 // and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
 // (G6): one agent in several sessions never mints a second lease that would silently end the
 // first. Another agent of the same identity (Caller.Agent, P-257) is another holder and is refused
-// CONFLICT_LOCKED, as conductor does for two distinct handles. Below master, a task assigned to
+// CONFLICT_LOCKED, as conductor does for two distinct handles, and so is a client that registered or
+// declared the label a live API token of its identity carries (ownedAgent, P-277): it is not that
+// token, so it is neither handed the token's lease nor lets ClaimTask replace it. Below master, a task assigned to
 // someone else is refused FORBIDDEN by claim_next's rule, ownAssignee (P-334, P-297; owner ruling
 // 2026-10-30): another account's id or login, another member's id, or another agent's label. An
 // unassigned task, the caller's own id or login, its own label on that label's token, and a string
@@ -304,6 +341,19 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 			if as := cur.Assignee; as != nil && *as != "" {
 				if err := l.ownAssignee(ctx, t.Tx, txMember(t.Tx), caller, a, req.ProjectID, *as); err != nil {
 					return ClaimTaskResp{}, err
+				}
+			}
+			if now := t.Now.UnixMilli(); sameHolder(cur, caller, now) {
+				// A live lease store.ClaimTask takes as the caller's own (the re-claim below hands
+				// back its leaseId, and ClaimTask would replace it) is the caller's only when the
+				// caller is the claim's agent by P-277's rule: a client named like a live token
+				// label of its identity is not that token. One read, for an unlabelled caller only.
+				owned, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+				if err != nil {
+					return ClaimTaskResp{}, err
+				}
+				if !owned {
+					return ClaimTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 				}
 			}
 			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
@@ -1542,7 +1592,18 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 	}, func(t *txn) (CancelTaskResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()
-		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity && leaseAgent(cur.Claim, caller)
+		// The holder's pass: its own live lease, under its own agent (ownedAgent), and, for a caller
+		// whose token carries a role (an OAuth grant), a role that could have claimed it: a viewer
+		// grant holds no lease, whatever its client is named.
+		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity &&
+			(caller.Role == "" || domain.RoleMeetsTier(a.Role, domain.TierWrite))
+		if owner {
+			own, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+			if err != nil {
+				return CancelTaskResp{}, err
+			}
+			owner = own
+		}
 		if !owner && !domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 			return CancelTaskResp{}, forbidden("cancel_task needs the master role or the task's live lease",
 				map[string]any{"tool": "cancel_task", "role": a.Role, "requiredRole": domain.TierMinRole(domain.TierMaster)})
@@ -1554,8 +1615,14 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 			return CancelTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if !owner && !leaseYields(cur, caller, a.Role, now) {
-			return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
+		if !owner {
+			yields, err := leaseYields(ctx, t.Tx, cur, caller, a.Role, now)
+			if err != nil {
+				return CancelTaskResp{}, err
+			}
+			if !yields {
+				return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
+			}
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 		if err != nil {

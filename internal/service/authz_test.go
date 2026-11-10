@@ -270,3 +270,44 @@ func TestAuthorizeGrantReaderErrorIsInternal(t *testing.T) {
 		t.Fatalf("the failure was cached: %v", err)
 	}
 }
+
+// The token role caps the tools that take no project too: a capped caller (an OAuth
+// grant) needs the write tier for every one of them that changes data, so a viewer grant, "read
+// boards and tasks", creates no project, writes no setting and disconnects no agent, while it
+// still reads. A worker grant, and an uncapped caller, pass as before.
+func TestAuthorizeTokenRoleCapsTheToolsWithNoProject(t *testing.T) {
+	f := newFixture(t, Options{})
+	viewer, worker, uncapped := f.alice, f.alice, f.alice
+	viewer.Role, worker.Role = string(domain.RoleViewer), string(domain.RoleWorker)
+	writes := 0
+	for _, tool := range domain.ClassifiedTools() {
+		p, _ := domain.ToolPosture(tool)
+		if p.TenantScoped || p.AdminOnly == domain.AdminOnlyOnly {
+			continue
+		}
+		call := func(c domain.Caller) error {
+			_, err := f.c.authorize(f.ctx, c, "", tool, domain.GrantSubject{}, false)
+			return err
+		}
+		if err := call(uncapped); err != nil {
+			t.Fatalf("%s uncapped: %v", tool, err)
+		}
+		if err := call(worker); err != nil {
+			t.Fatalf("%s under a worker grant: %v", tool, err)
+		}
+		if p.Effect == domain.EffectRead {
+			if err := call(viewer); err != nil {
+				t.Fatalf("%s (a read) under a viewer grant: %v", tool, err)
+			}
+			continue
+		}
+		writes++
+		e := wantCode(t, call(viewer), domain.CodeForbidden)
+		if e.Details["role"] != domain.RoleViewer || e.Details["requiredRole"] != domain.RoleWorker {
+			t.Fatalf("%s under a viewer grant: details %v", tool, e.Details)
+		}
+	}
+	if writes != 4 {
+		t.Fatalf("%d tools with no project change data, want 4 (create_project, disconnect_agent, mark_notifications_read, set_my_settings)", writes)
+	}
+}

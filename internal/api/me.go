@@ -109,6 +109,11 @@ func createCLIToken(o *Options, c domain.Caller, w http.ResponseWriter, r *http.
 	if in.TTLSeconds < 0 {
 		return domain.Validation("ttlSeconds cannot be negative", map[string]any{"field": "ttlSeconds"})
 	}
+	// Bounded before the conversion to a Duration, whose nanoseconds would wrap past ~292 years
+	// into a short (or the default) life instead of this refusal.
+	if in.TTLSeconds > int64(auth.MaxTokenTTL/time.Second) {
+		return domain.Validation("a token lives from 1 minute to 365 days", map[string]any{"field": "ttlSeconds"})
+	}
 	// Conductor's blast-radius cap (CLI_TOKEN_MAX_PER_IDENTITY, me.ts:247-252): a leaked token cannot
 	// mint an unbounded fan of tokens that outlive it. The host's `token create` is not capped.
 	infos, err := o.Tokens.List(r.Context(), c.Identity)

@@ -46,7 +46,9 @@ func TestMeAgentsAuditRoutesOnTheStack(t *testing.T) {
 			t.Fatalf("root reads alice's settings: %v", got)
 		}
 
-		for body, why := range map[string]string{`{"label":"x","scope":"all"}`: "an unknown key", `{"label":"x","ttlSeconds":-1}`: "a negative ttl", `{"label":""}`: "an empty label", `{"label":"x","ttlSeconds":10}`: "a ttl under a minute"} {
+		for body, why := range map[string]string{`{"label":"x","scope":"all"}`: "an unknown key", `{"label":"x","ttlSeconds":-1}`: "a negative ttl", `{"label":""}`: "an empty label", `{"label":"x","ttlSeconds":10}`: "a ttl under a minute",
+			`{"label":"x","ttlSeconds":31536001}`: "a ttl over a year", `{"label":"x","ttlSeconds":18446744134}`: "a ttl that wraps to a minute in nanoseconds",
+			`{"label":"x","ttlSeconds":36028797018963968}`: "a ttl that wraps to zero in nanoseconds"} {
 			if code, out := h.do("POST", "/api/me/cli-tokens", body, nil); code != http.StatusBadRequest || codeOf(t, out) != "VALIDATION" {
 				t.Fatalf("mint with %s: %d %s, want 400 VALIDATION", why, code, out)
 			}

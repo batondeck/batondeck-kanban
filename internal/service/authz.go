@@ -43,7 +43,8 @@ func checkGrant(g domain.CapabilityGrant, s domain.GrantSubject) error {
 
 // authorize is the one membership, role-tier and capability-grant check (ADR-0003). Its order:
 // the tool's posture (an unclassified tool is FORBIDDEN, so a new tool fails closed); a workspace
-// admin flag where the posture is AdminOnly "only"; for a tenant-scoped tool, membership of
+// admin flag where the posture is AdminOnly "only"; for a tool that is not tenant-scoped and changes
+// data, the write tier against the caller's token role when it carries one; for a tenant-scoped tool, membership of
 // projectID (a missing project or membership is FORBIDDEN, never NOT_FOUND, so a project's
 // existence does not leak), the tier against the member's role capped by the caller's token role,
 // and the grant via domain.CheckGrant unless the tool is grant-exempt. Membership and grant are
@@ -59,6 +60,12 @@ func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, t
 		return access{}, forbidden("Workspace admin required", map[string]any{"tool": tool, "requiredCapability": "workspace-admin"})
 	}
 	if !p.TenantScoped {
+		// No project role applies, but the token's role still caps the caller: below the write
+		// tier (a viewer grant, "read boards and tasks") a tool that changes data is refused.
+		if caller.Role != "" && p.Effect != domain.EffectRead && !domain.RoleMeetsTier(domain.Role(caller.Role), domain.TierWrite) {
+			return access{}, forbidden("Role "+caller.Role+" cannot call "+tool,
+				map[string]any{"tool": tool, "role": domain.Role(caller.Role), "requiredRole": domain.TierMinRole(domain.TierWrite)})
+		}
 		return access{}, nil
 	}
 	if projectID == "" {
