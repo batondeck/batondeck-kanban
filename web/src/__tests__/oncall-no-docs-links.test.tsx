@@ -3,9 +3,10 @@
  *
  * `docsHref` built `/docs/<page>.html`, a path copied from the hosted product, where a docs site was
  * served there. This binary serves no `/docs/` route: the SPA catch-all answers the shell, so the
- * "Read the guide" and "Wiring guide" buttons were dead. The repository ships no on-call guide, so
- * the buttons were removed rather than re-pointed. Each case first finds the panel the link sat in,
- * so a zero count cannot come from a screen that never rendered.
+ * "Read the guide" and "Wiring guide" buttons were dead, so they were removed. The one guide the
+ * setup links now is the repository's docs/oncall.md, on GitHub, from the endpoint panel
+ * (oncall-endpoint-signing.test.tsx). Each case first finds the panel the link sat in, so a zero
+ * count cannot come from a screen that never rendered.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

@@ -831,10 +831,21 @@ export function OncallSetup({
                   </Cluster>
                   {rotating && active.auth.externallyIssued && (
                     <Stack gap={4}>
+                      {/* Only PagerDuty issues its own secret; any other source given one at setup
+                          signs the v0 form with whatever secret it holds, so the operator supplied it. */}
                       <Note>
-                        This source issued its own signing secret. Rotate it in the source&apos;s own
-                        console first, then paste the NEW value here — BatonDeck cannot mint one it
-                        would ever send.
+                        {active.source === 'pagerduty' ? (
+                          <>
+                            PagerDuty issued this integration&apos;s signing secret. Rotate it in
+                            PagerDuty first, then paste the NEW value here — BatonDeck cannot mint one
+                            it would ever send.
+                          </>
+                        ) : (
+                          <>
+                            You supplied this integration&apos;s signing secret. Paste the new one here,
+                            then give it to the sender; the previous one keeps verifying for 24 hours.
+                          </>
+                        )}
                       </Note>
                       <Cluster gap={8} wrap>
                         <input
