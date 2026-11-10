@@ -36,7 +36,7 @@ func TestAppCSPHashesTheInlineScripts(t *testing.T) {
 }
 
 // TestAppCSPNamesNoThirdPartyHost: the SPA bundles its fonts and its link cards ask no favicon
-// service (web/src/settings.ts linkFavicons is off), so every source is this origin, a hash, a
+// service (web/src/AppLink.tsx has no such lookup), so every source is this origin, a hash, a
 // keyword or data:. A host here would let a page tell a third party what a viewer is looking at.
 func TestAppCSPNamesNoThirdPartyHost(t *testing.T) {
 	for _, directive := range strings.Split(AppCSP, ";") {

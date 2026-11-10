@@ -19,12 +19,6 @@ export interface UiSettings {
   presenceOfflineAfterMs: number;
   /** "Who's around now" window for presence lists/pickers. */
   presenceWindowMs: number;
-  /**
-   * Fetch link-card icons from Google's favicon service. OFF: on, every viewer's browser sends each
-   * linked hostname (an internal CI or wiki host included) to Google, and nothing in this server turns
-   * it on or off. Off is a generic icon and no external request; the AppCSP admits no such host.
-   */
-  linkFavicons: boolean;
 }
 
 export const UI_DEFAULTS: UiSettings = {
@@ -35,7 +29,6 @@ export const UI_DEFAULTS: UiSettings = {
   sessionsLimit: 100,
   presenceOfflineAfterMs: 75000,
   presenceWindowMs: 600000,
-  linkFavicons: false,
 };
 
 let current: UiSettings = UI_DEFAULTS;

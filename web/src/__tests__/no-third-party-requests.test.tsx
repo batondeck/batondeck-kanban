@@ -12,7 +12,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import indexHtml from '../../index.html?raw';
 import { render, cleanup } from '@testing-library/react';
 import { AppLinkCard } from '../AppLink.js';
-import { UI_DEFAULTS, hydrateUiSettings } from '../settings.js';
+import { hydrateUiSettings, type UiSettings } from '../settings.js';
 
 afterEach(() => {
   hydrateUiSettings(undefined);
@@ -28,8 +28,14 @@ describe('link cards', () => {
     expect(external, 'the card asked a third party about the linked host').toEqual([]);
   });
 
-  it('the favicon lookup is off by default', () => {
-    expect(UI_DEFAULTS.linkFavicons).toBe(false);
+  it('no session override can bring the favicon lookup back', () => {
+    // The shape auth.tsx hands over from /api/session. The card had a Google favicon branch behind a
+    // `linkFavicons` setting; any later override that set it would have restored the request.
+    const fromServer: Record<string, number | boolean> = { linkFavicons: true };
+    hydrateUiSettings(fromServer as Partial<UiSettings>);
+    const { container } = render(<AppLinkCard url="https://wiki.internal-corp.example/page" />);
+    const external = [...container.querySelectorAll('img')].map((i) => i.getAttribute('src') ?? '').filter((s) => /^(https?:)?\/\//.test(s));
+    expect(external, 'an override turned the third-party favicon lookup back on').toEqual([]);
   });
 });
 
