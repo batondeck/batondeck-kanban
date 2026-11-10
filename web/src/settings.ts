@@ -44,6 +44,11 @@ export function uiSettings(): UiSettings {
 
 /** Merge workspace overrides over the defaults. Called by AuthProvider on every session load. */
 export function hydrateUiSettings(overrides: Partial<UiSettings> | undefined): UiSettings {
-  current = { ...UI_DEFAULTS, ...(overrides ?? {}) };
+  const merged = { ...UI_DEFAULTS, ...(overrides ?? {}) };
+  // `list_tasks` refuses a `limit` over 200 (internal/service/tasks.go listMaxLimit), and the drawer,
+  // the Activity log and the Agents screen send this page size in one request: past 200 each would fail.
+  const pageLimit = Math.floor(Number(merged.taskPageLimit));
+  merged.taskPageLimit = Number.isFinite(pageLimit) ? Math.min(200, Math.max(1, pageLimit)) : UI_DEFAULTS.taskPageLimit;
+  current = merged;
   return current;
 }
