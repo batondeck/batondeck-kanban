@@ -76,12 +76,18 @@ function RawPayloadDialog({
     retry: false,
   });
   // Escape closes, and focus starts on the dialog, so a keyboard user is not stranded behind it.
+  // Heard in the CAPTURE phase and stopped there: the setup drawer behind listens for Escape on
+  // window too, and without this one key closed both, losing the drawer and its editor.
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.focus();
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
   const expired = q.error instanceof ApiError && q.error.status === 404;

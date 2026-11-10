@@ -112,4 +112,19 @@ describe('the refused-payload viewer', () => {
     expect(dialog.querySelector('img'), 'the payload was interpreted as markup').toBeNull();
     expect(dialog.querySelector('pre'), 'the payload renders in a pre, uninterpreted').toBeTruthy();
   });
+
+  it('Escape closes the payload dialog, not the setup drawer behind it', async () => {
+    // Both listen on window: the dialog's Escape also reached the drawer's handler and closed the
+    // whole drawer, losing the delivery log and anything half-typed in the editor.
+    stub(200);
+    const onClose = vi.fn();
+    render(<OncallSetup projectId="p1" integrations={[INTEGRATION]} onClose={onClose} />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: /view payload/i }, { timeout: 3_000 }));
+    await screen.findByRole('dialog', { name: /refused payload/i });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /refused payload/i }), 'the payload dialog closes').toBeNull();
+    expect(onClose, 'the drawer closed along with the dialog').not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose, 'a second Escape closes the drawer as before').toHaveBeenCalledTimes(1);
+  });
 });
