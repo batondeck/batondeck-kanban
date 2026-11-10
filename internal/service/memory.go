@@ -139,8 +139,8 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 	})
 }
 
-// ReadMemory is read_memory: the task's newest 200 task, agent and shared entries, then the scope,
-// key, agent-privacy and TTL filters (store.Memory.ReadMemory's window-then-filter).
+// ReadMemory is read_memory: the task's newest 200 task, agent and shared entries that pass the
+// scope, key, agent-privacy and TTL filters (store.Memory.ReadMemory's filter-then-window).
 func (s contextSvc) ReadMemory(ctx context.Context, caller domain.Caller, req ReadMemoryReq) (ReadMemoryResp, error) {
 	if _, err := s.c.authorize(ctx, caller, req.ProjectID, "read_memory", domain.GrantSubject{}, true); err != nil {
 		return ReadMemoryResp{}, err

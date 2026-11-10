@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"slices"
 	"sync"
@@ -553,6 +554,46 @@ func completeOne(t *testing.T, e *env, reason string, want domain.Status) {
 	if n := len(ofType(e.events(t, dep.ID), domain.EventTaskDependencyCleared)); n != 1 {
 		t.Fatalf("reason %q: %d dependency_cleared events, want 1", reason, n)
 	}
+}
+
+// The memory window counts only what the reader may see: another author's private notes, expired
+// entries and entries of other keys never push a live shared entry out of the briefing or a keyed
+// read.
+func TestTaskMemoryWindowCountsWhatTheReaderSees(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		cx := e.c.Context()
+		task := e.task(t, domain.Todo)
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		write := func(c domain.Caller, scope domain.MemoryScope, key, ttl string) {
+			t.Helper()
+			if _, err := cx.WriteMemory(e.ctx, c, WriteMemoryReq{ProjectID: e.project, TaskID: task.ID, Scope: scope, Key: key, Value: "v", TTL: ttl}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(bob, domain.MemoryScopeShared, "handoff", "")
+		gone := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+		for i := range 20 {
+			write(e.alice, domain.MemoryScopeAgent, fmt.Sprintf("scratch-%d", i), "")
+			write(e.alice, domain.MemoryScopeTask, fmt.Sprintf("expired-%d", i), gone)
+		}
+		got, err := cx.GetTaskContext(e.ctx, bob, GetTaskContextReq{ProjectID: e.project, TaskID: task.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Memory) != 1 || got.Memory[0].Key != "handoff" {
+			t.Fatalf("bob's briefing memory = %+v, want his live shared entry: alice's private and expired entries took the window", got.Memory)
+		}
+		for range 200 {
+			write(bob, domain.MemoryScopeTask, "newer", "")
+		}
+		keyed, err := cx.ReadMemory(e.ctx, bob, ReadMemoryReq{ProjectID: e.project, TaskID: task.ID, Key: "handoff"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(keyed.Entries) != 1 {
+			t.Fatalf("read_memory {key: handoff} behind 200 newer entries = %+v, want the entry", keyed.Entries)
+		}
+	})
 }
 
 // AC4: an entry with a one-second ttl is read at once and gone two seconds later.
