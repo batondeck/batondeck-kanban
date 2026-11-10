@@ -905,6 +905,7 @@ export function OncallSetup({
                     form={form}
                     set={set}
                     isCreate={false}
+                    currentMode={active.auth.mode}
                     onGenerateKey={() => set({ apiKey: mintKey() })}
                   />
                   {problems.length > 0 && (

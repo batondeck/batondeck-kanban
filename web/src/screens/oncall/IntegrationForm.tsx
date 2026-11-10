@@ -237,6 +237,8 @@ const jwtTyped = (f: FormState): boolean =>
  * of an integration carries no issuer, audience or JWKS URL, so an edit opens with them blank, and
  * blank then means "keep what is configured" (`patchBodyOf` sends no auth). They are required on
  * create, on a switch to jwt, and once any one is typed, because the patch then sends all three.
+ * A key mode likewise keeps its stored key on a blank edit, but a switch into api_key or basic has
+ * no key to keep, and the core refuses that patch without one.
  */
 export function formProblems(
   f: FormState,
@@ -247,7 +249,9 @@ export function formProblems(
   const out: string[] = [];
   if (!f.name.trim()) out.push('Name is required.');
   if (!f.boardId.trim()) out.push('Target board id is required.');
-  if (isCreate && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
+  // A key mode keeps its stored key on a blank edit, but a switch INTO one has no key to keep.
+  const keyNeeded = isCreate || f.authMode !== currentMode;
+  if (keyNeeded && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
     out.push('This mode needs a key — generate one.');
   }
   const jwtNeeded = isCreate || f.authMode !== currentMode || jwtTyped(f);
@@ -274,15 +278,20 @@ export function IntegrationForm({
   form,
   set,
   isCreate,
+  currentMode,
   onGenerateKey,
 }: {
   source: OncallSource;
   form: FormState;
   set: (patch: Partial<FormState>) => void;
   isCreate: boolean;
+  /** The edited integration's stored auth mode; absent on create. */
+  currentMode?: IntegrationAuthMode;
   onGenerateKey: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Blank auth fields keep the stored ones only on an edit that stays in the stored mode.
+  const keepsAuth = !isCreate && form.authMode === currentMode;
   const isWebhook = source.id === 'webhook';
   const setExtract = (patch: Partial<FormState['extract']>): void =>
     set({ extract: { ...form.extract, ...patch } });
@@ -342,7 +351,7 @@ export function IntegrationForm({
 
           {(form.authMode === 'api_key' || form.authMode === 'basic') && (
             <Field2
-              label={isCreate ? 'Key' : 'New key (leave blank to keep the current one)'}
+              label={keepsAuth ? 'New key (leave blank to keep the current one)' : 'Key'}
               hint={
                 form.authMode === 'basic'
                   ? 'Sent as the PASSWORD of HTTP Basic; the username is ignored. Stored as a hash — shown once.'
@@ -357,7 +366,7 @@ export function IntegrationForm({
                   aria-label="API key"
                   value={form.apiKey}
                   onChange={(e) => set({ apiKey: e.target.value })}
-                  placeholder={isCreate ? 'generate, or paste your own' : 'unchanged'}
+                  placeholder={keepsAuth ? 'unchanged' : 'generate, or paste your own'}
                 />
                 <button className="btn secondary" type="button" onClick={onGenerateKey}>
                   Generate
@@ -387,7 +396,7 @@ export function IntegrationForm({
 
           {form.authMode === 'jwt' && (
             <Stack gap={12}>
-              {!isCreate && (
+              {keepsAuth && (
                 <Note>
                   The configured issuer, audience and JWKS URL are not shown back. Leave all three
                   blank to keep them; type all three to replace them.

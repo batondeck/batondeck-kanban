@@ -131,6 +131,50 @@ describe('a jwt integration', () => {
     expect(screen.getByText(/JWT mode needs an issuer, an audience and a JWKS URL/i)).toBeTruthy();
     expect(saveButton().disabled).toBe(true);
   });
+
+  it('says blank keeps the configured values only when jwt IS configured', async () => {
+    mount(BASE);
+    await openEditor();
+    expect(screen.getByText(/leave all three\s+blank to keep them/i), 'a jwt integration: blank keeps them').toBeTruthy();
+    cleanup();
+    calls.length = 0;
+    // Switching an hmac integration to jwt: nothing is configured to keep, and blank is refused.
+    mount({ ...BASE, auth: { mode: 'hmac' } });
+    await openEditor();
+    fireEvent.click(screen.getByLabelText(/^jwt$/));
+    expect(screen.queryByText(/blank to keep them/i), 'no "keep them" on a switch to jwt').toBeNull();
+  });
+});
+
+describe('switching an integration to a key mode on edit', () => {
+  // The core refuses api_key or basic without a key ("requires apiKey"), and a mode switch has no
+  // current key to keep: the form asks for one rather than offering "leave blank".
+  for (const mode of ['api_key', 'basic'] as const) {
+    it(`asks for a key on a switch from hmac to ${mode}`, async () => {
+      mount({ ...BASE, auth: { mode: 'hmac' } });
+      await openEditor();
+      fireEvent.click(screen.getByLabelText(new RegExp(`^${mode}$`)));
+      expect(screen.queryByText(/leave blank to keep the current one/i), 'no current key to keep').toBeNull();
+      expect(screen.getByText(/this mode needs a key/i)).toBeTruthy();
+      expect(saveButton().disabled).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
+      expect(saveButton().disabled).toBe(false);
+      fireEvent.click(saveButton());
+      const patch = await sentPatch();
+      expect((patch['auth'] as { mode: string; apiKey: string }).mode).toBe(mode);
+      expect((patch['auth'] as { apiKey: string }).apiKey.length).toBeGreaterThanOrEqual(8);
+    });
+  }
+
+  it('POSITIVE CONTROL: an api_key integration keeps its key on a blank edit', async () => {
+    mount({ ...BASE, auth: { mode: 'api_key' } });
+    await openEditor();
+    expect(screen.getByText(/leave blank to keep the current one/i)).toBeTruthy();
+    expect(screen.queryByText(/this mode needs a key/i)).toBeNull();
+    fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'renamed' } });
+    fireEvent.click(saveButton());
+    expect((await sentPatch())['auth']).toBeUndefined();
+  });
 });
 
 describe('clearing a setting on edit', () => {
