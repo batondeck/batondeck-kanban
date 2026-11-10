@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -169,5 +170,40 @@ func TestOpenSQLiteOpensExactlyThePathNamed(t *testing.T) {
 	})
 	if len(stray) > 0 {
 		t.Fatalf("files outside the directories named: %v", stray)
+	}
+}
+
+// The database file OpenSQLite creates is private (0600), and so are the -wal and -shm files SQLite
+// makes beside it, which take the database file's mode, whatever the umask lets through and
+// whatever the directory's mode: it holds every task, comment, the audit log and the password
+// hashes, and the README's example puts it in a directory made by a plain mkdir (0755).
+func TestOpenSQLiteCreatesTheFilesPrivate(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	dir := filepath.Join(t.TempDir(), "srv")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "bk.db")
+	s, err := OpenSQLite(path, "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.w.Exec("CREATE TABLE x (n INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.r.QueryRow("SELECT count(*) FROM x").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := fi.Mode().Perm(); mode != 0o600 {
+			t.Errorf("%s: mode %o, want 600", filepath.Base(p), mode)
+		}
 	}
 }

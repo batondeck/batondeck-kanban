@@ -450,3 +450,30 @@ func TestCommandsAgreeOnASQLitePathWithAHash(t *testing.T) {
 		t.Fatalf("user list: %d %s", code, errs)
 	}
 }
+
+// A SQLite file made before OpenSQLite created it 0600, or copied in under a looser umask, keeps
+// its mode: serve logs a WARN and doctor prints one, each naming the files other local accounts can
+// read and the chmod that makes them private. A private file draws no warning.
+func TestALooseSQLiteFileModeIsWarnedOf(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	if code, out, _ := run("doctor"); code != 0 || strings.Contains(out, "WARN") {
+		t.Fatalf("doctor on a private file: %d %q", code, out)
+	}
+	if w := sqliteModeWarning(path); w != "" {
+		t.Fatalf("a private file: %q", w)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := "sqlite file " + path + " is mode 644: other local accounts can read the board; chmod 600 it, and its -wal and -shm files"
+	if w := sqliteModeWarning(path); w != want {
+		t.Fatalf("a 0644 file:\n got %q\nwant %q", w, want)
+	}
+	if code, out, _ := run("doctor"); code != 0 || !strings.Contains(out, "WARN store        "+want+"\n") {
+		t.Fatalf("doctor on a 0644 file: %d %q", code, out)
+	}
+}

@@ -177,6 +177,18 @@ func openStore(ctx context.Context, cfg *core.Config, create bool) (store.Store,
 	return store.OpenSQLite(path, cfg.Database.Synchronous)
 }
 
+// sqliteModeWarning is why the SQLite file at path is open to other local accounts, naming the
+// chmod that closes it, or "" when it is private (or not there). store.OpenSQLite creates the file
+// 0600, and SQLite gives its -wal and -shm files the same mode; a file made before, or copied in
+// under a looser umask, keeps the mode it has, which serve and doctor warn of.
+func sqliteModeWarning(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm()&0o077 == 0 {
+		return ""
+	}
+	return fmt.Sprintf("sqlite file %s is mode %o: other local accounts can read the board; chmod 600 it, and its -wal and -shm files", path, fi.Mode().Perm())
+}
+
 // migratedLine says what one Migrate did.
 func migratedLine(m store.Migrated) string {
 	if m.None {
@@ -274,6 +286,11 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	log.Printf("serve: store %s: %s", cfg.Engine(), line)
+	if cfg.Engine() == core.EngineSQLite {
+		if w := sqliteModeWarning(cfg.SQLitePath()); w != "" {
+			log.Printf("serve: WARN %s", w)
+		}
+	}
 	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)

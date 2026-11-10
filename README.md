@@ -160,6 +160,9 @@ tried from claude.ai itself.
 | a file path, such as `/srv/batondeck/batondeck-kanban.db` (relative paths are relative to the working directory) | SQLite, the default |
 | `postgres://user:password@host:5432/dbname?sslmode=disable` (or `postgresql://…`) | Postgres |
 
+The SQLite file is created mode 0600, and its `-wal` and `-shm` files take its mode, so a
+directory other accounts can list, such as a `/srv/batondeck` made by a plain `mkdir`, does not
+open the board to them; `serve` and `doctor` warn of a file made or copied in with a looser mode.
 SQLite runs with `synchronous=FULL`. `BATONDECK_DATABASE_SYNCHRONOUS=NORMAL` (`database.synchronous`)
 opts into `NORMAL` for write throughput: in WAL mode the file stays consistent, but the last
 transactions before a power loss may be lost. `batondeck-kanban serve -h` lists every

@@ -46,5 +46,10 @@ func doctor(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "ok   store        %s, the connection reports: %s\n", dataLine(cfg), v)
+	if cfg.Engine() == core.EngineSQLite {
+		if w := sqliteModeWarning(cfg.SQLitePath()); w != "" {
+			fmt.Fprintf(stdout, "WARN store        %s\n", w)
+		}
+	}
 	return 0
 }
