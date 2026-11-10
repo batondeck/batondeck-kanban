@@ -800,8 +800,9 @@ func (l lifecycle) leaseArgs(ctx context.Context, caller domain.Caller, tool, pr
 }
 
 // Next is next_task: the frontier's best task, claiming nothing (store PreviewFrontier, limit 1),
-// and its summary: two statements, three when the frontier is empty (the lazy reap's
-// ListExpiredLeases). includeInbox adds two (REVIEW, then BLOCKED split into blocked and poisoned).
+// and its summary: two statements, one when the frontier is empty. It is a read (read tier,
+// grant-exempt, readOnlyHint) and writes nothing: an expired lease is reaped by claim_next's lazy
+// recovery or reap_stale_leases, never by a preview, which would write as a viewer. includeInbox adds two (REVIEW, then BLOCKED split into blocked and poisoned).
 // strategy "score" ranks the frontier's first frontierPage tasks with the scorer rank_tasks uses
 // (scorer.rank: the project's selectionWeights and agingCeilingMs) and previews the best; explain,
 // which needs it, adds the top task's factors and the runner-up. useProfile judges eligibility by
@@ -855,17 +856,6 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	head, err := l.nextHead(ctx, q, sc, score)
 	if err != nil {
 		return NextTaskResp{}, err
-	}
-	if len(head) == 0 {
-		sum, err := l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID)
-		if err != nil {
-			return NextTaskResp{}, err
-		}
-		if sum.reaped() > 0 {
-			if head, err = l.nextHead(ctx, q, sc, score); err != nil {
-				return NextTaskResp{}, err
-			}
-		}
 	}
 	var resp NextTaskResp
 	if len(head) > 0 {
@@ -1402,8 +1392,8 @@ func (l lifecycle) Reap(ctx context.Context, caller domain.Caller, req ReapStale
 	return ReapStaleLeasesResp{Reaped: int64(sum.reaped())}, nil
 }
 
-// reap is the one reaper: reap_stale_leases, and the lazy recovery of claim_next and next_task
-// when their frontier is empty (no background sweeper). One ListExpiredLeases (at most 200 tasks,
+// reap is the one reaper: reap_stale_leases, and the lazy recovery of claim_next when its frontier
+// is empty (no background sweeper; next_task is a read and never reaps). One ListExpiredLeases (at most 200 tasks,
 // oldest expiry first); the project's retry policy is read only when there is something to reap. A
 // task resolved since the read (heartbeat, completion, a new claim) is skipped. The access is the
 // calling tool's: a grant check left pending is finished against each reaped task.

@@ -1014,7 +1014,8 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 			t.Fatalf("%s read resume with %v, want one ListArtifacts and one ListContextItems", c.name, m)
 		}
 	}
-	// next_task on an empty frontier: the preview and the lazy reap's one read.
+	// next_task on an empty frontier: the preview alone (it reaps nothing, so it reads no expired
+	// leases).
 	empty, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "E", CreatedBy: "alice"}, store.WriteOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -1024,7 +1025,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := n.take()
-	if r, _ := reads(m); r > 3 {
+	if r, _ := reads(m); r > 1 || m["ListExpiredLeases"] != 0 {
 		t.Fatalf("empty next_task %d statements %v", r, m)
 	}
 	t.Logf("next_task empty   %v", m)

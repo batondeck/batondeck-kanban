@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 )
@@ -145,6 +146,30 @@ func TestClaimingAGatedTaskNamesItsBlockers(t *testing.T) {
 		}
 		if got, _ := be.Details["blockedBy"].([]string); !slices.Equal(got, []string{a.ID}) {
 			t.Fatalf("details %v, want blockedBy [%s]", be.Details, a.ID)
+		}
+	})
+}
+
+// next_task is a read (read tier, grant-exempt, readOnlyHint): on an empty frontier it reaps nothing.
+// Before, it ran the lazy reap under the caller, so a viewer's preview moved an expired lease's task
+// back to TODO (or poisoned it) in its own name. claim_next and reap_stale_leases keep reaping.
+func TestNextTaskReapsNothing(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		e.settings(t, map[string]any{"retryPolicy": domain.RetryPolicy{BaseDelayMs: 1000, MaxDelayMs: 60_000, PoisonAfterAttempts: 1}})
+		vera := e.member(t, e.project, "vera", domain.RoleViewer)
+		task := e.task(t, domain.Todo)
+		e.claim(t, e.alice, task.ID, 5)
+		e.clock.advance(10 * time.Minute)
+		before := e.get(t, task.ID)
+		r, err := e.c.Lifecycle().Next(e.ctx, vera, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID})
+		after := e.get(t, task.ID)
+		t.Logf("viewer next_task over an expired lease: task %v err %v; %s %s v%d -> %s v%d attempts %d updatedBy %s",
+			r.Task, err, task.ID, before.Status, before.Version, after.Status, after.Version, after.ClaimAttempts, after.UpdatedBy)
+		if err != nil || r.Task != nil {
+			t.Fatalf("next_task = %+v, %v; want null", r.Task, err)
+		}
+		if after.Status != domain.InProgress || after.Version != before.Version || after.ClaimAttempts != before.ClaimAttempts || len(ofType(e.events(t, task.ID), domain.EventTaskPoisoned)) != 0 {
+			t.Fatalf("next_task wrote %s: %+v", task.ID, after)
 		}
 	})
 }
