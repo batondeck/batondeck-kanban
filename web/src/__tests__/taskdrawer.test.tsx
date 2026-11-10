@@ -653,3 +653,104 @@ describe('a web claim survives the drawer remounting', () => {
     expect(screen.queryByText('leaseId')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The Edit draft carries the version it was taken from. Save read `task.version` at click time, and
+ * the task keeps refreshing under an open editor (the stream's nudge, the 30 s poll), so a draft
+ * based on v3 was saved as v4 with the v3 title: the agent's concurrent edit was overwritten and the
+ * version check the API exists for never fired.
+ */
+describe('the description editor keeps the version it started from', () => {
+  const patches = (fm: typeof fetch) =>
+    (fm as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as { version: number; patch: Record<string, unknown> });
+  function editingFetch() {
+    let current: Task = task;
+    const base = routeFetch();
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown, status = 200) => ({ ok: status < 400, status, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(url) && init?.method === 'PATCH') {
+        const b = JSON.parse(String(init.body)) as { version: number; patch: Partial<Task> };
+        if (b.version !== current.version) return json({ code: 'STALE', message: `Version mismatch: expected ${b.version}, found ${current.version}` }, 409);
+        current = { ...current, ...b.patch, version: current.version + 1 };
+        return json({ task: current });
+      }
+      if (/\/tasks\/T-1$/.test(url)) return json({ task: current });
+      return base(input, init);
+    });
+    return { fm, agentEdits: () => { current = { ...current, title: 'Ship the parser v2', description: 'AGENT REWRITE', version: current.version + 1 }; } };
+  }
+  const saveButton = () => within((document.querySelector('textarea.input') as HTMLElement).parentElement!).getByRole('button', { name: 'Save' });
+  const startEditing = async () => {
+    await screen.findByText('Ship the parser');
+    const edit = screen.getByRole('button', { name: 'Edit' });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    const ta = document.querySelector('textarea.input') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'HUMAN DRAFT based on v3' } });
+    return ta;
+  };
+
+  it('a concurrent edit is not overwritten: Save holds, shows theirs, and sends only my field on my say-so', async () => {
+    const { fm, agentEdits } = editingFetch();
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    await startEditing();
+    agentEdits(); // v3 -> v4 under the open editor
+    await qc.invalidateQueries({ queryKey: ['task', 'p1'] });
+    await screen.findByText('T-1 · v4'); // the refreshed task has landed
+    fireEvent.click(saveButton());
+    await new Promise((r) => setTimeout(r, 30));
+    // Never the v3-based text under the v4 version.
+    expect(patches(fm).filter((p) => p.version === 4)).toEqual([]);
+    expect(document.querySelector('textarea.input')).toHaveValue('HUMAN DRAFT based on v3');
+    expect(screen.getByText('AGENT REWRITE')).toBeInTheDocument(); // the server's current text, beside the draft
+    // Choosing to keep my edit sends only what I changed, on the version I have now seen.
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my edit' }));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patches(fm).filter((p) => p.version === 4)).toEqual([{ version: 4, patch: { description: 'HUMAN DRAFT based on v3' } }]));
+  });
+
+  it('with no concurrent edit, Save sends the version it started from and only the changed field', async () => {
+    const { fm } = editingFetch();
+    vi.stubGlobal('fetch', fm);
+    renderDrawer();
+    await startEditing();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patches(fm)).toEqual([{ version: 3, patch: { description: 'HUMAN DRAFT based on v3' } }]));
+  });
+});
+
+/** The digest editor has the same shape: its draft keeps the version and the text it started from. */
+describe('the digest editor keeps the version it started from', () => {
+  it('holds Save when the digest changed under it, and saves mine over theirs only on my say-so', async () => {
+    let current: Task = { ...task, contextSummary: 'old digest' };
+    const base = routeFetch();
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(url)) return json({ task: current });
+      return base(input, init);
+    });
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    const digest = await screen.findByText('old digest');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()); // the role has loaded
+    fireEvent.doubleClick(digest);
+    const ta = await screen.findByDisplayValue('old digest');
+    fireEvent.change(ta, { target: { value: 'my digest' } });
+    current = { ...current, contextSummary: 'AGENT DIGEST', version: 4 };
+    await qc.invalidateQueries({ queryKey: ['task', 'p1'] });
+    await screen.findByText('T-1 · v4');
+    const summaries = () => fm.mock.calls.filter(([u]) => /\/summary$/.test(String(u))).map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    fireEvent.click(screen.getByRole('button', { name: 'Save summary' }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(summaries()).toEqual([]);
+    expect(screen.getByText('AGENT DIGEST')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save summary' }));
+    await waitFor(() => expect(summaries()).toEqual([expect.objectContaining({ version: 4, summary: 'my digest' })]));
+  });
+});

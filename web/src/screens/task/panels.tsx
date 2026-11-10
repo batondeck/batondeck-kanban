@@ -85,13 +85,27 @@ function ClosedWhy({ id, why }: { id: string; why: string | undefined }) {
 /* ---- description + digest ------------------------------------------------------------------ */
 
 export function DescriptionPanel({ d }: P) {
-  const { task, projectId, taskId, editing, setEditing, draft, setDraft, startEdit, run, canEdit } = d;
+  const { task, editing, setEditing, draft, setDraft, startEdit, editConflict, keepMyEdit, saveEdit, canEdit } = d;
   return (
     <Panel title="Description" right={<span className="mono">markdown · updated {timeAgo(task.updatedAt)}</span>} pad>
       {editing ? (
         <>
           <textarea className="input" maxLength={LIMITS.description} style={{ width: '100%', minHeight: 100 }} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
-          <Button style={{ marginTop: 8 }} variant="primary" disabled={!canEdit} onClick={() => void run(tasksApi.updateTask(projectId, taskId, task.version, { title: draft.title, description: draft.description }), () => setEditing(false))}>Save</Button>
+          {editConflict && (
+            // Save would overwrite this, so it holds: theirs beside mine, and the editor chooses.
+            <Note>
+              <p style={{ margin: '0 0 6px' }}>Changed by someone else since you started editing (v{draft.version} → v{task.version}). Theirs now:</p>
+              {task.title !== draft.base.title && <p style={{ margin: '0 0 6px' }}>Title: <strong>{task.title}</strong></p>}
+              {task.description !== draft.base.description && (
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, margin: '0 0 6px' }}>{task.description}</div>
+              )}
+              <Cluster gap={4}>
+                <Button onClick={keepMyEdit}>Keep my edit</Button>
+                <Button onClick={() => setEditing(false)}>Discard my edit</Button>
+              </Cluster>
+            </Note>
+          )}
+          <Button style={{ marginTop: 8 }} variant="primary" disabled={!canEdit || editConflict} onClick={saveEdit}>Save</Button>
         </>
       ) : task.description ? (
         // Agents write markdown briefs — render them (same .md styling as comments) instead of raw text.
@@ -110,13 +124,17 @@ export function DescriptionPanel({ d }: P) {
 /** The agent-written rolling summary (`set_summary`). Editable in place. */
 export function DigestPanel({ d }: P) {
   const { task, projectId, taskId, ctx, run, canSummarise, why } = d;
-  const [summaryDraft, setSummaryDraft] = useState<string | null>(null);
+  // The draft keeps the text it started from: the task refreshes under it (stream, poll), and Save
+  // read the version at click time, so it overwrote a digest an agent set meanwhile. When the digest
+  // changed since, Save holds until the editor chooses, as the description's editor does.
+  const [summaryDraft, setSummaryDraft] = useState<{ text: string; base: string } | null>(null);
+  const conflict = summaryDraft !== null && task.contextSummary !== summaryDraft.base;
   // `set_summary` is tier write (P-440): below it double-click opens nothing, and the empty digest
   // says why instead of inviting the double-click.
   const summaryWhy = why('set_summary', 'edit the digest');
   return (
     <Panel title="Agent digest" pad>
-      <div onDoubleClick={() => canSummarise && summaryDraft === null && setSummaryDraft(task.contextSummary)}>
+      <div onDoubleClick={() => canSummarise && summaryDraft === null && setSummaryDraft({ text: task.contextSummary, base: task.contextSummary })}>
         {summaryDraft === null ? (
           <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: 'var(--text-2)' }}>
             {ctx?.summary || task.contextSummary || (
@@ -128,9 +146,19 @@ export function DigestPanel({ d }: P) {
           </p>
         ) : (
           <>
-            <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft} onChange={(e) => setSummaryDraft(e.target.value)} />
+            <textarea className="input" maxLength={LIMITS.summary} style={{ width: '100%', minHeight: 70 }} value={summaryDraft.text} onChange={(e) => setSummaryDraft({ ...summaryDraft, text: e.target.value })} />
+            {conflict && (
+              <Note>
+                <p style={{ margin: '0 0 6px' }}>The digest changed since you started editing. Theirs now:</p>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, margin: '0 0 6px' }}>{task.contextSummary}</div>
+                <Cluster gap={4}>
+                  <Button onClick={() => setSummaryDraft({ ...summaryDraft, base: task.contextSummary })}>Keep my edit</Button>
+                  <Button onClick={() => setSummaryDraft(null)}>Discard my edit</Button>
+                </Cluster>
+              </Note>
+            )}
             <Cluster gap={4} style={{ marginTop: 6 }}>
-              <Button variant="primary" disabled={!canSummarise} onClick={() => void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft), () => setSummaryDraft(null))}>Save summary</Button>
+              <Button variant="primary" disabled={!canSummarise || conflict} onClick={() => { if (!conflict) void run(contextApi.setSummary(projectId, taskId, task.version, summaryDraft.text), () => setSummaryDraft(null)); }}>Save summary</Button>
               <Button onClick={() => setSummaryDraft(null)}>Cancel</Button>
             </Cluster>
           </>

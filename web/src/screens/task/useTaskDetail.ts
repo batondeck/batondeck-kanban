@@ -37,6 +37,14 @@ const NEXT: Record<Status, Status[]> = {
   DONE: ['IN_PROGRESS'],
 };
 
+/**
+ * The Edit draft: the title and description being edited, and the version and text they were taken
+ * from. Save sends only the fields changed from `base`, and holds when someone else changed the title
+ * or description since (see `editConflict`): the task keeps refreshing under an open editor, so the
+ * version read at Save time is not the one the draft was based on.
+ */
+export interface EditDraft { title: string; description: string; version: number; base: { title: string; description: string } }
+
 /** Fire a write, refresh the ticket's caches, surface the error instead of throwing. */
 export type Run = <T>(p: Promise<T>, onSuccess?: (r: T) => void) => Promise<void>;
 
@@ -75,7 +83,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
   };
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<{ title: string; description: string }>({ title: '', description: '' });
+  const [draft, setDraft] = useState<EditDraft>({ title: '', description: '', version: 0, base: { title: '', description: '' } });
 
   // The board's SSE stream invalidates ['task', projectId, …] on every board change (the ui-backend keeps
   // a stateful MCP session even under STATELESS_MCP=true, so resource subscriptions fire), keeping
@@ -173,6 +181,8 @@ export function useTaskDetail(projectId: string, taskId: string) {
     return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => {
       // Only a lease outcome answers LEASE_EXPIRED: the remembered lease is spent, so stop offering it.
       if (e instanceof ApiError && e.code === 'LEASE_EXPIRED') setLease(null);
+      // STALE: the task moved on. Read it now, so an open editor shows what changed under it.
+      if (e instanceof ApiError && e.code === 'STALE') void qc.invalidateQueries({ queryKey: ['task', projectId, taskId] });
       setErr(String(e instanceof Error ? e.message : e));
     });
   };
@@ -279,13 +289,36 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const startEdit = (): void => {
     if (!task || !canEdit) return;
     setEditing(true);
-    setDraft({ title: task.title, description: task.description });
+    setDraft({ title: task.title, description: task.description, version: task.version, base: { title: task.title, description: task.description } });
+  };
+  // Someone else changed the title or the description since the draft was taken. Save holds until the
+  // editor chooses: `keepMyEdit` or Cancel. A version bump that changed neither (a label, a claim)
+  // is no conflict: Save then sends only the edited fields on the version last read, and the server's
+  // check refuses it (STALE) if the task has moved on again.
+  const editConflict = editing && !!task && (task.title !== draft.base.title || task.description !== draft.base.description);
+  /** Keep my edit over the newer version: a field I did not touch takes the newer text. */
+  const keepMyEdit = (): void => {
+    if (!task) return;
+    setDraft((dr) => ({
+      title: dr.title === dr.base.title ? task.title : dr.title,
+      description: dr.description === dr.base.description ? task.description : dr.description,
+      version: task.version,
+      base: { title: task.title, description: task.description },
+    }));
+  };
+  const saveEdit = (): void => {
+    if (!task || editConflict) return;
+    const patch: { title?: string; description?: string } = {};
+    if (draft.title !== draft.base.title) patch.title = draft.title;
+    if (draft.description !== draft.base.description) patch.description = draft.description;
+    if (patch.title === undefined && patch.description === undefined) { setEditing(false); return; }
+    void run(tasksApi.updateTask(projectId, taskId, task.version, patch), () => setEditing(false));
   };
 
   return {
     projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, memQ, attQ,
     err, setErr, run, uploadFile, move, countdown, myLease, claimIsMine, heldByOther, setLease,
-    editing, setEditing, draft, setDraft, startEdit,
+    editing, setEditing, draft, setDraft, startEdit, editConflict, keepMyEdit, saveEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
     colFor, moveTargets, nextOf, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
