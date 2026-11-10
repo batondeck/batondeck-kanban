@@ -107,13 +107,14 @@ func sprintText(name, goal, acceptance Optional[string]) error {
 // Update is update_sprint (conductor sprints.ts:114-181, in-memory-store.ts:1645-1729), version
 // checked on the sprint: proposalTaskId is patchable only while PROPOSED, and name, goal and
 // acceptance only until the sprint is CLOSED or ABANDONED (VALIDATION; resending the value held
-// passes, and checkpoint and eventCursor stay patchable for a resume); a status
-// change follows the fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the
-// activation gates against the proposal task read in the transaction and stamps approvedBy (the
-// proposal's reviewer, else who moved it to DONE, read from its events: doneBy) and startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
-// "open" is status != DONE (plan §Fold 2), so a BLOCKED-poison member is open and a cancelled one
-// (DONE with the cancelled label, ADR-0001) is not. It runs under the project lock, as set_sprint and
-// create_task {sprintId} do, so a member cannot join between the close and its warning.
+// passes, and checkpoint and eventCursor stay patchable for a resume); a status change follows the
+// fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the activation gates against
+// the proposal task read in the transaction and stamps approvedBy (the proposal's reviewer, else who
+// moved it to DONE, read from its events: doneBy) and startedAt; CLOSED and ABANDONED stamp
+// closedAt. Closing with members not DONE warns, naming them: "open" is status != DONE (plan §Fold
+// 2), so a BLOCKED-poison member is open and a cancelled one (DONE with the cancelled label,
+// ADR-0001) is not. It runs under the project lock, as set_sprint and create_task {sprintId} do, so
+// a member cannot join between the close and its warning.
 func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req UpdateSprintReq) (UpdateSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_sprint", domain.GrantSubject{}, false)
 	if err != nil {
@@ -369,11 +370,10 @@ func samePtr(a, b *string) bool {
 // another board is VALIDATION; an add of a member, or a remove of a non-member, returns the task
 // unchanged before the version check (retry-safe); otherwise the task is version-checked, the
 // membership is judged (domain.CheckSprintMembership, exclusive among the sprints that have not
-// ended: endedSprints), and the task's sprintIds and the
-// sprint's member count move together, with sprint.task_added or sprint.task_removed on the task.
-// It runs under the project lock, as update_sprint does: under Postgres READ COMMITTED a close that
-// committed after this call read the sprint ACTIVE would otherwise let the task join a CLOSED sprint
-// its close warning never named.
+// ended: endedSprints), and the task's sprintIds and the sprint's member count move together, with
+// sprint.task_added or sprint.task_removed on the task. It runs under the project lock, as
+// update_sprint does: under Postgres READ COMMITTED a close that committed after this call read the
+// sprint ACTIVE would otherwise let the task join a CLOSED sprint its close warning never named.
 func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprintReq) (SetSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "set_sprint", domain.GrantSubject{}, true)
 	if err != nil {

@@ -9,8 +9,8 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
-// setStatus moves sprint sp to status in the store, unchecked: the test's way to an ACTIVE sprint
-// without a proposal.
+// setSprintStatus moves sprint sp to status in the store, unchecked: the test's way to an ACTIVE
+// sprint without a proposal.
 func (e *lcEnv) setSprintStatus(t *testing.T, sp store.Sprint, status domain.SprintStatus) store.Sprint {
 	t.Helper()
 	got, err := e.st.UpdateSprint(e.ctx, e.project, sp.ID, sp.Version, store.SprintPatch{Status: &status, UpdatedBy: "alice", UpdatedAt: 1})
