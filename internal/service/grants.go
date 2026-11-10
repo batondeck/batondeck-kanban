@@ -15,7 +15,7 @@ func (c *Core) Grants() Grants { return grantsSvc{c} }
 
 type grantsSvc struct{ c *Core }
 
-// Grant is grant_capabilities. The identity resolves as add_member's does; one that is not a member
+// Grant is grant_capabilities. The identity resolves as remove_member's does (memberKey); one that is not a member
 // is VALIDATION (conductor's), a deny or tools entry that is no tool, or one no grant can enforce, is
 // VALIDATION naming it (domain.CheckGrantEnforceable; a grant stored before that check still loads
 // and is enforced by the names it holds). After the
@@ -26,7 +26,7 @@ func (g grantsSvc) Grant(ctx context.Context, caller domain.Caller, req GrantCap
 	if err != nil {
 		return GrantCapabilitiesResp{}, err
 	}
-	id, err := g.c.resolveIdentity(ctx, req.IdentityID)
+	id, err := g.c.memberKey(ctx, req.ProjectID, req.IdentityID)
 	if err != nil {
 		return GrantCapabilitiesResp{}, err
 	}
