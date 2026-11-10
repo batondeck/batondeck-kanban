@@ -40,7 +40,7 @@ func TestCallBookkeepingStoresNoCallerText(t *testing.T) {
 		r := c.Req.(service.RecordToolCallReq)
 		rows = append(rows, r.Tool+" "+r.Outcome+" "+r.Code+" ["+r.ProjectID+"]")
 	}
-	want := []string{unknownTool + " error INTERNAL []", unknownTool + " error INTERNAL []", "whoami ok OK []", "whoami ok OK []"}
+	want := []string{unknownTool + " error VALIDATION []", unknownTool + " error VALIDATION []", "whoami ok OK []", "whoami ok OK []"}
 	if strings.Join(rows, "|") != strings.Join(want, "|") {
 		t.Errorf("tool_calls rows = %q, want %q", rows, want)
 	}

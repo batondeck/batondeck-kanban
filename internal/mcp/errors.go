@@ -63,9 +63,9 @@ func (s *Server) errorMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // record writes the call's tool_calls row: outcome ok with code OK, else error with the code the
-// client received (INTERNAL for a protocol error, whose result go-sdk hands back as a typed nil),
-// and the projectId the call named when countsInProject allows it, which the operations summary
-// groups by.
+// client received (for a protocol error, whose result go-sdk hands back as a typed nil, VALIDATION
+// when it is invalid params, as an unknown tool's -32602 is, else INTERNAL), and the projectId the
+// call named when countsInProject allows it, which the operations summary groups by.
 // It never fails or aborts the call: ToolCalls.Record returns no error to act on, and a panic in
 // the bookkeeping is recovered and logged here.
 func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, err error, took time.Duration) {
@@ -78,6 +78,9 @@ func (s *Server) record(ctx context.Context, req mcp.Request, res mcp.Result, er
 	r, _ := res.(*mcp.CallToolResult)
 	if err != nil || r == nil || r.IsError {
 		row.Outcome, row.Code = "error", string(domain.CodeInternal)
+		if rpc, ok := err.(*jsonrpc.Error); ok && rpc.Code == jsonrpc.CodeInvalidParams {
+			row.Code = string(domain.CodeValidation)
+		}
 		if err == nil && r != nil {
 			if e, ok := domain.AsBatonDeckError(r.GetError()); ok {
 				row.Code = string(e.Code)
