@@ -189,16 +189,17 @@ func TestAddMemberRoleChangeHoldsAtOnce(t *testing.T) {
 	erin := domain.Caller{Identity: "erin", TokenScope: "erin"}
 	_, err := f.c.Boards().List(f.ctx, erin, ListBoardsReq{ProjectID: f.project.ID})
 	wantCode(t, err, domain.CodeForbidden) // caches the non-membership
-	f.addMember(t, "erin", domain.RoleWorker)
+	f.addMember(t, "erin", domain.RoleMaster)
 	if _, err := f.c.Boards().List(f.ctx, erin, ListBoardsReq{ProjectID: f.project.ID}); err != nil {
 		t.Fatalf("erin, just added, is refused: %v", err)
 	}
-	if _, err := f.c.Boards().Create(f.ctx, erin, CreateBoardReq{ProjectID: f.project.ID, Name: "w"}); err != nil {
-		t.Fatalf("a worker cannot create a board: %v", err)
+	if _, err := f.c.Boards().Create(f.ctx, erin, CreateBoardReq{ProjectID: f.project.ID, Name: "m"}); err != nil {
+		t.Fatalf("a master cannot create a board: %v", err)
 	}
-	f.addMember(t, "erin", domain.RoleViewer)
-	_, err = f.c.Boards().Create(f.ctx, erin, CreateBoardReq{ProjectID: f.project.ID, Name: "v"})
-	t.Logf("erin demoted to viewer, create_board: %v", err)
+	// create_board is master (the owner's ruling of 2026-11-10), so a worker is below it.
+	f.addMember(t, "erin", domain.RoleWorker)
+	_, err = f.c.Boards().Create(f.ctx, erin, CreateBoardReq{ProjectID: f.project.ID, Name: "w"})
+	t.Logf("erin demoted to worker, create_board: %v", err)
 	wantCode(t, err, domain.CodeForbidden)
 }
 

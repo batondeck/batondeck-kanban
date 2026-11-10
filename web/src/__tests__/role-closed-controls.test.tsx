@@ -4,9 +4,10 @@
  * The UI e2e suite found a viewer offered "+ New task" on the board, Comment on a task and
  * "+ Add Member" in Settings, each learnt of only from the server's refusal ("FORBIDDEN: Role viewer
  * cannot call create_task"), while Status and Claim were already closed with a reason (P-209). The
- * tiers are `internal/domain/grants.go`'s: create_task master, add_comment and add_column write
- * (a worker), update_column and remove_column structural (a member), add_member, remove_member and
- * update_settings admin. The role is the caller's in the project, as the UI already holds it.
+ * tiers are `internal/domain/grants.go`'s: create_task and add_column master (add_column by the
+ * owner's ruling of 2026-11-10), add_comment write (a worker), update_column and remove_column
+ * structural (a member), add_member, remove_member and update_settings admin. The role is the
+ * caller's in the project, as the UI already holds it.
  *
  * Each closed case has its positive control: the role that may act sees the control open. The server
  * still decides; these assert only what is offered, and that a closed control sends nothing.
@@ -201,6 +202,8 @@ function settingsAs(role: string): Calls {
 const addMember = () => screen.getByRole('button', { name: '+ Add Member' });
 const addColumn = () => screen.getByRole('button', { name: '+ Add Column' });
 const reviewSwitch = () => screen.getByRole('switch');
+/** Below master the columns name both floors: adding is master's, the rest a member's. */
+const BELOW_ADD_COLUMN = 'Only a master can add columns. Only a member or an admin can rename, limit or delete them.';
 
 describe('Settings offers each write from its tier up', () => {
   it('a viewer: members, columns and the review step are closed, each with its reason', async () => {
@@ -211,7 +214,7 @@ describe('Settings offers each write from its tier up', () => {
     expect(addMember()).toHaveAccessibleDescription('Only a project admin can add or remove members.');
     expect(screen.getByPlaceholderText('teammate@example.com')).toBeDisabled();
     for (const b of screen.getAllByRole('button', { name: /^Remove/ })) expect(b).toBeDisabled();
-    expect(screen.getByText('A viewer cannot change columns.')).toBeInTheDocument();
+    expect(screen.getByText(BELOW_ADD_COLUMN)).toBeInTheDocument();
     expect(addColumn()).toBeDisabled();
     expect(screen.getByPlaceholderText('New column name')).toBeDisabled();
     expect(screen.getByDisplayValue('To do')).toBeDisabled();
@@ -223,16 +226,31 @@ describe('Settings offers each write from its tier up', () => {
     expect(f.mock.calls.some(([, init]) => init?.method && init.method !== 'GET')).toBe(false);
   });
 
-  it('a worker may add a column (tier write) but not rename, limit or delete one, nor manage members', async () => {
-    settingsAs('worker');
+  it('a worker may not add a column (tier master), rename, limit or delete one, nor manage members, and sends nothing', async () => {
+    const f = settingsAs('worker');
+    await screen.findByText('Wes');
+    await waitFor(() => expect(screen.getByText(BELOW_ADD_COLUMN)).toBeInTheDocument());
+    expect(screen.getByPlaceholderText('New column name')).toBeDisabled();
+    expect(addColumn()).toBeDisabled();
+    expect(addColumn()).toHaveAccessibleDescription(BELOW_ADD_COLUMN);
+    fireEvent.click(addColumn());
+    expect(screen.getByDisplayValue('To do')).toBeDisabled();
+    expect(addMember()).toBeDisabled();
+    expect(reviewSwitch()).toBeDisabled();
+    await settle();
+    expect(f.mock.calls.some(([, init]) => init?.method && init.method !== 'GET')).toBe(false);
+  });
+
+  it('POSITIVE CONTROL: a master may add a column but not rename, limit or delete one', async () => {
+    settingsAs('master');
     await screen.findByText('Wes');
     await waitFor(() => expect(screen.getByText('Only a member or an admin can rename, limit or delete columns.')).toBeInTheDocument());
     expect(screen.getByPlaceholderText('New column name')).toBeEnabled();
     fireEvent.change(screen.getByPlaceholderText('New column name'), { target: { value: 'QA' } });
     expect(addColumn()).toBeEnabled();
     expect(screen.getByDisplayValue('To do')).toBeDisabled();
+    expect(screen.queryByText(BELOW_ADD_COLUMN)).toBeNull();
     expect(addMember()).toBeDisabled();
-    expect(reviewSwitch()).toBeDisabled();
   });
 
   it('POSITIVE CONTROL: a project admin has every control open and no reason shown', async () => {
@@ -244,6 +262,6 @@ describe('Settings offers each write from its tier up', () => {
     for (const b of screen.getAllByRole('button', { name: /^Remove/ })) expect(b).toBeEnabled();
     expect(screen.getByDisplayValue('To do')).toBeEnabled();
     expect(reviewSwitch()).toBeEnabled();
-    expect(screen.queryByText(/Only a project admin|cannot change columns|Only a member or an admin/)).toBeNull();
+    expect(screen.queryByText(/Only a project admin|cannot change columns|Only a master|Only a member or an admin/)).toBeNull();
   });
 });

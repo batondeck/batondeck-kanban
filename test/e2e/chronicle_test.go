@@ -36,7 +36,8 @@ func page(t *testing.T, c *Client, project, pageID string) (M, map[string]string
 
 // The worker starts a record by hand and edits it from its head; each version reads back through
 // the page resource. A taken slug, a sweep-shaped block id, an edit from a moved head and a viewer's
-// write are refused; a delete from a stale head is STALE, and a delete leaves no page.
+// write are refused. Deleting is the master's (the owner's ruling of 2026-11-10): a worker's delete is
+// FORBIDDEN, a delete from a stale head is STALE, and a delete leaves no page and one audit row.
 func chronicleCreateEditDelete(t *testing.T, e *env) {
 	p := e.project(t, "Chronicle")
 	slug := "adr/parser-" + uniq("s")[2:]
@@ -60,10 +61,15 @@ func chronicleCreateEditDelete(t *testing.T, e *env) {
 	e.master.Refuse(t, "edit_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedParentVersionId": v1, "blocks": blocks("ctx", "lost update")}, "STALE")
 	e.viewer.Refuse(t, "edit_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedParentVersionId": v2, "blocks": blocks("ctx", "x")}, "FORBIDDEN")
 
-	e.worker.Refuse(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedHeadVersionId": v1}, "STALE")
+	e.worker.Refuse(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedHeadVersionId": v2}, "FORBIDDEN")
 	e.viewer.Refuse(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid}, "FORBIDDEN")
-	del := e.worker.Call(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedHeadVersionId": v2})
+	e.master.Refuse(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedHeadVersionId": v1}, "STALE")
+	del := e.master.Call(t, "delete_chronicle_page", M{"projectId": p.id, "pageId": pid, "expectedHeadVersionId": v2})
 	want(t, B(del, "ok"), "delete_chronicle_page answered %s", js(del))
+	// The page leaves no version behind; the audit log names who deleted it, in which project.
+	rows := A(e.admin.Call(t, "list_audit_log", M{"action": "chronicle.page_deleted", "subject": pid}), "entries")
+	want(t, len(rows) == 1 && S(rows[0], "actor") == e.srv.ids["master"] && S(rows[0], "projectId") == p.id && S(rows[0], "agent") == "e2e-master",
+		"list_audit_log chronicle.page_deleted for %s: %s", pid, js(rows))
 	gone, _ := page(t, e.viewer, p.id, pid)
 	want(t, gone["page"] == nil && gone["head"] == nil, "the deleted page still reads: %s", js(gone))
 	idx, rerr := e.viewer.Read(t, "batondeck://"+p.id+"/chronicle")

@@ -9,7 +9,7 @@ import (
 // Boards is the boards and columns service.
 type Boards interface {
 	// Create is create_board.
-	// Tier: write. Event: board.created. Audit: none. Doorbell: none. Replays on idempotencyKey.
+	// Tier: master (the owner's ruling of 2026-11-10). Event: board.created. Audit: none. Doorbell: none. Replays on idempotencyKey.
 	Create(ctx context.Context, caller domain.Caller, req CreateBoardReq) (CreateBoardResp, error)
 
 	// List is list_boards.
@@ -21,7 +21,7 @@ type Boards interface {
 	Get(ctx context.Context, caller domain.Caller, req GetBoardReq) (GetBoardResp, error)
 
 	// AddColumn is add_column.
-	// Tier: write. Event: none. Audit: none. Doorbell: none.
+	// Tier: master (the owner's ruling of 2026-11-10). Event: none. Audit: none. Doorbell: none.
 	AddColumn(ctx context.Context, caller domain.Caller, req AddColumnReq) (AddColumnResp, error)
 
 	// UpdateColumn is update_column.

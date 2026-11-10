@@ -26,8 +26,8 @@ type Chronicle interface {
 	EditPage(ctx context.Context, caller domain.Caller, req EditChroniclePageReq) (EditChroniclePageResp, error)
 
 	// DeletePage is delete_chronicle_page: the page, its versions and its bodies, irreversibly.
-	// Tier: write. Event: chronicle.page_deleted. Audit: chronicle.page_deleted (the page as subject).
-	// Doorbell: none.
+	// Tier: master (the owner's ruling of 2026-11-10). Event: chronicle.page_deleted. Audit:
+	// chronicle.page_deleted (the page as subject). Doorbell: none.
 	DeletePage(ctx context.Context, caller domain.Caller, req DeleteChroniclePageReq) (DeleteChroniclePageResp, error)
 
 	// ListPages is the chronicle resource: 100 pages by slug, then nextCursor. Tier: read.

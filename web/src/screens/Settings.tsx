@@ -14,7 +14,7 @@ import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
 import { useAuth } from '../auth.js';
-import { useMyProjectRole } from '../displayNames.js';
+import { NOT_A_MEMBER, useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { useSingleProject } from '../projectContext.js';
 
@@ -517,11 +517,13 @@ export function Settings() {
 
   /**
    * WHAT THE CALLER'S ROLE IN THIS PROJECT LETS THEM CHANGE HERE (P-432), the tiers of
-   * `internal/domain/grants.go`: `add_column` is write (a worker or above), `update_column` and
-   * `remove_column` structural (a member or above), `add_member`, `remove_member` and
-   * `update_settings` admin. A control below its tier is disabled and says why, as the task's Status
-   * and Claim do, instead of offering a click the server refuses. While the role loads every one is
-   * closed with no reason yet (fail closed). Hiding is not enforcing: the server still decides.
+   * `internal/domain/grants.go`: `add_column` is master (the owner's ruling of 2026-11-10; it was
+   * write), `update_column` and `remove_column` structural (a member or above), `add_member`,
+   * `remove_member` and `update_settings` admin. So a master may add a column but not rename, limit or
+   * delete one, and below master the reason names both floors. A control below its tier is disabled
+   * and says why, as the task's Status and Claim do, instead of offering a click the server refuses.
+   * While the role loads every one is closed with no reason yet (fail closed). Hiding is not
+   * enforcing: the server still decides.
    */
   const myRole = useMyProjectRole(projectId);
   const roleKnown = myRole !== undefined;
@@ -533,7 +535,9 @@ export function Settings() {
     ? null
     : canAddColumn
       ? closedWhy(myRole, 'update_column', 'rename, limit or delete columns')!
-      : closedWhy(myRole, 'add_column', 'change columns')!;
+      : myRole === NOT_A_MEMBER
+        ? closedWhy(myRole, 'add_column', 'change columns')!
+        : `${closedWhy(myRole, 'add_column', 'add columns')!} ${closedWhy(myRole, 'update_column', 'rename, limit or delete them')!}`;
   const membersWhy = closedWhy(myRole, 'add_member', 'add or remove members') ?? null;
   const workflowWhy = closedWhy(myRole, 'update_settings', 'change workflow settings') ?? null;
 

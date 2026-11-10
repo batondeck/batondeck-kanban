@@ -261,7 +261,7 @@ export function CommandPalette() {
 }
 
 /**
- * Opens the project's first board, creating one when it has none. Creating is `create_board`, tier write
+ * Opens the project's first board, creating one when it has none. Creating is `create_board`, tier master
  * (P-440): a caller below it is taken to the project's (empty) board list instead, which says why.
  */
 async function openProject(

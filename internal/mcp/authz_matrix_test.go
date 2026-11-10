@@ -17,7 +17,10 @@ type pinnedPosture struct {
 
 // expectedPosture pins each registered tool's guard, as conductor's test/unit/authz-matrix.test.ts
 // does: a posture widened in internal/domain/grants.go, or a tool registered with no row here,
-// fails. The tiers are conductor's manifest.ts entries for these tools.
+// fails. The tiers are conductor's manifest.ts entries for these tools, except create_board,
+// add_column and delete_chronicle_page: the owner's ruling of 2026-11-10 moved those three from write
+// (conductor's) to master, so a worker can neither destroy a Chronicle page nor redirect and wedge
+// everyone's claims with a board or a WIP-limited column it cannot then change.
 var expectedPosture = map[string]pinnedPosture{
 	"create_project":  {tier: "", tenantScoped: false},
 	"get_project":     {tier: domain.TierRead, tenantScoped: true},
@@ -28,10 +31,10 @@ var expectedPosture = map[string]pinnedPosture{
 	"remove_member":   {tier: domain.TierAdmin, tenantScoped: true},
 	// grant_capabilities is conductor's requireAdmin (manifest.ts:225), governed like every non-read.
 	"grant_capabilities": {tier: domain.TierAdmin, tenantScoped: true},
-	"create_board":       {tier: domain.TierWrite, tenantScoped: true},
+	"create_board":       {tier: domain.TierMaster, tenantScoped: true},
 	"list_boards":        {tier: domain.TierRead, tenantScoped: true},
 	"get_board":          {tier: domain.TierRead, tenantScoped: true},
-	"add_column":         {tier: domain.TierWrite, tenantScoped: true},
+	"add_column":         {tier: domain.TierMaster, tenantScoped: true},
 	"update_column":      {tier: domain.TierStructural, tenantScoped: true},
 	"remove_column":      {tier: domain.TierStructural, tenantScoped: true},
 	"create_task":        {tier: domain.TierMaster, tenantScoped: true},
@@ -76,11 +79,12 @@ var expectedPosture = map[string]pinnedPosture{
 	"add_follow_up":    {tier: domain.TierMaster, tenantScoped: true},
 	"ack_follow_up":    {tier: domain.TierWrite, tenantScoped: true},
 	"list_follow_ups":  {tier: domain.TierRead, tenantScoped: true},
-	// The chronicle writes are conductor's requireWriter: tier write, and governed by a grant.
+	// The chronicle writes are conductor's requireWriter: tier write, and governed by a grant. The
+	// delete is master by the owner's ruling of 2026-11-10: it is irreversible (no version, no undo).
 	"create_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	"ingest_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
 	"edit_chronicle_page":   {tier: domain.TierWrite, tenantScoped: true},
-	"delete_chronicle_page": {tier: domain.TierWrite, tenantScoped: true},
+	"delete_chronicle_page": {tier: domain.TierMaster, tenantScoped: true},
 	// Runs and sprints are conductor's requireMaster for every write, membership for the reads.
 	"start_runs":    {tier: domain.TierMaster, tenantScoped: true},
 	"open_run":      {tier: domain.TierMaster, tenantScoped: true},
