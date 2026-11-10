@@ -8,9 +8,14 @@ SELECT project_id, id, blocker_id, dependent_id, type, created_by, ts FROM depen
 WHERE project_id = $1 AND blocker_id = $2 AND dependent_id = $3 AND type = $4
 ORDER BY ts, id COLLATE "C" LIMIT 1;
 
--- What domain.CheckCycle reads: every blocks edge of the project.
--- name: ListBlocksEdges :many
-SELECT blocker_id, dependent_id FROM dependencies WHERE project_id = $1 AND type = 'blocks';
+-- What domain.CheckCycle reads: the project's live gates, the blocks edges whose blocker is still in
+-- the dependent's blockedBy. An edge whose blocker reached DONE stays (upstream context) but gates
+-- nothing, so it closes no cycle.
+-- name: ListGatingEdges :many
+SELECT d.blocker_id, d.dependent_id FROM dependencies d
+JOIN tasks t ON t.project_id = d.project_id AND t.id = d.dependent_id
+WHERE d.project_id = $1 AND d.type = 'blocks'
+  AND t.blocked_by::jsonb @> jsonb_build_array(d.blocker_id);
 
 -- name: InsertEdge :one
 INSERT INTO dependencies (project_id, id, blocker_id, dependent_id, type, created_by, ts) VALUES ($1, $2, $3, $4, $5, $6, $7)

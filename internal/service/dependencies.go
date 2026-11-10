@@ -14,7 +14,9 @@ import (
 // status never changes (plan §Ticket states: add_dependency only writes blockedBy). A blocker already
 // DONE gets its edge (get_task_context's upstream reads it) but gates nothing. The dependent
 // (toTaskId, where the event hangs) is mutate's task and is bumped once; the blocker is bumped once
-// when its blocks cache gained the dependent, as conductor's bumpArray does. Serialised per project
+// when its blocks cache gained the dependent, as conductor's bumpArray does. Re-adding an edge whose
+// gate cleared (its blocker reached DONE and was reopened) gates the dependent again; re-adding an
+// edge that changes nothing appends no dependency.added. Serialised per project
 // (mutation.LockProject).
 func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req AddDependencyReq) (AddDependencyResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_dependency", domain.GrantSubject{}, true)
@@ -41,21 +43,39 @@ func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req
 		Tool: "add_dependency", Args: map[string]any{"projectId": req.ProjectID, "fromTaskId": req.FromTaskID, "toTaskId": req.ToTaskID},
 		ProjectID: req.ProjectID, TaskID: req.ToTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
 	}, func(t *txn) (AddDependencyResp, error) {
-		gains := typ == "blocks" && req.FromTaskID != req.ToTaskID && !slices.Contains(t.Task.BlockedBy, req.FromTaskID)
+		// The blocker as it is before the edge: whether its blocks cache gains the dependent (a new
+		// edge) and whether the dependent's blockedBy gains it (an open blocker not gating yet, which
+		// a re-added edge whose gate cleared also is) is what store.AddEdge will write.
+		blocksEdge := typ == "blocks" && req.FromTaskID != req.ToTaskID
+		var blocker store.Task
+		var err error
+		if blocksEdge {
+			if blocker, err = t.Tx.GetTask(ctx, req.ProjectID, req.FromTaskID); err != nil {
+				return AddDependencyResp{}, err
+			}
+		}
 		edge, err := t.Tx.AddEdge(ctx, store.AddEdgeInput{ProjectID: req.ProjectID, FromTaskID: req.FromTaskID, ToTaskID: req.ToTaskID, Type: store.DependencyType(typ), CreatedBy: caller.Identity})
 		if err != nil {
 			return AddDependencyResp{}, err
 		}
-		if gains {
-			if err := t.bumpOther(req.FromTaskID); err != nil {
+		changed := true
+		if blocksEdge {
+			gainsBlocks := !slices.Contains(blocker.Blocks, req.ToTaskID)
+			gainsGate := blocker.Status != domain.Done && !slices.Contains(t.Task.BlockedBy, req.FromTaskID)
+			if gainsBlocks {
+				if _, err := t.bump(blocker); err != nil {
+					return AddDependencyResp{}, err
+				}
+			}
+			changed = gainsBlocks || gainsGate
+		}
+		if changed {
+			data, err := json.Marshal(map[string]any{"fromTaskId": req.FromTaskID, "type": typ})
+			if err != nil {
 				return AddDependencyResp{}, err
 			}
+			t.Event(store.EventInput{Type: domain.EventDependencyAdded, Data: data})
 		}
-		data, err := json.Marshal(map[string]any{"fromTaskId": req.FromTaskID, "type": typ})
-		if err != nil {
-			return AddDependencyResp{}, err
-		}
-		t.Event(store.EventInput{Type: domain.EventDependencyAdded, Data: data})
 		return AddDependencyResp{Edge: edgeOut(edge)}, nil
 	})
 }

@@ -1274,8 +1274,10 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 				if slices.Contains(cur.BlockedBy, b) {
 					continue
 				}
-				if _, err := t.bump(other); err != nil {
-					return BlockTaskResp{}, err
+				if !slices.Contains(other.Blocks, cur.ID) {
+					if _, err := t.bump(other); err != nil {
+						return BlockTaskResp{}, err
+					}
 				}
 				if err := t.event(cur, domain.EventDependencyAdded, map[string]any{"fromTaskId": b, "type": "blocks"}); err != nil {
 					return BlockTaskResp{}, err

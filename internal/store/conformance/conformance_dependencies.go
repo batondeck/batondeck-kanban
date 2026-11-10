@@ -177,6 +177,31 @@ func dependencies(t *testing.T, newStore Factory) {
 			wantCaches(t, sd, p, ts[1], []string{ts[0]}, []string{})
 		})
 
+		// A blocks edge outlives its gate: when its blocker reaches DONE the service clears it from
+		// the dependent's blockedBy (SetCaches) and the edge stays. Re-adding it while the blocker is
+		// open again re-opens the gate on the same edge, and a cleared edge closes no cycle.
+		t.Run("AClearedGateReopensOnTheSameEdgeAndClosesNoCycle", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			ts := seedTasks(t, sd, p, b, "a", "b", "c")
+			first, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
+			noErr(t, err)
+			noErr(t, s.SetCaches(ctx, p, ts[1], nil, nil))
+			back, err := s.AddEdge(ctx, blocks(p, ts[1], ts[0]))
+			noErr(t, err)
+			_, err = s.RemoveEdge(ctx, p, back.ID)
+			noErr(t, err)
+			again, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
+			noErr(t, err)
+			if again.ID != first.ID || len(edgeIDs(t, s, p)) != 1 {
+				t.Fatalf("the re-add returned %s (first %s) and the project holds %v", again.ID, first.ID, edgeIDs(t, s, p))
+			}
+			wantCaches(t, sd, p, ts[1], []string{ts[0]}, []string{})
+			wantCaches(t, sd, p, ts[0], []string{}, []string{ts[1]})
+			// The live gate ts[0] -> ts[1] closes one again.
+			_, err = s.AddEdge(ctx, blocks(p, ts[1], ts[0]))
+			wantErr(t, err, domain.CodeCycleDetected, "")
+		})
+
 		t.Run("RemoveEdgeRemovesTheEdgeAndItsCacheEntries", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")

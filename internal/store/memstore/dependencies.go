@@ -27,21 +27,28 @@ func (s *Store) AddEdge(ctx context.Context, in store.AddEdgeInput) (store.Depen
 		if err != nil {
 			return store.DependencyEdge{}, err
 		}
-		edges := st.projectEdges(in.ProjectID)
-		var blocking []domain.Edge
-		for _, e := range edges {
+		var same *store.DependencyEdge
+		var gating []domain.Edge
+		for _, e := range st.projectEdges(in.ProjectID) {
 			if e.FromTaskID == in.FromTaskID && e.ToTaskID == in.ToTaskID && e.Type == in.Type {
-				return e, nil
+				same = &e
 			}
+			// The live gates: blocks edges whose blocker is still in the dependent's blockedBy.
 			if e.Type == store.DependencyBlocks {
-				blocking = append(blocking, domain.Edge{FromTaskID: e.FromTaskID, ToTaskID: e.ToTaskID})
+				if dep, err := st.task(in.ProjectID, e.ToTaskID); err == nil && slices.Contains(dep.BlockedBy, e.FromTaskID) {
+					gating = append(gating, domain.Edge{FromTaskID: e.FromTaskID, ToTaskID: e.ToTaskID})
+				}
 			}
 		}
 		if in.Type == store.DependencyBlocks {
-			if err := domain.CheckCycle(blocking, in.FromTaskID, in.ToTaskID); err != nil {
+			gates := from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID)
+			if same != nil && !gates {
+				return *same, nil
+			}
+			if err := domain.CheckCycle(gating, in.FromTaskID, in.ToTaskID); err != nil {
 				return store.DependencyEdge{}, err
 			}
-			if from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID) {
+			if gates {
 				to.BlockedBy = append(list(to.BlockedBy), from.ID)
 			}
 			st.put(to)
@@ -49,6 +56,9 @@ func (s *Store) AddEdge(ctx context.Context, in store.AddEdgeInput) (store.Depen
 				from.Blocks = append(list(from.Blocks), to.ID)
 			}
 			st.put(from)
+		}
+		if same != nil {
+			return *same, nil
 		}
 		e := store.DependencyEdge{ProjectID: in.ProjectID, ID: newID("D-", 16), FromTaskID: in.FromTaskID, ToTaskID: in.ToTaskID, Type: in.Type, CreatedBy: in.CreatedBy, TS: nowMillis()}
 		st.edges[[2]string{e.ProjectID, e.ID}] = e

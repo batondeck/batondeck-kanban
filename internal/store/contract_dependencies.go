@@ -46,10 +46,14 @@ type AddEdgeInput struct {
 type Dependencies interface {
 	// AddEdge adds the edge. It takes the project's lock (Locks.LockProject) before anything else,
 	// so concurrent edge writes of one project are serialised wherever they are called from. For
-	// blocks it runs domain.CheckCycle over the project's blocks edges first, then appends FromTaskID to the dependent's blockedBy and ToTaskID to the blocker's
-	// blocks (each at most once). blockedBy holds open blockers only: a blocker already DONE gets its
-	// edge and the blocks entry, and the dependent's blockedBy does not gain it. An edge equal to an
-	// existing one (same from, to and type) returns the existing edge and writes nothing.
+	// blocks it runs domain.CheckCycle over the project's live gates first (the blocks edges whose
+	// blocker is still in the dependent's blockedBy: an edge whose blocker reached DONE stays but
+	// gates nothing), then appends FromTaskID to the dependent's blockedBy and ToTaskID to the
+	// blocker's blocks (each at most once). blockedBy holds open blockers only: a blocker already
+	// DONE gets its edge and the blocks entry, and the dependent's blockedBy does not gain it. An edge
+	// equal to an existing one (same from, to and type) returns the existing edge and writes nothing,
+	// unless it is a blocks edge whose gate cleared and whose blocker is open again: then, after the
+	// cycle check, the dependent's blockedBy regains the blocker (the gate re-opens).
 	AddEdge(ctx context.Context, in AddEdgeInput) (DependencyEdge, error)
 	// RemoveEdge removes the edge and returns it; for blocks it also removes FromTaskID from the
 	// dependent's blockedBy and ToTaskID from the blocker's blocks.
