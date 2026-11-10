@@ -130,9 +130,10 @@ func (a *Accounts) Lookup(ctx context.Context, login string) (store.User, error)
 	return u, err
 }
 
-// Disable marks the user disabled. Their sessions and tokens stop resolving once the account cache
-// entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by default). Enable is the way
-// back.
+// Disable marks the user disabled. Their sessions, API tokens and OAuth access tokens stop
+// resolving once the account cache entry that ResolveCaller holds expires (AccountCacheTTL, 60 s by
+// default), and their OAuth grants are not refreshed while it lasts. Nothing is deleted or
+// revoked: Enable is the way back, and what has not expired works again.
 func (a *Accounts) Disable(ctx context.Context, login string) (store.User, error) {
 	u, err := a.Lookup(ctx, login)
 	if err != nil {
@@ -165,8 +166,10 @@ func (a *Accounts) Enable(ctx context.Context, login string) (u store.User, wasD
 // SetPassword replaces the user's password and ends every browser session of the user, returning
 // how many it ended: a reset after a leak must not leave a session the old password opened. The
 // hash is written first, so a sign-in with the old password cannot land between the two writes and
-// keep a session. API and OAuth tokens are separate credentials and stay (`token revoke` ends one;
-// `user disable` ends them all). Without Sessions it refuses before writing anything.
+// keep a session. API tokens and OAuth grants are separate credentials and stay: `token revoke`
+// ends an API token, and `user disable` suspends both (Disable); no command ends one OAuth grant,
+// whose refresh token lapses 14 days after its last use. Without Sessions it refuses before
+// writing anything.
 func (a *Accounts) SetPassword(ctx context.Context, login, password string) (ended int64, err error) {
 	if a.Sessions == nil {
 		return 0, errors.New("auth: Accounts.Sessions is nil: a password change must end the user's sessions")

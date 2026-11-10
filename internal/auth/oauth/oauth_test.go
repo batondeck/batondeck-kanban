@@ -780,3 +780,27 @@ func TestAuthorizeRefusesAStoredRedirectURIWithUserinfo(t *testing.T) {
 		t.Fatalf("authorize with a stored userinfo redirect URI: %d %q %s, want a direct 400", resp.StatusCode, resp.Header.Get("Location"), page)
 	}
 }
+
+// A disabled user's grant does not refresh: the refresh token is refused (invalid_grant) and kept,
+// so the grant cannot slide its 14 days forward while the account is disabled, and a code issued
+// before the disable is not exchanged. Once the user is enabled again the unexpired refresh token
+// works, as their API tokens resolve again (user enable).
+func TestADisabledUsersGrantDoesNotRefresh(t *testing.T) {
+	f := newFixture(t)
+	clientID, code, verifier := f.authorize(t, "worker", nil)
+	_, first := f.exchange(t, clientID, code, verifier)
+	laterClient, laterCode, laterVerifier := f.authorize(t, "worker", nil)
+	if _, err := f.svc.Accounts.Disable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	st, m := f.refreshCall(t, clientID, first["refresh_token"].(string))
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	st, m = f.exchange(t, laterClient, laterCode, laterVerifier)
+	wantOAuthError(t, st, m, http.StatusBadRequest, "invalid_grant")
+	if _, _, err := f.svc.Accounts.Enable(context.Background(), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if st, m := f.refreshCall(t, clientID, first["refresh_token"].(string)); st != http.StatusOK {
+		t.Fatalf("the refresh once alice is enabled again: %d %v", st, m)
+	}
+}
