@@ -327,3 +327,32 @@ func TestFifoServesTheOldestTaskFirst(t *testing.T) {
 		}
 	})
 }
+
+// claim_task honours the retry backoff fail_task set (domain.IsClaimable: past nextEligibleAt), as
+// claim_next does: a claim inside it is refused, naming when it ends, and writes nothing. Before, a
+// fail_task then claim_task loop retried at once and burnt through poisonAfterAttempts in seconds.
+func TestClaimTaskHonoursTheRetryBackoff(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		e.settings(t, map[string]any{"retryPolicy": policy3})
+		lc := e.c.Lifecycle()
+		task := e.task(t, domain.Todo)
+		c := e.claim(t, e.alice, task.ID, 0)
+		if _, err := lc.Fail(e.ctx, e.alice, FailTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, Reason: "boom"}); err != nil {
+			t.Fatal(err)
+		}
+		failed := e.get(t, task.ID)
+		_, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: task.ID})
+		t.Logf("claim_task inside the backoff (nextEligibleAt %v): %v", failed.NextEligibleAt, err)
+		be := wantCode(t, err, domain.CodeInvalidTransition)
+		if be.Details["nextEligibleAt"] != isoMs(*failed.NextEligibleAt) {
+			t.Fatalf("details %v, want nextEligibleAt %s", be.Details, isoMs(*failed.NextEligibleAt))
+		}
+		if got := e.get(t, task.ID); got.Status != domain.Todo || got.Version != failed.Version {
+			t.Fatalf("the refused claim wrote %+v", got)
+		}
+		e.clock.advance(2 * time.Second)
+		if _, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: task.ID}); err != nil {
+			t.Fatalf("claim_task past the backoff: %v", err)
+		}
+	})
+}

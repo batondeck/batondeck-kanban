@@ -123,6 +123,7 @@ func TestFailPoisonsAtTheThresholdAndClaimNextSkipsIt(t *testing.T) {
 				if got.Status != domain.Todo || got.ClaimAttempts != int64(i) || got.NextEligibleAt == nil || *got.NextEligibleAt != want || got.Claim != nil {
 					t.Fatalf("fail %d: %+v, want TODO attempts %d nextEligibleAt %d", i, got, i, want)
 				}
+				e.clock.advance(time.Minute) // past the backoff: claim_task honours it
 				continue
 			}
 			if got.Status != domain.Blocked || !reasonIs(got, domain.BlockedReasonPoison) || got.ClaimAttempts != 3 ||

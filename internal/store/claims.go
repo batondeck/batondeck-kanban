@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
@@ -182,6 +183,9 @@ func claimTask(ctx context.Context, e engine, projectID, taskID string, expected
 		}
 		if len(t.BlockedBy) > 0 {
 			return Task{}, domain.GatedClaim(taskID, t.Status, t.BlockedBy)
+		}
+		if t.Status == domain.Todo && t.NextEligibleAt != nil && *t.NextEligibleAt > in.Now {
+			return Task{}, domain.InBackoff(taskID, time.UnixMilli(*t.NextEligibleAt))
 		}
 		mine := t.Claim != nil && t.Claim.Owner == in.Owner && sameAgent(t.Claim.AgentID, in.AgentID)
 		if live(t.Claim, in.Now) && !mine {
