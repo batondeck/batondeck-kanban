@@ -116,8 +116,9 @@ func readFeed(ctx context.Context, svc service.Services, c domain.Caller, p stri
 
 // registerResources adds the resource templates, each reading through srv's services as the
 // request's caller. The ids and the cursor taken from the URI pass domain.CheckText first, as a
-// tool's arguments do (a NUL is VALIDATION, never a store error), and a panic in the read is
-// INTERNAL with its stack logged, as a tool's is: go-sdk recovers no handler panic.
+// tool's arguments do (a NUL, or a percent-decoded byte that is not UTF-8, is VALIDATION, never a
+// store error), and a panic in the read is INTERNAL with its stack logged, as a tool's is: go-sdk
+// recovers no handler panic.
 func registerResources(srv *Server) {
 	for _, r := range resources {
 		srv.sdk.AddResourceTemplate(&mcp.ResourceTemplate{

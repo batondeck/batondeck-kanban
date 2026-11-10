@@ -47,18 +47,27 @@ func TestLastProjectIDFollowsTheCallersOwnCalls(t *testing.T) {
 	})
 }
 
-// A resource read whose URI carries a NUL in an id is VALIDATION on every engine, as get_task's is:
-// on Postgres it reached the store and came back a retryable INTERNAL, on SQLite NOT_FOUND.
+// A resource read whose URI carries a NUL, or a byte that is not UTF-8, in an id is VALIDATION on
+// every engine, as get_task's NUL is: on Postgres it reached the store and came back a retryable
+// INTERNAL, on SQLite NOT_FOUND (or FORBIDDEN for the project id). The URI is percent-decoded, so
+// unlike a tool's JSON arguments it can carry bytes that are not UTF-8.
 func TestResourceReadRefusesNULOnEveryEngine(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		h := bootStack(t, s)
 		c := &caller{t: t, cs: h.Connect(t, stackOwner), called: map[string]int{}}
 		p := str(c.call("create_project", map[string]any{"name": "Nul", "idempotencyKey": "p-nul"})["projectId"])
-		_, err := c.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: "batondeck://" + p + "/task/T%00"})
-		var werr *jsonrpc.Error
-		var data domain.BatonDeckError
-		if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInvalidParams || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeValidation {
-			t.Errorf("%s: read of a task id with a NUL = %v, want JSON-RPC invalid params with VALIDATION", s.Engine, err)
+		for _, uri := range []string{
+			"batondeck://" + p + "/task/T%00",
+			"batondeck://" + p + "/task/T%FF", // a byte that is not UTF-8 (Postgres: SQLSTATE 22021, as a NUL)
+			"batondeck://" + p + "/task/T%C3", // a cut UTF-8 sequence
+			"batondeck://P-%FF/task/T-1",      // in the project id, which authorize looks up first
+		} {
+			_, err := c.cs.ReadResource(testCtx(t), &sdk.ReadResourceParams{URI: uri})
+			var werr *jsonrpc.Error
+			var data domain.BatonDeckError
+			if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInvalidParams || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeValidation {
+				t.Errorf("%s: read %s = %v, want JSON-RPC invalid params with VALIDATION", s.Engine, uri, err)
+			}
 		}
 	})
 }

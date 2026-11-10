@@ -307,10 +307,14 @@ func TestResourcesRead(t *testing.T) {
 		t.Logf("read %s -> JSON-RPC %d %s", uri, werr.Code, werr.Data)
 	}
 
-	// A NUL in an id or the cursor taken from the URI is VALIDATION (invalid params) before any
-	// service call, as domain.CheckText makes it for a tool's arguments: Postgres cannot store or
-	// compare NUL in text, so the engines would otherwise disagree (G3).
-	for _, uri := range []string{"batondeck://P-1/task/T%00", "batondeck://P-1/board/B-1/feed?cursor=c%00", "batondeck://P-1/chronicle/C-1/versions/V%00"} {
+	// A NUL or a byte that is not UTF-8 in an id or the cursor taken from the URI is VALIDATION
+	// (invalid params) before any service call, as domain.CheckText makes it for a tool's
+	// arguments: Postgres cannot store or compare either in text, so the engines would otherwise
+	// disagree (G3). A URI is percent-decoded, so unlike JSON it can carry bytes that are not UTF-8.
+	for _, uri := range []string{
+		"batondeck://P-1/task/T%00", "batondeck://P-1/board/B-1/feed?cursor=c%00", "batondeck://P-1/chronicle/C-1/versions/V%00",
+		"batondeck://P-1/task/T%FF", "batondeck://P-1/task/T%C3", "batondeck://P-%FF/task/T-1", "batondeck://P-1/board/B-1/feed?cursor=c%FE",
+	} {
 		before := len(f.Calls())
 		_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: uri})
 		var werr *jsonrpc.Error

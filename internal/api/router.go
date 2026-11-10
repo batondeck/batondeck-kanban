@@ -67,10 +67,10 @@ type route struct {
 const maxBody = 1 << 20
 
 // Mount registers every BFF route on mux: /api/public-config and POST /api/login outside the
-// session check, every other path behind Authenticate and then CSRF.
+// session check, every other path behind Authenticate and then CSRF, and then urlText.
 func Mount(mux *http.ServeMux, o Options) {
 	for _, r := range table(&o) {
-		h := o.Auth.CSRF(r.h)
+		h := o.Auth.CSRF(urlText(r.Path, r.h, o.logger()))
 		if !r.public {
 			h = o.Auth.Authenticate(h)
 		}
