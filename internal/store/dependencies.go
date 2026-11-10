@@ -35,11 +35,11 @@ func (s *Postgres) AddEdge(ctx context.Context, in AddEdgeInput) (DependencyEdge
 	return addEdge(ctx, s, in)
 }
 
-func (s *SQLite) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, error) {
+func (s *SQLite) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, bool, error) {
 	return removeEdge(ctx, s, projectID, edgeID)
 }
 
-func (s *Postgres) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, error) {
+func (s *Postgres) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, bool, error) {
 	return removeEdge(ctx, s, projectID, edgeID)
 }
 
@@ -189,8 +189,9 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 	return out, err
 }
 
-func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (DependencyEdge, error) {
+func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (DependencyEdge, bool, error) {
 	var out DependencyEdge
+	var gated bool
 	err := e.Atomically(ctx, func(tx Store) error {
 		q := on(tx).queries(true)
 		r, err := q.DeleteEdge(ctx, sqlitedb.DeleteEdgeParams{ProjectID: projectID, ID: edgeID})
@@ -206,6 +207,7 @@ func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (Depend
 		if err != nil {
 			return err
 		}
+		gated = slices.Contains(to.BlockedBy, out.FromTaskID)
 		to.BlockedBy = slices.DeleteFunc(to.BlockedBy, func(id string) bool { return id == out.FromTaskID })
 		from.Blocks = slices.DeleteFunc(from.Blocks, func(id string) bool { return id == out.ToTaskID })
 		if err := writeCaches(ctx, q, to); err != nil {
@@ -213,7 +215,10 @@ func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (Depend
 		}
 		return writeCaches(ctx, q, from)
 	})
-	return out, err
+	if err != nil {
+		return DependencyEdge{}, false, err
+	}
+	return out, gated, nil
 }
 
 // edgeRow is the shape of the three list statements' rows: the starting row's id, then an edge

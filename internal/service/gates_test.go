@@ -253,6 +253,72 @@ func TestATodoDependentThatBecomesClaimableRingsItsWorker(t *testing.T) {
 	})
 }
 
+// remove_dependency of a TODO dependent's last gating edge makes it claimable, as a blocker reaching
+// DONE does: it rings the same way, broadcast when unassigned and assigned to its assignee. Before,
+// only an unblock that moved a BLOCKED dependent rang its worker; this one wrote a changed row that
+// rings masters alone. Removing an edge whose gate had already cleared (its blocker reached DONE and
+// was reopened since) frees nothing, so it rings no worker.
+func TestRemovingATodoDependentsLastBlockerRingsItsWorker(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		c, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "c",
+			Status: domain.Todo, Assignee: &bob.Identity, OrderKey: "a9", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.dependOn(t, a.ID, b.ID)
+		e.dependOn(t, a.ID, c.ID)
+		remove := func(id string) string {
+			t.Helper()
+			edges, err := e.st.ListBlockers(e.ctx, e.project, id)
+			if err != nil || len(edges) != 1 {
+				t.Fatalf("blockers of %s %+v (err %v), want one", id, edges, err)
+			}
+			from := e.changeCount(t)
+			if _, err := e.c.Context().RemoveDependency(e.ctx, e.alice, RemoveDependencyReq{ProjectID: e.project, EdgeID: edges[0].ID}); err != nil {
+				t.Fatalf("remove_dependency %s: %v", edges[0].ID, err)
+			}
+			ch, err := e.st.ReadChanges(e.ctx, 0, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rows []string
+			for _, row := range ch[from:] {
+				var p changePayload
+				_ = json.Unmarshal(row.Payload, &p)
+				if p.TaskID == id {
+					rows = append(rows, p.Kind+"@"+row.Scope)
+				}
+			}
+			return strings.Join(rows, " ")
+		}
+		rb, rc := remove(b.ID), remove(c.ID)
+		t.Logf("remove_dependency of the last blocker: %s rang %q, %s rang %q", b.ID, rb, c.ID, rc)
+		if rb != DoorbellBroadcast+"@"+BroadcastScope(e.project) || rc != DoorbellAssigned+"@bob" {
+			t.Fatalf("%s rang %q and %s rang %q, want %s broadcast and %s assigned to bob", b.ID, rb, c.ID, rc, b.ID, c.ID)
+		}
+
+		// A cleared edge: d's gate on x cleared when x reached DONE, and x is open again. d was
+		// claimable all along, so removing the edge rings no worker.
+		x, d := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		e.dependOn(t, x.ID, d.ID)
+		e.complete(t, x.ID)
+		done := e.get(t, x.ID)
+		if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: x.ID, Version: done.Version, ToStatus: domain.InProgress}); err != nil {
+			t.Fatalf("reopen %s: %v", x.ID, err)
+		}
+		if got := e.get(t, d.ID); len(got.BlockedBy) != 0 {
+			t.Fatalf("%s blockedBy %v, want the gate cleared", d.ID, got.BlockedBy)
+		}
+		rd := remove(d.ID)
+		t.Logf("remove_dependency of a cleared edge: %s rang %q", d.ID, rd)
+		if rd != ChangeKindChanged+"@project:"+e.project {
+			t.Fatalf("%s rang %q, want a changed row alone: it was claimable before", d.ID, rd)
+		}
+	})
+}
+
 // An idempotency key is bound to the call's arguments: the same key on another task is another
 // call, not a replay of the first one's answer. Before, complete_task(T-2, key "done") within the
 // window answered T-1's DONE body and left T-2 IN_PROGRESS with its deliverable dropped. The same
