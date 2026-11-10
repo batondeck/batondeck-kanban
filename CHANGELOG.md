@@ -1418,6 +1418,636 @@ this section's headings in CHANGELOG.md, are all part of it.
 
 ### Fixed
 
+From the pre-public review (2026-11-10), in which every subsystem was read by a reviewer, each
+finding was checked against the code, and each code defect was shown by a failing test before its
+fix:
+
+- **A worker can no longer create boards, add columns or delete Chronicle pages.** `create_board`,
+  `add_column` and `delete_chronicle_page` now need master. A worker could delete a record with all
+  its versions, or add a column whose low order and WIP limit took every claim and then refused it,
+  and could not undo either. In the web UI, "+ New board", "+ Add Column" and a record's Delete are
+  closed below master and say why.
+- **The consent role caps the tools that take no project.** A viewer OAuth grant could call
+  `create_project`, `set_my_settings`, `mark_notifications_read` and `disconnect_agent`, because the
+  cap applied only to tools with a `projectId`. A token that carries a role now needs at least
+  worker for those writes; reads and API tokens are unchanged.
+- **An OAuth access token no longer opens the REST API.** The web UI's `/api` routes took a
+  connector's access token, which is issued for `/mcp` alone and capped at the role chosen on the
+  consent page. A viewer or worker grant could call `POST /api/me/cli-tokens` to mint itself an
+  uncapped, year-long API token with the user's full roles and workspace-admin rights, and could
+  list or revoke the user's tokens. Such a bearer now gets 401 on every `/api` route; `/mcp` still
+  takes it.
+- **A client's chosen name no longer passes for another agent on a lease.** `cancel_task` let a
+  viewer OAuth grant act as the lease holder when its client's name matched the claim's agent. A
+  client whose OAuth `client_name` or MCP `clientInfo.name` equalled one of the user's API-token
+  labels held that token's leases: `claim_task` handed it the token's own `leaseId`, and
+  `cancel_task`, `move_task`, `delete_task` and `start_runs` let it through. The holder pass now
+  needs a role that could have claimed, a live token label belongs to that token alone, and such a
+  re-claim answers `CONFLICT_LOCKED` and leaves the token's lease as it was.
+- **A client named `id:<identity>` no longer borrows another identity's agent id.** An MCP
+  `clientInfo.name` or OAuth `client_name` of that shape was stamped as the agent on claims, feed
+  events, reviews and artifacts. It now names no agent, as a token label of that shape already did.
+- **A disabled user's OAuth grant is no longer refreshed.** `POST /token` rotated a disabled user's
+  refresh token and exchanged a code issued before the disable, which moved the grant's 14 days
+  forward for as long as the account stayed disabled. It now answers `invalid_grant` and leaves the
+  refresh token unspent.
+- **OAuth registration refuses look-alike redirect URIs and client names.** A redirect URI with a
+  user name (`https://claude.ai@evil.example/cb`) registered, and the consent page showed it as
+  returning to `https://claude.ai@…`; a `client_name` with a bidi override or zero-width character
+  could make the page show another name. `/register` now refuses both, `/authorize` refuses a stored
+  registration whose redirect URI carries a user name, and the sign-in and consent pages drop those
+  characters from a name stored before the rule.
+- **Client registration limits hold.** `/register` counted each IPv6 address on its own, so one /64
+  could register without limit, and at 10,000 addresses it forgot every count. It now counts an IPv6
+  client by its /64, as sign-in does, keeps its counts when its table is full, and allows at most
+  500 registrations an hour from all addresses together.
+- **Another site cannot sign a browser in with an `Origin: null` form.** On a plain-http board,
+  where browsers send no Fetch Metadata, a cross-site form posted from a no-referrer page signed
+  visitors in to the attacker's account. A sign-in with `Origin: null` is now refused, and the app's
+  pages send `Referrer-Policy: same-origin`, so their own POSTs carry their Origin and other sites
+  still get no Referer.
+- **An https `public_url` makes the sign-in cookies Secure.** Behind a TLS proxy that sends no
+  `X-Forwarded-Proto` (nginx's bare `proxy_pass`), the session cookie went out without Secure, and a
+  chain's `https, http` was not read as https. Both cookies are now Secure with an https
+  `public_url`, and a browser whose Origin is that URL passes the CSRF check, also when `public_url`
+  writes out port 443 or 80. The README names the headers the proxy should send, and the "cross-site
+  request refused" that a proxy rewriting `Host` causes.
+- **A password change ends a sign-in that was mid-check.** A sign-in with the old password whose
+  check overlapped `user passwd` or `user disable` kept a 7-day session. That session is now ended
+  and the sign-in refused.
+- **Sign-in limits count only checked passwords, and the OAuth sign-in page says when they apply.**
+  When both password-check slots were busy, a refused sign-in still used one of the address's 10
+  attempts a minute, so retries could lock a user out although no password was checked; such a
+  refusal now costs nothing. Past the limits, the OAuth sign-in page said the login and password did
+  not match, and now says there were too many attempts and to wait a minute.
+- **A user can change their own password.** A teammate added under Settings → Users could never
+  replace the generated password the admin saw. Settings → Your password now takes the current
+  password and a new one of at least 12 characters, signs out the user's other sessions, keeps this
+  browser signed in, and says that CLI tokens and agents keep working.
+- **A CLI-token `ttlSeconds` over a year is refused.** A huge value wrapped around when converted to
+  nanoseconds, and `POST /api/me/cli-tokens` answered 200 with a one-minute or 30-day token.
+  Anything over 365 days is now `VALIDATION`.
+- **The audit log records the sign-in and OAuth events it was built for.** The served binary dropped
+  CSRF refusals, client registrations, consents granted or denied, and grants revoked after a
+  replayed code or refresh token, because nothing connected them to the log. They are now audit
+  rows. Refusals are recorded at most 30 a minute for each account, and 30 a minute for all requests
+  with no credential together. A registration's row names the client and the hosts of its redirect
+  URIs, and holds at most 1 KB.
+- **Account changes and Chronicle page deletes are audited.** Adding an account under Settings →
+  Users, and the host's `user add`, `disable`, `enable` and `passwd`, wrote no audit row; they now
+  write `user.added`, `user.disabled`, `user.enabled` and `user.password_changed`, naming the admin
+  or `host` and the account, and an add whose row cannot be written leaves the account disabled. A
+  deleted Chronicle page keeps no version, and only its project's event feed noted the delete;
+  `delete_chronicle_page` now also writes a `chronicle.page_deleted` audit row, as `delete_task`
+  does. A change to `checkpointPolicy`, `tokenPolicy` or `maxTicketTokens` recorded
+  `settings.updated` with no data; the row now records them.
+- **`list_audit_log` pages.** Only the newest 500 rows of a filter could be read through the tool
+  and `GET /api/audit`, and only the newest 100 in the web UI. Both now take a `cursor` and answer
+  `nextCursor`, and the Workspace Log's audit panel offers Load more.
+- **A flood of wrong passwords no longer locks people out of signing in.** Every check waited in one
+  queue for the 2 password-check slots, so a steady stream of bad sign-ins from many IPv6 addresses
+  (thousands of /64s in one /48) kept every correct sign-in waiting until it was refused after 3 s.
+  Now a freed slot goes first to a login that signed in from that address in the last 30 days, and a
+  flood from the same /48 does not count against that login. Each IPv6 /48 also has its own budget
+  of 50 failed attempts a minute, on top of each /64's 10. The record of where people signed in from
+  is kept in memory only, so a restart forgets it.
+- **A long project id can no longer exhaust the server's memory.** Any token could name a
+  `projectId` of any length, and each one was cached for a minute with no cap. A `projectId` longer
+  than 64 bytes is now refused as `VALIDATION` before any lookup, and the access cache holds at most
+  10,000 entries.
+- **A member added by login before the account exists no longer gets stuck or stands in for the last
+  admin.** Once the account existed, Remove on the login's row removed the account's own membership
+  instead, adding the login again left two rows, and an admin row kept for a login let the last real
+  admin leave a project nobody could then manage. Now the row is removed by its own key, adding the
+  login or the account id again folds the row into the account's (its grant included, named in the
+  audit log), and the last account admin cannot leave or step down while only such a row stays
+  admin. Settings marks a member row with no account "no account · grants nothing".
+- **Two admins removing or demoting each other at once on Postgres leave one admin.** `add_member`
+  and `remove_member` checked the admin count and then wrote without the project lock, so both calls
+  could pass. They now take the project lock, and the second call is refused as the last admin.
+- **Membership, role and grant changes hold in every serve process once the change reaches it.**
+  Only the process that made the change dropped its cached access, so another process on the same
+  Postgres kept admitting a removed or narrowed identity for up to 60 s. Every process now drops the
+  project's cached access when the change reaches it over the bus, and a change the bus missed
+  clears the cache.
+- **Capability grants judge what a call writes.** `update_task` could raise a task above a grant's
+  `maxPriority` or relabel it outside its labels, and `add_subtask` and `orchestrate_subtasks` could
+  create children above the cap, while `create_task` within the cap was always refused. Every
+  written priority, and the labels an update writes, are now checked. Under a boards grant
+  `detect_anomalies` is judged on the board it scans, and under a statuses grant `pick_run` on where
+  it lands; both were always refused before.
+- **Malformed calls from a non-member no longer count in a project's operations summary.** A call
+  naming another team's project with an unknown key, a wrong type or a NUL character was refused
+  before membership was checked, but still counted in that project's summary under an agent name the
+  caller chose. Calls refused before the service now count in no project.
+- **Columns keep every card placeable, and claim_next serves the oldest task first.** Claims,
+  completions and other lifecycle moves carried a task's old order key into its new column, new
+  tasks reused the key the last claimed task had taken away, and tasks landing in one column at once
+  on Postgres could all take one key, so a card dropped between two equal-keyed cards snapped back.
+  New tasks, subtasks and on-call alerts, and tasks moved into a column by `move_task`, landed at
+  its top, so `claim_next` and `next_task`'s fifo always took the newest task and older ones could
+  wait for ever. Now a new or moved task lands at the end of its column and a lifecycle move at the
+  head of the column it enters, each with a key of its own, so concurrent landings get different
+  keys and the column is in arrival order. Boards that already exist keep their order. The board
+  says why a drop between two cards that still share a position cannot be placed, and `move_task`
+  refuses an order key over 256 characters or with a character outside 0-9, A-Z and a-z as
+  `VALIDATION`.
+- **A reopened task is no longer counted as cancelled.** A cancelled task reopened by `move_task` or
+  `add_follow_up {reopen}` kept the reserved `cancelled` label, so its later delivery never counted
+  as done. Leaving DONE now drops the label, and cancelling a poisoned task drops `poisoned`.
+- **A dependency on a finished task no longer locks its dependent out for ever.** `add_dependency`
+  from a blocker that was already DONE put it in the dependent's `blockedBy`, and nothing clears a
+  finished blocker, so `claim_next` skipped the dependent and `claim_task` refused it. The edge is
+  now recorded (`get_task_context` still shows it) but does not gate, and `block_task` naming a DONE
+  blocker is refused, naming it, with the caller's lease kept. Re-adding a dependency after its
+  blocker was reopened gates the dependent again, and a cleared edge no longer makes the reverse
+  dependency fail as a cycle.
+- **A task freed of its last blocker wakes its worker.** When a TODO dependent became claimable
+  because its last blocker finished, was cancelled or deleted, or its dependency was removed, only
+  masters were notified. Its assignee is now rung, or every worker when it is unassigned. Removing a
+  dependency that no longer gated a task leaves a task that is BLOCKED for its own reason alone.
+- **Expired leases no longer hold a WIP limit's slots against claims.** With a WIP limit on In
+  progress, agents that crashed while holding tasks made every `claim_next` and `claim_task` answer
+  `WIP_EXCEEDED` indefinitely. A claim refused by the limit now reaps the board's expired leases and
+  tries once more. A move into the lane still counts them until `reap_stale_leases` runs.
+- **`claim_task` names a task's blockers and respects its retry backoff.** On a blocked task it
+  answered "Illegal status transition TODO → IN_PROGRESS"; it now names the tasks it waits on and
+  returns them as `blockedBy`. A task inside the backoff that `fail_task` or the reaper set could be
+  claimed again at once, which used up the poison threshold in seconds; it is now refused with the
+  time the backoff ends.
+- **`next_task` never writes, and shows the task's resume.** On an empty board `next_task` reaped
+  expired leases in the caller's name, so a viewer's preview could send a task back to TODO or
+  poison it. Expired leases are now recovered only by `claim_next`, `claim_task` and
+  `reap_stale_leases`. Its `resume` field (branch, head commit, last checkpoint) was always null and
+  is now filled as `claim_task` fills it.
+- **An idempotency key reused on another task is no longer answered with the first task's result.**
+  `complete_task` on T-2 under a key already used for T-1 returned T-1's DONE task as success and
+  left T-2 in progress, dropping its deliverable. A key is now bound to the call's arguments, apart
+  from `create_integration`'s secrets, which are never kept: the same call still replays, and
+  different arguments make a new call.
+- **Matching by profile or score looks beyond the first 200 claimable tasks.** `claim_next` and
+  `next_task` with `useProfile`, and `next_task` with strategy score, judged only the first 200
+  tasks, so a task the agent's profile covers further down was reported as no work. They now look
+  through up to 1000.
+- **Finishing, cancelling or deleting a blocker no longer fails STALE on Postgres.** A versioned
+  move to DONE, `cancel_task` or `delete_task` of a task with dependents could fail with the version
+  of a dependent instead of the task's own.
+- **A column holding tasks cannot be removed or re-statused.** On Postgres, `remove_column` racing a
+  move, create or claim into that column could leave the task in a column the board no longer has;
+  the two now take turns. `update_column` changing the status of a column that holds tasks is
+  refused until the column is empty.
+- **`search_tasks` on Postgres finds words inside paths, addresses and ids.** "tasks.go", "T-123" or
+  "bob@example.com" found nothing on Postgres while SQLite found the task. The search vector now
+  splits on punctuation as the query does.
+- **A follow-up to another agent of your own account wakes it.** With one login and labelled tokens,
+  `add_follow_up` named the holding agent as target but rang nobody. It now rings that agent's
+  sessions.
+- **Deleting a sprint member lowers the sprint's member count.** `delete_task`, and the delete of
+  losing runs at `pick_run` and `cancel_runs`, left `memberCount` counting the deleted tasks, so a
+  sprint could refuse new members as full (`SPRINT_MAX_TASKS`) while holding fewer. The delete now
+  lowers each sprint's count in the same transaction, and upgrading recounts every sprint.
+- **An unfinished member of a closed or abandoned sprint can be carried to a successor sprint.** An
+  ended sprint still counted for exclusivity and refused changes to its members, so such a task
+  could never join another sprint, although the close warning said to carry it over. An ended sprint
+  now stays in the task's `sprintIds` for history and blocks no other sprint, the warning names
+  `set_sprint` add, and a claim's sprint and the board card's sprint badge name the task's newest
+  sprint.
+- **A sprint's record holds after the fact.** `update_sprint` could rewrite a CLOSED or ABANDONED
+  sprint's name, goal and acceptance, the criteria it had been approved against; that is now
+  `VALIDATION`, and `checkpoint` and `eventCursor` stay patchable. When the proposal task named no
+  reviewer, `approvedBy` was whoever last wrote to that task, so a worker who added a note to the
+  DONE proposal was recorded as the approver; it is now whoever moved the proposal to DONE.
+- **A pick or a sprint close in flight no longer slips past run and sprint writes on Postgres.**
+  `open_run` could commit a fresh, claimable run under a parent that a concurrent `pick_run` had
+  already moved to DONE, where no race tool could reach it, and `set_sprint` or `create_task` with a
+  `sprintId` could add a member to a sprint just closed. These calls, and `update_sprint`, now take
+  the project lock as `pick_run` and `cancel_runs` do.
+- **Races respect a task's blockers and its sprint.** `start_runs` created runs with no `blockedBy`,
+  so they were claimable at once and carried the task's work past its dependencies, and `pick_run`
+  could then land the task DONE ahead of its blockers; `start_runs` on such a task, and `open_run`
+  on a racing parent that has gained a blocker, now answer `INVALID_TRANSITION` naming the blockers.
+  A raced sprint member's runs did not belong to the sprint, so `claim_next`, `next_task` and
+  `rank_tasks` with a `sprintId` found nothing for it and `get_sprint` showed an empty frontier;
+  they now offer and list the runs of the sprint's members, which do not become members.
+- **A resolved Chronicle conflict stays resolved.** Resolving a sweep conflict either way was
+  flagged again by the next identical ingest, and a block landed as the generator's text stayed
+  "edited" for good. The human write that clears a conflict now settles it against that derivation,
+  and a block whose text both sides agree on is derived again.
+- **A Chronicle record keeps the attachment images it embeds.** Deleting the source task, or a
+  losing run at `pick_run` or `cancel_runs`, deleted the blob a record still showed, and the image
+  broke on every read. Chronicle bodies now hold the blobs they embed against the blob GC (migration
+  0009, which backfills existing records), and deleting the record releases them.
+- **The Chronicle sweep no longer skips finished tasks.** The plugin's Chronicle skill moved its
+  cursor after reading only the first page of `list_tasks`, which pages in board order and filters
+  `updatedSince` after paging, and set the cursor to the newest `updatedAt` it had listed, which
+  passed over a task that finished mid-sweep on a page already read. It now reads every page, keeps
+  a cursor per board, and moves it once, at the end, to the sweep's start by the server's clock less
+  a minute.
+- **`list_tasks` pages past a task whose stored order key holds a control byte.** `move_task` once
+  stored any key the order-key parser accepted, control bytes included, and once list cursors
+  refused every control character, a page ending on such a task could not be followed. A cursor is
+  now refused only for U+0000, the one character Postgres cannot bind, and `move_task` refuses a key
+  outside the key alphabet.
+- **Task memory reads count only what the reader can see.** `get_task_context` and `read_memory`
+  took the newest entries of every author, live or expired, before filtering, so another agent's
+  private notes or expired entries could push a task's shared memory and handoff note out of the
+  answer. The filters now run first, and the limit counts entries the reader may see.
+- **Private memory keys stay private.** The `memory.written` event every member sees in a task's
+  history and the board feed carried the key of `agent` and `agent_global` entries. For those scopes
+  it now carries only the scope.
+- **`add_comment` checks its parent, `retract_artifact` trims its selector, and `write_memory`
+  points to `attach_file`.** A `parentCommentId` that named no comment, or a comment on another
+  task, was stored as given at any length; it is now `NOT_FOUND`, nothing is written, and the
+  argument is bounded. `retract_artifact` matched an untrimmed url, ref or repo against the trimmed
+  value `add_artifact` stored, so retracting with the same string answered `NOT_FOUND`; it now trims
+  too. `write_memory` told an oversized value to use `largeArtifact`, which is itself refused; both
+  refusals now name the 32768-character cap and `attach_file`.
+- **Attachments keep their file names.** `attach_file` required `fileName` and then threw it away,
+  so attachments showed as "file · 2.3 MB" and downloaded under a 64-hex name with no extension. The
+  name is now stored (migration 0008; empty for older attachments), returned as `fileName` by
+  `list_attachments` and in `get_task_context`'s attachments, and shown and used for the download by
+  the task's Files panel. A name over 255 characters, not UTF-8, or holding a control character is
+  refused.
+- **An upload finishes, and an attachment never uploaded no longer stays pending.** A client that
+  disconnected right after its upload's body made the database write fail after the file was in
+  place, leaving a file no blob row named and the attachment pending; once the body is in, the
+  upload now finishes under its own one-minute bound. A replay of `attach_file` under its
+  idempotency key answered the stored upload URL, which had expired after 15 minutes, so every
+  answer, a replay included, now carries a freshly signed URL. The retention sweep deletes
+  attachments still pending 25 hours after they were created.
+- **Attachments can no longer fill the disk the database writes to.** `attach_file` checked only
+  each file's size, so a token repeating uploads could fill the disk the database shares, and every
+  write for every project then failed. `serve` now keeps 512 MiB free on the blob disk, counting
+  what uploads in progress are about to write: an `attach_file` or an upload that would go past it
+  is refused with `QUOTA_EXCEEDED` (507 for the upload) and leaves nothing behind.
+- **The retention sweep removes blob files no row names, and uploads are synced to disk.** A file
+  left by a crash or timeout between an upload's move and its row, a file whose unlink failed after
+  its row was deleted, and an upload's temporary file cut off by a crash stayed on disk for good.
+  The sweep now removes such files once last written over an hour ago, and removes none when most of
+  the files it checks have no row, so a board started against the wrong or an unrestored database
+  deletes nothing. An upload's file and directory are fsynced before its row says ready, so a power
+  loss right after a 200 no longer leaves a ready attachment whose file is empty or missing.
+- **One identity can no longer lock everyone out of MCP.** The server allows 1000 live MCP sessions
+  in total, and one token, or a client that never ended its sessions, could fill the table so that
+  every other client, the workspace admin included, was refused for up to 30 minutes. An identity
+  now holds at most 64 sessions. When it opens another, its longest-idle session with no call in
+  progress is closed to make room; if all of them are mid-call, the new session is refused.
+- **MCP list and resource results are marked private.** `tools/list`, which differs per caller, the
+  other lists and every resource read carried the protocol's default `cacheScope: "public"`, which
+  lets a shared cache serve one caller's result to another. They are now `private`.
+- **One caller can no longer erase other callers' tool-call records on Postgres.** A tool call whose
+  name or `projectId` held a NUL made Postgres refuse the whole batch of call records it was written
+  with, so other users' and agents' calls were lost from the operations summary, and a NUL in an
+  initialize `clientInfo` left a live session out of the admin's session list. A call to an unknown
+  tool is now recorded as "(unknown)" and counted as `VALIDATION`, the error its client was told; it
+  was counted as `INTERNAL`. A `projectId` that is not an id records no project, `clientInfo` is
+  cleaned and cut to an agent name's length, and a row that still carries a NUL is dropped on its
+  own.
+- **Malformed text in a request is refused as `VALIDATION` on every engine, and a resource read
+  survives a panic.** A NUL or a byte that is not UTF-8 in a resource URI's id or cursor came back
+  `NOT_FOUND` on SQLite and as a retryable internal error on Postgres, and was a 500 on Postgres on
+  the REST chronicle reads; a list cursor holding a NUL gave an empty page on SQLite and a retryable
+  `INTERNAL` on Postgres. Such a value in a resource URI, in any `/api` path or query, or in a list
+  cursor is now refused before any lookup. A REST body with bytes after its JSON object, such as
+  `{"name":"x"}]{...}`, was acted on by its first object and is now refused 400. A panic while
+  reading a resource ended the process; that read now returns an internal error.
+- **The plugin's `scripts/mcp.sh` ends the MCP session it opens.** Each run left its session open
+  for 30 minutes. It now ends the session on exit, after success or failure, and a server it cannot
+  reach gets one line and exit status 1 in place of curl's status 7.
+- **The Alertmanager, PagerDuty and Datadog connectors tell separate alerts and events apart.**
+  Alertmanager deliveries were keyed by `groupKey`, which repeats on every notification of a group,
+  so an alert's resolve and its next firing were answered 202 replayed and changed nothing for 30
+  days; each alert is now keyed by its status and its start and end times. Every PagerDuty v3 event
+  was filed as an incident keyed by its own id, and the subscription's test ping was refused; only
+  events about the incident itself are alerts now, and anything else is accepted as no event. All
+  groups of a Datadog multi-alert monitor shared the monitor's `alert_id`, so one host's recovery
+  closed another host's ticket; the fingerprint now includes `aggreg_key` when the payload carries
+  it, and the Datadog source's setup note names the fields to send.
+- **A sender with no delivery id of its own no longer loses a second outage.** Without a source id,
+  an identical body counted as a retry for the whole 30-day delivery window, so a check that went
+  down, up and down again filed nothing the second time. An identical body now counts as a retry
+  only within ten minutes, and under Correlate or Auto-close only while nothing else has arrived for
+  that alert since. A recovery of an alert never seen is recorded once instead of on every retry.
+- **On-call integrations file into a TODO column.** `create_integration` and `update_integration`
+  now refuse a new target column that is not TODO. If the target column is later re-statused or
+  removed, alerts go to the board's first TODO column instead of being refused one by one, and the
+  integration can still be edited without changing its column. A verified delivery that is refused
+  anyway now shows as a rejected row on the delivery log.
+- **One webhook delivery buys a bounded amount of work.** An unbounded `alerts[]` array ran one
+  transaction per entry on a single rate token. Repeated alerts in one delivery are now ingested
+  once and entries that are not objects are skipped. When a delivery carries more than 500 distinct
+  alerts, the first 500 are filed, and a rejected row on the delivery log says how many were
+  dropped.
+- **A replayed delivery writes nothing, and a body refused again is logged.** A delivery answered
+  from its recorded outcome wrote a change row, which dropped the project's board snapshots and woke
+  every master session for no change. A second refusal of the same body went unrecorded for 30 days,
+  even for a new reason; a new reason now gets a new row at once, and the same refusal at most one
+  row an hour.
+- **Odd text from a sender no longer stalls ingest or breaks replay.** Postgres cannot store a NUL,
+  so a payload holding one was answered 503 on every retry and the alerts after it never landed, and
+  a refusal quoting one failed as a 500; the ingest now drops NULs from everything it keeps. A
+  source's `deliveryId`, `groupKey` or event id went into the delivery id as sent, so a 200 KB one
+  was stored and logged whole and could never be replayed, since `replay_delivery` and
+  `read_delivery_raw` take at most 1,024 characters; a source id or fingerprint over 200 bytes is
+  now replaced by `sha256:` and 32 hex characters of its hash.
+- **A webhook sender's text is bounded and quoted where it lands.** A `jwt` delivery's refusal named
+  the token header's `alg` and `kid` as sent, a sender with no credential could store up to the body
+  cap of its own text on every rejected delivery row, and a sender's newline could forge server log
+  lines. The `alg` and `kid` are now cut to 32 characters and quoted, every rejected delivery's
+  error is cut to 500 characters, and every ingest log line quotes the refusal reason and the
+  delivery id.
+- **The JWKS fetch refuses carrier-grade NAT and the other reserved ranges.** A `jwksUrl` that
+  resolved to 100.64.0.0/10 (where a tailnet's or a cloud's internal services live), 192.0.0.0/24,
+  198.18.0.0/15, 240.0.0.0/4, a NAT64, 6to4, Teredo or v4-compatible (`::/96`) address, or the
+  deprecated site-local `fec0::/10` was fetched. It is now refused like a private address.
+- **`create_integration` and `update_integration` refuse a `jwksUrl` that can never be fetched.** An
+  http, malformed, credentialed, `localhost` or private-address URL was saved, and the integration
+  showed as enabled while every delivery was refused 401. Such a URL is now refused as `VALIDATION`,
+  naming `auth.jwt.jwksUrl`.
+- **An `hmac` integration given its own secret verifies its source's signature form.** Supplying
+  `externalSecret` on any source switched verification to PagerDuty's untimestamped raw-body `v1`
+  form, which refused a generic or webhook sender signing the documented timestamped `v0` form, and
+  the previous secret after a rotation that pasted a new one. Only the `pagerduty` source uses `v1`
+  now; every other `hmac` source verifies `v0`, whoever issued the secret. Upgrading: a
+  non-PagerDuty sender that was made to sign the `v1` form must switch to `v0`.
+- **A `jwt` integration can pin who the token names.** Issuer and audience alone let any account on
+  a shared issuer (Google, GitHub Actions) mint a token that filed incidents. Two optional pins now
+  exist over MCP, REST and the setup form: `auth.jwt.subject`, matched against `sub`, and
+  `auth.jwt.email`, matched when `email_verified` is true. On an edit, the form says the JWT
+  settings are replaced whole, so a blank pin removes the stored one.
+- **The on-call setup says where to post and how to sign.** The endpoint panel showed a bare path to
+  paste onto an "ingest function" this product does not have, and the signing scheme was written
+  down only in the Go source. The panel now shows the full URL and the headers the integration's
+  auth mode reads, with the `v0` signing string and a ready `curl` for `hmac`, and links the new
+  on-call guide, `docs/oncall.md`.
+- **Clearing an on-call integration's mapping or target column takes effect.** `update_integration`
+  with a present empty `mapping` answered success, bumped the version and kept the stored mapping,
+  and the web editor's Edit left out a cleared mapping or a blanked column. An absent `mapping`
+  still keeps the stored one; a present one, `{}` included, now replaces it whole, and Edit sends an
+  explicit clear for both.
+- **A new on-call key or secret is shown, and stays on screen until it is stored.** Generate then
+  Save changes on an `api_key` or `basic` integration replaced the key without showing the new one,
+  so nobody held it and every delivery was refused; the drawer now shows it once, as on create. A
+  click on the dimmed overlay or Escape closed the drawer while it showed a minted secret or key,
+  which was then lost for good; both are now ignored until the operator confirms they stored it. In
+  Settings, a new user's initial password no longer stays in the page's memory after Done.
+- **The on-call editor takes typed lists and asks only for what an edit needs, and the
+  refused-payload dialog shows real errors.** The comma-separated fields (Fingerprint, Title,
+  Severity and the other fallback chains, stamped labels and the annotation allowlist) dropped a
+  typed comma or space, so they could only be pasted. Editing a `jwt` integration demanded its
+  issuer, audience and JWKS URL again; blank now keeps them. A switch of auth mode now asks for a
+  key when the new mode needs one, and offers "leave blank to keep" only in the mode already
+  configured. The refused-payload dialog explained every failure as a body aged out after a fixed 7
+  days; only a 404 is explained that way now, and Escape in it closes only the dialog.
+- **serve's exit watcher no longer writes into a reused descriptor or stalls shutdown.** On Linux, a
+  session that unregistered or re-registered while serve was shutting down could write 8 bytes into
+  whatever file, connection or database file had just reused the closed watcher's descriptor; the
+  watcher now touches no descriptor once it is closed. When more than 64 watched sessions exited as
+  serve stopped (a logout, say), its shutdown waited out its whole time budget; the watcher now
+  stops at once.
+- **serve starts with many sessions to catch up.** When more than 16 restored wake sessions each had
+  a doorbell they had missed, serve's start-up blocked for good before it served anything: no
+  `/healthz`, no `/mcp`, no UI. Start-up now hands their catch-up to the dispatcher, and every
+  session is rung once.
+- **Serves on several machines can share one Postgres database.** At start-up a serve restored or
+  deleted every wake-session row by pid, so one machine's restart wiped another machine's sessions,
+  and a pid number could be registered only once in the whole database. Each row now names the
+  device that registered it (a `device-id` file in the data dir), a serve starts from its own
+  device's rows, and a pid is unique per device. Rows written by an earlier development build name
+  no device, and any serve may restore or drop them until their sessions register again.
+- **A session's registration holds.** Without `CLAUDE_CODE_MESSAGING_SOCKET`, `session register`
+  registered its parent, which under the plugin's hook is the script's own shell, so it reported
+  success and the entry was gone the same second; it now looks past the shells a hook runs under to
+  the client process, which may be a container's first process. A session registered with its
+  messaging socket keeps that socket and its doorbell when a later hook registers it again without
+  the variable. A session that re-registered while the dispatcher was rechecking its old, revoked
+  entry could lose its fresh registration; a drop now waits for a registration of the same process
+  in flight and removes only the entry it judged.
+- **`session register` and `session unregister` send the bearer only to your own server.** They sent
+  `BATONDECK_TOKEN` to whatever listened on the configured socket path, including a socket another
+  local user had bound first. They now check that the server runs as the same user, and otherwise
+  refuse in one stderr line without sending the token.
+- **A doorbell goes only to a session socket of serve's own user.** The dispatcher wrote the
+  session's Claude Code peer token to whatever listened at the socket path Claude Code's session
+  registry names, including a socket another local user had bound first. It now checks that the
+  socket is served by serve's own user; if it is not, it logs the refusal and writes nothing.
+- **The SQLite database is created readable by its owner only.** It was created under the umask
+  (0644), and its -wal and -shm files followed, so a database in an existing 0755 directory such as
+  the README's `/srv/batondeck` was readable by every local account. It is now created 0600, and for
+  an existing file with a looser mode, serve logs a warning and doctor prints one, each naming the
+  chmod.
+- **A refused `database.url` is never echoed.** A mistyped scheme (`Postgres://`, `postgress://`,
+  `pg://`) was refused by quoting the whole URL, password included, on stderr and in doctor's
+  output; now only the scheme is named. A Postgres URL whose password holds an unencoded `/` or `@`
+  is refused, naming the encoding, before part of the password can reach serve's store line or a
+  connection error.
+- **Every command opens the SQLite file it names, and a second serve on that file hears the first.**
+  A `#`, `?` or `%` in the database path (a "C#" folder, "team#1") was read as part of a URI, so
+  `migrate` and `serve` made the database in the parent directory while `user`, `token` and `doctor`
+  said it did not exist. A serve never noticed another serve's changes to the same file, so its
+  boards went stale, `claim_next` through it ignored a WIP limit set through the other, and its
+  stream and doorbells stayed silent; another process's commits now reach it within a quarter of a
+  second.
+- **Mistakes in the command line and the listen config are caught before anything runs.** `migrate
+  prod.json` or `serve /data/config.json` (a config file named without `-config`) ran against the
+  default SQLite file and listen address and reported success; `serve`, `migrate`, `doctor`,
+  `healthcheck` and `version` now exit 2, naming the argument. A `unix://` listen entry longer than
+  the kernel allows failed only at bind, as "invalid argument", after the store had migrated; the
+  config is now refused when it is read, with the path's length and the limit.
+- **master.key is created whole and once, and serve says when it creates one.** Two first starts at
+  the same moment, such as replicas on Postgres, could each write their own key, leaving one sealing
+  secrets under a key no longer on disk, and a crash mid-write left an empty file that stopped every
+  later start; the key now appears whole or not at all, and a process that loses the race uses the
+  winner's key. A key missing beside a database was replaced silently, after which every delivery to
+  an HMAC-signed integration was refused 401; serve now logs the key it creates, as a warning that
+  says what no longer opens and how to recover when the database holds secrets sealed under another
+  key. With no key file path and no `BATONDECK_MASTER_KEY`, the keyring is refused before anything
+  is written.
+- **The unused admin socket is gone.** Nothing served or called it, and its fallback path in the
+  temp directory had no owner or peer check.
+- **`doctor` and `migrate` say what is wrong.** doctor printed ok and exited 0 for a bad
+  `BATONDECK_MASTER_KEY`, a master.key at mode 0644, an unusable blob dir or a schema newer than the
+  binary; each now has its own line and fails the exit code, a schema not migrated yet is a warning,
+  and doctor still creates nothing it checks. migrate beside a running serve waited a minute in
+  silence for a lock serve holds for its whole life, then failed without naming the cause; it now
+  says at once that a serve is running and that serve migrates the store as it starts.
+- **Deleting tasks and the retention sweep keep pace with the data.** A task's delete walked every
+  event of its project inside the write transaction, and each blob sweep checked every blob against
+  scans of the attachments and memory tables; new indexes serve both, as well as a task's memory
+  window and the memory expiry sweep. Each keyed call kept its full result, a deleted task's title
+  included, for the life of the project; the retention sweep now deletes idempotency keys past their
+  replay window.
+- **The web UI works behind nginx and behind a proxy that asks for HTTP Basic auth.** `/api/stream`
+  now sends `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, so a stock nginx
+  `proxy_pass` passes its frames at once; before, the board stopped updating live and kept
+  reconnecting, and the README now says what to set behind other proxies. Any `Authorization` header
+  was read as an API token, so the Basic credentials a proxy asks for made every `/api` call 401
+  despite a valid session; a header of another scheme now leaves the session cookie to decide.
+- **`/assets/` no longer lists the bundle, and a refused `/blobs` request can no longer forge log
+  lines.** `GET /assets/` served a directory listing of the embedded bundle, cached as immutable for
+  a year, and now answers 404. A refused `/blobs` request's id was logged unquoted before any
+  signature was checked, so a newline in the path wrote a line of the sender's choosing; the id is
+  now quoted and cut to 80 characters.
+- **The board's Load more shows the rest of a board past 200 tasks.** It asked the server for more
+  than the 200 tasks a request may list, the board went blank, and every later refresh of the list
+  failed. It now reads the board page by page, a failed Load more says so and keeps the cards, live
+  updates keep the extra rows, and the header gives the board's total when only part of it is
+  loaded.
+- **A board or a ticket panel that could not be read says so, with Retry.** A board whose task list
+  failed to load was drawn as an empty board ("0 tasks", "No tasks" in every column), and in the
+  task drawer and on the ticket page a failed read of the comments, follow-ups, runs, context,
+  subtasks, memory, attachments or activity looked like an empty one ("No comments yet.", "Blocked
+  by: None"). Each now says the read failed and offers Retry, and the ticket's panels show their
+  empty state only once a read has come back empty.
+- **Live board updates reach the right board and stay.** The browser's one stream follows one board,
+  but every subscriber got that board's snapshots and was told it was live; only that board's
+  subscribers get them now, and a subscriber for another board is told it is not live and polls. A
+  change that reached the board while its task list was being read again (after a drag, or during
+  Load more) could be undone by that older read until the board changed again; the board now lays
+  the newer update over such a read.
+- **The live stream copes with many tabs and with a passing store error.** Every tab held one
+  `/api/stream` connection, and a browser allows only six per host over HTTP/1.1, so over plain HTTP
+  a sixth tab made every request in every tab wait; a tab hidden for 10 seconds now closes its
+  stream and reopens it when shown, refetching what it missed, and a tab opened in the background
+  opens none until it is shown. When `/api/stream` could not build a board or notifications frame (a
+  failed re-check of the caller or a failed read), the change waited for the next one; the frame is
+  now retried after 100 ms, backing off up to the 20 s ping.
+- **The board's keyboard follows the focus.** Once the ticket search answered, the command palette
+  stopped filtering and listed every command, so typing a ticket's title and pressing Enter ran the
+  first command, often the selected card's "Open"; ticket hits are now listed beside the filtered
+  commands, and Enter opens what was typed. The board's Enter shortcut took the key from every
+  button and link ("Hide activity", "Load more", a nav link, "Sign out") and opened the last
+  selected card; now a focused button or link does what it says, and Enter or Space on a focused
+  card opens that card.
+- **The board's cards, hints and Activity rail show what is true.** A task created on the board
+  showed twice for a moment while its placeholder faded out; the placeholder is now replaced by the
+  server's card in one step. A racing card's tooltip showed a literal "N" for its open runs, the
+  search box advertised `/`, which opens the command palette, and every empty column offered "press
+  c", though a new task lands in the board's first To do column, which alone offers it now. Beside a
+  long action the Activity rail cut an actor's name to a few letters, so claude-code and
+  claude-codex looked the same; the name now has a line of its own.
+- **The activity feed shows one write's events in order, grouped by the viewer's day.** Events a
+  mutation writes share a millisecond and were ordered by a random id, so the feed could show "added
+  to sprint" before "created"; ids now sort in append order. Events were grouped by UTC date, so
+  west of UTC an afternoon split between "Today" and "Yesterday"; groups now follow the viewer's
+  local day.
+- **Agents show as online, and on every board and project they work on.** The board read the agent
+  sessions once, so an agent that pulls each turn (Cursor, a claude.ai connector) was shown offline
+  75 seconds after the page loaded and one that connected later never appeared; the list is now
+  refreshed while the board is open. A screen that joined the already-open stream, such as Agents
+  with no board selected or the full task page, never saw a plugin session registered before it
+  opened, and visiting Settings dropped those sessions; the stream now hands its last presence to a
+  screen that joins later. The Agents page refreshed only on the first board's changes, and now also
+  refreshes every 30 seconds when the project has more than one board. No call ever set an agent
+  session's `lastProjectId`, so no card on the Projects grid showed an agent avatar; it is now the
+  project of the agent's last successful call.
+- **A claim made in the web UI can be finished after the ticket is closed.** Only the claim's own
+  answer carries the lease id, and the drawer kept it in component state, so closing the ticket,
+  walking with j/k or reloading left its holder with no Mark complete, Block, Hand off or Release
+  until the lease lapsed. The web UI now remembers its claims' lease ids per account and ticket,
+  another tab of the same browser picks a claim up at once, and a claim made in the browser holds an
+  hour, since the REST surface cannot renew it.
+- **Saving a ticket's description, title or digest no longer overwrites a concurrent edit.** The
+  editors sent the version current at Save time, not the one the draft was taken from, so an agent's
+  edit made while a person was typing was silently lost. Save now sends only the changed fields, and
+  when someone else changed the text meanwhile it shows theirs and offers Keep my edit or Discard my
+  edit.
+- **A ticket's panels show what is there.** Comment and follow-up threads longer than 100 entries
+  never showed their newest ones; they now read every page. Recent Activity filtered the board's
+  newest 50 events, so an older ticket on a busy board read "No activity yet"; it now reads the
+  ticket's own events, through a new index. The full ticket page now follows its board's live
+  updates, so new comments, context items, subtasks, attachments and dependency statuses appear
+  without a reload. The lease holder, "Held by", note avatars and link captions name the person
+  instead of the account id.
+- **A subtask's checkbox offers only legal moves, and Escape cancels a half-typed chip.** Ticking a
+  TODO, In progress or Blocked subtask sent a move straight to Done, which the status table refuses;
+  the box is now open only for Review to Done and Done back to In progress, and otherwise says why.
+  In the drawer, Escape saved a half-typed label or capability; it now discards it.
+- **The task drawer behaves as a modal.** A text selection released outside it no longer closes it
+  and loses the draft. Tab stays inside it, also while the ticket loads, and skips hidden controls;
+  focus returns to where it was on close, and the board's `c` key no longer opens the new-task row
+  behind it.
+- **A board write after opening Analytics is sent, and Analytics and Reports each show their own
+  window.** Analytics cached its task census under the key every optimistic board write walks, in a
+  shape those writes could not read, so for five minutes afterwards every card move, assign, status
+  change and create in that project failed with a JavaScript error before reaching the server; the
+  census now has its own key, and the board's writes skip any cached entry they cannot read. The
+  7-day and 30-day operations summaries shared one cache entry, so whichever screen opened second
+  showed the other's numbers; the window is now part of the cache key.
+- **The web UI makes no request to a third party.** Link cards loaded their icon from Google's
+  favicon service, which sent every linked hostname, internal hosts included, and the viewer's
+  address to Google, and no setting in this build could turn it off; every page also loaded Google
+  Fonts. Link cards now show a generic icon, Inter, JetBrains Mono and Newsreader are bundled with
+  the UI, and the Content-Security-Policy names no host but the board's own.
+- **The web UI works at whatever address it is opened at.** With `public_url` set, every signed
+  `/blobs` URL started with it, so at another address (localhost, a LAN IP) the board's own
+  Content-Security-Policy refused its uploads, leaving attachments pending, and blocked its embedded
+  images; the UI now uses those URLs on its own origin. At a plain-http address such as
+  `http://devbox:8080`, where browsers offer neither `crypto.randomUUID` nor the clipboard API, "New
+  record" crashed, On-call's Generate and the Copy buttons did nothing, and clicking a project id
+  threw an error. Ids and keys now use a random source every origin has, and copying falls back to
+  another way, shows the link to copy by hand if nothing works, and says when it could not copy.
+- **A shared Chronicle link opens the record it names, and a broken diagram leaves nothing behind.**
+  Record URLs carried no project, so a link opened "Pick a project", "No such record" or another
+  project's record with the same slug, depending on the reader's sidebar. Record links now carry
+  their project, opening a record selects its project in the sidebar, choosing another project there
+  opens that project's Chronicle index, and older links still fall back to the sidebar. A mermaid
+  block that failed to parse left mermaid's "Syntax error" graphic at the bottom of the page, one
+  more each time it was shown, and now leaves nothing.
+- **A double click no longer creates things twice.** Double-clicking a new project's card created
+  two boards, pressing Enter again in the CLI token label while the first mint was running minted a
+  second live token, and "+ Add Column" could add a column twice. Each now goes out once.
+- **Settings refuses a WIP limit that is not a whole number, and no longer says a token was never
+  used.** A limit such as "five" or "1O" was sent as no limit, so a typo removed the column's WIP
+  limit; Settings now takes a whole number of 1 or more, or blank for none, and otherwise explains
+  the rule and sends nothing. The CLI tokens table read "never" under Last used for every token,
+  because the server records no use; the column is gone.
+- **On-screen text describes this server.** The connect dialog said the plugin talks to
+  http://localhost:8080 and never mentioned `BATONDECK_URL`; on another address its plugin command
+  now sets the variable. The crash screen said "It has been reported" while posting to
+  `/api/client-error`, which this server does not serve; nothing is posted now, and the screen asks
+  the user to report the message it shows. The on-call body-limit hint, a promise of incident
+  metrics and the 503 error message described the hosted system this code came from, and now
+  describe this binary.
+- **Release workflows run pinned actions, and only the jobs that push hold write tokens.** The
+  `release-draft`, `image-staging` and `release-publish` workflows ran actions by version tag, which
+  an action's owner can move, in jobs whose token could push the image to ghcr.io and create
+  releases. Every action is now named by commit SHA and workflow-level permissions are read-only;
+  `release-draft` builds under a read-only token, only the job that pushes the image holds
+  `packages: write`, and only the job that creates the draft holds `contents: write`.
+- **The image and `compose.yaml` start from bases named by digest.** The Dockerfile's final stage
+  used `gcr.io/distroless/static-debian12:nonroot` and `compose.yaml` ran `postgres:16`, both by
+  tag, so a moved tag could change what the image is built on or what holds the database. Both are
+  now pinned by digest, as the Go builder already was (`postgres:16.15@sha256:…`), and `make check`
+  refuses a workflow action, base image or compose image that is not pinned.
+- **The release is built with Go 1.26.10.** Go 1.26.9 lacked crypto/x509's denylist of compromised
+  intermediate certificates (GO-2026-6809), which the server reaches through a `jwt` integration's
+  JWKS fetch and a Postgres connection over TLS. CI now runs govulncheck and fails on any
+  vulnerability the code reaches.
+- **The web UI's development tools are past their published advisories.** vite 8.2.4, vitest 4.1.12,
+  undici 8.12.4 and source-map-js 1.2.2 replace versions with published advisories (the vite 8.2.0
+  dev server behind `npm run dev` could serve files outside the project). The bundled UI is not
+  affected, and CI runs `npm audit`.
+- **`make check` runs each slow suite once, and timing tests hold on a loaded runner.** The race run
+  already covered the store conformance and live contract tests that their own steps then ran again,
+  about 8 more minutes on CI's runner; each now runs once, and CI's job limit is 90 minutes. The
+  board stream's 200 ms bound is checked by a new `make stream-latency` step without the race
+  detector, the retention timer test waits for its sweeps, and the wake tests' other-user refusals
+  run when the tests run as root.
+- **The plugin's skills and commands can be followed.** `/master` had no step for a sprint's
+  proposal task or its activation, so a sprint stayed PROPOSED, workers looking for ACTIVE sprints
+  never found it, and the closing step was refused; `/master` and the worker skill now give the
+  proposal, the admin's activation, closing from ACTIVE (else abandoning) and carrying unfinished
+  members, and `/runs` says a task with open blockers cannot be raced. The worker prompt sent agents
+  to fetch attachments by a `downloadUrl` that `get_task_context` does not carry; it, the worker
+  skill, `/work` and the server's initialize instructions now name `list_attachments`, and the
+  worker skill and `/master` tell a blocked task by the `poisoned` label and the board feed's block
+  reason, where they looked for a `blockedReason` field no tool returns. `plugin/SECURITY.md` now
+  says the server keeps the registering token sealed while a session is registered and reads the
+  session's peer token for each doorbell.
+
+Earlier fixes made while 0.1.0 was built:
+
 - The task page's Review panel names who completed the task, the way the rest of the ticket names
   a person: the member's name, else their login, else the shortened id when nothing names the
   account. It printed the stored account id ("completed by U-4e68…") (P-431).
