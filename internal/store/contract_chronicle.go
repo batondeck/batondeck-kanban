@@ -85,7 +85,7 @@ type UpsertedChroniclePage struct {
 // AppendChronicleVersionInput is a version to append from ExpectedParentVersionID. HasDerived marks
 // a sweep's write: DerivedBlocks becomes the page's merge base and Conflicts its conflict state (set
 // when non-empty, cleared when empty); a human write (HasDerived false) clears any standing conflict
-// and keeps the base.
+// and settles it: the conflict's derivation becomes the base (with none standing, the base stays).
 type AppendChronicleVersionInput struct {
 	ExpectedParentVersionID string
 	Blocks                  []domain.ChronicleBlock

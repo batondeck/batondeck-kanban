@@ -94,6 +94,8 @@ func TestMergeVersions(t *testing.T) {
 			want: []MergeDisposition{KeptOurs}, wantIDs: []string{"a"}, conflicts: []string{}, source: SourceHuman},
 		{name: "conflict: both changed it", base: []ChronicleBlock{blk("a", "v1")}, ours: []ChronicleBlock{blk("a", "mine")}, theirs: []ChronicleBlock{blk("a", "v2")},
 			want: []MergeDisposition{MergeConflict}, wantIDs: []string{"a"}, conflicts: []string{"a"}, source: SourceHuman},
+		{name: "converged: both changed it to the same text", base: []ChronicleBlock{blk("a", "v1")}, ours: []ChronicleBlock{blk("a", "v2 ")}, theirs: []ChronicleBlock{blk("a", "v2")},
+			want: []MergeDisposition{TakenTheirs}, wantIDs: []string{"a"}, conflicts: []string{}, source: SourceSweep},
 		{name: "added-theirs: new in the derivation", base: nil, ours: nil, theirs: []ChronicleBlock{blk("a", "v1")},
 			want: []MergeDisposition{AddedTheirs}, wantIDs: []string{"a"}, conflicts: []string{}, source: SourceSweep},
 		{name: "conflict-restored-theirs: deleted by a human, changed by the derivation", base: []ChronicleBlock{blk("a", "v1")}, ours: nil, theirs: []ChronicleBlock{blk("a", "v2")},
@@ -128,6 +130,16 @@ func TestMergeVersions(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a converged block is theirs, origin included", func(t *testing.T) {
+		mine := blk("a", "v2")
+		mine.Origin = &BlockOrigin{AdrID: "ADR-0001", BlockHash: BlockHash("v1")}
+		gen := blk("a", "v2")
+		gen.Origin = &BlockOrigin{AdrID: "ADR-0001", BlockHash: BlockHash("v2")}
+		got := MergeVersions([]ChronicleBlock{blk("a", "v1")}, []ChronicleBlock{mine}, []ChronicleBlock{gen})
+		if b := MergedBlocks(got); len(b) != 1 || !sameOrigin(b[0].Origin, gen.Origin) {
+			t.Errorf("MergedBlocks = %+v, want theirs with its origin (derived again)", b)
+		}
+	})
 	t.Run("a conflict keeps ours and carries theirs", func(t *testing.T) {
 		got := MergeVersions([]ChronicleBlock{blk("a", "v1")}, []ChronicleBlock{blk("a", "mine")}, []ChronicleBlock{blk("a", "v2")})
 		m := got.Blocks[0]

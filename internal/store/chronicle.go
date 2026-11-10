@@ -480,6 +480,12 @@ func appendChronicleVersion(ctx context.Context, e engine, projectID, pageID str
 		// (ts, id) order is the chain's order even when two land in one millisecond.
 		now := max(nowMillis(), p.UpdatedAt+1)
 		base := p.LastDerivedObject
+		if !in.HasDerived && p.Conflict != nil {
+			// A human write settles the standing conflict, whichever side it took: the derivation it
+			// was found against becomes the base, so that derivation is not flagged again.
+			settled := p.Conflict.TheirsObject
+			base = &settled
+		}
 		var derivedBody []byte
 		var conflict *ChronicleConflict
 		if in.HasDerived {
@@ -531,7 +537,7 @@ func appendChronicleVersion(ctx context.Context, e engine, projectID, pageID str
 		if conflict != nil {
 			newTheirs = &conflict.TheirsObject
 		}
-		if in.HasDerived {
+		if in.HasDerived || base != p.LastDerivedObject {
 			if err := dropChronicleBody(ctx, q, projectID, pageID, p.LastDerivedObject, base, newTheirs); err != nil {
 				return err
 			}
