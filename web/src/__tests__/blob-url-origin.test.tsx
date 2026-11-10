@@ -32,6 +32,10 @@ describe('onOwnOrigin', () => {
       `${FAR}/blobs/${SHA}`, // not signed
       `${FAR}/assets/blobs/${SHA}?exp=1&sig=2`,
       'not a url at all ::',
+      // Already on this origin: a relative signed URL (the Chronicle's stable form, P-244) and an
+      // absolute one both come back exactly as they were.
+      `/blobs/${SHA}?exp=1793368000&sig=${'d'.repeat(64)}`,
+      signedAt(own, SHA),
     ]) {
       expect(onOwnOrigin(other)).toBe(other);
     }

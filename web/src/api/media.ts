@@ -8,7 +8,8 @@ import { req, P } from './http.js';
  * TLS proxy that sends no X-Forwarded-Proto it signs them as http://. The page's CSP allows only its
  * own origin for fetches and images, and /blobs answers no CORS, so such a URL could not take an
  * upload or show an image. The signature covers the purpose, the id and the expiry, not the host, so
- * the same path and query work here. Any other URL comes back as it was.
+ * the same path and query work here. Any other URL, and one already on this origin (relative or
+ * absolute, such as the Chronicle's stable relative form), comes back exactly as it was.
  */
 export function onOwnOrigin(url: string): string {
   let u: URL;
@@ -17,6 +18,7 @@ export function onOwnOrigin(url: string): string {
   } catch {
     return url;
   }
+  if (u.origin === window.location.origin) return url;
   if (!/^\/blobs\/[^/]+$/.test(u.pathname) || !u.searchParams.has('exp') || !u.searchParams.has('sig')) return url;
   return `${window.location.origin}${u.pathname}${u.search}`;
 }
