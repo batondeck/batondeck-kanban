@@ -52,11 +52,18 @@ function Mermaid({ text }: { text: string }) {
     let live = true;
     import('mermaid')
       .then(async (m) => {
-        m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+        // `suppressErrorRendering`: without it a parse error draws mermaid's own "Syntax error"
+        // graphic into the temporary element it appends to <body>, and throws before removing it,
+        // so the graphic outlived the block (one per mount) outside React's root.
+        m.default.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', suppressErrorRendering: true });
         const { svg: out } = await m.default.render(idRef, text);
         if (live) setSvg(out);
       })
-      .catch(() => { if (live) setFailed(true); });
+      .catch(() => {
+        // Belt to the flag above: whatever mermaid left of its temporary element (`d` + the id) goes.
+        document.getElementById(`d${idRef}`)?.remove();
+        if (live) setFailed(true);
+      });
     return () => { live = false; };
   }, [text, idRef]);
   if (failed) return <pre className="chr-mermaid-src"><code>{text}</code></pre>;
