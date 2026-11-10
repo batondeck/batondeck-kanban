@@ -123,7 +123,7 @@ func checkRegistration(req registration) (code, desc string) {
 	// A format character (unicode.Cf: a bidi override, a zero-width joiner) is refused with the
 	// control characters: the name is shown on the sign-in and consent pages, where one can make it
 	// read as another.
-	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
+	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, hiddenNameRune) >= 0 {
 		return "invalid_client_metadata", fmt.Sprintf("client_name is at most %d characters, none of them a control or format character", maxClientNameLen)
 	}
 	if len(req.Scope) > maxScopeLen {
@@ -131,6 +131,10 @@ func checkRegistration(req registration) (code, desc string) {
 	}
 	return "", ""
 }
+
+// hiddenNameRune is a character /register refuses in a client_name: a control character, or a
+// format character (unicode.Cf) that can make a shown name read as another.
+func hiddenNameRune(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
 
 // badRedirectURI says why u cannot be a redirect URI, "" when it can: an absolute URI with no
 // fragment (RFC 6749 §3.1.2) and no userinfo, https, or http only to a loopback host (RFC 8252 §7.3), or an app's

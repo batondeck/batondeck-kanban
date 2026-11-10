@@ -195,9 +195,17 @@ func (s *Server) session(r *http.Request) (domain.Caller, store.Session, bool) {
 	return c, sess, true
 }
 
+// clientLabel is the name the sign-in and consent pages show for c: its client_name without the
+// characters /register refuses (hiddenNameRune), which a registration stored before that rule may
+// still hold, else its client id.
 func clientLabel(c store.OAuthClient) string {
-	if c.ClientName != "" {
-		return c.ClientName
+	if name := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if hiddenNameRune(r) {
+			return -1
+		}
+		return r
+	}, c.ClientName)); name != "" {
+		return name
 	}
 	return c.ClientID
 }

@@ -781,6 +781,34 @@ func TestAuthorizeRefusesAStoredRedirectURIWithUserinfo(t *testing.T) {
 	}
 }
 
+// A client_name stored before /register refused format characters is shown without them: the
+// sign-in and consent pages never render a bidi override or a zero-width character that could make
+// the name read as another.
+func TestAuthorizeShowsAStoredClientNameWithoutFormatCharacters(t *testing.T) {
+	f := newFixture(t)
+	const redirect = "https://claude.ai/api/mcp/auth_callback"
+	if err := f.st.CreateOAuthClient(context.Background(), store.OAuthClient{ClientID: "bdc_old", ClientName: "Claude\u202egnp.exe\u200b",
+		RedirectURIs: []string{redirect}, CreatedAt: f.clk.now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	_, challenge := pkce(t)
+	b := f.browser(t)
+	u := f.srv.URL + "/authorize?" + authQuery("bdc_old", redirect, challenge, nil).Encode()
+	for _, step := range []string{"sign-in", "consent"} {
+		if step == "consent" {
+			f.signIn(t, b)
+		}
+		resp, err := b.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := body(t, resp)
+		if resp.StatusCode != http.StatusOK || strings.ContainsAny(page, "\u202e\u200b") || !strings.Contains(page, "Claudegnp.exe") {
+			t.Fatalf("%s page for a stored client_name with format characters: %d, want 200 naming %q with none of them:\n%s", step, resp.StatusCode, "Claudegnp.exe", page)
+		}
+	}
+}
+
 // A disabled user's grant does not refresh: the refresh token is refused (invalid_grant) and kept,
 // so the grant cannot slide its 14 days forward while the account is disabled, and a code issued
 // before the disable is not exchanged. Once the user is enabled again the unexpired refresh token
