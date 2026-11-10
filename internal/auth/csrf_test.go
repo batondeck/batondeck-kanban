@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func (f *fixture) wantRefusalAudited(t *testing.T, before int, reason string) {
@@ -135,4 +136,36 @@ func TestCSRFFormFieldCarriesTheToken(t *testing.T) {
 		t.Fatalf("a wrong token in the form: %d", code)
 	}
 	f.wantRefusalAudited(t, n, "csrf_token")
+}
+
+// A refusal of a request with no credential (anyone's cross-site sign-in POST) is audited at most
+// anonymousRefusalRows a minute, so it cannot grow the audit log without bound; a refusal of a
+// signed-in request is audited whatever that budget holds.
+func TestAnonymousRefusalsAreAuditedWithinABudget(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "pw")
+	sess, csrf := f.session(t, "alice")
+	cross := map[string]string{"Sec-Fetch-Site": "cross-site"}
+	for i := 0; i < anonymousRefusalRows+5; i++ {
+		if resp := f.login(t, "alice", "pw", cross, false); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-site sign-in %d: %d", i, resp.StatusCode)
+		}
+	}
+	if n := len(f.audited()); n != anonymousRefusalRows {
+		t.Fatalf("%d refusals audited of %d, want %d", n, anonymousRefusalRows+5, anonymousRefusalRows)
+	}
+	for _, e := range f.audited() {
+		if e.Action != "request.refused" || e.Actor != "" || e.Subject != "path:/login" {
+			t.Fatalf("audit row %+v", e)
+		}
+	}
+	n := len(f.audited())
+	if w := f.post(req{session: sess, csrf: csrf, hdr: cross}); w.Code != http.StatusForbidden {
+		t.Fatalf("a signed-in cross-site POST: %d", w.Code)
+	}
+	f.wantRefusalAudited(t, n, "cross_site")
+	f.clk.add(time.Minute)
+	if resp := f.login(t, "alice", "pw", cross, false); resp.StatusCode != http.StatusForbidden || len(f.audited()) != n+2 {
+		t.Fatalf("a minute later: %d, %d rows, want %d", resp.StatusCode, len(f.audited()), n+2)
+	}
 }
