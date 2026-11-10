@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -10,7 +11,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -326,16 +326,14 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 }
 
 // dataLine names where serve keeps its state: the SQLite file, or the Postgres host and database
-// (never the URL, which may carry a password), and the blob dir.
+// as libpq and pgx read them (core.Config.PostgresHostDB; never the URL, which may carry a
+// password), and the blob dir.
 func dataLine(cfg *core.Config) string {
 	if cfg.Engine() != core.EnginePostgres {
 		return fmt.Sprintf("sqlite at %s, blobs in %s", cfg.SQLitePath(), cfg.BlobDir())
 	}
-	host, db := "?", "?"
-	if u, err := url.Parse(cfg.Database.URL); err == nil {
-		host, db = u.Host, strings.TrimPrefix(u.Path, "/")
-	}
-	return fmt.Sprintf("postgres on host %s, database %s, blobs in %s", host, db, cfg.BlobDir())
+	host, db := cfg.PostgresHostDB()
+	return fmt.Sprintf("postgres on host %s, database %s, blobs in %s", cmp.Or(host, "?"), cmp.Or(db, "?"), cfg.BlobDir())
 }
 
 // listenAll binds every listen entry, closing the ones bound when one fails.

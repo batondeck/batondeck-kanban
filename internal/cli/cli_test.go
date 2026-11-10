@@ -207,6 +207,15 @@ func TestDataLineNamesThePathsAndNeverThePassword(t *testing.T) {
 	if got := dataLine(cfg); got != "postgres on host db.example:5432, database kanban, blobs in /srv/blobs" {
 		t.Fatalf("postgres: %q", got)
 	}
+	// A '?' or '#' in the password ends the authority for url.Parse, not for libpq and pgx, which read
+	// the host after the '@': the line names that host, and no part of the password.
+	t.Setenv("BATONDECK_DATABASE_URL", "postgres://bk:12?SE#CRET@db.example/kanban")
+	if cfg, err = loadConfig(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := dataLine(cfg); got != "postgres on host db.example, database kanban, blobs in /srv/blobs" {
+		t.Fatalf("postgres, a '?' in the password: %q", got)
+	}
 }
 
 // serve migrates before it listens: by the time /healthz answers, a fresh SQLite file holds
