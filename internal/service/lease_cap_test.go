@@ -8,7 +8,7 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
-// auth#1: a lease is not handed to a caller by a name its client chose. On every engine:
+// A lease is not handed to a caller by a name its client chose. On every engine:
 //   - a caller capped below the write tier (a viewer OAuth grant) is never the holder cancel_task
 //     lets through, even when its client's name is the claim's agent;
 //   - a client that registered or declared the name a live API token of the same identity carries

@@ -134,7 +134,7 @@ func (c *Core) leaseYields(ctx context.Context, st store.Store, t store.Task, ca
 	return ownedAgent(ctx, st, t.Claim, caller, now)
 }
 
-// ownedAgent is leaseAgent with P-277's rule on labels (auth#1): a claim's agent that a live API
+// ownedAgent is leaseAgent with P-277's rule on labels: a claim's agent that a live API
 // token of the caller's identity carries as its label is that token's agent, so a caller whose
 // client registered (an OAuth client_name) or declared (clientInfo.name) the same name, and is not
 // that token (Caller.Labelled), does not hold the lease by it. One read of the identity's tokens,
@@ -1574,7 +1574,7 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 		now := t.Now.UnixMilli()
 		// The holder's pass: its own live lease, under its own agent (ownedAgent), and, for a caller
 		// whose token carries a role (an OAuth grant), a role that could have claimed it: a viewer
-		// grant holds no lease, whatever its client is named (auth#1).
+		// grant holds no lease, whatever its client is named.
 		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity &&
 			(caller.Role == "" || domain.RoleMeetsTier(a.Role, domain.TierWrite))
 		if owner {

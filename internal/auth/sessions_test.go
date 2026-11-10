@@ -267,7 +267,7 @@ func TestAnOAuthAccessTokenDoesNotOpenTheBFF(t *testing.T) {
 	}
 }
 
-// auth#13: past the sign-in limit, the OAuth sign-in page's form (a next) is sent back with
+// Past the sign-in limit, the OAuth sign-in page's form (a next) is sent back with
 // login=limited, not login=failed: the password was never checked, so the page must not say it
 // did not match.
 func TestLoginNextPastTheLimitSaysLimited(t *testing.T) {

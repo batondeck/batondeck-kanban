@@ -271,7 +271,7 @@ func TestAuthorizeGrantReaderErrorIsInternal(t *testing.T) {
 	}
 }
 
-// The token role caps the tools that take no project too (authz#1): a capped caller (an OAuth
+// The token role caps the tools that take no project too: a capped caller (an OAuth
 // grant) needs the write tier for every one of them that changes data, so a viewer grant, "read
 // boards and tasks", creates no project, writes no setting and disconnects no agent, while it
 // still reads. A worker grant, and an uncapped caller, pass as before.

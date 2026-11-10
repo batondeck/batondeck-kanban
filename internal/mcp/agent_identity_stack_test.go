@@ -192,7 +192,7 @@ func TestASwappedBearerRunsNoToolOnTheSessionOnTheRealStack(t *testing.T) {
 	})
 }
 
-// mcp-contract#11: "id:<identity>" is the id service.AgentID derives, never a name a client
+// "id:<identity>" is the id service.AgentID derives, never a name a client
 // declares. A client whose clientInfo.name is "id:" and another identity names no agent: its
 // task's createdByAgent and its agent_sessions row are the caller's own derived id, as for a token
 // label of that shape (auth.ResolveCaller) and a wake registration (service.CheckWakeAgent).

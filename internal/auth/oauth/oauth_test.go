@@ -708,7 +708,7 @@ func TestSignInAndConsentPagesCannotBeFramed(t *testing.T) {
 	check("Allow test client?")
 }
 
-// auth#13: the sign-in page says why it is back. login=failed is a login and password that did not
+// The sign-in page says why it is back. login=failed is a login and password that did not
 // match; login=limited is the sign-in limit, where no password was checked, so it says to wait
 // rather than that the password was wrong.
 func TestSignInPageSaysWhyItIsBack(t *testing.T) {
