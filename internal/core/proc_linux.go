@@ -42,7 +42,8 @@ func ProcessUID(pid int) (int, error) {
 
 // pidfdWatch holds a pidfd per watched pid and polls them with an eventfd that add, remove and
 // close write to so the loop rebuilds its set. A removed pidfd is closed by the loop, after the
-// poll that may still hold it returns.
+// poll that may still hold it returns. Once closed, add and remove touch no descriptor: the
+// eventfd's number may already belong to another file (core-cli-ops#0).
 type pidfdWatch struct {
 	efd     int
 	mu      sync.Mutex
@@ -80,6 +81,7 @@ func (w *pidfdWatch) loop(exited chan<- int) {
 			for _, fd := range w.fds {
 				unix.Close(fd)
 			}
+			clear(w.fds)
 			w.mu.Unlock()
 			return
 		}
@@ -146,7 +148,7 @@ func (w *pidfdWatch) remove(pid int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	fd, ok := w.fds[pid]
-	if !ok {
+	if !ok || w.closed {
 		return
 	}
 	delete(w.fds, pid)
