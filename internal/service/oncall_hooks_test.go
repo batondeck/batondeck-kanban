@@ -234,6 +234,10 @@ func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 // reason within the hour is still one row.
 func TestHookRefusalsOfOneBodyStayVisible(t *testing.T) {
 	f, _, root := oncallFixture(t)
+	// Five minutes into an hour: the minute steps below stay in it, and the hour step leaves it.
+	f.clock.mu.Lock()
+	f.clock.t = f.clock.t.Truncate(time.Hour).Add(5 * time.Minute)
+	f.clock.mu.Unlock()
 	iid := f.integration(t, root, CreateIntegrationReq{Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"}}).Integration.ID
 	body := []byte(`{"fingerprint":"f","status":"firing","severity":"s","title":"t","titel":"x"}`)
 	post := func(key string) HookOutcome {
