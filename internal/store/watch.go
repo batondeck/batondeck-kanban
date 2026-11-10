@@ -79,7 +79,9 @@ const sqliteWatchPoll = 250 * time.Millisecond
 // own (not one of the read pool's, and outside the statement count): the value moves when any other
 // connection commits, this process's write connection included, so after each in-process wake the
 // value it left is read before wake is called, and only another process's commit moves it from
-// there. An idle watch costs that one pragma per poll and no read of the change log.
+// there, or one of this process's that appended no change (a tool_calls row, a session touch),
+// which costs the tail one read that finds nothing. An idle watch costs that one pragma per poll and
+// no read of the change log.
 func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 	db, err := sql.Open("sqlite", s.watchDSN)
 	if err != nil {
