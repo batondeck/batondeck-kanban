@@ -128,3 +128,64 @@ func TestAnEndedSprintsRecordIsNotRewritten(t *testing.T) {
 		}
 	})
 }
+
+// approvedBy is who approved the proposal task, the actor whose move landed it DONE, when it names no
+// reviewer: a master completes it (REVIEW), the admin moves it REVIEW → DONE, and a worker then adds a
+// note to the DONE task; the activation stamps the admin, in the sprint and its sprint.activated.
+// Before, it stamped the proposal's updatedBy: the worker who only wrote the note.
+func TestSprintApprovedByIsTheProposalsApprover(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		e.settings(t, map[string]any{"reviewEnabled": true})
+		master := e.member(t, e.project, "mia", domain.RoleMaster)
+		worker := e.member(t, e.project, "wes", domain.RoleWorker)
+		sp := e.sprint(t, e.board.ID)
+		proposal, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "proposal",
+			CustomFields: map[string]FieldValue{"sprintProposalFor": sp.ID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid := proposal.Task.ID
+		bound, err := e.c.Sprints().Update(e.ctx, e.alice, UpdateSprintReq{ProjectID: e.project, SprintID: sp.ID, Version: sp.Version,
+			Patch: SprintPatchIn{ProposalTaskID: Value(pid)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := e.claim(t, master, pid, 0)
+		if _, err := e.c.Lifecycle().Complete(e.ctx, master, CompleteTaskReq{ProjectID: e.project, TaskID: pid, LeaseID: c.LeaseID, Deliverable: "the plan"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: pid, Version: e.get(t, pid).Version, ToStatus: domain.Done}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.c.Context().AddItem(e.ctx, worker, AddContextItemReq{ProjectID: e.project, TaskID: pid, Kind: "note", Body: "read it, looks good"}); err != nil {
+			t.Fatal(err)
+		}
+		done := e.get(t, pid)
+		active, err := e.c.Sprints().Update(e.ctx, e.alice, UpdateSprintReq{ProjectID: e.project, SprintID: sp.ID, Version: int64(bound.Sprint.Version),
+			Patch: SprintPatchIn{Status: Some(SprintStatus("ACTIVE"))}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		feed, err := e.st.ListBoardFeed(e.ctx, e.project, e.board.ID, "", 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var activated string
+		for _, ev := range feed.Events {
+			if ev.Type == domain.EventSprintActivated {
+				activated = string(ev.Data)
+			}
+		}
+		got := "<nil>"
+		if active.Sprint.ApprovedBy != nil {
+			got = *active.Sprint.ApprovedBy
+		}
+		t.Logf("proposal %s %s updatedBy %s; approvedBy %s; sprint.activated %s", pid, done.Status, done.UpdatedBy, got, activated)
+		if done.UpdatedBy != worker.Identity || done.Status != domain.Done {
+			t.Fatalf("the setup did not leave the worker as updatedBy: %s %s", done.Status, done.UpdatedBy)
+		}
+		if got != e.alice.Identity || !strings.Contains(activated, `"approvedBy":"alice"`) {
+			t.Fatalf("approvedBy %s (event %s), want %s, who moved the proposal to DONE", got, activated, e.alice.Identity)
+		}
+	})
+}

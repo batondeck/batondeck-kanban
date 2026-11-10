@@ -109,8 +109,8 @@ func sprintText(name, goal, acceptance Optional[string]) error {
 // acceptance only until the sprint is CLOSED or ABANDONED (VALIDATION; resending the value held
 // passes, and checkpoint and eventCursor stay patchable for a resume); a status
 // change follows the fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the
-// activation gates against the proposal task read in the transaction and stamps approvedBy and
-// startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
+// activation gates against the proposal task read in the transaction and stamps approvedBy (the
+// proposal's reviewer, else who moved it to DONE, read from its events: doneBy) and startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
 // "open" is status != DONE (plan §Fold 2), so a BLOCKED-poison member is open and a cancelled one
 // (DONE with the cancelled label, ADR-0001) is not. It runs under the project lock, as set_sprint and
 // create_task {sprintId} do, so a member cannot join between the close and its warning.
@@ -221,7 +221,10 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 				if err != nil {
 					return UpdateSprintResp{}, err
 				}
-				sp.ApprovedBy, sp.StartedAt, selfApproved = &store.Nullable[string]{Value: &approvedBy}, stamp, self
+				if approvedBy != "" {
+					sp.ApprovedBy = &store.Nullable[string]{Value: &approvedBy}
+				}
+				sp.StartedAt, selfApproved = stamp, self
 			case domain.SprintClosed, domain.SprintAbandoned:
 				sp.ClosedAt = stamp
 			}
@@ -279,7 +282,12 @@ func (t *txn) proposalOf(taskID string) (*domain.SprintProposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, Cancelled: slices.Contains(task.Labels, domain.LabelCancelled), UpdatedBy: task.UpdatedBy}
+	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, Cancelled: slices.Contains(task.Labels, domain.LabelCancelled)}
+	if task.Status == domain.Done {
+		if out.DoneBy, err = t.doneBy(task.ID); err != nil {
+			return nil, err
+		}
+	}
 	var fields map[string]any
 	if len(task.CustomFields) > 0 {
 		if err := json.Unmarshal(task.CustomFields, &fields); err != nil {
@@ -297,6 +305,41 @@ func (t *txn) proposalOf(taskID string) (*domain.SprintProposal, error) {
 		out.Reviewer = *review.Reviewer
 	}
 	return out, nil
+}
+
+// doneByPages bounds doneBy's read of a task's history, newest first, at 200 events a page.
+const doneByPages = 5
+
+// doneBy is the actor of the newest event that landed taskID DONE: task.moved from another status,
+// or task.completed or run.picked, to DONE. "" when none of its newest doneByPages pages holds one.
+func (t *txn) doneBy(taskID string) (string, error) {
+	cursor := ""
+	for range doneByPages {
+		page, err := t.Tx.ListTaskEvents(t.ctx, t.ProjectID, taskID, cursor, 200)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range page.Events {
+			if e.Type != domain.EventTaskMoved && e.Type != domain.EventTaskCompleted && e.Type != domain.EventRunPicked {
+				continue
+			}
+			var d struct {
+				From domain.Status `json:"from"`
+				To   domain.Status `json:"to"`
+			}
+			if err := json.Unmarshal(e.Data, &d); err != nil {
+				return "", err
+			}
+			if d.To == domain.Done && d.From != domain.Done {
+				return e.Actor, nil
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	return "", nil
 }
 
 // orWarn is a policy as conductor reads it: unset is "warn" (artifacts.ts:15,140).

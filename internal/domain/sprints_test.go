@@ -85,7 +85,7 @@ func TestSprintMembership(t *testing.T) {
 
 func TestSprintActivation(t *testing.T) {
 	id := "T-9"
-	done := &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", UpdatedBy: "bob"}
+	done := &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", DoneBy: "bob"}
 	base := SprintActivation{SprintID: "S-a", ProposalTaskID: &id, Proposal: done, ActorRole: RoleAdmin, SelfApproval: "warn"}
 	by, self, err := CheckSprintActivation(base)
 	if err != nil || by != "bob" || self {
@@ -125,7 +125,7 @@ func TestSprintActivation(t *testing.T) {
 	}
 	warn := base
 	warn.ActorIsCreator = true
-	warn.Proposal = &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", Reviewer: "rita", UpdatedBy: "bob"}
+	warn.Proposal = &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", Reviewer: "rita", DoneBy: "bob"}
 	if by, self, err := CheckSprintActivation(warn); err != nil || by != "rita" || !self {
 		t.Fatalf("self-approval under warn = %q %v %v, want rita and a self-approval", by, self, err)
 	}
