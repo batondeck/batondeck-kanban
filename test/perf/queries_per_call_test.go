@@ -50,8 +50,10 @@ const (
 	// edges on each side, its artifacts, its attachments and its open follow-ups. Raised from 6 by
 	// P-236 for the last three: one statement each, never one per row.
 	pinGetTaskContext = 9
-	// next_task: the frontier preview and the summary of the task it names.
-	pinNextTask = 3
+	// next_task: the frontier preview and the summary of the task it names, then resume's artifacts
+	// and one page of context items, as claim_next's. Raised from 3 for those two: next_task's
+	// resume was always null without them.
+	pinNextTask = 5
 	// GET /api/analytics/operations (service.Analytics, no tool): the one GROUP BY over tool_calls.
 	pinAnalyticsOperations = 1
 )

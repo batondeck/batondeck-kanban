@@ -436,3 +436,22 @@ func TestCancellingABlockerIsNotStaleOnItsDependent(t *testing.T) {
 		})
 	}
 }
+
+// next_task's resume is the previewed task's, as claim_task's and claim_next's are: an agent deciding
+// whether to take a task sees its recorded checkpoint. Before, it was always null.
+func TestNextTaskCarriesTheResume(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		task := e.task(t, domain.Todo)
+		if _, err := e.st.AddContextItem(e.ctx, store.AddContextItemInput{ProjectID: e.project, TaskID: task.ID, Kind: store.ContextNote, Body: "DONE: the lexer\nNEXT: the parser", Author: "alice"}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := e.c.Lifecycle().Next(e.ctx, e.alice, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID})
+		if err != nil || r.Task == nil || r.Task.ID != task.ID {
+			t.Fatalf("next_task = %+v, %v", r.Task, err)
+		}
+		t.Logf("next_task %s resume %+v", r.Task.ID, r.Resume)
+		if r.Resume == nil || checkpointText(r.Resume.LastCheckpoint)["NEXT"] != "the parser" {
+			t.Fatalf("resume %+v, want the task's last checkpoint", r.Resume)
+		}
+	})
+}

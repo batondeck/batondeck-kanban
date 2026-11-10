@@ -836,9 +836,11 @@ func (l lifecycle) leaseArgs(ctx context.Context, caller domain.Caller, tool, pr
 }
 
 // Next is next_task: the frontier's best task, claiming nothing (store PreviewFrontier, limit 1),
-// and its summary: two statements, one when the frontier is empty. It is a read (read tier,
-// grant-exempt, readOnlyHint) and writes nothing: an expired lease is reaped by claim_next's lazy
-// recovery or reap_stale_leases, never by a preview, which would write as a viewer. includeInbox adds two (REVIEW, then BLOCKED split into blocked and poisoned).
+// its summary and its resume (claim_task's: the artifacts and one context-items page): four
+// statements, one when the frontier is empty. It is a read (read tier, grant-exempt, readOnlyHint)
+// and writes nothing: an expired lease is reaped by claim_next's lazy recovery or
+// reap_stale_leases, never by a preview, which would write as a viewer. includeInbox adds two
+// (REVIEW, then BLOCKED split into blocked and poisoned).
 // strategy "score" ranks the frontier's first frontierPage tasks with the scorer rank_tasks uses
 // (scorer.rank: the project's selectionWeights and agingCeilingMs) and previews the best; explain,
 // which needs it, adds the top task's factors and the runner-up. useProfile judges eligibility by
@@ -900,6 +902,10 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 			return NextTaskResp{}, l.c.mapErr("next_task", err)
 		}
 		resp.Task = &out
+		// resume, as claim_task's: the previewed task's (two reads, only when there is one).
+		if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, out.ID); err != nil {
+			return NextTaskResp{}, l.c.mapErr("next_task", err)
+		}
 		if req.Explain {
 			top := head[0].score
 			resp.Explanation = NextExplanation{AgedOut: top.AgedOut, Factors: factorsOut(top), Reason: top.Reason, Score: top.Score}

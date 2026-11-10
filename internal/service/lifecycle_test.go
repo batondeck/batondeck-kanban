@@ -957,9 +957,10 @@ func reads(m map[string]int) (r int, w int) {
 	return r, w
 }
 
-// AC8: claim_next costs at most six read statements and next_task at most three, with the
+// AC8: claim_next costs at most six read statements and next_task at most five, with the
 // membership cached; cold (no snapshot) and warm (the bus live) are both measured. claim_next's pin
 // rose from four by P-117 for resume's two reads after the commit, the artifacts and one items page;
+// next_task's from three for the same two, when it previews a task (its resume was always null);
 // both are asserted, so neither can go uncounted.
 func TestClaimNextAndNextStatementPins(t *testing.T) {
 	f := newFixture(t, Options{})
@@ -990,7 +991,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 			}
 			return err
 		}},
-		{"next_task", 3, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
+		{"next_task", 5, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
 		{"claim_next warm", 6, func() error {
 			f.c.ObserveChange(store.Change{ID: 1, Payload: json.RawMessage(`{}`)})
 			if _, err := f.c.boardSnapshot(f.ctx, f.project.ID, f.board.ID); err != nil {
@@ -1011,7 +1012,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 		if r > c.pin {
 			t.Fatalf("%s issued %d read statements %v, the pin is %d", c.name, r, m, c.pin)
 		}
-		if strings.HasPrefix(c.name, "claim_next") && (m["ListArtifacts"] != 1 || m["ListContextItems"] != 1) {
+		if (strings.HasPrefix(c.name, "claim_next") || c.name == "next_task") && (m["ListArtifacts"] != 1 || m["ListContextItems"] != 1) {
 			t.Fatalf("%s read resume with %v, want one ListArtifacts and one ListContextItems", c.name, m)
 		}
 	}
