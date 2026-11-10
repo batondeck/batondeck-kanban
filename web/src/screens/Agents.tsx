@@ -10,6 +10,7 @@ import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { Avatar, EmptyState, PageHeader, eventActor, leaseLeft, personName, timeAgo } from '../components.js';
+import { useWorkspaceNames } from '../displayNames.js';
 import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { displayAgentName, isSessionOnline } from '../agentStatus.js';
@@ -23,6 +24,7 @@ import { mergePresence, replaceDevicePresence } from '../presenceMerge.js';
 export function Agents() {
   const { ui } = useAuth();
   const { projectId } = useProject();
+  const workspaceNames = useWorkspaceNames();
   const [connectOpen, setConnectOpen] = useState(false);
 
   const qc = useQueryClient();
@@ -202,7 +204,10 @@ export function Agents() {
                               <Avatar id={name} active={online} tool={tk} />
                               <span style={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
                                 <span style={{ fontSize: 14, fontWeight: 600, color: online ? 'var(--text)' : 'var(--text-2)' }}>{name}</span>
-                                <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{s.identityId}</span>
+                                {/* Whose token the agent runs on: the account's name when a project of the caller's names it, else the id (P-457). */}
+                                {workspaceNames[s.identityId]
+                                  ? <span style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{workspaceNames[s.identityId]}</span>
+                                  : <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{s.identityId}</span>}
                               </span>
                             </span>
                           </td>
