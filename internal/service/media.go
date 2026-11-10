@@ -92,7 +92,8 @@ func (c *Core) signedExpiry() time.Time {
 }
 
 // AttachFile is attach_file: a pending attachment row and an upload URL for it, signed for upload
-// until expiresAt. The task's version moves once; the event is attachment.created.
+// until expiresAt. The task's version moves once; the event is attachment.created. Bytes the blob
+// volume has no room for above its reserve (blob.Store.Room) are QUOTA_EXCEEDED, with no row.
 func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachFileReq) (AttachFileResp, error) {
 	c := m.c
 	a, err := c.authorize(ctx, caller, req.ProjectID, "attach_file", domain.GrantSubject{}, true)
@@ -124,6 +125,11 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 		Tool: "attach_file", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
 		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
 	}, func(t *txn) (AttachFileResp, error) {
+		if err := c.media.Files.Room(req.Bytes); err != nil {
+			return AttachFileResp{}, domain.NewError(domain.CodeQuotaExceeded,
+				"The server's attachment storage is full: the upload would leave its disk under the space kept free for the database. Ask the operator to free space.",
+				map[string]any{"field": "bytes"})
+		}
 		att, err := t.Tx.CreateAttachment(ctx, store.CreateAttachmentInput{
 			ProjectID: req.ProjectID, TaskID: req.TaskID, MimeType: req.MimeType, Bytes: req.Bytes,
 			Kind: store.AttachmentKind(req.Kind), CreatedBy: caller.Identity,

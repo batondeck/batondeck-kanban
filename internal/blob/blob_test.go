@@ -187,3 +187,61 @@ func TestLockSerialisesOneHash(t *testing.T) {
 		t.Fatalf("locks left: %v", s.locks)
 	}
 }
+
+// volume makes statFree report a volume of size bytes on which only dir/tmp's files take space.
+func volume(t *testing.T, size int64) {
+	t.Helper()
+	orig := statFree
+	statFree = func(dir string) (int64, error) {
+		used := int64(0)
+		ents, _ := os.ReadDir(filepath.Join(dir, "tmp"))
+		for _, e := range ents {
+			if fi, err := e.Info(); err == nil {
+				used += fi.Size()
+			}
+		}
+		return size - used, nil
+	}
+	t.Cleanup(func() { statFree = orig })
+}
+
+// Uploads leave Reserve free on the store's volume: a body that would take it below is cut off with
+// ErrFull and leaves no file, and Room answers the same for a size before any byte is written, so
+// attachments cannot fill the disk the database shares.
+func TestStageKeepsTheReserveFree(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Reserve = 1 << 20
+	volume(t, 3<<20)
+	if _, err := s.Stage(bytes.NewReader(make([]byte, 4<<20))); !errors.Is(err, ErrFull) {
+		t.Fatalf("staging 4 MiB on a 3 MiB volume with 1 MiB reserved: %v, want ErrFull", err)
+	}
+	// A body read in small pieces (an HTTP body) is cut off once it reaches the reserve.
+	if _, err := s.Stage(struct{ io.Reader }{bytes.NewReader(make([]byte, 4<<20))}); !errors.Is(err, ErrFull) {
+		t.Fatalf("staging 4 MiB piecewise: %v, want ErrFull", err)
+	}
+	if left, _ := os.ReadDir(filepath.Join(s.Dir(), "tmp")); len(left) != 0 {
+		t.Fatalf("%d staged files left behind", len(left))
+	}
+	if err := s.Room(2<<20 + 1); !errors.Is(err, ErrFull) {
+		t.Fatalf("Room past the reserve: %v, want ErrFull", err)
+	}
+	t.Run("Control", func(t *testing.T) {
+		if err := s.Room(2 << 20); err != nil {
+			t.Fatalf("Room up to the reserve: %v", err)
+		}
+		st, err := s.Stage(bytes.NewReader(make([]byte, 1<<20)))
+		if err != nil {
+			t.Fatalf("staging 1 MiB above the reserve: %v", err)
+		}
+		st.Discard()
+		s.Reserve = 0
+		st, err = s.Stage(bytes.NewReader(make([]byte, 4<<20)))
+		if err != nil {
+			t.Fatalf("no reserve: %v", err)
+		}
+		st.Discard()
+	})
+}

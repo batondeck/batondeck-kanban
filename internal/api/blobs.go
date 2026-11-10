@@ -86,8 +86,9 @@ func (b *BlobRoutes) release(id string) {
 // over MaxBytes 413, judged by its Content-Length before reading and by the bytes read, with nothing
 // left on disk; a body still arriving when the URL expires 403 (the connection's read deadline is
 // the expiry), with nothing left on disk; a second PUT while one is reading the same id's body 409;
-// an id that is not an attachment ref 404; the service's NOT_FOUND 404, INVALID_TRANSITION
-// (uploaded already) 409, VALIDATION (not the declared size) 400.
+// an id that is not an attachment ref 404; a body that would leave the blob volume under its reserve
+// (blob.Store.Reserve) 507 QUOTA_EXCEEDED, with nothing left on disk; the service's NOT_FOUND 404,
+// INVALID_TRANSITION (uploaded already) 409, VALIDATION (not the declared size) 400.
 func (b *BlobRoutes) Upload() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, exp, ok := b.verify(w, r, blob.Upload)
@@ -120,6 +121,10 @@ func (b *BlobRoutes) Upload() http.Handler {
 		switch {
 		case errors.As(err, &mb):
 			b.tooLarge(w, id)
+			return
+		case errors.Is(err, blob.ErrFull):
+			b.Logger.Printf("api: blob PUT %s refused: the blob volume is down to its reserve of %d bytes", id, b.Files.Reserve)
+			auth.WriteError(w, http.StatusInsufficientStorage, domain.CodeQuotaExceeded, "the server's attachment storage is full")
 			return
 		case errors.As(err, &ne) && ne.Timeout():
 			b.Logger.Printf("api: blob PUT %s refused: expired mid-body", id)

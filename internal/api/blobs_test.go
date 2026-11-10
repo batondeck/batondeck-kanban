@@ -43,6 +43,7 @@ func (u *uploads) calls() int {
 type blobRig struct {
 	srv    *httptest.Server
 	signer *blob.Signer
+	files  *blob.Store
 	dir    string
 	up     *uploads
 	logs   *bytes.Buffer
@@ -60,7 +61,7 @@ func newBlobRig(t *testing.T) *blobRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &blobRig{signer: signer, dir: dir, up: &uploads{}, logs: &bytes.Buffer{}, logMu: &sync.Mutex{}}
+	r := &blobRig{signer: signer, files: files, dir: dir, up: &uploads{}, logs: &bytes.Buffer{}, logMu: &sync.Mutex{}}
 	routes := &BlobRoutes{Signer: signer, Files: files, MaxBytes: 1 << 20, Uploads: r.up, Logger: log.New(lockedWriter{r.logMu, r.logs}, "", 0)}
 	mux := http.NewServeMux()
 	mux.Handle("PUT /blobs/{id}", routes.Upload())
@@ -188,4 +189,38 @@ func TestASecondConcurrentUploadOfOneIDIsRefused(t *testing.T) {
 	if r.up.calls() != 3 {
 		t.Fatalf("CompleteUpload called %d times, want 3", r.up.calls())
 	}
+}
+
+// A body that would leave the blob volume under its reserve is 507 QUOTA_EXCEEDED, with a log line,
+// no temp file, and the service never called: uploads cannot fill the disk the database is on.
+func TestUploadRefusedUnderTheVolumesReserve(t *testing.T) {
+	r := newBlobRig(t)
+	r.files.Reserve = 1 << 62 // more than any volume holds
+	id := blob.Ref{ProjectID: "P-1", TaskID: "T-1", AttachmentID: "A-1"}.String()
+	put := func() (*http.Response, string) {
+		req, _ := http.NewRequest(http.MethodPut, r.signer.URL(r.srv.URL, id, blob.Upload, time.Now().Add(time.Minute)), strings.NewReader("hello"))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, string(b)
+	}
+	resp, body := put()
+	if resp.StatusCode != http.StatusInsufficientStorage || !strings.Contains(body, `"QUOTA_EXCEEDED"`) {
+		t.Fatalf("status %d body %s, want 507 QUOTA_EXCEEDED", resp.StatusCode, body)
+	}
+	if n := r.tmpFiles(t); n != 0 || r.up.calls() != 0 {
+		t.Fatalf("%d temp files, %d service calls, want none", n, r.up.calls())
+	}
+	if !strings.Contains(r.log(), "reserve") {
+		t.Fatalf("no log line names the reserve: %q", r.log())
+	}
+	t.Run("Control", func(t *testing.T) {
+		r.files.Reserve = 0
+		if resp, body := put(); resp.StatusCode != http.StatusOK || r.up.calls() != 1 {
+			t.Fatalf("status %d body %s, %d service calls, want 200 and 1", resp.StatusCode, body, r.up.calls())
+		}
+	})
 }

@@ -457,3 +457,24 @@ func TestTheHashLockKeepsAReadyRowsFileOverTheEngines(t *testing.T) {
 		})
 	}
 }
+
+// attach_file refuses, with QUOTA_EXCEEDED and no row, an attachment the blob volume has no room
+// for above its reserve; the upload would be refused anyway, and the agent learns it before it reads
+// the file.
+func TestAttachFileRefusedUnderTheVolumesReserve(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		task := m.newTask(t)
+		m.files.Reserve = 1 << 62 // more than any volume holds
+		_, err := m.c.Media().AttachFile(m.ctx, m.alice, AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "f.txt", MimeType: "text/plain", Kind: "file", Bytes: 10})
+		wantCode(t, err, domain.CodeQuotaExceeded)
+		if got := m.list(t, task.ID); len(got) != 0 {
+			t.Fatalf("%d attachments after the refusal, want 0", len(got))
+		}
+		// Control: with room, the same call attaches.
+		m.files.Reserve = 0
+		m.attach(t, task.ID, 10)
+		if got := m.list(t, task.ID); len(got) != 1 {
+			t.Fatalf("%d attachments, want 1", len(got))
+		}
+	})
+}

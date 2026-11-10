@@ -97,6 +97,11 @@ var DefaultRetention = Retention{ChangeLogDays: 7, ToolCallsDays: 45, Deliveries
 // DefaultBlobMaxBytes is blob.max_bytes unset: conductor's ATTACHMENT_MAX_BYTES, 50 MiB.
 const DefaultBlobMaxBytes = 50 << 20
 
+// BlobReserve is the free space serve keeps on the blob directory's volume: attach_file and an
+// upload that would leave less are refused (blob.Store.Reserve), so attachments cannot fill the disk
+// the SQLite file (beside the blobs by default) or a Postgres on the same disk writes to.
+const BlobReserve = 512 << 20
+
 // Blob is the `blob` object of the config file: the local blob store of attachments.
 type Blob struct {
 	// Dir is the blob directory; "" is "blobs" beside the SQLite file (BlobDir).

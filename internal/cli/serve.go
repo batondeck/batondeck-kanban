@@ -232,6 +232,7 @@ func mediaOptions(cfg *core.Config, keys *core.Keyring, lns []net.Listener, logg
 	if err != nil {
 		return service.MediaOptions{}, err
 	}
+	files.Reserve = core.BlobReserve
 	m := service.MediaOptions{Files: files, MaxBytes: cfg.Blob.MaxBytes, BaseURL: cfg.PublicURL}
 	if keys == nil {
 		logger.Printf("serve: WARN no keyring: attach_file is refused and no download URL is signed; set %s (or run with -config)", core.MasterKeyEnv)
