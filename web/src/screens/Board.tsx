@@ -822,22 +822,24 @@ export function Board() {
   // a write per agent call. So there is nothing for the board-events carrier to fan out, and that has
   // not changed.
   //
-  // What changed is WHERE the poll lives. The gateway now pushes a periodic presence SNAPSHOT down this
-  // board's SSE connection (`event: presence`), so this query no longer polls at all — one server-side
-  // fetch per connected identity per tick serves every tab that identity has open, instead of every tab
-  // fetching for itself every 10s. Calling it a snapshot rather than "push" is deliberate: it is a poll
-  // moved to the server, which is the honest description and still removes the client cost.
+  // THE STREAM DOES NOT CARRY THIS LIST. Its presence frame is the device directory's entries for the
+  // viewer (CLI processes on this machine, internal/api/stream.go), sent on open and on a directory
+  // change. Every other session, an MCP client that pulls each turn (Cursor, a claude.ai connector), is
+  // only in `/api/agents/sessions`, and is online while its `lastSeenAt` is within
+  // `presenceOfflineAfterMs`. So the list is re-read every half of that window while the board is open
+  // (and its tab is in front): fetched once, an agent active seconds ago read offline 75 s after load,
+  // and one that connected later never appeared.
   //
-  // The initial fetch stays: a tab must render presence before the first tick arrives. It keeps the
-  // device rows a presence frame already put in the cache (P-197): the list never carries them, and a
-  // frame comes on open and then only on a directory change, so an answer landing after the open frame,
-  // or any refetch later, would show a live session as offline until the next change.
+  // Each answer keeps the device rows a presence frame already put in the cache (P-197): the list never
+  // carries them, and a frame comes on open and then only on a directory change, so an answer landing
+  // after the open frame, or any refetch later, would show a live session as offline until the next change.
   const agentsQ = useQuery({
     queryKey: ['agentsessions'],
     queryFn: async () => {
       const fresh = await agentsApi.agentSessions(uiSettings().sessionsLimit);
       return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions) };
     },
+    refetchInterval: Math.max(1000, Math.floor(uiSettings().presenceOfflineAfterMs / 2)),
   });
 
   // `resync`, or a rebuilt socket: no board frame comes until the next change, so the board, its tasks
@@ -934,9 +936,11 @@ export function Board() {
   // Live agent presence: an agent holding a non-expired claim is "busy"; everything else is derived from
   // session recency. Recomputed as the (polled) sessions/tasks change, so the dots stay current.
   const busyKeys = useMemo(() => busyAgentKeys(allTasks), [allTasks]);
+  // `dataUpdatedAt` moves on every answer, even one equal to the last (which keeps the same `data`), so
+  // each poll re-derives the states against a fresh `Date.now()` and a silent agent goes offline.
   const agentList = useMemo(
     () => buildAgentList(agentsQ.data?.sessions ?? [], busyKeys, allTasks.map((t) => t.assignee).filter(Boolean) as string[], Date.now()),
-    [agentsQ.data, busyKeys, allTasks],
+    [agentsQ.data, agentsQ.dataUpdatedAt, busyKeys, allTasks],
   );
 
   const [moveErr, setMoveErr] = useState<string | null>(null);
