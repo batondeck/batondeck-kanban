@@ -101,17 +101,40 @@ func (c *Core) boardSnapshot(ctx context.Context, projectID, boardID string) (Bo
 // ObserveChange is the snapshot cache's invalidation hook: the bus calls it with every change-log
 // row it delivers, and the cache serves nothing before its first call. A row naming a board drops
 // that board's snapshot; a row naming only a project drops every snapshot of the project. The
-// highest id seen is the cursor a snapshot is composed at.
+// highest id seen is the cursor a snapshot is composed at. It is the access cache's hook too: a row
+// of a membership, role or grant change (policyTools) drops the project's cached access and every
+// tools/list narrowing, and a create_project row its creator's narrowing, so a change made through
+// another process holds here on the identity's next call, not only once the access TTL runs out.
 func (c *Core) ObserveChange(ch store.Change) {
 	var p struct {
 		ProjectID string `json:"projectId"`
 		BoardID   string `json:"boardId"`
+		Tool      string `json:"tool"`
+		Actor     string `json:"actor"`
 	}
 	_ = json.Unmarshal(ch.Payload, &p)
 	if p.ProjectID == "" && ch.ProjectID != nil {
 		p.ProjectID = *ch.ProjectID
 	}
+	switch {
+	case policyTools[p.Tool] && p.ProjectID != "":
+		c.InvalidateAccess(p.ProjectID, "")
+	case p.Tool == "create_project" && p.Actor != "":
+		c.hidden.invalidate(p.Actor)
+	}
 	c.boards.observe(ch.ID, p.ProjectID, p.BoardID)
+}
+
+// policyTools are the tools whose change-log row drops the project's cached access in every
+// process (ObserveChange): those that change who is a member, with what role, under what grant.
+var policyTools = map[string]bool{"add_member": true, "remove_member": true, "grant_capabilities": true, "delete_project": true}
+
+// DropCachedAccess drops every cached membership, grant and tools/list narrowing. The bus's tap calls
+// it when it dropped a change (cli.feedSnapshots), since a dropped row may have been a policy change
+// ObserveChange never saw.
+func (c *Core) DropCachedAccess() {
+	c.access.invalidateAll()
+	c.hidden.invalidate("")
 }
 
 // ResetSnapshots drops every board snapshot. live true says the bus feeds ObserveChange from now

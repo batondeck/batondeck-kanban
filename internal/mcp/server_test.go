@@ -432,13 +432,16 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 	// A name nobody registered: go-sdk refuses it, and the row carries neither the caller's free text
 	// nor a project, only unknownTool.
 	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "BUY-CHEAP-PILLS-example.com", Arguments: map[string]any{"projectId": "P-1"}})
+	// Arguments go-sdk refuses against the input schema: no service judged the caller's membership,
+	// so the project the arguments name is not the row's.
+	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1", "bogus": 1}})
 	var got []string
 	for _, c := range calls(f, "ToolCalls.Record") {
 		r := c.Req.(service.RecordToolCallReq)
 		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code+" "+r.ProjectID)
 	}
 	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1",
-		"u-ada denied error FORBIDDEN ", "u-ada " + unknownTool + " error VALIDATION "}
+		"u-ada denied error FORBIDDEN ", "u-ada " + unknownTool + " error VALIDATION ", "u-ada whoami error VALIDATION "}
 	if !slices.Equal(got, want) {
 		t.Errorf("tool_calls rows = %q, want %q", got, want)
 	}

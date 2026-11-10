@@ -19,12 +19,14 @@ type AuditDescriptor struct {
 // sensitiveActions is the one place a sensitive tool is declared, and the opposite polarity to
 // grants: a tool absent here is not audited, because auditing every call would bury the actions that
 // change who may do what, or destroy data. Conductor's rows for the tools in scope, with
-// update_settings no longer recording transitionTable (the table is fixed), set_transitions gone with
-// its tool, and delete_task and delete_chronicle_page added.
+// update_settings no longer recording transitionTable (the table is fixed) and recording
+// checkpointPolicy, tokenPolicy and maxTicketTokens, set_transitions gone with its tool, and
+// delete_task and delete_chronicle_page added.
 var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	// Project membership and privilege.
 	"add_member": func(a map[string]any) AuditDescriptor {
-		return AuditDescriptor{Action: "member.added", Subject: canonID(a, "identityId"), Data: pick(a, "role")}
+		// folded: the rows kept for the account's login that the add folded into its row.
+		return AuditDescriptor{Action: "member.added", Subject: canonID(a, "identityId"), Data: pick(a, "role", "folded")}
 	},
 	"remove_member": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "member.removed", Subject: canonID(a, "identityId"), Data: map[string]any{}}
@@ -51,7 +53,7 @@ var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 		return AuditDescriptor{Action: "settings.updated", Subject: str(a, "projectId"), Data: pick(a,
 			"reviewEnabled", "quotaEnabled", "txnCap", "artifactPolicy", "selfApprovalPolicy",
 			"defaultReviewer", "selectionWeights", "agingCeilingMs", "capabilityAliases", "retryPolicy",
-			"anomalyPolicy", "maxRunsPerTask")}
+			"anomalyPolicy", "maxRunsPerTask", "checkpointPolicy", "tokenPolicy", "maxTicketTokens")}
 	},
 
 	// Revocation, keyed on the identity: the agent rides in data so a search by account finds it.

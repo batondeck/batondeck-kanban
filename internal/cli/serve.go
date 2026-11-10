@@ -335,19 +335,21 @@ var wakeRegistry = func() string {
 // snapshot.
 const snapshotTapBuffer = 1024
 
-// feedSnapshots hands every change the bus delivers to the board snapshot cache
-// (Core.ObserveChange, ADR-0004) until the tap closes with the bus, then turns the cache off. A change
-// the tap dropped clears every snapshot, since which board it named is unknown. It reads only the
-// tap: no statement, no poll.
+// feedSnapshots hands every change the bus delivers to the board snapshot cache and the access cache
+// (Core.ObserveChange, ADR-0004) until the tap closes with the bus, then turns the snapshot cache off.
+// A change the tap dropped clears every snapshot and every cached access entry, since which board it
+// named, or whether it changed a membership or grant, is unknown. It reads only the tap: no
+// statement, no poll.
 func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) {
 	defer sc.ResetSnapshots(false)
 	var dropped int64
 	for c := range tap.C() {
 		sc.ObserveChange(c)
 		if n := tap.Dropped(); n > dropped {
-			logger.Printf("serve: the board snapshot cache's tap dropped %d change(s); clearing every snapshot", n-dropped)
+			logger.Printf("serve: the board snapshot cache's tap dropped %d change(s); clearing every snapshot and cached access", n-dropped)
 			dropped = n
 			sc.ResetSnapshots(true)
+			sc.DropCachedAccess()
 		}
 	}
 }

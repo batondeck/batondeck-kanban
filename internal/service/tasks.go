@@ -1,6 +1,7 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -148,7 +149,8 @@ func callerAgent(c domain.Caller) *string {
 // sprint.task_added {sprintId, memberCount}, under the project lock. Without sprintId no statement
 // is added.
 func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels}, false)
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels,
+		Priorities: []domain.Priority{cmp.Or(req.Priority, domain.PriorityNormal)}}, false)
 	if err != nil {
 		return CreateTaskResp{}, err
 	}
@@ -319,7 +321,11 @@ func (s tasksSvc) Get(ctx context.Context, caller domain.Caller, req GetTaskReq)
 // autoAssign's resolution is not carried (no agent-profile store): autoAssign beside patch.assignee
 // is conductor's VALIDATION, and autoAssign alone is VALIDATION too.
 func (s tasksSvc) Update(ctx context.Context, caller domain.Caller, req UpdateTaskReq) (UpdateTaskResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_task", domain.GrantSubject{Labels: req.Patch.Labels}, true)
+	subject := domain.GrantSubject{Labels: req.Patch.Labels}
+	if req.Patch.Priority != "" {
+		subject.Priorities = []domain.Priority{req.Patch.Priority}
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_task", subject, true)
 	if err != nil {
 		return UpdateTaskResp{}, err
 	}

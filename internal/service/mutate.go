@@ -83,7 +83,8 @@ type mutation struct {
 	// project lock (store.Locks) is the transaction's first statement, before the task is loaded or
 	// any task row locked, so lock order is project then tasks. add_dependency and remove_dependency
 	// set it: under Postgres READ COMMITTED two of them on disjoint pairs could each pass
-	// domain.CheckCycle and together close a cycle (P-110).
+	// domain.CheckCycle and together close a cycle (P-110); add_member and remove_member set it for
+	// the last-admin guard.
 	LockProject bool
 	// KeepVersion loads and checks the task but leaves its version where it was when fn wrote nothing
 	// to it: a write beside the task (a comment, a follow-up, an ack) is not a change of the task,

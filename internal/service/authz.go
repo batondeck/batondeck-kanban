@@ -48,8 +48,9 @@ func checkGrant(g domain.CapabilityGrant, s domain.GrantSubject) error {
 // projectID (a missing project or membership is FORBIDDEN, never NOT_FOUND, so a project's
 // existence does not leak), the tier against the member's role capped by the caller's token role,
 // and the grant via domain.CheckGrant unless the tool is grant-exempt. Membership and grant are
-// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once. A grant on
-// a project admin is not enforced.
+// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once in the
+// process that made the change, and ObserveChange in every other process once the bus delivers the
+// change's row. A grant on a project admin is not enforced.
 // AdminOnly "conditional" tools are listed and gated in their handler, not here.
 func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, tool string, subject domain.GrantSubject, namesTask bool) (access, error) {
 	p, ok := domain.ToolPosture(tool)
@@ -111,7 +112,9 @@ func effectiveRole(member domain.Role, token string) domain.Role {
 
 // InvalidateAccess drops the cached membership and grant of identityID in projectID, or of every
 // identity in it when identityID is "", so the next authorize reads them again. Every membership,
-// role or grant change calls it (add_member, remove_member, grant_capabilities, delete_project).
+// role or grant change calls it (add_member, remove_member, grant_capabilities, delete_project) in
+// the process that made it, and ObserveChange calls it in every process when the bus delivers the
+// change's row.
 func (c *Core) InvalidateAccess(projectID, identityID string) {
 	c.access.invalidate(projectID, identityID)
 	c.hidden.invalidate(identityID)
@@ -193,6 +196,14 @@ func (a *accessCache) put(projectID, identityID string, e accessCached, gen uint
 	}
 	e.expires = now.Add(a.ttl)
 	a.entries[[2]string{projectID, identityID}] = e
+}
+
+// invalidateAll drops every entry.
+func (a *accessCache) invalidateAll() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gen++
+	clear(a.entries)
 }
 
 func (a *accessCache) invalidate(projectID, identityID string) {

@@ -750,7 +750,25 @@ export function Settings() {
     return p.then((r) => { refresh(); return r; }).catch((e) => setErr(String(e instanceof Error ? e.message : e)));
   };
 
-  const addMember = useMutation({ mutationFn: () => projectsApi.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
+  /**
+   * A LOGIN NO ACCOUNT HOLDS. add_member keys a member by the account id a login names; any other
+   * reference is kept as given, and that row grants nothing until an account takes the login and the
+   * member is added again (which folds the row into the account). The answer keys such a row by the
+   * typed text itself; so does an account id, which get_project's memberDisplay then names. The note
+   * shows once the refreshed project holds the row and names no account for it.
+   */
+  const [addedRef, setAddedRef] = useState<string | null>(null);
+  const addMember = useMutation({
+    mutationFn: () => projectsApi.addMember(projectId, member, role),
+    onSuccess: (r) => {
+      const typed = member.trim();
+      setAddedRef(typed && Object.prototype.hasOwnProperty.call(r.members, typed) ? typed : null);
+      setMember('');
+      refresh();
+    },
+    onError: (e) => setErr(String(e)),
+  });
+  const noAccount = addedRef !== null && project?.members[addedRef] !== undefined && memberDisplay[addedRef] === undefined ? addedRef : null;
   const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
     mutationFn: (wipLimit: number | null) => boardsApi.addColumn(projectId, board!.id, col.name, col.status, wipLimit),
@@ -979,7 +997,15 @@ export function Settings() {
                             <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{id}</span>
                           </span>
                         ) : (
-                          <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                          // memberDisplay names every account; a row it does not name is no account
+                          // (a login kept as given), so it grants nothing.
+                          <span
+                            style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}
+                            title="No account is this member, so the row grants nothing. Once a workspace admin adds the account under Users, add its login here again."
+                          >
+                            <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>no account · grants nothing</span>
+                          </span>
                         )}
                       </Cluster>
                     </td>
@@ -1028,6 +1054,12 @@ export function Settings() {
                 + Add Member
               </button>
             </div>
+            {noAccount && (
+              <p role="status" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>
+                No account has the login {noAccount} yet, so this row grants nothing. Once a workspace admin adds the
+                account under Users, add {noAccount} here again.
+              </p>
+            )}
             {membersWhy && (
               <p id="members-closed" className="muted" style={{ margin: 0, padding: '8px 12px', fontSize: 12 }}>{membersWhy}</p>
             )}
