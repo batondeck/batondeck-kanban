@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -25,6 +26,11 @@ const (
 	maxRedirectURILen = 2000
 	maxClientNameLen  = 200
 	maxScopeLen       = 200
+
+	// maxRegistrationAuditData bounds the JSON data of an oauth.client.registered row, and
+	// maxAuditHostLen each place a redirect URI points at in it (JSON-encoded bytes).
+	maxRegistrationAuditData = 1024
+	maxAuditHostLen          = 64
 )
 
 // registration is the part of an RFC 7591 request this server reads; other members are ignored.
@@ -79,7 +85,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), auth.AuditEvent{Action: "oauth.client.registered", Subject: "oauth_client:" + id, Result: "ok",
-		Data: map[string]any{"clientName": req.ClientName, "redirectUris": req.RedirectURIs}})
+		Data: registrationAudit(req)})
 	body := map[string]any{
 		"client_id":                  id,
 		"client_id_issued_at":        now.Unix(),
@@ -95,6 +101,81 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		body["scope"] = req.Scope
 	}
 	writeJSON(w, http.StatusCreated, body)
+}
+
+// registrationAudit is the data of the oauth.client.registered row: the client's name, how many
+// redirect URIs it registered and the distinct places they point at (a URI's host, or an app
+// scheme's name and ":"), a long one cut to its end, where its domain is. Not the URIs themselves:
+// anyone may register, audit rows are kept for good, and one registration may carry 20 KB of them,
+// so the data stays within maxRegistrationAuditData bytes of JSON (the name's 200, ten places of
+// maxAuditHostLen, the keys). The URI a code went to is in the oauth.consent.granted row, which a
+// signed-in user made.
+func registrationAudit(req registration) map[string]any {
+	var seen []string
+	hosts := []string{}
+	for _, u := range req.RedirectURIs {
+		p, err := url.Parse(u)
+		if err != nil {
+			continue
+		}
+		h := p.Host
+		if h == "" {
+			h = p.Scheme + ":"
+		}
+		if !slices.Contains(seen, h) {
+			seen = append(seen, h)
+			hosts = append(hosts, clipJSON(h, maxAuditHostLen, true))
+		}
+	}
+	return map[string]any{"clientName": clipJSON(req.ClientName, maxClientNameLen, false),
+		"redirectUriCount": len(req.RedirectURIs), "redirectHosts": hosts}
+}
+
+// clipJSON is s when encoding/json writes it in at most max bytes between its quotes; else the
+// longest start of it (with tail, end of it) that fits there with "…" marking the cut.
+func clipJSON(s string, max int, tail bool) string {
+	n := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		n, i = n+jsonLen(r, size), i+size
+	}
+	if n <= max {
+		return s
+	}
+	budget, n := max-len("…"), 0
+	if !tail {
+		i := 0
+		for i < len(s) {
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if n+jsonLen(r, size) > budget {
+				break
+			}
+			n, i = n+jsonLen(r, size), i+size
+		}
+		return s[:i] + "…"
+	}
+	j := len(s)
+	for j > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:j])
+		if n+jsonLen(r, size) > budget {
+			break
+		}
+		n, j = n+jsonLen(r, size), j-size
+	}
+	return "…" + s[j:]
+}
+
+// jsonLen is at most how many bytes encoding/json writes for the rune r, size bytes of a string: it
+// escapes a quote and a backslash in two, and a control character, <, > and & (for HTML), U+2028,
+// U+2029 and a byte that is no UTF-8 in six.
+func jsonLen(r rune, size int) int {
+	switch {
+	case r == '"' || r == '\\':
+		return 2
+	case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || (r == utf8.RuneError && size == 1):
+		return 6
+	}
+	return size
 }
 
 // checkRegistration is the RFC 7591 §3.2.2 error code and description for a request this server

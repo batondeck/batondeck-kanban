@@ -148,6 +148,6 @@ func (s *Server) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), auth.AuditEvent{Action: "oauth.consent.granted", Actor: sess.UserID,
-		Subject: "oauth_client:" + req.client.ClientID, Result: "ok", Data: map[string]any{"role": string(role), "resource": req.resource}})
+		Subject: "oauth_client:" + req.client.ClientID, Result: "ok", Data: map[string]any{"role": string(role), "resource": req.resource, "redirectUri": req.redirectURI}})
 	http.Redirect(w, r, withParams(req.redirectURI, map[string]string{"code": code, "state": req.state}), http.StatusSeeOther)
 }

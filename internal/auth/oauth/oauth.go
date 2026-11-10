@@ -45,8 +45,9 @@ const (
 // Registration bounds: DefaultRegisterLimit registrations per client address (an IPv6 address by
 // its /64) and DefaultRegisterTotal from every address together per DefaultRegisterWindow, and a
 // registration no authorization used within UnusedClientTTL is deleted at the next registration.
-// The total bounds what many addresses can store: each registration keeps up to 20 KB of redirect
-// URIs for a day and an audit row for good.
+// The total bounds what many addresses can store at once (each registration keeps up to 20 KB of
+// redirect URIs for a day) and how fast they add to the audit log, which keeps a row of at most
+// 1 KB (registrationAudit) for each registration for good.
 const (
 	DefaultRegisterLimit  = 20
 	DefaultRegisterTotal  = 500

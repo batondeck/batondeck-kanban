@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -160,6 +161,19 @@ func TestServeAuditsTheAuthEvents(t *testing.T) {
 			} {
 				if got[want] != 1 {
 					t.Errorf("%d rows %+v, want 1; the log: %+v", got[want], want, page2.Rows)
+				}
+			}
+			// The registration's row keeps a bounded summary, not the URIs; the consent's row names
+			// the URI the code went to.
+			for _, r := range page2.Rows {
+				var data map[string]any
+				_ = json.Unmarshal(r.Data, &data)
+				switch {
+				case r.Action == "oauth.client.registered" && (data["redirectUris"] != nil || data["redirectUriCount"] != 1.0 ||
+					fmt.Sprint(data["redirectHosts"]) != "[127.0.0.1:43999]" || data["clientName"] != "probe"):
+					t.Errorf("the oauth.client.registered row's data: %s", r.Data)
+				case r.Action == "oauth.consent.granted" && data["redirectUri"] != callback:
+					t.Errorf("the oauth.consent.granted row's data: %s", r.Data)
 				}
 			}
 			revoked := 0
