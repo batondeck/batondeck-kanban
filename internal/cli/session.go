@@ -37,6 +37,10 @@ every subcommand takes -config PATH.
 // sessionTimeout bounds one request: a hook waits on it before the session starts.
 const sessionTimeout = 3 * time.Second
 
+// sessionServerUID is the uid the server on the socket must run as for the bearer to be sent:
+// this process's. A test points it at another uid.
+var sessionServerUID = os.Getuid
+
 // session is `batondeck-kanban session register|unregister`. Usage errors exit 2; every other
 // outcome exits 0, a failure as exactly one stderr line, and nothing is written to stdout (a
 // SessionStart hook's stdout becomes the model's context) but the usage a person asked for with
@@ -98,7 +102,7 @@ func session(args []string, stdout, stderr io.Writer) int {
 	}
 	client := &http.Client{Timeout: sessionTimeout, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, core.NetworkUnix, sock)
+			return core.DialUnix(ctx, sock, sessionServerUID())
 		}}}
 	var req *http.Request
 	if sub == "register" {

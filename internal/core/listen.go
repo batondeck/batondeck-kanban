@@ -120,6 +120,31 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 	return &peerListener{Listener: ln, uid: uid, path: path, log: logger}, nil
 }
 
+// DialUnix connects to the Unix socket at path and refuses a server whose uid, read from the
+// kernel as Listen reads a client's, is not uid: a client about to send a bearer sends it only to
+// a server of its own uid, whoever could have bound the path first (core-cli-ops#10).
+func DialUnix(ctx context.Context, path string, uid int) (net.Conn, error) {
+	c, err := (&net.Dialer{}).DialContext(ctx, NetworkUnix, path)
+	if err != nil {
+		return nil, err
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s: not a Unix connection", path)
+	}
+	p, err := peerCred(uc)
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s: reading the server's uid: %w", path, err)
+	}
+	if p.UID != uid {
+		c.Close()
+		return nil, fmt.Errorf("unix socket %s is served by uid %d, not uid %d: refusing to send it the bearer", path, p.UID, uid)
+	}
+	return c, nil
+}
+
 // privateDir refuses a socket directory that another user could replace the socket in: one not
 // owned by uid, writable by group or other, or a symlink (whoever can write its parent can repoint
 // it). Its ancestors are not checked.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -142,6 +143,48 @@ func TestSessionHookChild(t *testing.T) {
 		t.Skip("the hook's command, run by TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient")
 	}
 	os.Exit(session([]string{"register", "--role", "worker"}, os.Stdout, os.Stderr))
+}
+
+// core-cli-ops#10 (tested): the client sends the bearer only to a server of its own uid, as the
+// server admits only clients of its own uid. Another local user who binds the configured socket
+// path first (a /tmp directory after a reboot, say) got every session's BATONDECK_TOKEN from the
+// SessionStart hook, which fails quietly by design. A server of another uid is played here by a
+// listener of this uid with the client's expected uid pointed elsewhere: it is refused in one
+// stderr line, exit 0, and the listener reads no request.
+func TestSessionSendsTheBearerOnlyToAServerOfItsUID(t *testing.T) {
+	sock := filepath.Join(shortDir(t, "bkimp"), "bk.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 4)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	t.Setenv("BATONDECK_CONFIG", "")
+	t.Setenv("BATONDECK_LISTEN", "unix://"+sock)
+	const bearer = "a-bearer-the-impostor-must-not-read" // the client sends it as it is
+	t.Setenv("BATONDECK_TOKEN", bearer)
+	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "")
+	old := sessionServerUID
+	sessionServerUID = func() int { return os.Getuid() + 1 }
+	t.Cleanup(func() { sessionServerUID = old })
+	for _, sub := range [][]string{{"session", "register", "--role", "worker"}, {"session", "unregister"}} {
+		oneLine(t, fmt.Sprintf("is served by uid %d, not uid %d", os.Getuid(), os.Getuid()+1), sub...)
+	}
+	select {
+	case auth := <-got:
+		t.Fatalf("a server of another uid read a request carrying %q", auth)
+	default:
+	}
+	sessionServerUID = old // the positive control: the same listener, as this uid's, is sent the request
+	oneLine(t, "registered as", "session", "register", "--role", "worker")
+	if auth := <-got; auth != "Bearer "+bearer {
+		t.Fatalf("the positive control's request carried %q", auth)
+	}
 }
 
 // AC2 (tested): the routes are 404 over TCP for the client's exact body, and a client whose listen
