@@ -6,6 +6,9 @@
  * refusal, and the bigger `limit` stuck, so every later refetch of the list was refused too. The fake
  * below refuses a limit over 200 exactly as the server does and pages by cursor.
  *
+ * The board's first page is set to 20 (`taskPageLimit`, admin-tunable) so the cases render 25 cards,
+ * not 205: "Load more" still asks for 20 + 200 rows, past the server's 200, as it does at the default.
+ *
  * And a list that failed rendered as an EMPTY board ("0 tasks", "No tasks" in every column), with
  * nothing saying the read failed.
  */
@@ -15,6 +18,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { Board } from '../screens/Board.js';
 import { boardTasksKey, mergeFirstPage } from '../mutations.js';
+import { hydrateUiSettings } from '../settings.js';
+import { listTasksUpTo } from '../api/boards.js';
 import type { Task } from '../types.js';
 
 class FakeES {
@@ -53,7 +58,8 @@ const json = (status: number, b: unknown) => ({ ok: status < 400, status, json: 
 
 beforeEach(() => {
   FakeES.instances = [];
-  all = Array.from({ length: 205 }, (_, i) => mk(i + 1));
+  all = Array.from({ length: 25 }, (_, i) => mk(i + 1));
+  hydrateUiSettings({ taskPageLimit: 20 });
   failTasks = false;
   taskUrls = [];
   vi.stubGlobal('EventSource', FakeES);
@@ -84,6 +90,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  hydrateUiSettings(undefined);
   vi.unstubAllGlobals();
 });
 
@@ -103,52 +110,52 @@ function renderBoard(qc = newClient()) {
 const cards = () => document.querySelectorAll('.card[data-task-id]').length;
 
 describe('the board pages its task list with the cursor (limit stays within 1..200)', () => {
-  it('Load more shows the rest of a 205-task board, and no request asks for more than 200', async () => {
+  it('Load more shows the rest of the board, and no request asks for more than 200', async () => {
     const qc = renderBoard();
-    await waitFor(() => expect(cards()).toBe(200));
+    await waitFor(() => expect(cards()).toBe(20));
     // The header says the board holds more than is shown, from the board's own counts.
-    expect(screen.getByText('200 of 205 tasks')).toBeInTheDocument();
+    expect(screen.getByText('20 of 25 tasks')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    await waitFor(() => expect(cards()).toBe(205));
-    expect(screen.getByText('205 tasks')).toBeInTheDocument();
+    await waitFor(() => expect(cards()).toBe(25));
+    expect(screen.getByText('25 tasks')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
     for (const q of taskUrls) expect(Number(new URLSearchParams(q).get('limit')), q).toBeLessThanOrEqual(200);
-    expect(taskUrls.some((q) => new URLSearchParams(q).has('cursor')), 'the second page is read by cursor').toBe(true);
 
     // A later refetch of the list (the settle refetch after a drag, a resync, the fallback poll) is
     // not refused either, and keeps every row.
     taskUrls = [];
     await act(async () => { await qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] }); });
     await waitFor(() => expect(taskUrls.length).toBeGreaterThan(0));
-    await waitFor(() => expect(cards()).toBe(205));
+    await waitFor(() => expect(cards()).toBe(25));
     expect(screen.queryByText(/Couldn’t load the tasks/)).toBeNull();
   });
 
-  it('a board frame (the first 200 tasks) does not drop the rows Load more fetched', async () => {
+  it('a board frame (one page, with its cursor) does not drop the rows Load more fetched', async () => {
     renderBoard();
-    await waitFor(() => expect(cards()).toBe(200));
+    await waitFor(() => expect(cards()).toBe(20));
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    await waitFor(() => expect(cards()).toBe(205));
+    await waitFor(() => expect(cards()).toBe(25));
     const es = FakeES.instances.at(-1)!;
-    // internal/api/stream.go boardTasksLimit: a frame carries one page of 200, with its cursor.
+    // internal/api/stream.go boardTasksLimit: a frame carries one page (200 there; 20 here, as the
+    // board's first page is), with its cursor.
     act(() => {
       es.readyState = 1;
       es.emit('open');
-      es.emit('board', { board: { board, taskCounts: { c1: 205 } }, tasks: { tasks: all.slice(0, 200), nextCursor: '200' }, feed: { events: [] } });
+      es.emit('board', { board: { board, taskCounts: { c1: 25 } }, tasks: { tasks: all.slice(0, 20), nextCursor: '20' }, feed: { events: [] } });
     });
     await act(() => new Promise<void>((r) => setTimeout(r, 30)));
-    expect(cards()).toBe(205);
+    expect(cards()).toBe(25);
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 
   it('a Load more that fails says so, keeps the cards shown, and leaves later refetches working', async () => {
     const qc = renderBoard();
-    await waitFor(() => expect(cards()).toBe(200));
+    await waitFor(() => expect(cards()).toBe(20));
     failTasks = true;
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     await waitFor(() => expect(screen.getByText(/Couldn’t load more tasks/)).toBeInTheDocument());
-    expect(cards()).toBe(200);
+    expect(cards()).toBe(20);
     failTasks = false;
     taskUrls = [];
     await act(async () => { await qc.invalidateQueries({ queryKey: ['tasks', 'p1', 'b1'] }); });
@@ -168,7 +175,7 @@ describe('a task list that failed to load is an error, not an empty board', () =
 
     failTasks = false;
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(cards()).toBe(200));
+    await waitFor(() => expect(cards()).toBe(20));
     expect(screen.queryByText(/Couldn’t load the tasks/)).toBeNull();
   });
 
@@ -196,5 +203,26 @@ describe('mergeFirstPage', () => {
     expect(k).toEqual(['tasks', 'p1', 'b1', 200]);
     const frame = page(all.slice(1, 4), 'c');
     expect(mergeFirstPage(page(all.slice(0, 3), 'c'), frame)).toBe(frame);
+  });
+});
+
+describe('listTasksUpTo', () => {
+  it('reads past 200 rows page by page with the cursor, each request within 200', async () => {
+    all = Array.from({ length: 450 }, (_, i) => mk(i + 1));
+    const out = await listTasksUpTo('p1', 'b1', 420);
+    expect(out.tasks).toHaveLength(420);
+    expect(out.tasks[419]!.id).toBe('T-420');
+    expect(out.nextCursor).toBe('420');
+    expect(taskUrls.map((q) => Object.fromEntries(new URLSearchParams(q)))).toEqual([
+      { limit: '200' },
+      { limit: '200', cursor: '200' },
+      { limit: '20', cursor: '400' },
+    ]);
+  });
+
+  it('stops at the end of the board, with no cursor', async () => {
+    const out = await listTasksUpTo('p1', 'b1', 400);
+    expect(out.tasks).toHaveLength(25);
+    expect(out.nextCursor).toBeUndefined();
   });
 });
