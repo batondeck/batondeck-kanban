@@ -300,9 +300,10 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 	}
 	d.mu.Lock()
 	var old entry // a copy: the dispatcher writes lastCursor under mu
-	found := d.entries[req.PID] != nil
+	cur := d.entries[req.PID]
+	found := cur != nil
 	if found {
-		old = *d.entries[req.PID]
+		old = *cur
 	}
 	d.mu.Unlock()
 	id, cursor := "", req.Cursor
@@ -313,7 +314,7 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 		if old.procStart == reg.ProcStart {
 			id, cursor = old.id, max(cursor, old.lastCursor)
 		} else {
-			d.drop(ctx, req.PID, "re-registered by another process")
+			d.drop(ctx, cur, "re-registered by another process")
 		}
 	}
 	if err := d.watch.Add(int(req.PID)); err != nil {
@@ -358,7 +359,7 @@ func (d *Directory) Unregister(ctx context.Context, caller domain.Caller, pid in
 	if e == nil || e.identity != caller.Identity {
 		return domain.NotFound("WakeSession", fmt.Sprint(pid))
 	}
-	d.drop(ctx, pid, "unregistered")
+	d.drop(ctx, e, "unregistered")
 	return nil
 }
 
@@ -398,19 +399,20 @@ func (d *Directory) signal() {
 	d.changed = make(chan struct{})
 }
 
-// drop removes pid's entry and its row, and stops watching it.
-func (d *Directory) drop(ctx context.Context, pid int64, why string) {
+// drop removes e and its row, and stops watching its pid, unless a register has replaced e
+// meanwhile: the verdict of a recheck that read e is e's, never its replacement's
+// (core-cli-ops#12).
+func (d *Directory) drop(ctx context.Context, e *entry, why string) {
+	pid := e.pid
 	d.mu.Lock()
-	e := d.entries[pid]
-	if e != nil {
-		d.unindex(e)
-		delete(d.entries, pid)
-		d.signal()
-	}
-	d.mu.Unlock()
-	if e == nil {
+	if d.entries[pid] != e {
+		d.mu.Unlock()
 		return
 	}
+	d.unindex(e)
+	delete(d.entries, pid)
+	d.signal()
+	d.mu.Unlock()
 	d.watch.Remove(int(pid))
 	d.o.Logger.Printf("wake: dropped pid %d (%s, %s): %s", pid, e.role, e.identity, why)
 	if err := d.o.Sessions.DropWakeSession(context.WithoutCancel(ctx), e.id); err != nil {
@@ -542,7 +544,12 @@ func (d *Directory) loop(ctx context.Context, tap *bus.Subscription, missed []re
 				d.deliver(ctx, r)
 			}
 		case pid := <-d.watch.Exited():
-			d.drop(ctx, int64(pid), "the process exited")
+			d.mu.Lock()
+			e := d.entries[int64(pid)]
+			d.mu.Unlock()
+			if e != nil {
+				d.drop(ctx, e, "the process exited")
+			}
 		case pid := <-d.rescope:
 			d.mu.Lock()
 			e := d.entries[pid]
@@ -690,7 +697,7 @@ func (d *Directory) sweep(ctx context.Context) {
 // sweepOne rechecks e, dropping it when it no longer holds.
 func (d *Directory) sweepOne(ctx context.Context, e *entry) {
 	if why, ok := d.recheck(ctx, e, false); ok && why != "" {
-		d.drop(ctx, e.pid, why)
+		d.drop(ctx, e, why)
 	}
 }
 
@@ -722,7 +729,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 		return
 	}
 	if why != "" {
-		d.drop(ctx, e.pid, why)
+		d.drop(ctx, e, why)
 		return
 	}
 	if !slices.Contains(e.scopes, service.BroadcastScope(r.frame.ProjectID)) {
@@ -731,10 +738,10 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	reg, err := readRegistry(d.o.Registry, e.pid)
 	switch {
 	case err != nil:
-		d.drop(ctx, e.pid, "its registry entry is gone: "+err.Error())
+		d.drop(ctx, e, "its registry entry is gone: "+err.Error())
 		return
 	case reg.ProcStart != e.procStart:
-		d.drop(ctx, e.pid, "its pid now names another process")
+		d.drop(ctx, e, "its pid now names another process")
 		return
 	}
 	f := r.frame
@@ -747,7 +754,7 @@ func (d *Directory) deliver(ctx context.Context, r released) {
 	}
 	if err := writeDoorbell(reg.MessagingSocketPath, frameBytes(reg.SessionID, token, f, e.label()), d.o.WriteTimeout); err != nil {
 		if gone(err) {
-			d.drop(ctx, e.pid, "its socket is gone: "+err.Error())
+			d.drop(ctx, e, "its socket is gone: "+err.Error())
 			return
 		}
 		d.o.Logger.Printf("wake: writing pid %d's doorbell: %v", e.pid, err)
