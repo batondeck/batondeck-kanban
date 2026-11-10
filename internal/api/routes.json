@@ -212,6 +212,11 @@
       "source": "app.ts:3540"
     },
     {
+      "method": "POST",
+      "path": "/api/me/password",
+      "source": "new: a user changes their own password (a signed-in session; ui-backend's accounts were WorkOS's)"
+    },
+    {
       "method": "GET",
       "path": "/api/me/settings",
       "source": "app.ts:2696"

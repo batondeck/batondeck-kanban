@@ -57,8 +57,10 @@ describe('Settings → Users', () => {
     const table = await screen.findByRole('table', { name: 'Users' });
     expect(within(table).getByText('carol')).toBeInTheDocument();
     expect(within(table).getByText('Disabled')).toBeInTheDocument();
-    // No control beyond list and add: disable, password and role changes are the host's CLI.
-    expect(screen.queryByRole('button', { name: /disable|password|role|remove/i })).toBeNull();
+    // No control beyond list and add: disable, password and role changes are the host's CLI. (The
+    // Your password panel elsewhere on the page changes the signed-in user's own, nobody else's.)
+    const panel = table.closest('section')!;
+    expect(within(panel).queryByRole('button', { name: /disable|password|role|remove/i })).toBeNull();
 
     fireEvent.change(screen.getByLabelText('New user login'), { target: { value: 'bob' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add user' }));

@@ -1,11 +1,14 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -87,7 +90,7 @@ func TestRefusalRegisterOverTheRateLimit(t *testing.T) {
 
 // The limiter counts per address: another address is not held by the first's budget.
 func TestRegisterLimitIsPerAddress(t *testing.T) {
-	l := newLimiter(1, time.Hour)
+	l := newLimiter(1, 0, time.Hour)
 	now := time.Unix(0, 0)
 	if ok, _ := l.allow("10.0.0.1", now); !ok {
 		t.Fatal("first call refused")
@@ -97,6 +100,159 @@ func TestRegisterLimitIsPerAddress(t *testing.T) {
 	}
 	if ok, _ := l.allow("10.0.0.2", now); !ok {
 		t.Fatal("another address refused")
+	}
+}
+
+// An IPv6 client counts by its /64, as the sign-in limit counts it: another address inside the same
+// /64 gets no fresh budget, another /64 does.
+func TestRegisterLimitCountsAnIPv6ClientByItsSlash64(t *testing.T) {
+	l := newLimiter(2, 0, time.Hour)
+	now := time.Unix(0, 0)
+	for _, a := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2"} {
+		if ok, _ := l.allow(a, now); !ok {
+			t.Fatalf("%s refused within the budget", a)
+		}
+	}
+	if ok, _ := l.allow("2001:db8:1:2:ffff:ffff:ffff:3", now); ok {
+		t.Fatal("a third address of the same /64 allowed past its budget")
+	}
+	if ok, _ := l.allow("2001:db8:1:3::1", now); !ok {
+		t.Fatal("another /64 refused")
+	}
+}
+
+// A table full of live windows refuses a new address rather than forgetting every count, so
+// flooding it with addresses does not reset an address that spent its budget.
+func TestRegisterLimitKeepsCountsWhenFull(t *testing.T) {
+	l := newLimiter(1, 0, time.Hour)
+	now := time.Unix(0, 0)
+	for i := 0; i < maxTracked; i++ {
+		if ok, _ := l.allow(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), now); !ok {
+			t.Fatalf("address %d refused", i)
+		}
+	}
+	if ok, _ := l.allow("10.0.0.0", now); ok {
+		t.Fatal("the first address allowed again: the counts were forgotten")
+	}
+	if ok, wait := l.allow("192.0.2.1", now); ok || wait <= 0 || wait > time.Hour {
+		t.Fatalf("a new address while the table is full: %t, retry after %s", ok, wait)
+	}
+	if ok, _ := l.allow("192.0.2.1", now.Add(time.Hour)); !ok {
+		t.Fatal("a new address once the windows ended: refused")
+	}
+}
+
+// Every address together is bounded per window too, so many addresses cannot store registrations
+// without limit; the window's end lifts it.
+func TestRegisterLimitBoundsEveryAddressTogether(t *testing.T) {
+	l := newLimiter(5, 3, time.Hour)
+	now := time.Unix(0, 0)
+	for _, a := range []string{"10.0.0.1", "10.0.0.2", "2001:db8::1"} {
+		if ok, _ := l.allow(a, now); !ok {
+			t.Fatalf("%s refused within the total", a)
+		}
+	}
+	if ok, wait := l.allow("10.0.0.4", now.Add(time.Minute)); ok || wait != 59*time.Minute {
+		t.Fatalf("a fourth address past the total: %t, retry after %s", ok, wait)
+	}
+	if ok, _ := l.allow("10.0.0.4", now.Add(time.Hour)); !ok {
+		t.Fatal("refused once the window ended")
+	}
+}
+
+// Anyone may register and audit rows are kept for good, so the oauth.client.registered row holds a
+// bounded summary of the registration, not its redirect URIs: a maximal one (10 URIs of 2000 bytes,
+// a 200-byte name, made of characters JSON escapes) leaves at most maxRegistrationAuditData bytes of
+// data. Each place a URI points at is named, by the end of a long host, where its domain is.
+func TestRegistrationAuditRowIsBounded(t *testing.T) {
+	f := newFixture(t)
+	var uris []string
+	for i := range maxRedirectURIs - 1 {
+		u := fmt.Sprintf("https://%d.%s.example/", i, strings.Repeat("<", 300))
+		uris = append(uris, u+strings.Repeat("a", maxRedirectURILen-len(u)))
+	}
+	uris = append(uris, "app."+strings.Repeat("x", maxRedirectURILen-len("app.:/cb"))+":/cb")
+	req, err := json.Marshal(map[string]any{"client_name": strings.Repeat("<", maxClientNameLen), "redirect_uris": uris})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(f.srv.URL+"/register", "application/json", bytes.NewReader(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("a maximal registration: %d %s", resp.StatusCode, body(t, resp))
+	}
+	resp.Body.Close()
+	rows := f.audited("oauth.client.registered")
+	if len(rows) != 1 {
+		t.Fatalf("%d oauth.client.registered rows, want 1", len(rows))
+	}
+	data, err := json.Marshal(rows[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > maxRegistrationAuditData || bytes.Contains(data, []byte("aaaa")) {
+		t.Fatalf("the row's data is %d bytes (limit %d), holding the URIs: %t", len(data), maxRegistrationAuditData, bytes.Contains(data, []byte("aaaa")))
+	}
+	var got struct {
+		ClientName       string   `json:"clientName"`
+		RedirectURICount int      `json:"redirectUriCount"`
+		RedirectHosts    []string `json:"redirectHosts"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RedirectURICount != maxRedirectURIs || len(got.RedirectHosts) != maxRedirectURIs || !strings.HasPrefix(got.ClientName, "<<<") {
+		t.Fatalf("the row's data: %s", data)
+	}
+	for i, h := range got.RedirectHosts[:maxRedirectURIs-1] {
+		if !strings.HasPrefix(h, "…") || !strings.HasSuffix(h, ".example") {
+			t.Fatalf("host %d: %q, want the end of the host", i, h)
+		}
+	}
+	if h := got.RedirectHosts[maxRedirectURIs-1]; !strings.HasSuffix(h, "x:") {
+		t.Fatalf("an app scheme's entry: %q", h)
+	}
+	if f.register(t, callbackURI); !reflect.DeepEqual(f.audited("oauth.client.registered")[1].Data,
+		map[string]any{"clientName": "test client", "redirectUriCount": 1, "redirectHosts": []string{"127.0.0.1:43111"}}) {
+		t.Fatalf("a plain registration's data: %v", f.audited("oauth.client.registered")[1].Data)
+	}
+}
+
+// clipJSON keeps a string's JSON encoding within its bound whatever characters it holds, and marks
+// a cut at the end it drops.
+func TestClipJSONBoundsTheEncodedString(t *testing.T) {
+	for _, s := range []string{"plain.example", strings.Repeat(`"\\`, 40), strings.Repeat("\u2028<&>", 30),
+		strings.Repeat("\xff", 90), strings.Repeat("é😀", 50), strings.Repeat("\x01", 70)} {
+		for _, tail := range []bool{false, true} {
+			got := clipJSON(s, 64, tail)
+			enc, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(enc)-2 > 64 {
+				t.Fatalf("clipJSON(%q, 64, %t) = %q encodes in %d bytes", s, tail, got, len(enc)-2)
+			}
+			switch {
+			case got == s:
+			case tail && strings.HasPrefix(got, "…") && strings.HasSuffix(s, strings.TrimPrefix(got, "…")):
+			case !tail && strings.HasSuffix(got, "…") && strings.HasPrefix(s, strings.TrimSuffix(got, "…")):
+			default:
+				t.Fatalf("clipJSON(%q, 64, %t) = %q", s, tail, got)
+			}
+		}
+	}
+}
+
+// The redirect URI a code was sent to is in the oauth.consent.granted row, which a signed-in user
+// made.
+func TestConsentRowNamesTheRedirectURI(t *testing.T) {
+	f := newFixture(t)
+	f.authorize(t, "worker", nil)
+	rows := f.audited("oauth.consent.granted")
+	if len(rows) != 1 || rows[0].Data["redirectUri"] != callbackURI {
+		t.Fatalf("oauth.consent.granted rows: %+v, want one naming %s", rows, callbackURI)
 	}
 }
 

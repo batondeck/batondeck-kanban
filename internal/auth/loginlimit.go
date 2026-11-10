@@ -12,7 +12,8 @@ import (
 
 // LoginLimits bounds password checks, each of which allocates argon2id's 64 MiB: at most Verifies of
 // them run at once, a caller waits up to Wait for a slot, and every attempt debits a token bucket of
-// its client address (an IPv6 address by its /64) before it runs; a success refunds it. There is no
+// its client address (an IPv6 address by its /64) before it runs; a success refunds it, and so does a
+// refusal that checked no password (no verification slot within Wait, a store error). There is no
 // bucket per login: one would let a few addresses lock anyone out of an account.
 type LoginLimits struct {
 	// Verifies is the most password checks at once; 0 means 2 (128 MiB), whatever the core count.
@@ -48,16 +49,17 @@ func orDefault(v, def int) int {
 // the token back.
 func (l *LoginLimits) admit(addr string, now time.Time) (refund func(), err error) {
 	l.init()
-	key := addrKey(addr)
+	key := AddrKey(addr)
 	if wait, ok := l.addrs.take(key, now); !ok {
 		return nil, rateLimited(wait)
 	}
 	return func() { l.addrs.refund(key) }, nil
 }
 
-// addrKey is the bucket an address counts against: an IPv4 address itself, an IPv6 address its /64
-// (one host commonly holds a whole /64). Anything unparsable is its own key.
-func addrKey(addr string) string {
+// AddrKey is what a client address counts against, in the sign-in limits and in OAuth
+// registration's: an IPv4 address itself, an IPv6 address its /64 (one host commonly holds a whole
+// /64). Anything unparsable is its own key.
+func AddrKey(addr string) string {
 	a, err := netip.ParseAddr(addr)
 	if err != nil {
 		return addr

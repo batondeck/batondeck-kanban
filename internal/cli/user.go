@@ -18,8 +18,9 @@ import (
 // stdin is where a password is read from; tests replace it with a pipe.
 var stdin = os.Stdin
 
-// minPasswordLen is the shortest password user add and user passwd accept.
-const minPasswordLen = 12
+// minPasswordLen is the shortest password user add and user passwd accept, as the Settings
+// password change does.
+const minPasswordLen = auth.MinPasswordLen
 
 // readPassword reads the first line of stdin. A terminal is refused rather than read, because it
 // would echo the password: pipe it in instead.
@@ -113,7 +114,7 @@ func user(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer st.Close()
-	acc := &auth.Accounts{Store: st, Sessions: st}
+	acc := &auth.Accounts{Store: st, Sessions: st, Audit: st}
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "user %s: %v\n", sub, err)
 		return 1
@@ -124,7 +125,7 @@ func user(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(err)
 		}
-		u, err := acc.Add(ctx, fs.Arg(0), name, pw, admin)
+		u, err := acc.AddAs(ctx, auth.HostActor, "cli", fs.Arg(0), name, pw, admin)
 		if err != nil {
 			return fail(err)
 		}
@@ -134,13 +135,13 @@ func user(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "user add: %s %s%s\n", u.ID, u.Email, role)
 	case "disable":
-		u, err := acc.Disable(ctx, fs.Arg(0))
+		u, err := acc.DisableAs(ctx, auth.HostActor, "cli", fs.Arg(0))
 		if err != nil {
 			return fail(err)
 		}
 		fmt.Fprintf(stdout, "user disable: %s %s disabled at %s\n", u.ID, u.Email, time.UnixMilli(u.DisabledAt).UTC().Format(time.RFC3339))
 	case "enable":
-		u, was, err := acc.Enable(ctx, fs.Arg(0))
+		u, was, err := acc.EnableAs(ctx, auth.HostActor, "cli", fs.Arg(0))
 		if err != nil {
 			return fail(err)
 		}
@@ -154,7 +155,7 @@ func user(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(err)
 		}
-		ended, err := acc.SetPassword(ctx, fs.Arg(0), pw)
+		ended, err := acc.SetPasswordAs(ctx, auth.HostActor, "cli", fs.Arg(0), pw)
 		if err != nil {
 			return fail(err)
 		}

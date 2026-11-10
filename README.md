@@ -99,7 +99,9 @@ batondeck-kanban token create --user you@example.com
 
 `token create` prints the token (`bd_…`) once, on stdout; it lives 30 days unless `--ttl` says
 otherwise. The same login and password sign in to the web UI at `http://localhost:8080`, where
-Settings → CLI tokens makes more.
+Settings → CLI tokens makes more. A teammate added under Settings → Users gets a generated password,
+shown once to the admin who added them; they replace it under Settings → Your password, which
+signs out their other sessions.
 
 The server starts empty. In the web UI, type a name on the Projects page and press **New project**,
 then open the project: its first board is created when you first open it, and **+ New task** adds a
@@ -156,9 +158,25 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
 client reached the server at, so behind a proxy that rewrites the Host header, set it.
 
+Have the proxy forward the original `Host` and send `X-Forwarded-Proto: https` and
+`X-Forwarded-For`; nginx's bare `proxy_pass` sends none of them, so add
+`proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. With an https `public_url` the
+sign-in cookies are `Secure` whatever the proxy sends; without one they are `Secure` only on a
+request that arrived over TLS or says `X-Forwarded-Proto: https`, and otherwise a later plain-http
+request would carry the session in clear. Once `public_url` is https, reach the board through the
+proxy only: a browser keeps no `Secure` cookie sent over plain http (localhost aside), so signing in
+at `http://<lan-address>:8080` directly brings you back to the sign-in page.
+
+If signing in answers **cross-site request refused** (403), the server judged the browser's
+`Origin` to be another site's: the proxy rewrote `Host` (nginx's bare `proxy_pass` sends its
+upstream's) or the scheme. Forward `Host` and `X-Forwarded-Proto` as above, or set `public_url`
+to the address the browser uses.
+
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
-address) would count all your users as one: ten mistyped passwords lock everyone out until the
+address, 500 an hour in all; an IPv6 address counts by its /64 in both) would count all your users
+as one: ten mistyped passwords lock everyone out until the
 budget refills, and a steady trickle of wrong ones keeps them out. Name the proxy and the server
 counts each client by the address the proxy appends to `X-Forwarded-For` instead:
 

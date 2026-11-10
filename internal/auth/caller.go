@@ -16,6 +16,10 @@ import (
 // and tokens keep working.
 const DefaultAccountCacheTTL = 60 * time.Second
 
+// AnonymousActor is the audit actor of an event no identity made: a refused request that carried
+// no credential, a dynamic client registration.
+const AnonymousActor = "anonymous"
+
 // AuditEvent is one audit row as the audit_log table holds it; the writer stamps the time.
 type AuditEvent struct {
 	Action    string // dotted, e.g. "request.refused"
@@ -32,7 +36,8 @@ type Service struct {
 	Accounts *Accounts
 	Tokens   *TokenService
 	Sessions store.Sessions
-	// Audit receives every refusal the CSRF check makes; nil records nothing.
+	// Audit receives the CSRF check's refusals and the OAuth server's events (client registered,
+	// consent granted or denied, grant revoked); serve sets StoreAudit. nil records nothing.
 	Audit func(ctx context.Context, e AuditEvent)
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
@@ -46,6 +51,11 @@ type Service struct {
 	// OAuthResource is the resource (RFC 8707) this service's bearers are presented at: an OAuth
 	// access token issued for any other is refused.
 	OAuthResource string
+	// PublicURL is the server's public_url ("" when unset). When it is https the session cookies are
+	// Secure whatever the request says (a TLS proxy may forward plain http and no
+	// X-Forwarded-Proto), and the CSRF check takes a browser's Origin that is its origin as this
+	// server's own (a proxy may forward another Host).
+	PublicURL string
 	// Proxies are the trusted reverse proxies: a sign-in through one counts against the client its
 	// X-Forwarded-For names (TrustedProxies.ClientAddr); nil reads no header.
 	Proxies TrustedProxies
@@ -53,6 +63,7 @@ type Service struct {
 	mu          sync.Mutex
 	cache       map[string]accountEntry
 	clientNames map[string]string // OAuth client id -> its agent name (oauthClientName)
+	refusals    *buckets          // the audit budget of refusals, per actor (csrf.go)
 }
 
 type accountEntry struct {
