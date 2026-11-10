@@ -13,12 +13,11 @@ import (
 // VALIDATION (the store leaves that policy to its caller); the guard reads the member list and
 // writes one row, so add_member and remove_member hold the project lock (mutation.LockProject):
 // under Postgres READ COMMITTED two admins demoting or removing each other at once would each count
-// two admins and leave none. When the identity is an account, a row
-// keyed by its login (added by that login before the account existed, and kept as given) is folded
-// into the account's row in the same mutation: the row goes, and its grant follows when the account
-// was no member. After the commit the identity's cached access is dropped (InvalidateAccess here,
-// ObserveChange in every other process once the bus delivers the row), so a new role or membership
-// holds on its next call.
+// two admins and leave none. When the identity is an account, a row keyed by its login (added by
+// that login before the account existed, and kept as given) is folded into the account's row in the
+// same mutation: the row goes, and its grant follows when the account was no member. After the
+// commit the identity's cached access is dropped (InvalidateAccess here, ObserveChange in every
+// other process once the bus delivers the row), so a new role or membership holds on its next call.
 func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMemberReq) (AddMemberResp, error) {
 	a, err := p.c.authorize(ctx, caller, req.ProjectID, "add_member", domain.GrantSubject{}, false)
 	if err != nil {
