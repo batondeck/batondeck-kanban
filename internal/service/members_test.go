@@ -185,3 +185,70 @@ func TestAMemberAddedByLoginBeforeItsAccountOverTheEngines(t *testing.T) {
 		})
 	}
 }
+
+// An admin row for a login no account holds yet is no admin an account can leave the project to: no
+// credential resolves to it, and nothing makes it the account once one takes the login. So the last
+// account admin may neither remove nor demote itself while only such a row stays admin; another
+// account admin is enough. (A project of identities that are no accounts, as the fixtures', keeps
+// counting every admin row: there the departing admin is no account either.)
+func TestAPendingLoginIsNoAdminToLeaveTo(t *testing.T) {
+	for _, e := range engines {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			c := New(st, Options{ToolCallFlush: -1})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			for _, u := range []store.User{
+				{ID: "U-carol", Email: "carol@example.test", DisplayName: "Carol", PasswordHash: "x", CreatedAt: 1},
+				{ID: "U-erin", Email: "erin@example.test", DisplayName: "Erin", PasswordHash: "x", CreatedAt: 1},
+			} {
+				if err := st.CreateUser(ctx, u); err != nil {
+					t.Fatal(err)
+				}
+			}
+			carol := domain.Caller{Identity: "U-carol", TokenScope: "U-carol"}
+			p, err := c.Projects().Create(ctx, carol, CreateProjectReq{Name: "Q"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := p.ProjectID
+			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "dave@example.test", Role: domain.RoleAdmin}); err != nil {
+				t.Fatal(err)
+			}
+			_, rerr := c.Projects().RemoveMember(ctx, carol, RemoveMemberReq{ProjectID: id, IdentityID: "U-carol"})
+			_, derr := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "carol@example.test", Role: domain.RoleMember})
+			t.Logf("U-carol removes herself: %v; demotes herself: %v", rerr, derr)
+			if be := wantCode(t, rerr, domain.CodeValidation); be.Message != "Cannot remove the last admin" {
+				t.Fatalf("remove: %v, want 'Cannot remove the last admin'", rerr)
+			}
+			if be := wantCode(t, derr, domain.CodeValidation); be.Message != "Cannot demote the last admin" {
+				t.Fatalf("demote: %v, want 'Cannot demote the last admin'", derr)
+			}
+			members, err := st.ListMembers(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if roles := memberRoles(members); roles["U-carol"] != domain.RoleAdmin || len(roles) != 2 {
+				t.Fatalf("members %+v, want U-carol still admin beside the login row", roles)
+			}
+			// With another account admin, U-carol may go.
+			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "erin@example.test", Role: domain.RoleAdmin}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "U-carol", Role: domain.RoleMember}); err != nil {
+				t.Fatalf("demote beside another account admin: %v", err)
+			}
+			erin := domain.Caller{Identity: "U-erin", TokenScope: "U-erin"}
+			if _, err := c.Projects().RemoveMember(ctx, erin, RemoveMemberReq{ProjectID: id, IdentityID: "U-carol"}); err != nil {
+				t.Fatalf("remove beside another account admin: %v", err)
+			}
+			// U-erin is now the last account admin: she cannot leave to the login row either.
+			_, err = c.Projects().RemoveMember(ctx, erin, RemoveMemberReq{ProjectID: id, IdentityID: "U-erin"})
+			wantCode(t, err, domain.CodeValidation)
+			// The login row itself stays removable: it is no account admin.
+			if _, err := c.Projects().RemoveMember(ctx, erin, RemoveMemberReq{ProjectID: id, IdentityID: "dave@example.test"}); err != nil {
+				t.Fatalf("remove the login row: %v", err)
+			}
+		})
+	}
+}

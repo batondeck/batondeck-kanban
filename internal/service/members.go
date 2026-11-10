@@ -131,19 +131,25 @@ func (p projects) RemoveMember(ctx context.Context, caller domain.Caller, req Re
 }
 
 // keepsAnAdmin reports whether the project keeps an admin some caller can act as once id is no
-// longer one: another admin row keyed by an account id, or by a reference that is no account's login
-// (kept as given: a member need not be an account yet). An admin row keyed by the login of an account
-// is not counted: every reference to that login resolves to the account's id, so no caller is that
-// member, and counting it would let the project's last real admin leave.
+// longer one. Every caller is an account, so when id is an account only another admin row keyed by an
+// account id counts: a row kept as given for a login no account holds yet is no one until an account
+// takes the login, and then no reference names it (it resolves to the account's id), so leaving the
+// project to it would leave no admin. When id is no account either (a project of identities kept as
+// given), another admin row counts unless it is keyed by an account's login, for the same reason.
 func keepsAnAdmin(ctx context.Context, tx store.Store, roles map[string]domain.Role, id string) (bool, error) {
+	departing, err := isAccount(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
 	for k, r := range roles {
 		if k == id || r != domain.RoleAdmin {
 			continue
 		}
-		if _, err := tx.GetUser(ctx, k); err == nil {
-			return true, nil
-		} else if !errors.Is(err, store.ErrNotFound) {
-			return false, err
+		if ok, err := isAccount(ctx, tx, k); err != nil || ok {
+			return ok, err
+		}
+		if departing {
+			continue
 		}
 		switch _, err := tx.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(k))); {
 		case errors.Is(err, store.ErrNotFound):
@@ -153,6 +159,18 @@ func keepsAnAdmin(ctx context.Context, tx store.Store, roles map[string]domain.R
 		}
 	}
 	return false, nil
+}
+
+// isAccount reports whether the member key k is an account's id.
+func isAccount(ctx context.Context, tx store.Store, k string) (bool, error) {
+	switch _, err := tx.GetUser(ctx, k); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // memberKey is the member key an identityId names in projectID for a call on an existing member
