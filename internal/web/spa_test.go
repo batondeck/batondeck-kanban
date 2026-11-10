@@ -182,3 +182,33 @@ func TestMountSPA(t *testing.T) {
 		}
 	}
 }
+
+// api-http#10: /assets/ serves the hashed files and nothing else. The directory, or any directory
+// under it, is 404 rather than http.FileServer's listing, and a 404 is not cached as immutable;
+// a real asset still is.
+func TestAssetsServeFilesNotListings(t *testing.T) {
+	entries, err := os.ReadDir("../../web/dist/assets")
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("web/dist/assets: %v, %d entries", err, len(entries))
+	}
+	mux := http.NewServeMux()
+	MountSPA(mux)
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+	asset := get("/assets/" + entries[0].Name())
+	if asset.Code != 200 || asset.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("an asset: %d, Cache-Control %q", asset.Code, asset.Header().Get("Cache-Control"))
+	}
+	for _, path := range []string{"/assets/", "/assets/nope.js"} {
+		rec := get(path)
+		if rec.Code != 404 || strings.Contains(rec.Body.String(), "<a href") {
+			t.Errorf("%s: %d %.80q, want 404 and no listing", path, rec.Code, rec.Body.String())
+		}
+		if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+			t.Errorf("%s: a 404 with Cache-Control %q", path, cc)
+		}
+	}
+}

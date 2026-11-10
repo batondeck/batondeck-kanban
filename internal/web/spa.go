@@ -19,8 +19,9 @@ func MountSPA(mux *http.ServeMux) {
 	files, fileServer := spaFiles()
 
 	// Hashed build assets are immutable by construction — the name changes when
-	// the content does — so the browser may keep them for as long as it likes.
-	mux.Handle("GET /assets/", assetCache(fileServer))
+	// the content does — so the browser may keep them for as long as it likes. Only files: a
+	// directory (/assets/ itself) is 404, not http.FileServer's listing.
+	mux.Handle("GET /assets/", assetCache(http.FileServer(filesOnly{files})))
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
@@ -113,6 +114,22 @@ func assetCache(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// filesOnly is fs with its directories hidden: opening one is fs.ErrNotExist, so a file server on
+// it answers 404 where it would list the directory.
+type filesOnly struct{ fs http.FileSystem }
+
+func (f filesOnly) Open(name string) (http.File, error) {
+	file, err := f.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	if st, err := file.Stat(); err != nil || st.IsDir() {
+		_ = file.Close()
+		return nil, fs.ErrNotExist
+	}
+	return file, nil
 }
 
 func spaFiles() (http.FileSystem, http.Handler) {
