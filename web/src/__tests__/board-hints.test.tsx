@@ -5,7 +5,8 @@
  * - The board's search box advertised `( / )`, but `/` opens the command palette (palette.tsx), so
  *   what the reader typed went there.
  * - Every empty column offered "No tasks — press c", Done and Review included, though a created task
- *   always lands in a TODO column (create_task, ADR-0005).
+ *   always lands in a TODO column (create_task, ADR-0005), and the board's first one at that
+ *   (todoColumn, internal/service/dependencies.go).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -29,6 +30,8 @@ const board = {
     { id: 'c2', name: 'Review', order: 2, status: 'REVIEW', wipLimit: null },
     { id: 'c3', name: 'Done', order: 3, status: 'DONE', wipLimit: null },
     { id: 'c4', name: 'In progress', order: 4, status: 'IN_PROGRESS', wipLimit: null },
+    // A second TODO column: a task created on the board never lands here.
+    { id: 'c5', name: 'Later', order: 5, status: 'TODO', wipLimit: null },
   ],
 };
 const racing = {
@@ -96,11 +99,11 @@ describe('the board’s hints say what is true', () => {
     expect(box.getAttribute('placeholder')).not.toContain('/');
   });
 
-  it('only a TODO column offers "press c"; other empty columns say "No tasks"', async () => {
+  it('only the TODO column a new task lands in offers "press c"; other empty columns say "No tasks"', async () => {
     renderBoard();
     await waitFor(() => expect(within(column('To do')).getByText(/No tasks/)).toBeInTheDocument());
     await waitFor(() => expect(within(column('To do')).getByText('c', { selector: '.kbd' })).toBeInTheDocument());
-    for (const name of ['Review', 'Done']) {
+    for (const name of ['Review', 'Done', 'Later']) {
       expect(within(column(name)).getByText('No tasks')).toBeInTheDocument();
       expect(within(column(name)).queryByText('c', { selector: '.kbd' }), `${name} offers c`).toBeNull();
     }

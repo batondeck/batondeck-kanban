@@ -1540,8 +1540,9 @@ export function Board() {
                       </AnimatePresence>
                       {colTasks.length === 0 && tasksLoaded && (
                         <div className="muted" style={{ fontSize: 12, padding: '8px 4px' }}>
-                          {/* A created task always lands in a TODO column (create_task, ADR-0005). */}
-                          {canCreate && col.status === 'TODO' ? (
+                          {/* A created task always lands in the board's first TODO column (create_task,
+                              ADR-0005; todoColumn in internal/service/dependencies.go), so only it offers c. */}
+                          {canCreate && col.id === board.columns.find((c) => c.status === 'TODO')?.id ? (
                             <>No tasks — press <span className="kbd">c</span></>
                           ) : (
                             'No tasks'
