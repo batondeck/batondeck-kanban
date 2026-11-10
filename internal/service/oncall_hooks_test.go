@@ -465,6 +465,21 @@ func TestHookBodyHashIDIsARetryOnlyWhileItIsOne(t *testing.T) {
 	if r := send(each, down); !r.Replayed || *r.TaskID != *two.TaskID {
 		t.Fatalf("per_event, its retry: %+v, want it replayed", r)
 	}
+
+	// A resolve of an alert with no state (it never fired here) writes none to point at, so its
+	// retry is found by the window alone, as under per_event: recorded once, not on every retry.
+	corr := integration("corr", "correlate")
+	idle := send(corr, up)
+	if idle.Result != "recorded" || idle.Replayed {
+		t.Fatalf("a recovery of an alert never seen: %+v, want recorded", idle)
+	}
+	if r := send(corr, up); !r.Replayed || r.DeliveryID != idle.DeliveryID {
+		t.Fatalf("its retry: %+v, want it replayed", r)
+	}
+	f.clock.advance(retryWindow)
+	if r := send(corr, up); r.Result != "recorded" || r.Replayed || r.DeliveryID == idle.DeliveryID {
+		t.Fatalf("the same recovery after the retry window: %+v, want a new delivery", r)
+	}
 }
 
 // Under correlate (the default lifecycle) an alert's resolve is its latest delivery even when its

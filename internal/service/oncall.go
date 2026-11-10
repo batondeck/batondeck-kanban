@@ -861,8 +861,9 @@ const retryWindow = 10 * time.Minute
 // kept as it is, for the delivery window. A body-hash id (hashed) is qualified so that it repeats
 // only as a retry: for a correlated alert by the time it was ingested, which its ingest leaves as
 // the alert state's lastAt, so a retry finds the delivery while it is still the alert's latest and
-// within retryWindow; with no alert state (per_event, a test event) by its retryWindow-long slot,
-// the slot before it searched too. Not found, a body-hash id is qualified by now.
+// within retryWindow; with no alert state to point at (per_event, a test event, a resolve of an
+// alert with none) by its retryWindow-long slot, the slot before it searched too. Not found, a
+// body-hash id is qualified by now (or now's slot).
 func deliveryRecord(ctx context.Context, s store.Store, integration store.Integration, ev oncall.Event, id string, hashed bool, now time.Time) (string, *store.Delivery, error) {
 	get := func(id string) (*store.Delivery, error) {
 		d, err := s.GetDelivery(ctx, integration.ProjectID, integration.ID, id)
@@ -880,19 +881,26 @@ func deliveryRecord(ctx context.Context, s store.Store, integration store.Integr
 	}
 	ms, window := now.UnixMilli(), retryWindow.Milliseconds()
 	var candidates []string
-	if integration.Lifecycle != "per_event" && ev.Status != oncall.StatusTest {
+	slotted := integration.Lifecycle == "per_event" || ev.Status == oncall.StatusTest
+	if !slotted {
 		st, err := s.GetAlertState(ctx, integration.ProjectID, integration.ID, ev.Fingerprint)
-		if err != nil && !isNotFound(err) {
-			return "", nil, err
-		}
-		if err == nil {
+		switch {
+		case err == nil:
 			candidates = append(candidates, id+"@"+strconv.FormatInt(st.LastAt, 10))
+		case !isNotFound(err):
+			return "", nil, err
+		default:
+			// No alert state: a firing writes one, its lastAt this ingest's time; a resolve writes
+			// none, so its retry is found by its slot, as under per_event.
+			slotted = ev.Status == oncall.StatusResolved
 		}
-		id += "@" + strconv.FormatInt(ms, 10)
-	} else {
+	}
+	if slotted {
 		slot := ms / window
 		candidates = append(candidates, id+"@w"+strconv.FormatInt(slot, 10), id+"@w"+strconv.FormatInt(slot-1, 10))
 		id = candidates[0]
+	} else {
+		id += "@" + strconv.FormatInt(ms, 10)
 	}
 	for _, at := range candidates {
 		d, err := get(at)

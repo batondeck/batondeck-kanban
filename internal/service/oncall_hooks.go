@@ -100,13 +100,14 @@ type HookResult struct {
 // presented (before any read), the integration by its id alone (unknown, tombstoned or disabled is
 // one not_found), the per-integration body cap, verification by the integration's auth mode before
 // a byte is parsed, then the source's connector and one Core.ingest per event under the delivery id
-// <the event's own key, the source's delivery id or the body's hash>#<fingerprint or index> (a
-// body-hash id qualified so that it repeats only as a retry, deliveryRecord). The delivery is charged to the
-// integration's rate budget before it is verified, so a refused sender cannot buy an outbound JWKS
-// fetch past the budget (P-231); a verification or parse failure is paid by that charge and is a
-// rejected delivery row (its raw body kept for the raw-body window while the integration's hourly
-// budget lasts). A delivery that parses gets the charge back before its events are ingested, since
-// ingest charges each new delivery id itself. The error is an internal fault only.
+// <the event's own key, the source's delivery id or the body's hash>#<fingerprint or index>; a
+// body-hash id then gets a suffix, @<ingest ms> or @w<10-minute slot>, so that it repeats only as a
+// retry (deliveryRecord). The delivery is charged to the integration's rate budget before it is
+// verified, so a refused sender cannot buy an outbound JWKS fetch past the budget (P-231); a
+// verification or parse failure is paid by that charge and is a rejected delivery row (its raw body
+// kept for the raw-body window while the integration's hourly budget lasts). A delivery that parses
+// gets the charge back before its events are ingested, since ingest charges each new delivery id
+// itself. The error is an internal fault only.
 func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (HookOutcome, error) {
 	now := c.now()
 	refuse := func(why HookRefusal, format string, a ...any) (HookOutcome, error) {
