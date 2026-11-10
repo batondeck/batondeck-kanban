@@ -85,10 +85,9 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<EditDraft>({ title: '', description: '', version: 0, base: { title: '', description: '' } });
 
-  // The board's SSE stream invalidates ['task', projectId, …] on every board change (the ui-backend keeps
-  // a stateful MCP session even under STATELESS_MCP=true, so resource subscriptions fire), keeping
-  // task.version fresh for version-checked actions (Pick, Cancel race, follow-ups, moves). This 30s poll
-  // is just a backstop for a dropped stream.
+  // The board's stream refreshes the ticket on every change on its board (the subscription below),
+  // keeping task.version fresh for version-checked actions (Pick, Cancel race, follow-ups, moves). This
+  // 30s poll is just a backstop for a dropped stream.
   const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => tasksApi.getTask(projectId, taskId), refetchInterval: 30000 });
   const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId) });
   // Account id → display name, for the header's "created by" (P-314). The same cache entry the
@@ -106,21 +105,31 @@ export function useTaskDetail(projectId: string, taskId: string) {
     },
     staleTime: 60_000,
   });
+  const task = taskQ.data?.task;
+  // The shared socket, scoped to the ticket's board once the ticket has loaded (joining it opens no
+  // second one). A board frame names no task, so each refreshes this ticket's own reads: on the full
+  // page no Board is mounted to do it, and comments are in no board nudge. In the drawer the Board's
+  // nudge refetches most of these first; `cancelRefetch: false` joins that fetch instead of restarting it.
   // The kept device rows are retired only by a presence frame, so this hook writes the frames itself:
   // on the full task page no Board is mounted to do it, and a session that left would otherwise stay
   // listed through every refetch (P-197). In the drawer the Board writes the same rows the same way.
-  // Joining the shared socket opens no second one; a frame is the device's whole live list.
-  useEffect(
-    () =>
-      streamApi.userStream({
-        onPresence: (sessions) =>
-          qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
-            sessions: replaceDevicePresence(old?.sessions, sessions),
-          })),
-      }),
-    [qc],
-  );
-  const task = taskQ.data?.task;
+  // A frame is the device's whole live list.
+  const streamBoardId = task?.boardId;
+  useEffect(() => {
+    const onPresence = (sessions: AgentSession[]): void => {
+      qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
+        sessions: replaceDevicePresence(old?.sessions, sessions),
+      }));
+    };
+    if (!streamBoardId) return streamApi.userStream({ onPresence });
+    const onUpdate = (): void => {
+      for (const k of ['task', 'ctx', 'subs', 'mem', 'att', 'comments', 'followups', 'runs']) {
+        void qc.invalidateQueries({ queryKey: [k, projectId, taskId] }, { cancelRefetch: false });
+      }
+      void qc.invalidateQueries({ queryKey: ['hist', projectId, streamBoardId, taskId] }, { cancelRefetch: false });
+    };
+    return streamApi.stream(projectId, streamBoardId, onUpdate, undefined, onPresence);
+  }, [qc, projectId, streamBoardId, taskId]);
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [
       { queryKey: ['ctx', projectId, taskId], queryFn: () => contextApi.taskContext(projectId, taskId) },
