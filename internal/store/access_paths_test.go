@@ -12,6 +12,15 @@ import (
 var accessPaths = []struct{ name, query, index string }{
 	// The head of a column: every write that moves a task into another column reads it.
 	{"column head", "SELECT order_key FROM tasks WHERE project_id = 'p' AND board_id = 'b' AND column_id = 'c' ORDER BY order_key, id LIMIT 1", "tasks_column_order"},
+	// A deleted task's events (the foreign key's cascade) and one task's event page.
+	{"task events cascade", "DELETE FROM task_events WHERE project_id = 'p' AND task_id = 't'", "task_events_task"},
+	{"task events page", "SELECT id FROM task_events WHERE project_id = 'p' AND task_id = 't' ORDER BY ts DESC, id DESC LIMIT 50", "task_events_task"},
+	// The blob GC's two reference checks, per blob.
+	{"attachment blob reference", "SELECT 1 FROM attachments a WHERE a.blob_sha256 = 'h'", "attachments_blob"},
+	{"memory blob reference", "SELECT 1 FROM memory m WHERE m.blob_sha256 = 'h'", "memory_blob"},
+	// A task's memory window and the memory expiry sweep.
+	{"memory window", "SELECT id FROM memory w WHERE w.project_id = 'p' AND w.task_id = 't' AND w.scope IN ('task', 'agent', 'shared') ORDER BY w.ts DESC, w.id DESC LIMIT 20", "memory_task"},
+	{"memory expiry sweep", "SELECT id FROM memory m WHERE m.expires_at IS NOT NULL AND m.expires_at <= 5 ORDER BY m.expires_at, m.id LIMIT 500", "memory_expiry"},
 	// The idempotency keys past their window.
 	{"idempotency sweep", "SELECT project_id, identity, key FROM idempotency_keys i WHERE i.expires_at <= 5 ORDER BY i.expires_at, i.project_id, i.identity, i.key LIMIT 500", "idempotency_keys_expiry"},
 }
