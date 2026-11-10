@@ -30,7 +30,8 @@ const (
 	rawBodyKeptMax    = 64 << 10
 	rejectionIDSuffix = "#rejected"
 	// maxEventsPerDelivery is the most distinct events (alerts) one delivery is ingested with: each is
-	// its own transaction, so a larger delivery is refused (Alertmanager's max_alerts bounds a group).
+	// its own transaction, so of a larger delivery the rest are dropped and the cut is a rejected row
+	// (Alertmanager's max_alerts bounds a group).
 	maxEventsPerDelivery = 500
 )
 
@@ -196,8 +197,8 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		hashed     bool
 	}
 	// One verified delivery buys a bounded amount of work: an event whose delivery id repeats within
-	// it is ingested once (it is the same alert), and a delivery carrying more distinct events than
-	// maxEventsPerDelivery is refused whole, its charge kept.
+	// it is ingested once (it is the same alert), and of more distinct events than
+	// maxEventsPerDelivery only the first are ingested, the cut a rejected row paid by the charge.
 	todo, seen := make([]pending, 0, min(len(events), maxEventsPerDelivery+1)), map[string]bool{}
 	for i, ev := range events {
 		// The fingerprint qualifies the id, so a grouped delivery's alerts never collapse into one.
@@ -214,12 +215,22 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 			todo = append(todo, pending{ev: ev, deliveryID: deliveryID, hashed: idHashed})
 		}
 	}
-	if len(todo) > maxEventsPerDelivery {
-		return badRequest(fmt.Sprintf("too_many_events: the delivery carries %d distinct alerts, over the %d one delivery may carry; have the sender split its groups (Alertmanager: max_alerts)", len(todo), maxEventsPerDelivery))
+	if n := len(todo); n > maxEventsPerDelivery {
+		// Not refused: a 4xx has Alertmanager drop the whole group, in the outage that made it this
+		// big. The cut is where the operator looks, and the charge pays for its row.
+		reason := fmt.Sprintf("too_many_events: the delivery carries %d distinct alerts, over the %d one delivery is ingested with; the first %d were ingested and %d dropped; have the sender split its groups (Alertmanager: max_alerts)",
+			n, maxEventsPerDelivery, maxEventsPerDelivery, n-maxEventsPerDelivery)
+		c.log.Printf("ingest: integration %s cut a delivery: %s", integration.ID, reason)
+		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
+			return HookOutcome{}, err
+		}
+		todo = todo[:maxEventsPerDelivery]
+	} else {
+		// The delivery parsed: its events pay as they did before the charge moved ahead of
+		// verification, one token per new delivery id and none for a recorded one, so the charge is
+		// given back.
+		c.limiter.Refund(integration.ID, int(limits.RatePerMin))
 	}
-	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
-	// one token per new delivery id and none for a recorded one, so the charge is given back.
-	c.limiter.Refund(integration.ID, int(limits.RatePerMin))
 	caller := domain.Caller{Identity: IngestActor(integration.ID)}
 	out := HookOutcome{Results: []HookResult{}}
 	for _, p := range todo {

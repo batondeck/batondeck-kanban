@@ -791,8 +791,8 @@ func TestHookRecordsUnparsableDeliveries(t *testing.T) {
 
 // One verified delivery buys a bounded amount of work. Events whose delivery id repeats within the
 // delivery are ingested once (600 copies of one alert: one ingest, not 600 transactions and change
-// rows on a single rate token), and a delivery carrying more distinct events than
-// maxEventsPerDelivery is refused, a rejected row naming the count, with nothing filed.
+// rows on a single rate token), and of a delivery carrying more distinct events than
+// maxEventsPerDelivery the first are filed and the rest dropped, a rejected row naming the cut.
 func TestHookBoundsTheEventsOfOneDelivery(t *testing.T) {
 	f, _, root := oncallFixture(t)
 	key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
@@ -813,25 +813,39 @@ func TestHookBoundsTheEventsOfOneDelivery(t *testing.T) {
 	if after := f.count(t); after.changes-before.changes > 2 {
 		t.Fatalf("600 copies of one alert wrote %d change rows", after.changes-before.changes)
 	}
-	tasks := f.taskCount(t)
-	over := maxEventsPerDelivery + 1
+	// Past the bound the first maxEventsPerDelivery land, and the cut is a rejected row naming it:
+	// a refusal would have Alertmanager drop the whole group in the outage that made it this big.
+	over := maxEventsPerDelivery + 5
 	out = f.hook(t, iid, HookRequest{Header: key, Body: group(over, func(i int) string { return fmt.Sprintf(`{"fingerprint":"f%d"}`, i) })})
-	if out.Refusal != HookBadRequest || !strings.Contains(out.Detail, fmt.Sprint(over)) || f.taskCount(t) != tasks {
-		t.Fatalf("%d distinct alerts: %+v, %d tickets (was %d); want refused with nothing filed", over, out, f.taskCount(t), tasks)
-	}
-	var refused *store.Delivery
-	for _, d := range f.deliveries(t, iid) {
-		if d.Kind == store.DeliveryRejected {
-			refused = &d
+	created := 0
+	for _, r := range out.Results {
+		if r.Result == "created" && !r.Replayed {
+			created++
 		}
 	}
-	if refused == nil || !strings.Contains(*refused.Error, fmt.Sprint(over)) {
-		t.Fatalf("the refusal's row: %+v", refused)
+	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery || created != maxEventsPerDelivery {
+		t.Fatalf("%d distinct alerts: refusal %q %s, %d results, %d created; want the first %d filed",
+			over, out.Refusal, out.Detail, len(out.Results), created, maxEventsPerDelivery)
 	}
-	// control: exactly the bound lands.
+	if last := out.Results[maxEventsPerDelivery-1].DeliveryID; !strings.Contains(last, fmt.Sprintf("#f%d@", maxEventsPerDelivery-1)) {
+		t.Fatalf("the last alert filed is %s, want the delivery's alert %d", last, maxEventsPerDelivery-1)
+	}
+	rejected := func() []store.Delivery {
+		t.Helper()
+		page, err := f.st.ListDeliveries(f.ctx, f.project.ID, iid, store.DeliveryFilter{Kind: store.DeliveryRejected}, "", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page.Deliveries
+	}
+	cut := rejected()
+	if len(cut) != 1 || !strings.Contains(*cut[0].Error, fmt.Sprintf("%d distinct alerts", over)) || !strings.Contains(*cut[0].Error, "5 dropped") {
+		t.Fatalf("the cut's row: %+v", cut)
+	}
+	// control: exactly the bound lands, with no cut.
 	out = f.hook(t, iid, HookRequest{Header: key, Body: group(maxEventsPerDelivery, func(i int) string { return fmt.Sprintf(`{"fingerprint":"g%d"}`, i) })})
-	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery {
-		t.Fatalf("%d distinct alerts: %d results, refusal %q", maxEventsPerDelivery, len(out.Results), out.Refusal)
+	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery || len(rejected()) != 1 {
+		t.Fatalf("%d distinct alerts: %d results, refusal %q, rejected rows %d", maxEventsPerDelivery, len(out.Results), out.Refusal, len(rejected()))
 	}
 }
 
