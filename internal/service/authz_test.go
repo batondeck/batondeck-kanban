@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,5 +270,54 @@ func TestAuthorizeGrantReaderErrorIsInternal(t *testing.T) {
 	fail = false
 	if err := f.authorize(f.alice, "create_task"); err != nil {
 		t.Fatalf("the failure was cached: %v", err)
+	}
+}
+
+func (c *Core) accessEntries() int {
+	c.access.mu.Lock()
+	defer c.access.mu.Unlock()
+	return len(c.access.entries)
+}
+
+// A projectId no project can have (longer than any id the server makes) is VALIDATION before any
+// lookup, and nothing is cached for it: the caller chooses it, so caching it would let any token
+// grow the cache by the request's size.
+func TestAuthorizeRefusesAnOverlongProjectID(t *testing.T) {
+	f := newFixture(t, Options{})
+	stranger := domain.Caller{Identity: "mallory"}
+	long := "P-" + strings.Repeat("a", 200_000)
+	_, err := f.c.authorize(f.ctx, stranger, long, "get_project", domain.GrantSubject{}, false)
+	wantCode(t, err, domain.CodeValidation)
+	_, err = f.c.authorize(f.ctx, f.alice, long, "get_project", domain.GrantSubject{}, false)
+	wantCode(t, err, domain.CodeValidation)
+	// recall_memory is not tenant-scoped: it checks a named project's membership itself.
+	_, err = f.c.Context().RecallMemory(f.ctx, stranger, RecallMemoryReq{ProjectID: long})
+	wantCode(t, err, domain.CodeValidation)
+	if n := f.c.accessEntries(); n != 0 {
+		t.Fatalf("%d access entries cached for an overlong projectId, want 0", n)
+	}
+	// Control: the longest id allowed is still looked up (and refused as no membership).
+	_, err = f.c.authorize(f.ctx, stranger, "P-"+strings.Repeat("a", maxIDLen-2), "get_project", domain.GrantSubject{}, false)
+	wantCode(t, err, domain.CodeForbidden)
+	if err := f.authorize(f.alice, "get_project"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The access cache stays bounded while its entries are all live: a caller naming a new project id
+// on every call cannot grow it past accessCacheSweep within the TTL.
+func TestAccessCacheIsBounded(t *testing.T) {
+	f := newFixture(t, Options{})
+	stranger := domain.Caller{Identity: "mallory"}
+	for i := range 3 * accessCacheSweep {
+		_, err := f.c.authorize(f.ctx, stranger, fmt.Sprintf("P-%012x", i), "get_project", domain.GrantSubject{}, false)
+		wantCode(t, err, domain.CodeForbidden)
+	}
+	if n := f.c.accessEntries(); n > accessCacheSweep {
+		t.Fatalf("%d access entries within the TTL, want at most %d", n, accessCacheSweep)
+	}
+	// Control: the cache still serves (alice's entry is read once, then cached).
+	if err := f.authorize(f.alice, "get_project"); err != nil {
+		t.Fatal(err)
 	}
 }
