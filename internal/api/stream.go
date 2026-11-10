@@ -76,6 +76,9 @@ func feedURI(projectID, boardID string) string {
 // identity-routed notifications hub): list_notifications {limit: 50} as the caller, once on open
 // and again per StreamCoalesce of the caller's notification rows, read from the bus by the
 // caller's identity scope. A notification row is never a board change.
+// A board frame that cannot be made (the re-resolve or a read failed, not FORBIDDEN or NOT_FOUND) is
+// tried again after the coalesce, doubling per failure up to the ping, so a store blip delays the
+// change instead of dropping it until the next one.
 // The caller is resolved again before every ping, board, presence and notifications frame (P-219):
 // once the credential no longer resolves (a logout, a disabled user as of the account cache, a
 // revoked token) the stream closes and writes nothing more, so the client's reconnect meets 401.
@@ -263,6 +266,14 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pending > 0 {
 		arm(0)
 	}
+	// retry is how long after a board frame that could not be made (a failed re-resolve or read)
+	// the next try comes: the coalesce, doubling per failure up to the ping, back to the coalesce
+	// once a frame goes out. The pending changes stay pending meanwhile.
+	retry := s.coalesce
+	failed := func() {
+		arm(retry)
+		retry = min(retry*2, s.ping)
+	}
 	for !out.failed {
 		select {
 		case <-ctx.Done():
@@ -283,6 +294,7 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if closed, ok := recheck(); closed {
 				return
 			} else if !ok {
+				failed()
 				continue
 			}
 			frame, err := s.compose(ctx, caller, projectID, boardID)
@@ -291,8 +303,10 @@ func (s *stream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return // the caller lost the board: a reconnect meets the pre-flight's 403
 				}
 				logger.Printf("api: stream board frame %s/%s: %+v", projectID, boardID, err)
+				failed()
 				continue
 			}
+			retry = s.coalesce
 			out.event("board", last, frame)
 			out.event("updated", 0, updatedFrame{URI: feedURI(projectID, boardID), Count: pending})
 			pending = 0

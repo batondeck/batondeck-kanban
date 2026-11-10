@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -852,6 +856,47 @@ func TestStreamClosesOnANotificationAfterLogout(t *testing.T) {
 		case n := <-mine.notes:
 			t.Fatalf("a notifications frame after the logout: %s", n.data)
 		default:
+		}
+	})
+}
+
+// flakyAuth is an Auth whose Reauthenticate fails, with a plain error (a store hiccup, not a lapsed
+// credential), as many times as fails holds.
+type flakyAuth struct {
+	Auth
+	fails atomic.Int32
+}
+
+func (a *flakyAuth) Reauthenticate(r *http.Request) (domain.Caller, error) {
+	if a.fails.Add(-1) >= 0 {
+		return domain.Caller{}, errors.New("store: database is locked")
+	}
+	return a.Auth.Reauthenticate(r)
+}
+
+// api-http#6: a board frame whose re-resolve fails once (a store blip at flush time) is retried, so
+// the change still reaches the viewer without waiting for another change on the board.
+func TestStreamRetriesABoardFrameThatFailedOnce(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{})
+		flaky := &flakyAuth{Auth: l.auth}
+		mux := http.NewServeMux()
+		Mount(mux, Options{Services: s.Services, Bus: s.Bus, Auth: flaky, Users: l.auth.Accounts, Tokens: l.auth.Tokens, Logger: log.New(io.Discard, "", 0), Ping: time.Minute})
+		l.srv = httptest.NewServer(mux)
+		t.Cleanup(l.srv.Close)
+		pid, bid := seedBoard(t, l.harness, l.core, "Blip")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		flaky.fails.Store(1)
+		l.addTask(t, l.caller(), pid, bid, "during the blip")
+		f := c.next(t, 3*time.Second)
+		if f.event != "board" {
+			t.Fatalf("after the change: %+v, want board", f)
+		}
+		if d := decodeBoard(t, f); len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "during the blip" {
+			t.Fatalf("board frame %s", f.data)
+		}
+		if flaky.fails.Load() >= 0 {
+			t.Fatalf("the failure was never met (fails %d)", flaky.fails.Load())
 		}
 	})
 }
