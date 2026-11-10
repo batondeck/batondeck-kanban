@@ -178,3 +178,114 @@ func TestSuccessfulLoginsAreNotCounted(t *testing.T) {
 		}
 	}
 }
+
+// One IPv6 site (a /48, what one end site or a free tunnel broker hands out) has a budget of its
+// own on top of each /64's, so failed attempts from its 65,536 /64s cannot each spend a fresh
+// bucket.
+func TestFailedLoginsLimitedPerIPv6Site(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "right")
+	for i := range 50 {
+		if resp := f.loginFrom(t, fmt.Sprintf("2001:db8:0:%x::1", i+1), "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status %d, want 401", i+1, resp.StatusCode)
+		}
+	}
+	// Every further /64 of the /48 is refused before its own bucket is touched.
+	for i := 50; i < 80; i++ {
+		wantRateLimited(t, f.loginFrom(t, fmt.Sprintf("2001:db8:0:%x::1", i+1), "alice", "wrong"))
+	}
+	t.Run("Control", func(t *testing.T) {
+		// Another /48 has its own budget, and the owner signs in from it.
+		if resp := f.loginFrom(t, "2001:db8:1:1::1", "alice", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status %d, want 401", resp.StatusCode)
+		}
+		if resp := f.loginFrom(t, "2001:db8:1:2::1", "alice", "right"); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("status %d, want 204", resp.StatusCode)
+		}
+	})
+}
+
+// flood keeps the verification slots busy with wrong passwords for alice, each check taking hold:
+// a new attempt every few milliseconds, each from its own address that never signed in, for as long
+// as the test runs (stop ends it and waits for every attempt). It returns once the queue has been
+// full for longer than the limiter's Wait, so whatever queues behind it waits behind fresh attempts.
+func flood(t *testing.T, f *fixture, hold, wait time.Duration) (stop func()) {
+	t.Helper()
+	slowVerify(t, hold, nil)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+			}
+			addr := fmt.Sprintf("198.51.%d.%d", i/250, i%250+1)
+			wg.Go(func() { _, _ = f.svc.Accounts.Authenticate(context.Background(), addr, "alice", "wrong") })
+		}
+	})
+	time.Sleep(wait + hold)
+	return func() { close(done); wg.Wait() }
+}
+
+// A login that signed in before from an address is served before the flood when a verification
+// slot frees. Without that, a steady stream of wrong passwords from addresses that never signed in
+// keeps its owner out: each request waits behind attempts that arrived before it and gives up after
+// Wait, however many addresses the flood comes from.
+func TestKnownSignInIsServedBeforeTheFlood(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "right")
+	f.svc.Accounts.Limits = &LoginLimits{Verifies: 1, Wait: 400 * time.Millisecond, PerAddr: 1000}
+	if _, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.50", "alice", "right"); err != nil {
+		t.Fatal(err)
+	}
+	stop := flood(t, f, 100*time.Millisecond, 400*time.Millisecond)
+	defer stop()
+	for i := range 3 {
+		if _, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.50", "alice", "right"); err != nil {
+			t.Fatalf("sign-in %d by the owner, from where she signed in before, during the flood: %v", i+1, err)
+		}
+	}
+}
+
+// The slots serve a known pair's waiter first, then the others oldest first: the mechanism
+// TestKnownSignInIsServedBeforeTheFlood relies on, without its timing.
+func TestSlotsServeKnownFirst(t *testing.T) {
+	l := &LoginLimits{Verifies: 1, Wait: time.Minute}
+	release, err := l.acquire(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 3)
+	var wg sync.WaitGroup
+	for i, w := range []struct {
+		name  string
+		known bool
+	}{{"unknown-1", false}, {"unknown-2", false}, {"known", true}} {
+		wg.Go(func() {
+			r, err := l.acquire(context.Background(), w.known)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			got <- w.name
+			r()
+		})
+		for l.waiting() != i+1 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	release()
+	wg.Wait()
+	close(got)
+	var order []string
+	for n := range got {
+		order = append(order, n)
+	}
+	if want := "known unknown-1 unknown-2"; strings.Join(order, " ") != want {
+		t.Fatalf("served %v, want %s", order, want)
+	}
+}
