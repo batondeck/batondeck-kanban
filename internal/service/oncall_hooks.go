@@ -267,9 +267,11 @@ func (c *Core) verifyHook(ctx context.Context, integration store.Integration, r 
 		if why != "" {
 			return why, false
 		}
-		// PagerDuty signs the raw body with its own secret and no timestamp; the rest sign BatonDeck's.
+		// PagerDuty signs the raw body with its own secret and no timestamp; every other source signs
+		// BatonDeck's timestamped form, whether its secret was minted or pasted (externallyIssued
+		// only means it was never shown back), so the catalog's "replay-bounded" holds for it.
 		var ok bool
-		if integration.Source == "pagerduty" || a.HMAC.ExternallyIssued {
+		if integration.Source == "pagerduty" {
 			sig := r.Header(HeaderPagerDuty)
 			if sig == "" {
 				sig = r.Header(HeaderSignature)

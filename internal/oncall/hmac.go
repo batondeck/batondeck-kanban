@@ -55,7 +55,8 @@ type HMACAuth struct {
 	Previous          string `json:"previousEncrypted,omitempty"`
 	PreviousExpiresAt int64  `json:"previousExpiresAt,omitempty"`
 	RotatedAt         int64  `json:"rotatedAt"`
-	// ExternallyIssued: the source minted the secret (PagerDuty), so it was never shown back.
+	// ExternallyIssued: the caller supplied the secret (PagerDuty's own, or one a sender already
+	// holds), so it was never shown back. It does not choose the signature form: the source does.
 	ExternallyIssued bool `json:"externallyIssued,omitempty"`
 }
 

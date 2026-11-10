@@ -818,3 +818,51 @@ func TestHookBoundsTheSourcesDeliveryID(t *testing.T) {
 		t.Fatalf("a short delivery id: %+v", short)
 	}
 }
+
+// The signature form follows the source, not who issued the secret: a generic (or webhook) hmac
+// integration given its own externalSecret still verifies BatonDeck's timestamped v0 form, and the
+// untimestamped raw-body v1 form (PagerDuty's alone) is refused; a rotation that pastes an
+// externalSecret keeps the previous secret verifying in v0 form for the dual-accept window.
+// Control: PagerDuty's raw-body v1 is TestHookVerifiesEachMode's.
+func TestHookSignatureFormFollowsTheSource(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	rawV1 := func(secret string, body []byte) HookRequest {
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write(body)
+		h := http.Header{}
+		h.Set(HeaderSignature, "v1="+hex.EncodeToString(m.Sum(nil)))
+		return HookRequest{Header: h.Get, Body: body}
+	}
+	const own = "own-secret-0123456789"
+	for _, source := range []IntegrationSource{"generic", "webhook"} {
+		req := CreateIntegrationReq{Name: string(source), Source: source, Auth: IntegrationAuthInput{Mode: "hmac", ExternalSecret: own}}
+		if source == "webhook" {
+			req.Mapping.Extract = MappingExtract{Fingerprint: []string{"fingerprint"}, Title: []string{"title"}}
+		}
+		in := f.integration(t, root, req)
+		if !in.Integration.Auth.ExternallyIssued || in.Secret != "" {
+			t.Fatalf("%s with externalSecret: %+v", source, in)
+		}
+		body := genericBody("fp-"+string(source), "firing", "t")
+		if source == "webhook" {
+			body = []byte(`{"title":"t","fingerprint":"fp-webhook"}`)
+		}
+		if out := f.hook(t, in.Integration.ID, rawV1(own, body)); out.Refusal != HookUnauthorized {
+			t.Errorf("%s: an untimestamped raw-body v1 delivery: %+v, want unauthorized", source, out)
+		}
+		if out := f.hook(t, in.Integration.ID, signedHook(own, f.clock.now(), body)); out.Refusal != "" {
+			t.Errorf("%s: a v0 delivery signed with its own secret: %+v, want accepted", source, out)
+		}
+	}
+	minted := f.integration(t, root, CreateIntegrationReq{Name: "minted"})
+	rot, err := f.c.Oncall().RotateIntegrationSecret(f.ctx, root, RotateIntegrationSecretReq{ProjectID: f.project.ID, IntegrationID: minted.Integration.ID, Version: 1, ExternalSecret: own})
+	if err != nil || rot.Integration.Auth.DualAcceptUntil == nil {
+		t.Fatalf("rotate with an externalSecret: %+v, %v", rot, err)
+	}
+	if out := f.hook(t, minted.Integration.ID, signedHook(minted.Secret, f.clock.now(), genericBody("prev", "firing", "t"))); out.Refusal != "" {
+		t.Errorf("the previous secret in v0 form inside the window: %+v, want accepted", out)
+	}
+	if out := f.hook(t, minted.Integration.ID, signedHook(own, f.clock.now(), genericBody("next", "firing", "t"))); out.Refusal != "" {
+		t.Errorf("the pasted secret in v0 form: %+v, want accepted", out)
+	}
+}
