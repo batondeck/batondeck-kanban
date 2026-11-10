@@ -202,7 +202,10 @@ export function UsersSection() {
   const [name, setName] = useState('');
   // The one copy of the initial password: from the add answer, cleared by Done, never fetched.
   const [shown, setShown] = useState<{ login: string; password: string } | null>(null);
+  // gcTime 0 and reset() on Done, as the token mint below: the answer carries the plaintext, so it
+  // must not outlive Done in the mutation cache.
   const add = useMutation({
+    gcTime: 0,
     mutationFn: () => usersApi.addUser(login.trim(), name.trim()),
     onSuccess: (r) => {
       setShown({ login: r.user.login, password: r.password });
@@ -290,7 +293,7 @@ export function UsersSection() {
               </p>
               <Cluster gap={8}>
                 <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{shown.password}</code>
-                <button type="button" className="btn secondary" onClick={() => setShown(null)}>
+                <button type="button" className="btn secondary" onClick={() => { setShown(null); add.reset(); }}>
                   Done
                 </button>
               </Cluster>

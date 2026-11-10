@@ -436,6 +436,10 @@ export function OncallSetup({
 
   // TaskDrawer's conventions: focus the dialog once, Escape blurs a focused field first so a typing
   // operator is never one keystroke from losing the form, and only a second Escape closes.
+  // WHILE A SECRET IS SHOWN, neither Escape nor the overlay closes the drawer: the panel holds the
+  // only copy, and a stray key or click would lose it for good. "I have stored it" dismisses the
+  // panel; the Close button stays the explicit way out.
+  const secretShown = shownSecret !== null;
   useEffect(() => {
     dialogRef.current?.focus();
   }, []);
@@ -447,11 +451,12 @@ export function OncallSetup({
         el.blur();
         return;
       }
+      if (secretShown) return;
       onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, secretShown]);
 
   const invalidate = (): void => {
     void qc.invalidateQueries({ queryKey: ['oncall-integrations', projectId] });
@@ -572,7 +577,7 @@ export function OncallSetup({
   const cancelToList = (): void => setCreating('picking');
 
   return (
-    <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-overlay" onClick={secretShown ? undefined : onClose}>
       <div
         className="drawer"
         role="dialog"
