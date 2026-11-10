@@ -2,7 +2,8 @@
  * The Kanban board — Linear-grade interaction layer (Phases 1–3):
  *  - keyboard selection (j/k/arrows move, Enter opens, c creates, s/p open palette sub-pages)
  *  - URL-addressable drawer (?task=T-12 — deep links + working back button)
- *  - dnd-kit drag with drop highlight + lifted overlay; keyboard-draggable for free
+ *  - dnd-kit drag (pointer only) with drop highlight + lifted overlay. No KeyboardSensor: Enter or Space
+ *    on a focused card opens it, and the keyboard moves a card through `s` (Set status)
  *  - framer-motion card enter/leave; skeleton loading; optimistic create/move
  *  - one motion vocabulary (--ease/--t-1..3 in index.css) — extend it, don't invent alongside it
  */
@@ -351,11 +352,23 @@ function DraggableCard({ canMove, ...props }: Parameters<typeof TaskCard>[0] & {
   // ENTER is the plain `.card` CSS keyframe, which also gives the column-transition for free — the
   // card unmounts here and mounts in the destination column, where it plays in. Exit animates opacity
   // only: dnd-kit owns `transform` on this node and two owners of one property is a jank bug.
+  // dnd-kit makes this wrapper the card's tab stop (role=button, tabIndex 0) with no key handler of its
+  // own, and the board's `Enter` shortcut leaves a focused control its own keys (shortcuts.tsx). So
+  // Enter or Space here opens THIS card, not whichever one j/k last selected.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    listeners?.onKeyDown?.(e);
+    if (e.target !== e.currentTarget || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      props.onOpen();
+    }
+  };
   return (
     <motion.div
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      onKeyDown={onKeyDown}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
