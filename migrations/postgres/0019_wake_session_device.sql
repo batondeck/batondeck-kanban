@@ -1,5 +1,5 @@
 -- +goose Up
--- P-167 (core-cli-ops#4): serves on several devices may share one database (Postgres), and a
+-- P-167: serves on several devices may share one database (Postgres), and a
 -- directory row is valid only on the device whose serve registered it, where its pid names a
 -- process. A row names that device (device_id, the serve's device id; '' for a row written before
 -- this column, which any serve may restore or drop, as every row was before), a serve starts from

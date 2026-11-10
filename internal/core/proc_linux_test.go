@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// core-cli-ops#0 (tested): a Remove after Close writes nothing. serve closes the watcher when the
-// directory's dispatcher returns, while its HTTP server still takes an unregister (or a
-// re-register) that removes a pid: the kick then went to the closed eventfd's number, which the
-// next open had handed to an unrelated file, socket or database connection.
+// A Remove after Close (tested) writes nothing. serve closes the watcher when the directory's
+// dispatcher returns, while its HTTP server still takes an unregister (or a re-register) that
+// removes a pid: the kick then went to the closed eventfd's number, which the next open had handed
+// to an unrelated file, socket or database connection.
 func TestExitWatcherRemoveAfterCloseWritesNothing(t *testing.T) {
 	cmd := startSleeper(t)
 	w, err := NewExitWatcher()

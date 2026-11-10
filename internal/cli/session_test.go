@@ -105,11 +105,12 @@ func TestSessionWithoutAMessagingSocketIsTheParent(t *testing.T) {
 	}
 }
 
-// core-cli-ops#6 (tested): without a messaging socket the client is not the hook's own shell. The
-// plugin's hook is a /bin/sh script that Claude Code runs through `sh -c`, so the command's parent
-// is that script's shell, which exits the moment the command returns: it was registered, reported
-// as registered, and dropped in the same second. Here this test process plays the client and runs
-// a script of the hook's shape the same way; the registered pid is this process, and it stays.
+// The client under a hook's shells (tested): without a messaging socket it is not the hook's shell.
+// The plugin's hook is a /bin/sh script that Claude Code runs through `sh -c`, so the command's
+// parent is that script's shell, which exits the moment the command returns: it was registered,
+// reported as registered, and dropped in the same second. Here this test process plays the client
+// and runs a script of the hook's shape the same way; the registered pid is this process, and it
+// stays.
 func TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient(t *testing.T) {
 	s := startDirectory(t, nil)
 	sessionEnv(t, s, s.alice, "")
@@ -145,7 +146,7 @@ func TestSessionHookChild(t *testing.T) {
 	os.Exit(session([]string{"register", "--role", "worker"}, os.Stdout, os.Stderr))
 }
 
-// core-cli-ops#10 (tested): the client sends the bearer only to a server of its own uid, as the
+// The server's uid (tested): the client sends the bearer only to a server of its own uid, as the
 // server admits only clients of its own uid. Another local user who binds the configured socket
 // path first (a /tmp directory after a reboot, say) got every session's BATONDECK_TOKEN from the
 // SessionStart hook, which fails quietly by design. A server of another uid is played here by a

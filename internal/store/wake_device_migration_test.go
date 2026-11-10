@@ -26,7 +26,7 @@ func deviceMigration(t *testing.T, p *goose.Provider) (v, prev int64) {
 	return 0, 0
 }
 
-// The device migration (P-167, core-cli-ops#4), up, down and up again on a database holding
+// The device migration (P-167), up, down and up again on a database holding
 // directory rows: the rows survive the up with no device, a pid is unique per device once up (the
 // same pid on another device registers, a second on the same device is refused), the down keeps one
 // row per pid and the schema before it exactly, and the up after the down holds again.

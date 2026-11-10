@@ -10,11 +10,11 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/wake"
 )
 
-// core-cli-ops#1 (tested): serve restarts with more restored entries that each have a doorbell to
-// catch up on than the dispatcher's catch-up channel holds (16). Start restored every row before
-// it started the loop that reads that channel, so the 17th catch-up blocked Start, and with it
-// serve, until SIGTERM: no /healthz, no /mcp, no UI. Now Start returns, serve answers, and every
-// restored entry is rung once with what it missed.
+// A restart with many catch-ups (tested): serve restarts with more restored entries that each have
+// a doorbell to catch up on than the dispatcher's catch-up channel holds (16). Start restored every
+// row before it started the loop that reads that channel, so the 17th catch-up blocked Start, and
+// with it serve, until SIGTERM: no /healthz, no /mcp, no UI. Now Start returns, serve answers, and
+// every restored entry is rung once with what it missed.
 func TestARestartWithMoreCatchUpsThanTheDispatcherBuffers(t *testing.T) {
 	s := startDirectory(t, nil)
 	ctx := context.Background()
@@ -49,7 +49,7 @@ func TestARestartWithMoreCatchUpsThanTheDispatcherBuffers(t *testing.T) {
 	}
 }
 
-// core-cli-ops#4 (tested; P-167): serves on two devices share one database (Postgres). A
+// P-167 (tested): serves on two devices share one database (Postgres). A
 // directory row names the device whose serve registered it, and a serve starts from its own
 // device's rows alone: it neither restores another device's row whose pid happens to be live here
 // (a phantom entry) nor drops one whose pid is not a process here (a session that device still

@@ -89,9 +89,10 @@ func TestParseListen(t *testing.T) {
 	}
 }
 
-// first-run#11 (tested): a socket path longer than the kernel's sun_path takes is refused when the
-// config is read, naming its length and the limit, not at bind as "invalid argument" after serve
-// had migrated the store. A path of exactly the limit parses and binds (the positive control).
+// The socket path limit (tested): a socket path longer than the kernel's sun_path takes is refused
+// when the config is read, naming its length and the limit, not at bind as "invalid argument" after
+// serve had migrated the store. A path of exactly the limit parses and binds (the positive
+// control).
 func TestParseListenRefusesASocketPathOverTheLimit(t *testing.T) {
 	dir := sockPath(t)
 	dir = filepath.Dir(dir)

@@ -101,9 +101,10 @@ func sleeper(t *testing.T) int64 {
 	return int64(cmd.Process.Pid)
 }
 
-// core-cli-ops#12 (tested): a session re-registers its pid with a new token while the sweep is
-// rechecking its old entry, whose revoked bearer no longer resolves. The sweep's drop is the old
-// entry's: the fresh one, and its row, stay (the drop went by pid, and removed the fresh entry).
+// A re-register during a recheck (tested): a session re-registers its pid with a new token while
+// the sweep is rechecking its old entry, whose revoked bearer no longer resolves. The sweep's drop
+// is the old entry's: the fresh one, and its row, stay (the drop went by pid, and removed the fresh
+// entry).
 func TestASweepDropsTheEntryItRecheckedNotItsReplacement(t *testing.T) {
 	alice := domain.Caller{Identity: "U-alice", TokenScope: "U-alice"}
 	res := &hookResolver{callers: map[string]domain.Caller{"bd_new": alice}} // bd_old is revoked

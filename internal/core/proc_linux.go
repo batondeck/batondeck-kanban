@@ -74,7 +74,7 @@ func ProcessParent(pid int) (ppid int, name string, err error) {
 // pidfdWatch holds a pidfd per watched pid and polls them with an eventfd that add, remove and
 // close write to so the loop rebuilds its set. A removed pidfd is closed by the loop, after the
 // poll that may still hold it returns. Once closed, add and remove touch no descriptor: the
-// eventfd's number may already belong to another file (core-cli-ops#0).
+// eventfd's number may already belong to another file.
 type pidfdWatch struct {
 	efd     int
 	mu      sync.Mutex

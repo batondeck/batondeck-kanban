@@ -67,7 +67,7 @@ func ParseListen(s string) (ListenAddr, error) {
 }
 
 // socketPathFits refuses a socket path longer than the kernel binds (MaxSocketPath), which bind
-// would refuse only as "invalid argument" (first-run#11).
+// would refuse only as "invalid argument".
 func socketPathFits(path string) error {
 	if len(path) > MaxSocketPath {
 		return fmt.Errorf("the socket path %s is %d bytes; the limit is %d: choose a shorter path", path, len(path), MaxSocketPath)
@@ -122,7 +122,7 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 
 // DialUnix connects to the Unix socket at path and refuses a server whose uid, read from the
 // kernel as Listen reads a client's, is not uid: a client about to send a bearer sends it only to
-// a server of its own uid, whoever could have bound the path first (core-cli-ops#10).
+// a server of its own uid, whoever could have bound the path first.
 func DialUnix(ctx context.Context, path string, uid int) (net.Conn, error) {
 	c, err := (&net.Dialer{}).DialContext(ctx, NetworkUnix, path)
 	if err != nil {

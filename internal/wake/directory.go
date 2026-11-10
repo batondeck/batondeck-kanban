@@ -159,7 +159,7 @@ func (d *Directory) Start(ctx context.Context) error {
 	}
 	// The restored entries' catch-up frames go to the loop as it starts, not through d.catch: the
 	// loop is its only reader, so a send from here would block Start once more entries had something
-	// to catch up on than the channel holds (core-cli-ops#1).
+	// to catch up on than the channel holds.
 	var missed []released
 	for _, r := range rows {
 		why, frames := d.restore(ctx, r)
@@ -400,8 +400,7 @@ func (d *Directory) signal() {
 }
 
 // drop removes e and its row, and stops watching its pid, unless a register has replaced e
-// meanwhile: the verdict of a recheck that read e is e's, never its replacement's
-// (core-cli-ops#12).
+// meanwhile: the verdict of a recheck that read e is e's, never its replacement's.
 func (d *Directory) drop(ctx context.Context, e *entry, why string) {
 	pid := e.pid
 	d.mu.Lock()

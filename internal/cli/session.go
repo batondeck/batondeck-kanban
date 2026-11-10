@@ -165,7 +165,7 @@ func thisSession() (wake.Session, string, error) {
 // hookShells are the programs a hook's command runs under. Each exits once the command returns,
 // so none of them is the client: the plugin's hook is a /bin/sh script that the client runs
 // through `sh -c`, and registering the script's shell listed a process that was gone within the
-// second (core-cli-ops#6).
+// second.
 var hookShells = map[string]bool{"sh": true, "dash": true, "bash": true, "zsh": true, "ksh": true, "mksh": true,
 	"ash": true, "busybox": true, "yash": true, "posh": true, "fish": true, "csh": true, "tcsh": true}
 
