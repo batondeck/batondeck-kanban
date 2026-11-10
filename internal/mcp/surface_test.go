@@ -125,9 +125,19 @@ func TestPromptsRender(t *testing.T) {
 		if m := wakeForbidden.FindAllString(text, -1); len(m) > 0 {
 			t.Errorf("%s says %q", p.Name, m)
 		}
-		for _, tool := range snakeName.FindAllString(text, -1) {
+		named := snakeName.FindAllString(text, -1)
+		for _, tool := range named {
 			if _, ok := contract.Tools[tool]; !ok {
 				t.Errorf("%s names %s, which is not a tool of contract/expected.json", p.Name, tool)
+			}
+		}
+		// A field the prompt tells the agent to read comes back from a tool it names.
+		for _, field := range promptCitedFields {
+			if !regexp.MustCompile(`\b` + field + `\b`).MatchString(text) {
+				continue
+			}
+			if !slices.ContainsFunc(named, func(tool string) bool { return outputCarries(t, contract.Tools[tool], field) }) {
+				t.Errorf("%s cites %s, which no tool it names (%v) returns", p.Name, field, named)
 			}
 		}
 		delete(args, p.Arguments[1].Name)
@@ -139,6 +149,49 @@ func TestPromptsRender(t *testing.T) {
 	if want := []string{"decompose_into_subtasks", "pick_up_next_task", "summarize_for_handoff", "triage_inbox"}; !slices.Equal(names, want) {
 		t.Errorf("prompts/list = %v, want %v", names, want)
 	}
+}
+
+// promptCitedFields are the output fields a prompt may tell an agent to read; TestPromptsRender
+// holds each one a prompt cites to a tool the same prompt names.
+var promptCitedFields = []string{"downloadUrl", "blockedBy", "modelHint", "upstream", "deliverable", "version"}
+
+// outputCarries is whether a tool's entry in contract/expected.json has field as a property anywhere
+// in its output schema.
+func outputCarries(t *testing.T, raw json.RawMessage, field string) bool {
+	t.Helper()
+	if raw == nil {
+		return false
+	}
+	var tool struct {
+		Output any `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &tool); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(v any) bool
+	walk = func(v any) bool {
+		switch x := v.(type) {
+		case map[string]any:
+			if props, ok := x["properties"].(map[string]any); ok {
+				if _, ok := props[field]; ok {
+					return true
+				}
+			}
+			for _, c := range x {
+				if walk(c) {
+					return true
+				}
+			}
+		case []any:
+			for _, c := range x {
+				if walk(c) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(tool.Output)
 }
 
 // The resource templates conductor serves (contract/tools.json) that this server does not, and the

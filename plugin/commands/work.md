@@ -12,9 +12,11 @@ Work a batondeck-kanban board over MCP:
    `git fetch origin && git checkout <branch>` and continue from the last checkpoint's `NEXT`.
 3. **Load the context:** `get_task_context { projectId, taskId, includeUpstream: true }` and use every
    populated section before you act: `field` items say what, `decision` and `note` items say why,
-   `memory` carries durable facts, `attachments` carry designs and specs, `upstream` carries the
-   deliverables of the tasks this one depended on (build on them), and `openFollowUps` carries
-   directives you must satisfy. `get_task` for the title and description.
+   `memory` carries durable facts, `attachments` carry designs and specs (the context lists them
+   without a link: `list_attachments { projectId, taskId }` returns each one's `downloadUrl`, valid
+   15 minutes; fetch it and work from it), `upstream` carries the deliverables of the tasks this one
+   depended on (build on them), and `openFollowUps` carries directives you must satisfy. `get_task`
+   for the title and description.
 4. **Clear open follow-ups:** do what each says, record it, then
    `ack_follow_up { projectId, taskId, followUpId }`.
 5. **Do the work, recording as you go:** `add_context_item`, `write_memory`, `set_summary`;

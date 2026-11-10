@@ -28,9 +28,10 @@ var prompts = []prompt{
 				"eligible work). If instead you target a specific task that is blocked, walk its blockedBy chain " +
 				"with get_task and start at the deepest unblocked, unclaimed blocker — work what unblocks the most, " +
 				"in dependency order. claim_task it, then call get_task_context { includeUpstream: true } and USE " +
-				"every populated section before you act (don't skim): the description + 'field' items say WHAT, " +
-				"'decision'/'note' items say WHY, memory carries durable facts to reuse, attachments carry the " +
-				"designs/specs (download each via its downloadUrl and actually work from it), and 'upstream' carries " +
+				"every populated section before you act (don't skim): the description (get_task: the context has none) + " +
+				"'field' items say WHAT, 'decision'/'note' items say WHY, memory carries durable facts to reuse, " +
+				"attachments carry the designs/specs (the context lists them without a link: call list_attachments " +
+				"for the task, download each via its downloadUrl and actually work from it), and 'upstream' carries " +
 				"the deliverables of the tasks this one depended on — build directly on those, never re-derive prior " +
 				"output. If the task carries a modelHint, you MUST honor it before starting: switch to the stated " +
 				"model/effort, or spawn a subagent of that size to do the work. Hold all of it for the whole task. " +
@@ -65,7 +66,8 @@ var prompts = []prompt{
 		args:        [2]string{"projectId", "taskId"},
 		text: func(projectID, taskID string) string {
 			return fmt.Sprintf("Read get_task_context for %s in %s. Write a concise status digest (what is done, ", taskID, projectID) +
-				"what remains, key decisions) and store it with set_summary so the next agent can resume quickly."
+				"what remains, key decisions) and store it with set_summary so the next agent can resume quickly; " +
+				"set_summary takes the task's current version, which get_task returns (the context does not)."
 		},
 	},
 	{

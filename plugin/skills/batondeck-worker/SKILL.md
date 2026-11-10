@@ -189,7 +189,9 @@ on the ticket.
    memory, the task's own `deliverable`, `openFollowUps` and, with `includeUpstream`, the **upstream**
    deliverables of the tasks this one depended on. Build on those instead of re-deriving them. Also
    `recall_memory { projectId }` for what earlier tasks learned. `get_task_context` carries no title or
-   description: read those with `get_task`.
+   description: read those with `get_task`. Its attachments carry no link either:
+   `list_attachments { projectId, taskId }` returns each ready one's `downloadUrl` (valid 15 minutes);
+   fetch the designs and specs and work from them.
 3. **Honour `modelHint`**: switch model, or run the task in a subagent of that size; if you cannot,
    `add_comment` saying so.
 4. **Clear open follow-ups**: for each entry in `openFollowUps`, do what it says, record it, then
