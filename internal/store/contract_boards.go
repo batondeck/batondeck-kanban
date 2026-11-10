@@ -84,6 +84,10 @@ type Boards interface {
 	AddColumn(ctx context.Context, projectID, boardID string, in ColumnInput, opts WriteOptions) (Column, error)
 	// UpdateColumn applies patch to the column and returns the board after it. A status change on a
 	// column that holds a task is VALIDATION and nothing changes: its tasks would disagree with it.
+	// The column row is locked before the count, so a write into the column that holds it commits
+	// first and is counted. On Postgres a write that read the board before the change commits and
+	// locks the column after it still lands its task with the status it read; the store does not
+	// compare a write's status with its column's (a task whose status no column maps keeps its own).
 	UpdateColumn(ctx context.Context, projectID, boardID, columnID string, patch ColumnPatch) (Board, error)
 	// RemoveColumn removes an empty column and returns the board after it. A column holding a
 	// task, or the board's last column, is VALIDATION and nothing changes.
