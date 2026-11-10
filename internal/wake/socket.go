@@ -1,12 +1,12 @@
 package wake
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -138,10 +138,17 @@ func frameBytes(sessionID, token string, f Frame, label string) []byte {
 	return append(append(out, b...), '\n')
 }
 
+// doorbellUID is the uid a session's socket must be served by for a doorbell to be written: serve's
+// own, which is the session's (Register admits only a pid of the peer's uid, and the server only
+// peers of its own). A test points it at another uid.
+var doorbellUID = os.Getuid
+
 // writeDoorbell opens one connection to socket, writes the doorbell and closes it; nothing comes
 // back. Each step is bounded by timeout.
 func writeDoorbell(socket string, b []byte, timeout time.Duration) error {
-	c, err := net.DialTimeout("unix", socket, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	c, err := core.DialUnix(ctx, socket, doorbellUID())
+	cancel()
 	if err != nil {
 		return err
 	}

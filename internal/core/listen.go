@@ -121,8 +121,9 @@ func listenUnix(path string, uid int, logger *log.Logger) (net.Listener, error) 
 }
 
 // DialUnix connects to the Unix socket at path and refuses a server whose uid, read from the
-// kernel as Listen reads a client's, is not uid: a client about to send a bearer sends it only to
-// a server of its own uid, whoever could have bound the path first.
+// kernel as Listen reads a client's, is not uid: a client about to send a bearer (session
+// register) or a session's peer token (a doorbell) sends it only to a server of its own uid,
+// whoever could have bound the path first.
 func DialUnix(ctx context.Context, path string, uid int) (net.Conn, error) {
 	c, err := (&net.Dialer{}).DialContext(ctx, NetworkUnix, path)
 	if err != nil {
@@ -140,7 +141,7 @@ func DialUnix(ctx context.Context, path string, uid int) (net.Conn, error) {
 	}
 	if p.UID != uid {
 		c.Close()
-		return nil, fmt.Errorf("unix socket %s is served by uid %d, not uid %d: refusing to send it the bearer", path, p.UID, uid)
+		return nil, fmt.Errorf("unix socket %s is served by uid %d, not uid %d: refusing to write to it", path, p.UID, uid)
 	}
 	return c, nil
 }

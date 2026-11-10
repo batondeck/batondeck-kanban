@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -298,5 +299,48 @@ func TestWriteDoorbellAndGone(t *testing.T) {
 	}
 	if s := <-got; s != "x\n" {
 		t.Fatalf("read %q", s)
+	}
+}
+
+// A session socket of another uid (tested): the doorbell, and the session's peer token in its auth
+// line, go only to a socket served by serve's own uid, as the session it names is. Another local
+// user who bound the path the registry names first read the peer token, with which it could write
+// into the session as a peer. Another uid is played by this uid's listener with the uid the
+// dispatcher expects pointed elsewhere: the write is refused and the listener reads nothing.
+func TestWriteDoorbellOnlyToASocketOfServesUID(t *testing.T) {
+	dir, err := os.MkdirTemp("", "bkw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		b, _ := io.ReadAll(c)
+		got <- string(b)
+		c.Close()
+	}()
+	other := os.Getuid() + 1
+	doorbellUID = func() int { return other }
+	t.Cleanup(func() { doorbellUID = os.Getuid })
+	err = writeDoorbell(path, []byte(`{"type":"auth","token":"peer"}`+"\n"), time.Second)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("not uid %d", other)) || gone(err) {
+		t.Fatalf("writeDoorbell to a socket of another uid: %v; want a refusal naming uid %d, not gone", err, other)
+	}
+	select {
+	case s := <-got:
+		if s != "" {
+			t.Fatalf("the socket of another uid read %q", s)
+		}
+	case <-time.After(time.Second):
 	}
 }
