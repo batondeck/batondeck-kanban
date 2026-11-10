@@ -64,7 +64,7 @@ func TestMCPShEndsItsSession(t *testing.T) {
 	}
 	down := "http://" + ln.Addr().String()
 	_ = ln.Close()
-	if out, code := run(down, "whoami", `{}`); code != 1 || !strings.Contains(out, "mcp.sh:") {
-		t.Errorf("mcp.sh against no server: exit %d, %q, want 1 and its own one line", code, out)
+	if out, code := run(down, "whoami", `{}`); code != 1 || !strings.HasPrefix(out, "mcp.sh: cannot reach ") || strings.Count(out, "\n") != 1 {
+		t.Errorf("mcp.sh against no server: exit %d, %q, want 1 and its own one line (no curl line)", code, out)
 	}
 }
