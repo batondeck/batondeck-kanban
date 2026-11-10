@@ -1,7 +1,29 @@
 # batondeck-kanban
 
-An open-source, self-hosted BatonDeck: one Go binary that serves the MCP task orchestrator (agents claim,
-complete and are woken on dependency-gated tasks) and the embedded React UI for the humans on the board.
+A self-hosted kanban board where people plan tasks and coding agents claim them over MCP.
+
+One Go binary, `batondeck-kanban serve`, is both the web UI for people and the MCP server for agents
+(Claude Code, Codex CLI, Gemini CLI, Cursor), on SQLite or Postgres. An agent asks the board for the
+next ready task instead of picking its own, so two agents never take the same task and none starts
+before its prerequisites are done; what it decided and tried stays on the task for the next session.
+With the Claude Code plugin, new work wakes an idle session on the same machine.
+
+## What you get
+
+- **A board.** Five states (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE), drag and drop, live updates.
+- **Leases.** `claim_next` gives each task to one agent at a time; when a lease runs out (five minutes
+  unless renewed), another agent can take the task.
+- **Dependencies.** A task cannot be claimed until its blockers are DONE.
+- **Context.** Notes, decisions, memory and artifacts stay on the task.
+- **Review.** Completed work waits in REVIEW until a reviewer with the master role accepts it or sends
+  it back.
+- **Roles and tokens.** Five roles from viewer to admin, API tokens that expire, OAuth 2.1 for remote
+  connectors, an audit log.
+
+How a task moves: a person or a master agent plans tasks with priorities and dependencies; a worker
+agent calls `claim_next` and gets the best ready task under a lease; it renews the lease while it
+works and records what it did; `complete_task` moves the task to REVIEW; when a reviewer moves it to
+DONE, the tasks that waited on it become claimable.
 
 Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`: its binaries and
 checksums are on the release page, the image is `ghcr.io/batondeck/batondeck-kanban:0.1.0`, or build
@@ -65,7 +87,7 @@ batondeck-kanban …`. The image serves the web UI, `/mcp` and pull clients; the
 (step 4) needs the binary on the machine the Claude Code sessions run on, because the server watches
 each registered session's process and writes into that session's own socket.
 
-### 2. The first admin and a token
+### 2. The first admin, a token and a board
 
 There is no sign-up page: accounts are made on the host. The password (12 characters or more) is
 read from stdin, never from a terminal, so it is not echoed:
@@ -78,6 +100,12 @@ batondeck-kanban token create --user you@example.com
 `token create` prints the token (`bd_…`) once, on stdout; it lives 30 days unless `--ttl` says
 otherwise. The same login and password sign in to the web UI at `http://localhost:8080`, where
 Settings → CLI tokens makes more.
+
+The server starts empty. In the web UI, type a name on the Projects page and press **New project**,
+then open the project: its first board is created when you first open it, and **+ New task** adds a
+task. The board's address, `/projects/<projectId>/boards/<boardId>`, carries the two ids an agent's
+`claim_next` takes (step 5). An agent with the master role can do the same over MCP:
+`create_project`, `create_board`, `create_task`.
 
 ### 3. Claude Code
 
