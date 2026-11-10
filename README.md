@@ -128,6 +128,14 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
 client reached the server at, so behind a proxy that rewrites the Host header, set it.
 
+Have the proxy forward the original `Host` and send `X-Forwarded-Proto: https` and
+`X-Forwarded-For`; nginx's bare `proxy_pass` sends none of them, so add
+`proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. With an https `public_url` the
+sign-in cookies are `Secure` whatever the proxy sends; without one they are `Secure` only on a
+request that arrived over TLS or says `X-Forwarded-Proto: https`, and otherwise a later plain-http
+request would carry the session in clear.
+
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
 address) would count all your users as one: ten mistyped passwords lock everyone out until the

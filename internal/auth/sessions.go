@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	// SessionCookie carries the session's secret: HttpOnly, SameSite=Lax, Secure over TLS.
+	// SessionCookie carries the session's secret: HttpOnly, SameSite=Lax, Secure over TLS or with an
+	// https public_url.
 	SessionCookie = "bk_session"
 	// CSRFCookie carries the session's CSRF token for the page's script to echo in CSRFHeader. It is
 	// not HttpOnly by design; the check compares against the session row, not against this cookie.
@@ -100,8 +101,36 @@ func (s *Service) ResolveSession(ctx context.Context, secret string) (domain.Cal
 	return callerFor(sess.UserID, e), sess, nil
 }
 
+// requestIsTLS reports whether r reached the server over TLS: its own connection, or a proxy's
+// X-Forwarded-Proto: https (the list's first value, the hop the client reached, when a chain of
+// proxies sends several).
 func requestIsTLS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if r.TLS != nil {
+		return true
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
+
+// publicOrigin is PublicURL's scheme://host as a browser's Origin names it, "" when PublicURL is
+// unset or not an http(s) URL with a host.
+func (s *Service) publicOrigin() string {
+	u, err := url.Parse(s.PublicURL)
+	if s.PublicURL == "" || err != nil || u.Host == "" {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	return scheme + "://" + strings.ToLower(u.Host)
+}
+
+// secureCookies reports whether the cookies set on r's answer are Secure: r came over TLS, or
+// public_url is https, so the browser only ever reaches the server over TLS whatever the proxy
+// forwards.
+func (s *Service) secureCookies(r *http.Request) bool {
+	return requestIsTLS(r) || strings.HasPrefix(s.publicOrigin(), "https://")
 }
 
 // LoginHandler answers POST with the form fields `login` and `password`: 204 and the two cookies
@@ -151,7 +180,7 @@ func (s *Service) LoginHandler() http.Handler {
 			return
 		}
 		expires := time.UnixMilli(sess.ExpiresAt)
-		secure := requestIsTLS(r)
+		secure := s.secureCookies(r)
 		http.SetCookie(w, &http.Cookie{Name: SessionCookie, Value: secret, Path: "/", Expires: expires,
 			HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 		http.SetCookie(w, &http.Cookie{Name: CSRFCookie, Value: sess.CSRFToken, Path: "/", Expires: expires,
@@ -180,7 +209,7 @@ func (s *Service) LogoutHandler() http.Handler {
 				return
 			}
 		}
-		secure := requestIsTLS(r)
+		secure := s.secureCookies(r)
 		for _, name := range []string{SessionCookie, CSRFCookie} {
 			http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1,
 				HttpOnly: name == SessionCookie, Secure: secure, SameSite: http.SameSiteLaxMode})

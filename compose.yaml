@@ -18,7 +18,9 @@
 # .env keeps both lines). The image alone (`docker run`) runs on that SQLite file by default.
 #
 # The board is published on 127.0.0.1 only. The claude.ai connector needs it at a public HTTPS URL:
-# put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL.
+# put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL. The
+# proxy should forward the original Host and send X-Forwarded-Proto: https and X-Forwarded-For
+# (README step 6); an https BATONDECK_PUBLIC_URL makes the sign-in cookies Secure in any case.
 services:
   batondeck-kanban:
     image: ghcr.io/batondeck/batondeck-kanban:0.1.0

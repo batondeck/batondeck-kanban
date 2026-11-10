@@ -51,6 +51,11 @@ type Service struct {
 	// OAuthResource is the resource (RFC 8707) this service's bearers are presented at: an OAuth
 	// access token issued for any other is refused.
 	OAuthResource string
+	// PublicURL is the server's public_url ("" when unset). When it is https the session cookies are
+	// Secure whatever the request says (a TLS proxy may forward plain http and no
+	// X-Forwarded-Proto), and the CSRF check takes a browser's Origin that is its origin as this
+	// server's own (a proxy may forward another Host).
+	PublicURL string
 	// Proxies are the trusted reverse proxies: a sign-in through one counts against the client its
 	// X-Forwarded-For names (TrustedProxies.ClientAddr); nil reads no header.
 	Proxies TrustedProxies

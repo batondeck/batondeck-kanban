@@ -28,7 +28,7 @@ func (s *Service) CSRF(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !sameOrigin(r) {
+		if !s.sameOrigin(r) {
 			s.refuse(w, r, "cross_site")
 			return
 		}
@@ -79,13 +79,15 @@ func (s *Service) anonymousRefusalAllowed() bool {
 }
 
 // sameOrigin is hdtp's: Fetch Metadata when present, else Origin when present and not "null", else
-// true (no browser, or one that says nothing, which the CSRF token then judges).
-func sameOrigin(r *http.Request) bool {
+// true (no browser, or one that says nothing, which the CSRF token then judges). Origin is this
+// server's own when it is the origin r reached (RequestOrigin) or public_url's: behind a proxy
+// the forwarded Host and scheme may be the proxy's upstream, not what the browser saw.
+func (s *Service) sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin" || site == "none"
 	}
 	if o := r.Header.Get("Origin"); o != "" && o != "null" {
-		return o == RequestOrigin(r)
+		return o == RequestOrigin(r) || (o == s.publicOrigin() && o != "")
 	}
 	return true
 }

@@ -78,6 +78,8 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st, Audit: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	// The CSRF refusals and the OAuth server's events go to the audit log, as the token rows do.
 	resolver.Audit = auth.StoreAudit(st, nil, logger.Printf)
+	// An https public_url makes the session cookies Secure behind any TLS proxy (auth.Service.PublicURL).
+	resolver.PublicURL = publicURL
 	var as *oauth.Server
 	if publicURL != "" {
 		var err error

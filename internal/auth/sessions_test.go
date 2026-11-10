@@ -206,3 +206,53 @@ func TestLoginNextRedirectsOnlyToLocalPaths(t *testing.T) {
 		}
 	}
 }
+
+// Behind a TLS proxy that sends no X-Forwarded-Proto (nginx's bare proxy_pass), an https public_url
+// makes both cookies Secure, so a later plain-http request cannot carry the session in clear; and a
+// browser without Fetch Metadata whose Origin is the public URL signs in, although the Host the
+// proxy forwarded is another. A proxy chain's "https, http" is https. Without a public_url the
+// header alone decides (the control).
+func TestPublicURLMakesTheCookiesSecure(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "pw")
+	login := func(hdr map[string]string) *http.Response {
+		t.Helper()
+		form := url.Values{"login": {"alice"}, "password": {"pw"}}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/api/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		f.svc.CSRF(f.svc.LoginHandler()).ServeHTTP(w, r)
+		return w.Result()
+	}
+	secure := func(resp *http.Response) bool {
+		sc, cc := cookie(resp, SessionCookie), cookie(resp, CSRFCookie)
+		return sc != nil && cc != nil && sc.Secure && cc.Secure
+	}
+	if resp := login(nil); resp.StatusCode != http.StatusNoContent || secure(resp) {
+		t.Fatalf("no public_url, no header: %d, Secure %t", resp.StatusCode, secure(resp))
+	}
+	if resp := login(map[string]string{"X-Forwarded-Proto": "https, http"}); !secure(resp) {
+		t.Fatalf("X-Forwarded-Proto %q: not Secure", "https, http")
+	}
+	origin := map[string]string{"Origin": "https://board.example.com"}
+	if resp := login(origin); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("no public_url, Origin the proxy's: %d, want 403", resp.StatusCode)
+	}
+	f.svc.PublicURL = "https://board.example.com/"
+	if resp := login(nil); resp.StatusCode != http.StatusNoContent || !secure(resp) {
+		t.Fatalf("an https public_url, no header: %d, Secure %t", resp.StatusCode, secure(resp))
+	}
+	if resp := login(origin); resp.StatusCode != http.StatusNoContent || !secure(resp) {
+		t.Fatalf("an https public_url, Origin it: %d, Secure %t", resp.StatusCode, secure(resp))
+	}
+	if resp := login(map[string]string{"Origin": "https://evil.example"}); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("an https public_url, another Origin: %d, want 403", resp.StatusCode)
+	}
+	f.svc.PublicURL = "http://board.example.com"
+	if resp := login(nil); secure(resp) {
+		t.Fatal("an http public_url made the cookies Secure")
+	}
+}
