@@ -402,7 +402,7 @@ export function OncallSetup({
     kind: 'hmac' | 'api_key';
   } | null>(null);
   /**
-   * The api_key we minted for THIS create, held until the server confirms it.
+   * The api_key sent by THIS create or Edit save, held until the server confirms it.
    *
    * An API key is hashed server-side and never returned, so if it is not held here it cannot be
    * shown and the integration is unusable. This bug shipped once already — four sources produced
@@ -493,10 +493,18 @@ export function OncallSetup({
       setEditing(false);
       if (res.integration && 'secret' in res && typeof res.secret === 'string') {
         setShownSecret({ secret: res.secret, path: res.integration.endpointPath, kind: 'hmac' });
+      } else if (res.integration && mintedApiKey.current) {
+        // A new api_key/basic key set from Edit: the answer is `{integration}` only, exactly as on
+        // create, so the key the drawer sent is the only copy — shown once here or never.
+        setShownSecret({ secret: mintedApiKey.current, path: res.integration.endpointPath, kind: 'api_key' });
       }
+      mintedApiKey.current = null;
       invalidate();
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      mintedApiKey.current = null;
+      setError(e.message);
+    },
   });
   const rotate = useMutation({
     gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
@@ -893,11 +901,10 @@ export function OncallSetup({
                       disabled={!mayConfigure || save.isPending || problems.length > 0}
                       {...configureClosed}
                       onClick={() => {
-                        mintedApiKey.current = null;
-                        save.mutate({
-                          i: active,
-                          patch: patchBodyOf(form, activeSource, active),
-                        });
+                        const patch = patchBodyOf(form, activeSource, active);
+                        // Held BEFORE the call, as on create: a new key is answered by no secret.
+                        mintedApiKey.current = patch.auth?.apiKey ? patch.auth.apiKey : null;
+                        save.mutate({ i: active, patch });
                       }}
                     >
                       {save.isPending ? 'Saving…' : 'Save changes'}
