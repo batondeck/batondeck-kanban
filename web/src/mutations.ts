@@ -37,6 +37,9 @@ export type Snapshot = Array<[readonly unknown[], unknown]>;
  * MERGE RATHER THAN SKIP: every other task in the snapshot still lands, so a colleague's change to a
  * different card is not delayed by your in-flight drag.
  *
+ * NEWER WINS. A local copy older than the snapshot's (the server already applied this tab's write) is
+ * not kept: the snapshot holds the write, and the local copy's version is spent.
+ *
  * `isLocal` is injected (production passes `isLocalEdit`) so this is testable without faking timers.
  */
 export function mergeSnapshotPreservingLocalEdits(
@@ -47,7 +50,10 @@ export function mergeSnapshotPreservingLocalEdits(
   if (!old?.tasks?.length || !incoming.tasks?.length) return incoming;
   const mine = new Map(old.tasks.filter((t) => isLocal(t.id)).map((t) => [t.id, t]));
   if (mine.size === 0) return incoming;
-  return { ...incoming, tasks: incoming.tasks.map((t) => mine.get(t.id) ?? t) };
+  // A local copy is kept only while the snapshot is not newer: an optimistic patch keeps the version
+  // it was made from, so a snapshot at a later version already holds this tab's write, and keeping the
+  // older copy would send its stale version with the next write (STALE, and the card snaps back).
+  return { ...incoming, tasks: incoming.tasks.map((t) => { const m = mine.get(t.id); return m && m.version >= t.version ? m : t; }) };
 }
 
 /**
