@@ -185,6 +185,28 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 	return i, err
 }
 
+const headOrderKey = `-- name: HeadOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = $1 AND board_id = $2 AND column_id = $3
+ORDER BY order_key COLLATE "C", id COLLATE "C"
+LIMIT 1
+`
+
+type HeadOrderKeyParams struct {
+	ProjectID string
+	BoardID   string
+	ColumnID  string
+}
+
+// The first order key of one column of the board (order key, then id, COLLATE "C" as bytes),
+// through tasks_column_order: a task moved into the column lands before it.
+func (q *Queries) HeadOrderKey(ctx context.Context, arg HeadOrderKeyParams) (string, error) {
+	row := q.db.QueryRow(ctx, headOrderKey, arg.ProjectID, arg.BoardID, arg.ColumnID)
+	var order_key string
+	err := row.Scan(&order_key)
+	return order_key, err
+}
+
 const insertTask = `-- name: InsertTask :one
 INSERT INTO tasks (project_id, id, board_id, column_id, title, description, status, priority, assignee, labels, required_capabilities, parent_task_id, order_key, custom_fields, model_hint, run_of, sprint_ids, version, created_by, created_by_agent, created_at, updated_by, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 1, $18, $19, $20, $21, $22)

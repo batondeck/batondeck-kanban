@@ -70,3 +70,11 @@ FROM tasks WHERE project_id = sqlc.arg(project_id) AND id = ANY(sqlc.arg(ids)::t
 -- The delete at a version: no row is a missing task or another version, which the caller tells apart.
 -- name: DeleteTask :execrows
 DELETE FROM tasks WHERE project_id = $1 AND id = $2 AND version = $3;
+
+-- The first order key of one column of the board (order key, then id, COLLATE "C" as bytes),
+-- through tasks_column_order: a task moved into the column lands before it.
+-- name: HeadOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND board_id = sqlc.arg(board_id) AND column_id = sqlc.arg(column_id)
+ORDER BY order_key COLLATE "C", id COLLATE "C"
+LIMIT 1;

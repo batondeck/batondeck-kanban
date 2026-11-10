@@ -109,3 +109,33 @@ func TestLexorankMatchesReference(t *testing.T) {
 		}
 	}
 }
+
+// OrderBetweenSpread keys sort strictly between their bounds, are well formed, and differ by
+// entropy, including where OrderBetween's key is a prefix of the upper bound ("a0" for ("", "a0V")).
+func TestOrderBetweenSpread(t *testing.T) {
+	gaps := [][2]string{{"", ""}, {"", "a0"}, {"a0", ""}, {"a0", "a1"}, {"", "a0V"}, {"a0", "a0V"}, {"a0", "a01"},
+		{"a0", "a0001"}, {"Zz", "a0"}, {"a1", "a0"}, {"", "A00000000000000000000000001"}, {"a0V", "a0Vz"}}
+	for _, g := range gaps {
+		lo, hi := g[0], g[1]
+		if lo > hi && hi != "" {
+			lo, hi = hi, lo
+		}
+		seen := map[string]bool{}
+		for i := range 2000 {
+			k, err := OrderBetweenSpread(g[0], g[1], uint32(i)*2654435761)
+			if err != nil {
+				t.Fatalf("OrderBetweenSpread(%q, %q): %v", g[0], g[1], err)
+			}
+			if !(lo == "" || lo < k) || !(hi == "" || k < hi) || !IsValidOrder(k) {
+				t.Fatalf("OrderBetweenSpread(%q, %q) = %q: not a well-formed key strictly between", g[0], g[1], k)
+			}
+			seen[k] = true
+		}
+		if len(seen) < 1900 {
+			t.Errorf("OrderBetweenSpread(%q, %q): %d distinct keys of 2000", g[0], g[1], len(seen))
+		}
+	}
+	if _, err := OrderBetweenSpread("a0", "a0", 7); err == nil {
+		t.Fatal("OrderBetweenSpread(a0, a0) has no gap and must fail")
+	}
+}

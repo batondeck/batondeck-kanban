@@ -9,7 +9,9 @@ import (
 // ClaimInput is a claim by one agent. LeaseID is the caller's new lease id, ExpiresAt when the
 // lease runs out, Now the time the claim is judged at and recorded under (UpdatedAt). ColumnID is
 // the IN_PROGRESS column the task lands in ("" keeps its column): the service resolves it from the
-// board. Agent and AgentID are nil for a claim that did not come through an agent.
+// board. A task that changes column lands at that column's head with a fresh order key (HeadKey),
+// never with the key it had in its old column. Agent and AgentID are nil for a claim that did not
+// come through an agent.
 type ClaimInput struct {
 	Owner     string
 	Agent     *string

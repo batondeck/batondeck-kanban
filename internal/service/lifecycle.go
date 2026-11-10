@@ -372,7 +372,8 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 // inside mutate. An empty frontier writes nothing; it reaps the board's expired leases (lazy
 // recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
-// claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
+// claim (2: the IN_PROGRESS column's first order key, the claimed task landing before it, and the
+// claim statement) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
 // Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); useProfile to the
 // tasks the caller's own registered profile covers (claimNext; the project, the profile and its
 // stats are three more reads, plus the frontier page each attempt; no profile falls back to

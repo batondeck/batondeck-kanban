@@ -392,6 +392,36 @@ func tasks(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeValidation, "")
 	})
 
+	t.Run("SetStatusIntoAnotherColumnLandsAtItsHeadWithAFreshKey", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "already there", func(in *store.CreateTaskInput) {
+			in.ColumnID, in.Status, in.OrderKey = f.col[domain.InProgress], domain.InProgress, "a5"
+		})
+		head := "a5"
+		seen := map[string]bool{head: true}
+		for i := range 3 {
+			task := f.add(t, fmt.Sprint("moved ", i), nil) // each at "a0", the key the one before carried away
+			got, err := f.s.SetStatus(ctx, f.project, task.ID, 1, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+			mustOK(t, err)
+			if !domain.IsValidOrder(got.OrderKey) || got.OrderKey >= head || seen[got.OrderKey] {
+				t.Fatalf("move %d landed at %q, want a fresh well-formed key before the column's head %q (keys so far %v)", i, got.OrderKey, head, seen)
+			}
+			head, seen[got.OrderKey] = got.OrderKey, true
+			if _, err := domain.OrderBetween(got.OrderKey, "a5"); err != nil {
+				t.Fatalf("no key fits between %q and a5: %v", got.OrderKey, err)
+			}
+		}
+		// A key the caller names is the key; a write that keeps the column keeps the key.
+		named := f.add(t, "named", nil)
+		got, err := f.s.SetStatus(ctx, f.project, named.ID, 1, store.StatusChange{Status: domain.InProgress, ColumnID: f.col[domain.InProgress], OrderKey: ptr("a6"), UpdatedBy: "bob", UpdatedAt: taskClock + 1})
+		mustOK(t, err)
+		kept, err := f.s.SetStatus(ctx, f.project, named.ID, 2, store.StatusChange{Status: domain.Blocked, ColumnID: f.col[domain.InProgress], UpdatedBy: "bob", UpdatedAt: taskClock + 2})
+		mustOK(t, err)
+		if got.OrderKey != "a6" || kept.OrderKey != "a6" {
+			t.Fatalf("named key %q, then kept %q, want a6 both", got.OrderKey, kept.OrderKey)
+		}
+	})
+
 	t.Run("SetStatusLeavingDoneDropsTheCancelledLabel", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		task := f.add(t, "t", func(in *store.CreateTaskInput) { in.Labels = []string{"keep"} })

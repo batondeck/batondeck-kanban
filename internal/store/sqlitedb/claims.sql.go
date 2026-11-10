@@ -14,21 +14,22 @@ const claimNext = `-- name: ClaimNext :one
 
 UPDATE tasks SET status = 'IN_PROGRESS',
   column_id = CASE WHEN CAST(?1 AS TEXT) = '' THEN column_id ELSE CAST(?1 AS TEXT) END,
-  claim_owner = CAST(?2 AS TEXT), claim_agent = CAST(?3 AS TEXT), claim_agent_id = CAST(?4 AS TEXT),
-  lease_id = CAST(?5 AS TEXT), lease_expires_at = CAST(?6 AS INTEGER), next_eligible_at = NULL,
-  version = version + 1, updated_by = CAST(?2 AS TEXT), updated_at = CAST(?7 AS INTEGER)
+  order_key = CASE WHEN CAST(?2 AS TEXT) = '' THEN order_key ELSE CAST(?2 AS TEXT) END,
+  claim_owner = CAST(?3 AS TEXT), claim_agent = CAST(?4 AS TEXT), claim_agent_id = CAST(?5 AS TEXT),
+  lease_id = CAST(?6 AS TEXT), lease_expires_at = CAST(?7 AS INTEGER), next_eligible_at = NULL,
+  version = version + 1, updated_by = CAST(?3 AS TEXT), updated_at = CAST(?8 AS INTEGER)
 WHERE rid = (
-  SELECT f.rid FROM tasks f, (SELECT CAST(?8 AS TEXT) AS caps, CAST(?9 AS TEXT) AS sprint, CAST(?10 AS TEXT) AS only_ids) p
-  WHERE f.project_id = ?11 AND f.board_id = ?12 AND f.status = 'TODO'
+  SELECT f.rid FROM tasks f, (SELECT CAST(?9 AS TEXT) AS caps, CAST(?10 AS TEXT) AS sprint, CAST(?11 AS TEXT) AS only_ids) p
+  WHERE f.project_id = ?12 AND f.board_id = ?13 AND f.status = 'TODO'
     AND json_array_length(f.blocked_by) = 0
     AND (f.blocked_reason IS NULL OR f.blocked_reason <> 'poison')
     AND f.racing = 0
-    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?7 AS INTEGER))
-    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?7 AS INTEGER))
-    AND (CASE WHEN CAST(?13 AS TEXT) IS NULL
-          THEN f.assignee IS NULL OR f.assignee = CAST(?14 AS TEXT)
-            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?14 AS TEXT))
-          ELSE f.assignee = CAST(?13 AS TEXT) END)
+    AND (f.lease_expires_at IS NULL OR f.lease_expires_at <= CAST(?8 AS INTEGER))
+    AND (f.next_eligible_at IS NULL OR f.next_eligible_at <= CAST(?8 AS INTEGER))
+    AND (CASE WHEN CAST(?14 AS TEXT) IS NULL
+          THEN f.assignee IS NULL OR f.assignee = CAST(?15 AS TEXT)
+            OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = CAST(?15 AS TEXT))
+          ELSE f.assignee = CAST(?14 AS TEXT) END)
     AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
       SELECT 1 FROM json_each(f.required_capabilities) r
       WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
@@ -44,20 +45,21 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 `
 
 type ClaimNextParams struct {
-	ColumnID  string
-	Owner     string
-	Agent     sql.NullString
-	AgentID   sql.NullString
-	LeaseID   string
-	ExpiresAt int64
-	Now       int64
-	Caps      string
-	SprintID  string
-	OnlyIds   string
-	ProjectID string
-	BoardID   string
-	Assignee  sql.NullString
-	Caller    string
+	ColumnID        string
+	LandingOrderKey string
+	Owner           string
+	Agent           sql.NullString
+	AgentID         sql.NullString
+	LeaseID         string
+	ExpiresAt       int64
+	Now             int64
+	Caps            string
+	SprintID        string
+	OnlyIds         string
+	ProjectID       string
+	BoardID         string
+	Assignee        sql.NullString
+	Caller          string
 }
 
 type ClaimNextRow struct {
@@ -118,11 +120,13 @@ type ClaimNextRow struct {
 // BINARY collation).
 // ClaimNext in ONE statement. The connection is the store's single writer, and the statement's own
 // transaction takes the write lock before it reads the frontier, so two callers cannot pick the same
-// row. column_id ” keeps the task's column; a column that is not the board's matches no row, and
-// the caller tells that apart from an empty frontier.
+// row. column_id ” keeps the task's column; landing_order_key ” keeps its order key, another is the
+// caller's fresh key at the head of the column the task lands in. A column that is not the board's
+// matches no row, and the caller tells that apart from an empty frontier.
 func (q *Queries) ClaimNext(ctx context.Context, arg ClaimNextParams) (ClaimNextRow, error) {
 	row := q.db.QueryRowContext(ctx, claimNext,
 		arg.ColumnID,
+		arg.LandingOrderKey,
 		arg.Owner,
 		arg.Agent,
 		arg.AgentID,

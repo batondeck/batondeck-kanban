@@ -13,11 +13,13 @@
 -- UPDATE OF f SKIP LOCKED), locked and claimed, so concurrent callers never win the same task and
 -- never wait on each other. NO KEY UPDATE, not UPDATE: the FOR KEY SHARE a concurrent child insert's
 -- foreign key check takes on the task (a comment, an event) does not conflict with it, so that task
--- is not skipped (P-96). column_id '' keeps the task's column; a column that is not the board's matches no
--- row, and the caller tells that apart from an empty frontier.
+-- is not skipped (P-96). column_id '' keeps the task's column; landing_order_key '' keeps its order
+-- key, another is the caller's fresh key at the head of the column the task lands in. A column that
+-- is not the board's matches no row, and the caller tells that apart from an empty frontier.
 -- name: ClaimNext :one
 UPDATE tasks AS t SET status = 'IN_PROGRESS',
   column_id = CASE WHEN sqlc.arg(column_id)::text = '' THEN t.column_id ELSE sqlc.arg(column_id)::text END,
+  order_key = CASE WHEN sqlc.arg(landing_order_key)::text = '' THEN t.order_key ELSE sqlc.arg(landing_order_key)::text END,
   claim_owner = sqlc.arg(owner)::text, claim_agent = sqlc.narg(agent)::text, claim_agent_id = sqlc.narg(agent_id)::text,
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
@@ -52,6 +54,7 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 -- name: ClaimNextWaiting :one
 UPDATE tasks AS t SET status = 'IN_PROGRESS',
   column_id = CASE WHEN sqlc.arg(column_id)::text = '' THEN t.column_id ELSE sqlc.arg(column_id)::text END,
+  order_key = CASE WHEN sqlc.arg(landing_order_key)::text = '' THEN t.order_key ELSE sqlc.arg(landing_order_key)::text END,
   claim_owner = sqlc.arg(owner)::text, claim_agent = sqlc.narg(agent)::text, claim_agent_id = sqlc.narg(agent_id)::text,
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint

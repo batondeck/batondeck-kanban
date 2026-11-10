@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -27,6 +28,7 @@ type taskQueries interface {
 	ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByIDsParams) ([]sqlitedb.ListTasksByIDsRow, error)
 	DeleteTask(ctx context.Context, arg sqlitedb.DeleteTaskParams) (int64, error)
 	GetColumn(ctx context.Context, arg sqlitedb.GetColumnParams) (sqlitedb.Column, error)
+	HeadOrderKey(ctx context.Context, arg sqlitedb.HeadOrderKeyParams) (string, error)
 }
 
 func (s *SQLite) CreateTask(ctx context.Context, in CreateTaskInput) (Task, error) {
@@ -283,6 +285,28 @@ func placeOf(ctx context.Context, q sqlQueries, projectID, boardID, columnID str
 	return domain.NotFound("Column", columnID)
 }
 
+// HeadKey is the order key a task takes when a write moves it into a column without naming one: a key
+// before first, the column's first key ("" when it is empty), so the task lands at the column's head,
+// spread (domain.OrderBetweenSpread) so two writers that land tasks in one column at once do not mint
+// one key twice. A first that is malformed gives keep, the task's own key: a neighbour's bad key never
+// fails a lifecycle write.
+func HeadKey(first, keep string) string {
+	k, err := domain.OrderBetweenSpread("", first, rand.Uint32())
+	if err != nil {
+		return keep
+	}
+	return k
+}
+
+// landingKey is HeadKey for column columnID of the board: one bounded read of the column's first key.
+func landingKey(ctx context.Context, q sqlQueries, projectID, boardID, columnID, keep string) (string, error) {
+	first, err := q.HeadOrderKey(ctx, sqlitedb.HeadOrderKeyParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
+	if err != nil && !isNoRows(err) {
+		return "", fmt.Errorf("store: column head: %w", err)
+	}
+	return HeadKey(first, keep), nil
+}
+
 // columnOn refuses a column id that is not one of the board's.
 func columnOn(ctx context.Context, q sqlQueries, projectID, boardID, columnID string) error {
 	_, err := q.GetColumn(ctx, sqlitedb.GetColumnParams{ProjectID: projectID, BoardID: boardID, ID: columnID})
@@ -454,6 +478,13 @@ func setStatus(ctx context.Context, e engine, projectID, taskID string, expected
 		if c.ColumnID != "" {
 			if err := columnOn(ctx, q, projectID, t.BoardID, c.ColumnID); err != nil {
 				return Task{}, err
+			}
+			if c.ColumnID != t.ColumnID && c.OrderKey == nil {
+				key, err := landingKey(ctx, q, projectID, t.BoardID, c.ColumnID, t.OrderKey)
+				if err != nil {
+					return Task{}, err
+				}
+				t.OrderKey = key
 			}
 			t.ColumnID = c.ColumnID
 		}
@@ -803,6 +834,10 @@ func (p pgQueries) ListTasksByIDs(ctx context.Context, arg sqlitedb.ListTasksByI
 
 func (p pgQueries) DeleteTask(ctx context.Context, arg sqlitedb.DeleteTaskParams) (int64, error) {
 	return p.q.DeleteTask(ctx, pgdb.DeleteTaskParams(arg))
+}
+
+func (p pgQueries) HeadOrderKey(ctx context.Context, arg sqlitedb.HeadOrderKeyParams) (string, error) {
+	return p.q.HeadOrderKey(ctx, pgdb.HeadOrderKeyParams(arg))
 }
 
 func (p pgQueries) GetColumn(ctx context.Context, arg sqlitedb.GetColumnParams) (sqlitedb.Column, error) {
