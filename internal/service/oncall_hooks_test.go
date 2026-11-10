@@ -358,12 +358,19 @@ func TestHookIncidentLandsInATodoColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 	landsIn("b", cols[domain.Todo])
+	// An edit that sends the stored target back unchanged (the web form sends boardId and columnId
+	// on every save) is not refused for it: the ingest already files past the re-statused column.
+	row, _ := f.st.GetIntegration(f.ctx, f.project.ID, iid)
+	if _, err := f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: row.Version,
+		Patch: IntegrationPatch{Name: "renamed", BoardID: f.board.ID, ColumnID: Value(target)}}); err != nil {
+		t.Fatalf("a rename sending the re-statused column back unchanged: %v", err)
+	}
 	empty, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "Pager", Status: domain.Todo})
 	if err != nil {
 		t.Fatal(err)
 	}
 	pager := empty.Column.ID
-	row, _ := f.st.GetIntegration(f.ctx, f.project.ID, iid)
+	row, _ = f.st.GetIntegration(f.ctx, f.project.ID, iid)
 	if _, err := f.c.Oncall().UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: iid, Version: row.Version,
 		Patch: IntegrationPatch{ColumnID: Value(pager)}}); err != nil {
 		t.Fatal(err)

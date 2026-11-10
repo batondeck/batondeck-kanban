@@ -440,7 +440,10 @@ func (s oncallSvc) UpdateIntegration(ctx context.Context, caller domain.Caller, 
 			column = p.ColumnID.Ptr()
 			patch.ColumnID = &store.Nullable[string]{Value: column}
 		}
-		if patch.BoardID != nil || patch.ColumnID != nil {
+		// Only a changed target is checked: one sent back as stored (the web form sends it on every
+		// save) may name a column re-statused since, which the ingest already files past.
+		sameColumn := (column == nil) == (cur.ColumnID == nil) && (column == nil || *column == *cur.ColumnID)
+		if board != cur.BoardID || !sameColumn {
 			if err := checkTarget(ctx, t.Tx, req.ProjectID, board, column); err != nil {
 				return Integration{}, err
 			}
