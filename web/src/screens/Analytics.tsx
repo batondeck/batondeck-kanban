@@ -60,6 +60,8 @@ const ACTIVITY_ROW: CSSProperties = {
 const CENSUS_PAGE = 200;
 /** 10 x 200 = 2,000 tasks. Past that the page says it stopped rather than implying it counted all. */
 const CENSUS_MAX_PAGES = 10;
+/** The operations window asked for. The server clamps it to retention, so the heading reads `ops.days`. */
+const OPS_DAYS = 7;
 
 export function Analytics() {
   const { permissions, ui } = useAuth();
@@ -145,9 +147,10 @@ export function Analytics() {
   });
   // Historical operations (last 7d) from the tool_calls log (GET /api/analytics/operations) — what the live tools
   // can't show (throughput trend, per-tool usage, error rate over time). Scoped to this project.
+  // The window is in the key: `/reports` asks the same route for 30 days, one tab away.
   const opsQ = useQuery({
-    queryKey: ['analytics-ops', projectId],
-    queryFn: () => analyticsApi.analyticsOperations(projectId, 7),
+    queryKey: ['analytics-ops', projectId, OPS_DAYS],
+    queryFn: () => analyticsApi.analyticsOperations(projectId, OPS_DAYS),
     enabled: !!projectId,
     retry: false,
   });
@@ -425,7 +428,7 @@ export function Analytics() {
         {/* Operations (the tool_calls log, last 7d) — the historical/throughput view the live tools can't give */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Cluster justify='space-between'>
-            <h2 style={{ fontSize: 14, margin: 0 }}>Operations · last 7 days</h2>
+            <h2 style={{ fontSize: 14, margin: 0 }}>Operations · last {ops?.days ?? OPS_DAYS} days</h2>
             <span className="muted mono" style={{ fontSize: 11 }}>via the tool-call log</span>
           </Cluster>
           {opsQ.isLoading && <span className="muted" style={{ fontSize: 12 }}>Loading…</span>}

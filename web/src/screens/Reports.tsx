@@ -42,6 +42,8 @@ import { STATUSES } from '../types.js';
 const PAGE = 200;
 /** 2,000 tasks. A bound, not a silence: hitting it renders a footnote naming the number. */
 const MAX_PAGES = 10;
+/** The operations window asked for; the server clamps it to retention and the chart reads `ops.days`. */
+const OPS_DAYS = 30;
 
 const STATUS_COLOR: Record<Status, string> = {
   TODO: 'var(--ready)',
@@ -94,9 +96,10 @@ export function Reports() {
     }
   }, [censusQ.hasNextPage, censusQ.isFetchingNextPage, censusQ.data?.pages.length, censusQ]);
 
+  // The window is in the key: `/analytics` asks the same route for 7 days, one tab away.
   const opsQ = useQuery({
-    queryKey: ['analytics-ops', projectId],
-    queryFn: () => analyticsApi.analyticsOperations(projectId, 30),
+    queryKey: ['analytics-ops', projectId, OPS_DAYS],
+    queryFn: () => analyticsApi.analyticsOperations(projectId, OPS_DAYS),
     enabled: !!projectId,
     retry: false,
   });
