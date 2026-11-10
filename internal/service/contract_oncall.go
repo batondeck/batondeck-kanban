@@ -86,16 +86,17 @@ type UpdateIntegrationReq struct {
 }
 
 // IntegrationPatch is update_integration's patch: each present field replaces the stored one.
+// Mapping is replaced whole, so a present {} clears it; an absent one keeps it.
 type IntegrationPatch struct {
-	Auth      IntegrationAuthInput `json:"auth,omitzero"`
-	BoardID   string               `json:"boardId,omitzero"`
-	ColumnID  Nullable[string]     `json:"columnId,omitzero"`
-	Enabled   Optional[bool]       `json:"enabled,omitzero"`
-	Lifecycle IntegrationLifecycle `json:"lifecycle,omitzero"`
-	Limits    IntegrationLimitsIn  `json:"limits,omitzero"`
-	Mapping   IntegrationMapping   `json:"mapping,omitzero"`
-	Name      string               `json:"name,omitzero"`
-	Routing   IntegrationRouting   `json:"routing,omitzero"`
+	Auth      IntegrationAuthInput         `json:"auth,omitzero"`
+	BoardID   string                       `json:"boardId,omitzero"`
+	ColumnID  Nullable[string]             `json:"columnId,omitzero"`
+	Enabled   Optional[bool]               `json:"enabled,omitzero"`
+	Lifecycle IntegrationLifecycle         `json:"lifecycle,omitzero"`
+	Limits    IntegrationLimitsIn          `json:"limits,omitzero"`
+	Mapping   Optional[IntegrationMapping] `json:"mapping,omitzero"`
+	Name      string                       `json:"name,omitzero"`
+	Routing   IntegrationRouting           `json:"routing,omitzero"`
 }
 
 // UpdateIntegrationResp is update_integration's output.

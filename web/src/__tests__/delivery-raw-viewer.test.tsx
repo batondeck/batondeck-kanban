@@ -1,11 +1,12 @@
 /**
  * THE REFUSED PAYLOAD IS VIEWED, NOT DOWNLOADED — and the viewer explains an absence.
  *
- * The delivery LOG ENTRY is kept for `INGEST_DELIVERY_RETENTION_DAYS` (30). The raw body it refused
- * is kept for `INGEST_RAW_RETENTION_DAYS` (7). The row therefore outlives its payload by 23 days,
- * and for all of those days the UI offered a Download link that navigated to a bare 404. Reported
- * from staging as "download button doesn't work" — it worked exactly as built; what was wrong was
- * offering an action whose data had already been deleted, with nothing on screen saying so.
+ * The delivery LOG ENTRY is kept for `BATONDECK_RETENTION_DELIVERIES_DAYS` (default 30). The raw body
+ * it refused is kept for `BATONDECK_RETENTION_RAW_BODIES_DAYS` (default 7). On the defaults the row
+ * outlives its payload by 23 days, and for all of those days the UI offered a Download link that
+ * navigated to a bare 404. Reported from staging as "download button doesn't work" — it worked
+ * exactly as built; what was wrong was offering an action whose data had already been deleted, with
+ * nothing on screen saying so.
  *
  * A navigation cannot explain a 404. A dialog can, which is why this is a dialog.
  */
@@ -23,13 +24,14 @@ const INTEGRATION = {
   createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
 } as unknown as Integration;
 
-/** `rawStatus` decides what the payload route answers — 200 with bytes, or 404 once aged out. */
-function stub(rawStatus: number, body = '{"hostile":"<img src=x onerror=alert(1)>"}') {
+/** `rawStatus` decides what the payload route answers — 200 with bytes, 404 once aged out, or
+ *  another refusal whose JSON error body is `error`. */
+function stub(rawStatus: number, body = '{"hostile":"<img src=x onerror=alert(1)>"}', error: unknown = {}) {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b, text: async () => JSON.stringify(b) }) as Response;
     if (url.includes('/raw')) {
-      return { ok: rawStatus < 400, status: rawStatus, text: async () => body, json: async () => ({}) } as Response;
+      return { ok: rawStatus < 400, status: rawStatus, text: async () => body, json: async () => error } as Response;
     }
     if (url.includes('/deliveries')) {
       return json({ deliveries: [{
@@ -52,8 +54,8 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-async function openViewer(rawStatus: number, body?: string) {
-  stub(rawStatus, body);
+async function openViewer(rawStatus: number, body?: string, error?: unknown) {
+  stub(rawStatus, body, error);
   render(<OncallSetup projectId="p1" integrations={[INTEGRATION]} onClose={() => {}} />, { wrapper });
   const btn = await screen.findByRole('button', { name: /view payload/i }, { timeout: 3_000 });
   fireEvent.click(btn);
@@ -79,6 +81,25 @@ describe('the refused-payload viewer', () => {
     });
     expect(dialog.textContent, 'and name the two retentions that differ').toMatch(/30 days/);
     expect(dialog.textContent).toMatch(/7/);
+    // Both windows are server settings (BATONDECK_RETENTION_*_DAYS), so the numbers are the defaults.
+    expect(dialog.textContent, 'the numbers are defaults, not facts about this server').toMatch(/by default/i);
+  });
+
+  it('a refusal that is NOT an aged-out body says what went wrong, not "nothing went wrong"', async () => {
+    const dialog = await openViewer(500, undefined, { code: 'INTERNAL', message: 'Internal error' });
+    await waitFor(() => {
+      expect(dialog.textContent, 'the error is shown').toMatch(/Internal error/);
+    });
+    expect(dialog.textContent, 'a 500 is not an aged-out payload').not.toMatch(/no longer stored/i);
+    expect(dialog.textContent).not.toMatch(/nothing went wrong/i);
+  });
+
+  it("a 403 shows the server's reason", async () => {
+    const dialog = await openViewer(403, undefined, { code: 'FORBIDDEN', message: 'only a project master reads raw bodies' });
+    await waitFor(() => {
+      expect(dialog.textContent).toMatch(/only a project master reads raw bodies/);
+    });
+    expect(dialog.textContent).not.toMatch(/no longer stored/i);
   });
 
   it('POSITIVE CONTROL: a live payload is shown, and shown as TEXT', async () => {
@@ -91,5 +112,20 @@ describe('the refused-payload viewer', () => {
     // from the payload rather than trusting that.
     expect(dialog.querySelector('img'), 'the payload was interpreted as markup').toBeNull();
     expect(dialog.querySelector('pre'), 'the payload renders in a pre, uninterpreted').toBeTruthy();
+  });
+
+  it('Escape closes the payload dialog, not the setup drawer behind it', async () => {
+    // Both listen on window: the dialog's Escape also reached the drawer's handler and closed the
+    // whole drawer, losing the delivery log and anything half-typed in the editor.
+    stub(200);
+    const onClose = vi.fn();
+    render(<OncallSetup projectId="p1" integrations={[INTEGRATION]} onClose={onClose} />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: /view payload/i }, { timeout: 3_000 }));
+    await screen.findByRole('dialog', { name: /refused payload/i });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /refused payload/i }), 'the payload dialog closes').toBeNull();
+    expect(onClose, 'the drawer closed along with the dialog').not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose, 'a second Escape closes the drawer as before').toHaveBeenCalledTimes(1);
   });
 });

@@ -214,29 +214,65 @@ export function createBodyOf(f: FormState, source: OncallSource): CreateIntegrat
  * The edit body. `auth` is OMITTED unless the operator actually supplied new material: sending it
  * unchanged would re-run `buildAuth`, which MINTS a fresh hmac secret — silently rotating the
  * integration on every save and breaking the live sender.
+ *
+ * A CLEARED SETTING MUST BE SAID, because the core reads an absent field as "unchanged". It clears
+ * the target column only on an explicit `null`, and it replaces the stored mapping whole with any
+ * mapping the patch carries — so when the operator has cleared the last mapping setting, the patch
+ * carries `mapping: {}`.
  */
 export function patchBodyOf(f: FormState, source: OncallSource, current: Integration): IntegrationPatchBody {
   const modeChanged = f.authMode !== current.auth.mode;
   const suppliedMaterial =
     (f.authMode === 'api_key' || f.authMode === 'basic') && f.apiKey.trim().length > 0;
-  const suppliedJwt = f.authMode === 'jwt' && f.jwtIssuer.trim().length > 0;
+  const suppliedJwt = f.authMode === 'jwt' && jwtTyped(f);
   const suppliedExternal = f.authMode === 'hmac' && f.externalSecret.trim().length > 0;
   const sendAuth = modeChanged || suppliedMaterial || suppliedJwt || suppliedExternal;
+  const body = commonBody(f, source.id === 'webhook');
+  const clearsColumn = !trimmed(f.columnId) && Boolean(current.target.columnId);
+  const clearsMapping = !body.mapping && Object.keys(current.mapping ?? {}).length > 0;
   return {
-    ...commonBody(f, source.id === 'webhook'),
+    ...body,
+    ...(clearsColumn ? { columnId: null } : {}),
+    ...(clearsMapping ? { mapping: {} } : {}),
     ...(sendAuth ? { auth: authOf(f) } : {}),
   };
 }
 
-/** True when this form can be submitted — the fields the core would refuse without. */
-export function formProblems(f: FormState, source: OncallSource, isCreate: boolean): string[] {
+/** True when the operator typed any jwt setting, a pin included: on an edit, that is new auth. */
+const jwtTyped = (f: FormState): boolean =>
+  [f.jwtIssuer, f.jwtAudience, f.jwtJwksUrl, f.jwtSubject, f.jwtEmail].some((v) => v.trim().length > 0);
+
+/**
+ * True when this form can be submitted — the fields the core would refuse without.
+ *
+ * `currentMode` is the edited integration's stored auth mode (absent on create). The server's view
+ * of an integration carries no issuer, audience or JWKS URL, so an edit opens with them blank, and
+ * blank then means "keep what is configured" (`patchBodyOf` sends no auth). They are required on
+ * create, on a switch to jwt, and once any jwt field (a pin included) is typed, because the patch
+ * then sends the whole block.
+ * A key mode likewise keeps its stored key on a blank edit, but a switch into api_key or basic has
+ * no key to keep, and the core refuses that patch without one.
+ */
+export function formProblems(
+  f: FormState,
+  source: OncallSource,
+  isCreate: boolean,
+  currentMode?: IntegrationAuthMode,
+): string[] {
   const out: string[] = [];
   if (!f.name.trim()) out.push('Name is required.');
   if (!f.boardId.trim()) out.push('Target board id is required.');
-  if (isCreate && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
+  // A key mode keeps its stored key on a blank edit, but a switch INTO one has no key to keep.
+  const keyNeeded = isCreate || f.authMode !== currentMode;
+  if (keyNeeded && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
     out.push('This mode needs a key — generate one.');
   }
-  if (f.authMode === 'jwt' && (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())) {
+  const jwtNeeded = isCreate || f.authMode !== currentMode || jwtTyped(f);
+  if (
+    f.authMode === 'jwt' &&
+    jwtNeeded &&
+    (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())
+  ) {
     out.push('JWT mode needs an issuer, an audience and a JWKS URL.');
   }
   // PagerDuty signs with its OWN secret; the core refuses a mint. Saying so here turns a server
@@ -255,15 +291,20 @@ export function IntegrationForm({
   form,
   set,
   isCreate,
+  currentMode,
   onGenerateKey,
 }: {
   source: OncallSource;
   form: FormState;
   set: (patch: Partial<FormState>) => void;
   isCreate: boolean;
+  /** The edited integration's stored auth mode; absent on create. */
+  currentMode?: IntegrationAuthMode;
   onGenerateKey: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Blank auth fields keep the stored ones only on an edit that stays in the stored mode.
+  const keepsAuth = !isCreate && form.authMode === currentMode;
   const isWebhook = source.id === 'webhook';
   const setExtract = (patch: Partial<FormState['extract']>): void =>
     set({ extract: { ...form.extract, ...patch } });
@@ -323,7 +364,7 @@ export function IntegrationForm({
 
           {(form.authMode === 'api_key' || form.authMode === 'basic') && (
             <Field2
-              label={isCreate ? 'Key' : 'New key (leave blank to keep the current one)'}
+              label={keepsAuth ? 'New key (leave blank to keep the current one)' : 'Key'}
               hint={
                 form.authMode === 'basic'
                   ? 'Sent as the PASSWORD of HTTP Basic; the username is ignored. Stored as a hash — shown once.'
@@ -338,7 +379,7 @@ export function IntegrationForm({
                   aria-label="API key"
                   value={form.apiKey}
                   onChange={(e) => set({ apiKey: e.target.value })}
-                  placeholder={isCreate ? 'generate, or paste your own' : 'unchanged'}
+                  placeholder={keepsAuth ? 'unchanged' : 'generate, or paste your own'}
                 />
                 <button className="btn secondary" type="button" onClick={onGenerateKey}>
                   Generate
@@ -368,12 +409,13 @@ export function IntegrationForm({
 
           {form.authMode === 'jwt' && (
             <Stack gap={12}>
-              {/* The stored jwt block is never shown back, so an edit cannot prefill it: what is
-                  saved here replaces it whole, pins included. */}
-              {!isCreate && (
+              {/* The stored jwt block is never shown back, so an edit cannot prefill it: blank keeps
+                  it whole, pins included, and anything typed replaces it whole. */}
+              {keepsAuth && (
                 <Note>
-                  The JWT settings are not shown back. Filling them in replaces all of them, so
-                  re-enter the pins too: a blank pin removes the one stored.
+                  The configured issuer, audience, JWKS URL and pins are not shown back. Leave them all
+                  blank to keep them; to change any, type the issuer, audience and JWKS URL and re-enter
+                  the pins too: a blank pin then removes the one stored.
                 </Note>
               )}
               <TextField

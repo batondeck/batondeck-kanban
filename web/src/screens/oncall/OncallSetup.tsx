@@ -3,11 +3,13 @@
  * the ones that exist, and read each one's delivery log.
  *
  * TWO SAFETY PROPERTIES THIS FILE OWNS, both about bytes we did not write:
- *  1. A REJECTED delivery's payload is never rendered. The error string is shown as an escaped text
- *     node (React's default), and the payload itself is only ever reachable through a real
- *     navigation to the attachment route — never fetched and injected.
- *  2. A minted credential is displayed EXACTLY ONCE, in a panel the operator must dismiss. Nothing
- *     re-reads it, because nothing can: the server keeps only an encrypted or hashed copy.
+ *  1. A REJECTED delivery's payload is never rendered as markup. The error string and the payload
+ *     the refused-payload dialog fetches are shown as escaped text nodes (React's default), never
+ *     injected (see `RawPayloadDialog`).
+ *  2. A minted credential is displayed EXACTLY ONCE, in a panel that stays until the operator says
+ *     they stored it: while it shows, a click on the overlay and Escape are ignored, and only the
+ *     drawer's explicit Close button leaves without that confirmation. Nothing re-reads it, because
+ *     nothing can: the server keeps only an encrypted or hashed copy.
  *
  * THE SOURCE LIST IS NO LONGER HERE. It was — a hand-mirrored copy of the core's catalog, including
  * each vendor's auth capability, kept honest by a lexical drift test. It now arrives from
@@ -19,6 +21,7 @@ import { closedWhy, mayCall } from '../../toolFloors.js';
 import { Icon } from '../../icons.js';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as oncallApi from '../../api/oncall.js';
+import { ApiError } from '../../api/http.js';
 import type { Delivery, Integration, OncallSource } from '../../types.js';
 import { Cluster, Empty, Note, Panel, Pill, Stack } from '../../ui.js';
 import { ConfirmButton, timeAgo } from '../../components.js';
@@ -43,10 +46,15 @@ const mintKey = (): string => randomHex(32);
  * The refused payload of one delivery, in a dialog.
  *
  * THIS REPLACED A DOWNLOAD LINK THAT COULD NOT WORK MOST OF THE TIME. The delivery ROW is kept for
- * `INGEST_DELIVERY_RETENTION_DAYS` (30); the raw body only for `INGEST_RAW_RETENTION_DAYS` (7). So
- * for 23 of those 30 days the button was offered, the payload was already TTL-deleted, and clicking
- * it navigated to a bare 404 with no explanation — reported from staging as "download doesn't work".
- * A dialog can say WHY, which a navigation cannot.
+ * `BATONDECK_RETENTION_DELIVERIES_DAYS` (default 30); the raw body only for
+ * `BATONDECK_RETENTION_RAW_BODIES_DAYS` (default 7). So for 23 of those 30 days the button was
+ * offered, the payload was already TTL-deleted, and clicking it navigated to a bare 404 with no
+ * explanation — reported from staging as "download doesn't work". A dialog can say WHY, which a
+ * navigation cannot.
+ *
+ * ONLY A 404 IS "AGED OUT". A 403 (the caller's role changed), a 500 or a network failure is shown as
+ * the error it is: telling the operator "nothing went wrong" would send them away from a real fault.
+ * The two windows are server settings the browser cannot read, so the note gives them as defaults.
  *
  * RENDERED AS AN ESCAPED TEXT NODE, never as markup. These are unauthenticated attacker-controlled
  * bytes. The old route's defence was to refuse to render them at all (octet-stream + attachment +
@@ -72,15 +80,21 @@ function RawPayloadDialog({
     retry: false,
   });
   // Escape closes, and focus starts on the dialog, so a keyboard user is not stranded behind it.
+  // Heard in the CAPTURE phase and stopped there: the setup drawer behind listens for Escape on
+  // window too, and without this one key closed both, losing the drawer and its editor.
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.focus();
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
 
-  const expired = q.isError;
+  const expired = q.error instanceof ApiError && q.error.status === 404;
   return (
     <div className="raw-dialog-scrim" onClick={onClose}>
       <div
@@ -104,10 +118,14 @@ function RawPayloadDialog({
         {q.isLoading && <p className="muted">Loading…</p>}
         {expired && (
           <Note>
-            This payload is no longer stored. A delivery’s log entry is kept for 30 days, but the raw
-            body it refused is kept for 7 — so the record of the refusal outlives the bytes that
-            caused it. Nothing went wrong; there is simply nothing left to show.
+            This payload is no longer stored. A refused body is kept for less time than its delivery’s
+            log entry — by default 7 days against 30 days, as the server’s retention settings decide —
+            so the record of the refusal can outlive the bytes that caused it. Nothing went wrong;
+            there is simply nothing left to show.
           </Note>
+        )}
+        {q.isError && !expired && (
+          <Note>Could not load this payload: {q.error.message}</Note>
         )}
         {q.data && (
           // Escaped text, never markup — see the docblock above.
@@ -404,7 +422,7 @@ export function OncallSetup({
     kind: 'hmac' | 'api_key';
   } | null>(null);
   /**
-   * The api_key we minted for THIS create, held until the server confirms it.
+   * The api_key sent by THIS create or Edit save, held until the server confirms it.
    *
    * An API key is hashed server-side and never returned, so if it is not held here it cannot be
    * shown and the integration is unusable. This bug shipped once already — four sources produced
@@ -438,6 +456,10 @@ export function OncallSetup({
 
   // TaskDrawer's conventions: focus the dialog once, Escape blurs a focused field first so a typing
   // operator is never one keystroke from losing the form, and only a second Escape closes.
+  // WHILE A SECRET IS SHOWN, neither Escape nor the overlay closes the drawer: the panel holds the
+  // only copy, and a stray key or click would lose it for good. "I have stored it" dismisses the
+  // panel; the Close button stays the explicit way out.
+  const secretShown = shownSecret !== null;
   useEffect(() => {
     dialogRef.current?.focus();
   }, []);
@@ -449,11 +471,12 @@ export function OncallSetup({
         el.blur();
         return;
       }
+      if (secretShown) return;
       onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, secretShown]);
 
   const invalidate = (): void => {
     void qc.invalidateQueries({ queryKey: ['oncall-integrations', projectId] });
@@ -484,7 +507,10 @@ export function OncallSetup({
     },
     // Tier refusals come from the CORE and are shown verbatim — the drawer never guesses at a
     // caller's role, which would be a second authorization model to keep in sync.
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      mintedApiKey.current = null;
+      setError(e.message);
+    },
   });
   const save = useMutation({
     gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
@@ -495,10 +521,18 @@ export function OncallSetup({
       setEditing(false);
       if (res.integration && 'secret' in res && typeof res.secret === 'string') {
         setShownSecret({ secret: res.secret, path: res.integration.endpointPath, kind: 'hmac' });
+      } else if (res.integration && mintedApiKey.current) {
+        // A new api_key/basic key set from Edit: the answer is `{integration}` only, exactly as on
+        // create, so the key the drawer sent is the only copy — shown once here or never.
+        setShownSecret({ secret: mintedApiKey.current, path: res.integration.endpointPath, kind: 'api_key' });
       }
+      mintedApiKey.current = null;
       invalidate();
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => {
+      mintedApiKey.current = null;
+      setError(e.message);
+    },
   });
   const rotate = useMutation({
     gcTime: 0, // a secret in the response or the variables leaves memory with the drawer
@@ -546,7 +580,7 @@ export function OncallSetup({
   const active = integrations.find((i) => i.id === selected) ?? null;
   const activeSource = active ? sourceOf(active.source) : undefined;
   const formSource = creating instanceof Object ? creating : activeSource;
-  const problems = formSource ? formProblems(form, formSource, creating !== null) : [];
+  const problems = formSource ? formProblems(form, formSource, creating !== null, active?.auth.mode) : [];
   const set = (patch: Partial<FormState>): void => setForm((f) => ({ ...f, ...patch }));
 
   /**
@@ -566,7 +600,7 @@ export function OncallSetup({
   const cancelToList = (): void => setCreating('picking');
 
   return (
-    <div className="drawer-overlay" onClick={onClose}>
+    <div className="drawer-overlay" onClick={secretShown ? undefined : onClose}>
       <div
         className="drawer"
         role="dialog"
@@ -882,6 +916,7 @@ export function OncallSetup({
                     form={form}
                     set={set}
                     isCreate={false}
+                    currentMode={active.auth.mode}
                     onGenerateKey={() => set({ apiKey: mintKey() })}
                   />
                   {problems.length > 0 && (
@@ -899,11 +934,10 @@ export function OncallSetup({
                       disabled={!mayConfigure || save.isPending || problems.length > 0}
                       {...configureClosed}
                       onClick={() => {
-                        mintedApiKey.current = null;
-                        save.mutate({
-                          i: active,
-                          patch: patchBodyOf(form, activeSource, active),
-                        });
+                        const patch = patchBodyOf(form, activeSource, active);
+                        // Held BEFORE the call, as on create: a new key is answered by no secret.
+                        mintedApiKey.current = patch.auth?.apiKey ? patch.auth.apiKey : null;
+                        save.mutate({ i: active, patch });
                       }}
                     >
                       {save.isPending ? 'Saving…' : 'Save changes'}

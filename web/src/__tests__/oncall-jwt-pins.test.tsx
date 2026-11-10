@@ -9,7 +9,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { useState } from 'react';
 import { fireEvent, render, screen, cleanup } from '@testing-library/react';
-import { IntegrationForm, blankForm, createBodyOf, type FormState } from '../screens/oncall/IntegrationForm.js';
+import { IntegrationForm, blankForm, createBodyOf, formProblems, type FormState } from '../screens/oncall/IntegrationForm.js';
 import type { OncallSource } from '../types.js';
 
 const WEBHOOK: OncallSource = {
@@ -32,6 +32,7 @@ function Harness({ isCreate = true }: { isCreate?: boolean }) {
       form={form}
       set={(p) => setForm((f) => ({ ...f, ...p }))}
       isCreate={isCreate}
+      currentMode={isCreate ? undefined : 'jwt'}
       onGenerateKey={() => {}}
     />
   );
@@ -62,10 +63,18 @@ describe('the jwt auth fields', () => {
   // left blank there removes the stored one, and the form says so before the save.
   it('say on an edit that the settings are replaced whole and a blank pin removes the stored one', () => {
     render(<Harness isCreate={false} />);
-    expect(screen.getByText(/a blank pin removes the one stored/i)).toBeTruthy();
+    expect(screen.getByText(/a blank pin then removes the one stored/i)).toBeTruthy();
     cleanup();
     render(<Harness />);
-    expect(screen.queryByText(/a blank pin removes the one stored/i), 'a new integration has nothing stored').toBeNull();
+    expect(screen.queryByText(/a blank pin then removes the one stored/i), 'a new integration has nothing stored').toBeNull();
+  });
+
+  it('on an edit, a pin typed alone asks for the whole block instead of being dropped', () => {
+    // Blank keeps the stored block, pins included; anything typed replaces it whole, so a pin
+    // typed without the issuer, audience and JWKS URL would otherwise be sent nowhere.
+    const pinOnly: FormState = { ...blankForm(WEBHOOK), name: 'CI alerts', boardId: 'B-1', authMode: 'jwt', jwtSubject: 'repo:acme/app:ref:refs/heads/main' };
+    expect(formProblems(pinOnly, WEBHOOK, false, 'jwt')).toContain('JWT mode needs an issuer, an audience and a JWKS URL.');
+    expect(formProblems({ ...pinOnly, jwtSubject: '' }, WEBHOOK, false, 'jwt'), 'all blank keeps the block').toEqual([]);
   });
 
   it('send no pin that was left blank (control)', () => {

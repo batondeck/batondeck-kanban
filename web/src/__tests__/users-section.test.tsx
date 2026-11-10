@@ -4,7 +4,8 @@
  * generated password once, and offers no disable, password or role control.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within, waitFor } from '@testing-library/react';
+import type { QueryClient as QC } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router';
 
 afterEach(() => {
@@ -14,7 +15,7 @@ afterEach(() => {
 
 let fetched: string[] = [];
 
-async function mount(permissions: string[]): Promise<void> {
+async function mount(permissions: string[]): Promise<QC> {
   fetched = [];
   const users = [
     { id: 'U-1', login: 'root', displayName: 'root', role: 'admin', disabled: false, createdAt: 1 },
@@ -49,6 +50,7 @@ async function mount(permissions: string[]): Promise<void> {
     </QueryClientProvider>,
   );
   await screen.findByRole('heading', { name: 'Board Configuration' });
+  return qc;
 }
 
 describe('Settings → Users', () => {
@@ -75,5 +77,22 @@ describe('Settings → Users', () => {
     expect(screen.queryByRole('table', { name: 'Users' })).toBeNull();
     expect(screen.queryByText('Add user')).toBeNull();
     expect(fetched.filter((f) => f.endsWith(' /api/users'))).toEqual([]);
+  });
+});
+
+describe('Settings → Users: the initial password leaves memory', () => {
+  // The token mint beside this panel uses gcTime 0 and reset() on Done for exactly this reason: the
+  // add answer carries the plaintext, and a mutation's data outlives the panel that showed it.
+  it('is in no mutation once Done is pressed', async () => {
+    const qc = await mount(['batondeck:superadmin']);
+    const held = () =>
+      qc.getMutationCache().getAll().filter((m) => JSON.stringify(m.state.data ?? null).includes('generated-once-0123456789')).length;
+    await screen.findByRole('table', { name: 'Users' });
+    fireEvent.change(screen.getByLabelText('New user login'), { target: { value: 'bob' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }));
+    expect(await screen.findByText('generated-once-0123456789')).toBeInTheDocument();
+    expect(held(), 'the add answer is held while it is shown').toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(held(), 'the password is still in the mutation cache after Done').toBe(0));
   });
 });

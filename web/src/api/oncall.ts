@@ -1,6 +1,6 @@
 // The on-call routes of internal/api/oncall.go (R2.10): the source catalog, integrations, and each one's delivery log.
 import type { CreateIntegrationBody, Delivery, Integration, IntegrationPatchBody, OncallSource } from '../types.js';
-import { req, ON } from './http.js';
+import { ApiError, req, ON } from './http.js';
 
 // --- on-call integrations (spec §9/§10) ---
 /** The source catalog, SERVED rather than mirrored — see the route's docblock in the gateway. */
@@ -87,15 +87,18 @@ export const rawDeliveryUrl = (projectId: string, integrationId: string, deliver
  * The same bytes, as TEXT, for the in-app viewer.
  *
  * Decoded here rather than rendered by the browser: the caller puts it in a React text node, which
- * escapes it, so hostile bytes cannot become markup. Rejects when the payload has aged out — the
- * log entry survives 30 days and the body only 7, and the viewer explains that rather than showing
- * an empty box.
+ * escapes it, so hostile bytes cannot become markup. Rejects with an ApiError carrying the status and
+ * the core's message: a 404 is a payload that has aged out (by default the log entry survives 30 days
+ * and the body only 7), which the viewer explains; any other refusal is shown as what it is.
  */
 export const readDeliveryRaw = async (projectId: string, integrationId: string, deliveryId: string): Promise<{ payload: string }> => {
   const res = await fetch(
     `${ON(projectId)}/integrations/${integrationId}/deliveries/${encodeURIComponent(deliveryId)}/raw`,
     { credentials: 'include' },
   );
-  if (!res.ok) throw new Error(`payload unavailable (${res.status})`);
+  if (!res.ok) {
+    const j = (await res.json().catch(() => ({}))) as { code?: string; message?: string };
+    throw new ApiError(res.status, j.code ?? 'INTERNAL', j.message ?? `payload unavailable (${res.status})`);
+  }
   return { payload: await res.text() };
 };
