@@ -1,7 +1,34 @@
 # batondeck-kanban
 
-An open-source, self-hosted BatonDeck: one Go binary that serves the MCP task orchestrator (agents claim,
-complete and are woken on dependency-gated tasks) and the embedded React UI for the humans on the board.
+A self-hosted kanban board where people plan tasks and coding agents claim them over MCP.
+
+One Go binary, `batondeck-kanban serve`, is both the web UI for people and the MCP server for agents
+(Claude Code, Codex CLI, Gemini CLI, Cursor), on SQLite or Postgres. An agent asks the board for the
+next ready task instead of picking its own, so two agents never take the same task and none starts
+before its prerequisites are done; what it decided and tried stays on the task for the next session.
+With the Claude Code plugin, new work wakes an idle session on the same machine.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/board-dark.png">
+  <img alt="A board with three tasks blocked on dependencies, one claimed by an agent under a five-minute lease, and one waiting in Review" src="docs/images/board-light.png">
+</picture>
+
+## What you get
+
+- **A board.** Five states (TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE), drag and drop, live updates.
+- **Leases.** `claim_next` gives each task to one agent at a time; when a lease runs out (five minutes
+  unless renewed), another agent can take the task.
+- **Dependencies.** A task cannot be claimed until its blockers are DONE.
+- **Context.** Notes, decisions, memory and artifacts stay on the task.
+- **Review.** Completed work waits in REVIEW until a reviewer with the master role accepts it or sends
+  it back.
+- **Roles and tokens.** Five roles from viewer to admin, API tokens that expire, OAuth 2.1 for remote
+  connectors, an audit log.
+
+How a task moves: a person or a master agent plans tasks with priorities and dependencies; a worker
+agent calls `claim_next` and gets the best ready task under a lease; it renews the lease while it
+works and records what it did; `complete_task` moves the task to REVIEW; when a reviewer moves it to
+DONE, the tasks that waited on it become claimable.
 
 Status: 0.1.0, the first release (`CHANGELOG.md`), from its tag `v0.1.0`: its binaries and
 checksums are on the release page, the image is `ghcr.io/batondeck/batondeck-kanban:0.1.0`, or build
@@ -48,11 +75,14 @@ batondeck-kanban serve          # leave it running; the next steps are in anothe
 **Or the image**, on Postgres 16, with `compose.yaml` from this repository. On Postgres there is no
 `master.key` file beside a SQLite file, so the key comes from `.env`, and so does the database
 password (hex, since it goes into the connection URL unescaped); compose refuses to start without
-either.
+either. `.env` holds both secrets, so it is made readable by you alone (`umask 077`), and the
+repository's `.gitignore` keeps it out of a commit.
 
 ```bash
-printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
-printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
+git clone https://github.com/batondeck/batondeck-kanban.git && cd batondeck-kanban
+( umask 077
+  printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+  printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env )
 docker compose up -d --wait    # returns once the board answers its health check
 curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 ```
@@ -60,9 +90,11 @@ curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 In the steps below, run `batondeck-kanban …` as `docker compose exec -T batondeck-kanban
 batondeck-kanban …`. The image serves the web UI, `/mcp` and pull clients; the plugin's device wake
 (step 4) needs the binary on the machine the Claude Code sessions run on, because the server watches
-each registered session's process and writes into that session's own socket.
+each registered session's process and writes into that session's own socket. Such a server may share
+the image's Postgres database: each machine's server names its sessions with its own device id (the
+`device-id` file in its data dir) and leaves the other machines' sessions alone.
 
-### 2. The first admin and a token
+### 2. The first admin, a token and a board
 
 There is no sign-up page: accounts are made on the host. The password (12 characters or more) is
 read from stdin, never from a terminal, so it is not echoed:
@@ -74,7 +106,15 @@ batondeck-kanban token create --user you@example.com
 
 `token create` prints the token (`bd_…`) once, on stdout; it lives 30 days unless `--ttl` says
 otherwise. The same login and password sign in to the web UI at `http://localhost:8080`, where
-Settings → CLI tokens makes more.
+Settings → CLI tokens makes more. A teammate added under Settings → Users gets a generated password,
+shown once to the admin who added them; they replace it under Settings → Your password, which
+signs out their other sessions.
+
+The server starts empty. In the web UI, type a name on the Projects page and press **New project**,
+then open the project: its first board is created when you first open it, and **+ New task** adds a
+task. The board's address, `/projects/<projectId>/boards/<boardId>`, carries the two ids an agent's
+`claim_next` takes (step 5). An agent with the master role can do the same over MCP:
+`create_project`, `create_board`, `create_task`.
 
 ### 3. Claude Code
 
@@ -93,7 +133,7 @@ SessionEnd hook removes it, so the server rings the session over its own messagi
 is assigned to it or becomes claimable, and Claude Code starts a turn, even in an idle session.
 
 ```bash
-git clone https://github.com/batondeck/batondeck-kanban.git
+git clone https://github.com/batondeck/batondeck-kanban.git    # unless step 1 already did
 export BATONDECK_TOKEN=<token>
 export BATONDECK_LISTEN=tcp://127.0.0.1:8080,unix://$HOME/.batondeck/bk.sock
 claude --plugin-dir batondeck-kanban/plugin
@@ -123,11 +163,35 @@ export BATONDECK_PUBLIC_URL=https://board.example.com
 ```
 
 `public_url` is also the base of the signed attachment links. Unset, each link takes the host the
-client reached the server at, so behind a proxy that rewrites the Host header, set it.
+client reached the server at, so behind a proxy that rewrites the Host header, set it. The web UI
+uploads and shows attachments at whatever address it was opened at, `public_url` or not.
+
+The web UI's live board is a server-sent event stream, `/api/stream`, with a `ping` every 20 s. The
+server asks nginx not to buffer it (`X-Accel-Buffering: no`); behind another proxy, turn response
+buffering off for `/api/stream` and keep its read timeout above 20 s, or the board stops updating
+live and keeps reconnecting. Each tab on screen holds one such stream; a tab hidden for 10 s gives
+its stream back until it is shown again, since over plain HTTP a browser holds at most six
+connections to one server.
+
+Have the proxy forward the original `Host` and send `X-Forwarded-Proto: https` and
+`X-Forwarded-For`; nginx's bare `proxy_pass` sends none of them, so add
+`proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. With an https `public_url` the
+sign-in cookies are `Secure` whatever the proxy sends; without one they are `Secure` only on a
+request that arrived over TLS or says `X-Forwarded-Proto: https`, and otherwise a later plain-http
+request would carry the session in clear. Once `public_url` is https, reach the board through the
+proxy only: a browser keeps no `Secure` cookie sent over plain http (localhost aside), so signing in
+at `http://<lan-address>:8080` directly brings you back to the sign-in page.
+
+If signing in answers **cross-site request refused** (403), the server judged the browser's
+`Origin` to be another site's: the proxy rewrote `Host` (nginx's bare `proxy_pass` sends its
+upstream's) or the scheme. Forward `Host` and `X-Forwarded-Proto` as above, or set `public_url`
+to the address the browser uses.
 
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
-address) would count all your users as one: ten mistyped passwords lock everyone out until the
+address, 500 an hour in all; an IPv6 address counts by its /64 in both) would count all your users
+as one: ten mistyped passwords lock everyone out until the
 budget refills, and a steady trickle of wrong ones keeps them out. Name the proxy and the server
 counts each client by the address the proxy appends to `X-Forwarded-For` instead:
 
@@ -157,10 +221,19 @@ tried from claude.ai itself.
 | a file path, such as `/srv/batondeck/batondeck-kanban.db` (relative paths are relative to the working directory) | SQLite, the default |
 | `postgres://user:password@host:5432/dbname?sslmode=disable` (or `postgresql://…`) | Postgres |
 
+The SQLite file is created mode 0600, and its `-wal` and `-shm` files take its mode, so a
+directory other accounts can list, such as a `/srv/batondeck` made by a plain `mkdir`, does not
+open the board to them; `serve` and `doctor` warn of a file made or copied in with a looser mode.
 SQLite runs with `synchronous=FULL`. `BATONDECK_DATABASE_SYNCHRONOUS=NORMAL` (`database.synchronous`)
 opts into `NORMAL` for write throughput: in WAL mode the file stays consistent, but the last
 transactions before a power loss may be lost. `batondeck-kanban serve -h` lists every
 `BATONDECK_*` variable with its default, and how the config file and the environment combine.
+
+Attachments are files in the blob dir (`BATONDECK_BLOB_DIR`, by default `blobs` beside the SQLite
+file), each at most `BATONDECK_BLOB_MAX_BYTES` (50 MiB). `serve` keeps 512 MiB free on the blob dir's
+disk, so attachments cannot fill the disk the database writes to: an attachment that would leave less
+is refused (`QUOTA_EXCEEDED` from `attach_file`, 507 from its upload), even though `df` still shows
+that space available. Put the blob dir on a disk with room to spare.
 
 ### doctor
 
@@ -169,8 +242,19 @@ batondeck-kanban doctor
 ```
 
 checks the config and names the engine the connection itself reports (`the connection reports:
-SQLite 3.x`, or the Postgres server version), the store's location and the blob dir, and exits non-zero
-on a failure.
+SQLite 3.x`, or the Postgres server version), the store's location and the blob dir. Then it checks
+what `serve` refuses to start on: the schema (newer than the binary's fails; not migrated yet is a
+warning, since `serve` migrates it), the master key (`BATONDECK_MASTER_KEY`, or `master.key`'s mode
+and length) and whether the blob dir can be written. It creates none of them, and exits non-zero on
+a failure.
+
+### On-call webhooks
+
+A workspace admin can turn alerts from Grafana, Alertmanager, Datadog, Dynatrace, Google Cloud
+Monitoring, PagerDuty or any tool that can POST JSON into incident tickets: **On-call**, then
+**Setup**, in the web UI, or the `create_integration` tool. Each integration has its own URL,
+`<server>/hooks/<id>`. [docs/oncall.md](docs/oncall.md) says how a sender signs or authenticates a
+delivery, the payload each source sends, and the answers it gets back.
 
 ## Backup and restore
 
@@ -179,8 +263,9 @@ seals the secrets the database holds (each on-call integration's signing secret,
 directory's inbox tokens) and signs the attachment links. Restored under another key, the board, its
 tasks and its attachments come back, but no sealed secret opens: every delivery to an HMAC-signed
 on-call integration is refused 401. Keep the key with the backup, and keep both where only you can read
-them. Stop the server first, so the database and the blobs are copied at the same moment: the binary
-has no online backup.
+them. `serve` makes a new key when it finds none and says so, as a warning when the database already
+holds secrets sealed under another key. Stop the server first, so the database and the blobs are
+copied at the same moment: the binary has no online backup.
 
 **The binary, on SQLite.** By default everything is in one directory, `$XDG_DATA_HOME/batondeck-kanban`
 (else `~/.local/share/batondeck-kanban`): the SQLite file `batondeck-kanban.db` (with `-wal` and
@@ -235,6 +320,10 @@ docker compose up -d --wait
 
 `curl -fsS http://127.0.0.1:8080/healthz` then answers, and the board has its tasks and their
 attachments back.
+
+Either way, start the board only once its database is back, and only against its own. Its hourly
+sweep removes blob files over an hour old that no row in the database names. It keeps them all when
+most of the files it checks have no row, but do not lean on that.
 
 ## Performance
 
@@ -315,4 +404,5 @@ The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (32.4 ms).
 See [CONTRIBUTING.md](CONTRIBUTING.md) to build, test and send a change. Report a vulnerability
 privately, as [SECURITY.md](SECURITY.md) describes, not in a public issue.
 
-License: Apache-2.0 (`LICENSE`, `NOTICE`).
+License: Apache-2.0 (`LICENSE`, `NOTICE`). What the binary redistributes is in `THIRD_PARTY_NOTICES`;
+`batondeck-kanban licenses` prints all three from the binary itself.

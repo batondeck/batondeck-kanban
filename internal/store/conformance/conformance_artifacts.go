@@ -227,6 +227,25 @@ func comments(t *testing.T, newStore Factory) {
 			wantErr(t, err, domain.CodeNotFound, "Task")
 		})
 
+		t.Run("AReplyNamesACommentOfTheSameTask", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			tasks := seedTasks(t, sd, p, b, "a", "b")
+			elsewhere := add(t, s, p, tasks[1], "on b")
+			for _, parent := range []string{"CM-missing", elsewhere.ID} {
+				_, err := s.AddComment(ctx, store.AddCommentInput{ProjectID: p, TaskID: tasks[0], Author: "alice", Body: "reply", ParentCommentID: &parent})
+				wantErr(t, err, domain.CodeNotFound, "Comment")
+			}
+			page, err := s.ListComments(ctx, p, tasks[0], store.CommentsQuery{})
+			noErr(t, err)
+			if len(page.Items) != 0 {
+				t.Fatalf("a refused reply was written: %v", bodies(page.Items))
+			}
+			// A missing task is still NotFound Task, whatever the parent.
+			parent := "CM-missing"
+			_, err = s.AddComment(ctx, store.AddCommentInput{ProjectID: p, TaskID: "T-404", Author: "alice", Body: "x", ParentCommentID: &parent})
+			wantErr(t, err, domain.CodeNotFound, "Task")
+		})
+
 		t.Run("AddAndListRefuseAMissingTask", func(t *testing.T) {
 			s, _, p, _ := seeded(t, newStore)
 			_, err := s.AddComment(ctx, store.AddCommentInput{ProjectID: p, TaskID: "T-404", Author: "alice", Body: "x"})

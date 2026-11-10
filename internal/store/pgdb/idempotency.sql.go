@@ -42,6 +42,29 @@ func (q *Queries) ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyK
 	return key, err
 }
 
+const deleteExpiredIdempotencyKeys = `-- name: DeleteExpiredIdempotencyKeys :execrows
+DELETE FROM idempotency_keys WHERE (project_id, identity, key) IN (
+  SELECT i.project_id, i.identity, i.key FROM idempotency_keys i
+  WHERE i.expires_at <= $1::bigint
+  ORDER BY i.expires_at, i.project_id COLLATE "C", i.identity COLLATE "C", i.key COLLATE "C" LIMIT $2::bigint)
+`
+
+type DeleteExpiredIdempotencyKeysParams struct {
+	Now       int64
+	PageLimit int64
+}
+
+// The retention sweep: the keys whose window ended at or before now (a replay can no longer find
+// them, and each holds a mutation's whole result), the oldest expiry first, a page at a time, through
+// idempotency_keys_expiry. A global key (create_project's) goes too.
+func (q *Queries) DeleteExpiredIdempotencyKeys(ctx context.Context, arg DeleteExpiredIdempotencyKeysParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredIdempotencyKeys, arg.Now, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteProjectIdempotencyKeys = `-- name: DeleteProjectIdempotencyKeys :exec
 DELETE FROM idempotency_keys WHERE project_id = $1
 `

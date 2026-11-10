@@ -1704,6 +1704,67 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "pointer": "/tools/create_integration/input/properties/auth/properties/jwt/properties/email",
+      "required": false,
+      "schema": {
+        "type": "string"
+      },
+      "why": "Pre-public review (2026-11-10): on a shared issuer (Google, GitHub Actions) anyone with an account can mint a correctly signed token for a chosen audience, so issuer and audience alone do not identify the sender; an optional email pin is matched against the token's email exactly, with email_verified true. No migration: the stored jwt block is JSON."
+    },
+    {
+      "pointer": "/tools/create_integration/input/properties/auth/properties/jwt/properties/subject",
+      "required": false,
+      "schema": {
+        "type": "string"
+      },
+      "why": "Pre-public review (2026-11-10): on a shared issuer (Google, GitHub Actions) anyone with an account can mint a correctly signed token for a chosen audience, so issuer and audience alone do not identify the sender; an optional subject pin is matched against the token's sub exactly. No migration: the stored jwt block is JSON."
+    },
+    {
+      "pointer": "/tools/update_integration/input/properties/patch/properties/auth/properties/jwt/properties/email",
+      "required": false,
+      "schema": {
+        "type": "string"
+      },
+      "why": "Pre-public review (2026-11-10): on a shared issuer (Google, GitHub Actions) anyone with an account can mint a correctly signed token for a chosen audience, so issuer and audience alone do not identify the sender; an optional email pin is matched against the token's email exactly, with email_verified true. No migration: the stored jwt block is JSON."
+    },
+    {
+      "pointer": "/tools/update_integration/input/properties/patch/properties/auth/properties/jwt/properties/subject",
+      "required": false,
+      "schema": {
+        "type": "string"
+      },
+      "why": "Pre-public review (2026-11-10): on a shared issuer (Google, GitHub Actions) anyone with an account can mint a correctly signed token for a chosen audience, so issuer and audience alone do not identify the sender; an optional subject pin is matched against the token's sub exactly. No migration: the stored jwt block is JSON."
+    },
+    {
+      "pointer": "/tools/list_attachments/output/properties/attachments/items/properties/fileName",
+      "required": true,
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/attachments/items/properties/fileName",
+      "required": true,
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "pointer": "/tools/list_audit_log/input/properties/cursor",
+      "required": false,
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "pointer": "/tools/list_audit_log/output/properties/nextCursor",
+      "required": false,
+      "schema": {
+        "type": "string"
+      }
     }
   ],
   "errorDeltas": [

@@ -147,3 +147,51 @@ describe('a rotated secret is shown once', () => {
     await waitFor(() => expect(held(), 'the secret outlives the drawer in the mutation cache').toEqual([]));
   });
 });
+
+describe('a shown secret is not lost to a stray click or Escape', () => {
+  // The panel is the one copy of the secret: closing the drawer unmounts it. The overlay and Escape
+  // are the two ways to close it by accident, so while the panel is up neither closes the drawer;
+  // "I have stored it" is how it goes away.
+  const SECRET = 'whsec_shown_once_guarded';
+  function mountWithRotate(): ReturnType<typeof vi.fn> {
+    stub();
+    const base = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).endsWith('/rotate-secret')
+          ? new Response(JSON.stringify({ integration: { ...INTEGRATION, version: 2 }, secret: SECRET, shownOnce: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          : base(input, init),
+      ),
+    );
+    const onClose = vi.fn();
+    render(<OncallSetup projectId="P-1" integrations={[INTEGRATION]} onClose={onClose} />, { wrapper });
+    return onClose;
+  }
+
+  it('the overlay and Escape do not close the drawer while the secret is shown', async () => {
+    const onClose = mountWithRotate();
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate secret' }));
+    await screen.findByText(SECRET);
+    const dialog = screen.getByRole('dialog', { name: 'On-call setup' });
+    fireEvent.click(dialog.parentElement!);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose, 'the drawer closed over a secret shown once').not.toHaveBeenCalled();
+    expect(screen.getByText(SECRET)).toBeInTheDocument();
+  });
+
+  it('POSITIVE CONTROL: once it is stored, the overlay and Escape close the drawer again', async () => {
+    const onClose = mountWithRotate();
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate secret' }));
+    await screen.findByText(SECRET);
+    fireEvent.click(screen.getByRole('button', { name: 'I have stored it' }));
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('dialog', { name: 'On-call setup' }).parentElement!);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});

@@ -152,7 +152,7 @@ describe('/chronicle — the index', () => {
     await waitFor(() => expect(screen.getByText('R2.7 observed: routes and screens')).toBeTruthy());
     expect(screen.getByText('Written in the browser')).toBeTruthy();
     const links = [...document.querySelectorAll('a.line-row')].map((a) => a.getAttribute('href'));
-    expect(links).toEqual(expect.arrayContaining(['/chronicle/CP-46a5d90303fe', '/chronicle/CP-c9374f93302e']));
+    expect(links).toEqual(expect.arrayContaining([`/chronicle/CP-46a5d90303fe?project=${PID}`, `/chronicle/CP-c9374f93302e?project=${PID}`]));
     // The coverage tag is read off the real `coverage` key; the null one renders nothing.
     expect(screen.getByText('full')).toBeTruthy();
     expect(screen.getByText('New record').getAttribute('href')).toBe('/chronicle/new');
@@ -198,7 +198,7 @@ describe('/chronicle/:pageId — reading a record', () => {
     expect(document.querySelector('pre.chr-mermaid-src'), 'the fence fell back to its source').toBeNull();
     // The signed download URL reaches the <img> unaltered: exp and sig are the authority (blobs.go).
     expect(screen.getByAltText('red square').getAttribute('src')).toBe(SIGNED);
-    expect(screen.getByText('History').getAttribute('href')).toBe('/chronicle/CP-46a5d90303fe/history');
+    expect(screen.getByText('History').getAttribute('href')).toBe(`/chronicle/CP-46a5d90303fe/history?project=${PID}`);
   });
 });
 

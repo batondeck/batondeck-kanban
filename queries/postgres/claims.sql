@@ -3,7 +3,8 @@
 -- with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 -- the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 -- tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
--- of that sprint (its id in sprint_ids), with only_ids (a JSON array; JSON null for no filter) only
+-- of that sprint (its id in sprint_ids) and the runs of its members (run_of a task whose sprint_ids hold
+-- it: a raced member's work is in its runs), with only_ids (a JSON array; JSON null for no filter) only
 -- the tasks it names. caps, sprint_id and only_ids are read once, as the derived table p
 -- (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 -- valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
@@ -13,11 +14,15 @@
 -- UPDATE OF f SKIP LOCKED), locked and claimed, so concurrent callers never win the same task and
 -- never wait on each other. NO KEY UPDATE, not UPDATE: the FOR KEY SHARE a concurrent child insert's
 -- foreign key check takes on the task (a comment, an event) does not conflict with it, so that task
--- is not skipped (P-96). column_id '' keeps the task's column; a column that is not the board's matches no
--- row, and the caller tells that apart from an empty frontier.
+-- is not skipped (P-96). column_id '' keeps the task's column; landing_order_key '' keeps its order
+-- key, another is the caller's fresh key at the head of the column the task lands in. A column that
+-- is not the board's matches no row, and the caller tells that apart from an empty frontier. The
+-- column's row is read FOR KEY SHARE, as GetColumn reads it, so remove_column waits for the claim
+-- (and then sees its task) or the claim waits for remove_column (and then finds no column).
 -- name: ClaimNext :one
 UPDATE tasks AS t SET status = 'IN_PROGRESS',
   column_id = CASE WHEN sqlc.arg(column_id)::text = '' THEN t.column_id ELSE sqlc.arg(column_id)::text END,
+  order_key = CASE WHEN sqlc.arg(landing_order_key)::text = '' THEN t.order_key ELSE sqlc.arg(landing_order_key)::text END,
   claim_owner = sqlc.arg(owner)::text, claim_agent = sqlc.narg(agent)::text, claim_agent_id = sqlc.narg(agent_id)::text,
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
@@ -34,10 +39,13 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
-      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text
+      FOR KEY SHARE))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
@@ -52,6 +60,7 @@ RETURNING project_id, id, board_id, column_id, title, description, status, block
 -- name: ClaimNextWaiting :one
 UPDATE tasks AS t SET status = 'IN_PROGRESS',
   column_id = CASE WHEN sqlc.arg(column_id)::text = '' THEN t.column_id ELSE sqlc.arg(column_id)::text END,
+  order_key = CASE WHEN sqlc.arg(landing_order_key)::text = '' THEN t.order_key ELSE sqlc.arg(landing_order_key)::text END,
   claim_owner = sqlc.arg(owner)::text, claim_agent = sqlc.narg(agent)::text, claim_agent_id = sqlc.narg(agent_id)::text,
   lease_id = sqlc.arg(lease_id)::text, lease_expires_at = sqlc.arg(expires_at)::bigint, next_eligible_at = NULL,
   version = t.version + 1, updated_by = sqlc.arg(owner)::text, updated_at = sqlc.arg(now)::bigint
@@ -68,10 +77,13 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
-      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text))
+      SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text
+      FOR KEY SHARE))
   ORDER BY f.score DESC,
     CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
     f.order_key COLLATE "C", f.id COLLATE "C"
@@ -93,12 +105,14 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
           OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
         ELSE f.assignee = sqlc.narg(assignee)::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+    OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+      WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
   AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key COLLATE "C", f.id COLLATE "C"
-LIMIT sqlc.arg(page_limit)::bigint;
+LIMIT sqlc.arg(page_limit)::bigint OFFSET sqlc.arg(page_offset)::bigint;
 
 -- The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
 -- caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.

@@ -43,12 +43,14 @@ func checkGrant(g domain.CapabilityGrant, s domain.GrantSubject) error {
 
 // authorize is the one membership, role-tier and capability-grant check (ADR-0003). Its order:
 // the tool's posture (an unclassified tool is FORBIDDEN, so a new tool fails closed); a workspace
-// admin flag where the posture is AdminOnly "only"; for a tenant-scoped tool, membership of
+// admin flag where the posture is AdminOnly "only"; for a tool that is not tenant-scoped and changes
+// data, the write tier against the caller's token role when it carries one; for a tenant-scoped tool, membership of
 // projectID (a missing project or membership is FORBIDDEN, never NOT_FOUND, so a project's
 // existence does not leak), the tier against the member's role capped by the caller's token role,
 // and the grant via domain.CheckGrant unless the tool is grant-exempt. Membership and grant are
-// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once. A grant on
-// a project admin is not enforced.
+// cached per (project, identity) for the access TTL; InvalidateAccess drops an entry at once in the
+// process that made the change, and ObserveChange in every other process once the bus delivers the
+// change's row. A grant on a project admin is not enforced.
 // AdminOnly "conditional" tools are listed and gated in their handler, not here.
 func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, tool string, subject domain.GrantSubject, namesTask bool) (access, error) {
 	p, ok := domain.ToolPosture(tool)
@@ -59,6 +61,12 @@ func (c *Core) authorize(ctx context.Context, caller domain.Caller, projectID, t
 		return access{}, forbidden("Workspace admin required", map[string]any{"tool": tool, "requiredCapability": "workspace-admin"})
 	}
 	if !p.TenantScoped {
+		// No project role applies, but the token's role still caps the caller: below the write
+		// tier (a viewer grant, "read boards and tasks") a tool that changes data is refused.
+		if caller.Role != "" && p.Effect != domain.EffectRead && !domain.RoleMeetsTier(domain.Role(caller.Role), domain.TierWrite) {
+			return access{}, forbidden("Role "+caller.Role+" cannot call "+tool,
+				map[string]any{"tool": tool, "role": domain.Role(caller.Role), "requiredRole": domain.TierMinRole(domain.TierWrite)})
+		}
 		return access{}, nil
 	}
 	if projectID == "" {
@@ -104,14 +112,20 @@ func effectiveRole(member domain.Role, token string) domain.Role {
 
 // InvalidateAccess drops the cached membership and grant of identityID in projectID, or of every
 // identity in it when identityID is "", so the next authorize reads them again. Every membership,
-// role or grant change calls it (add_member, remove_member, grant_capabilities, delete_project).
+// role or grant change calls it (add_member, remove_member, grant_capabilities, delete_project) in
+// the process that made it, and ObserveChange calls it in every process when the bus delivers the
+// change's row.
 func (c *Core) InvalidateAccess(projectID, identityID string) {
 	c.access.invalidate(projectID, identityID)
 	c.hidden.invalidate(identityID)
 }
 
-// accessEntry is the cached membership and grant, read through on a miss or an expired entry.
+// accessEntry is the cached membership and grant, read through on a miss or an expired entry. A
+// projectID longer than any the server makes is VALIDATION, neither looked up nor cached.
 func (c *Core) accessEntry(ctx context.Context, projectID, identityID string) (accessCached, error) {
+	if len(projectID) > maxIDLen {
+		return accessCached{}, domain.Validation("projectId is not a project id", map[string]any{"field": "projectId", "maxLength": maxIDLen})
+	}
 	now := c.now()
 	e, gen, ok := c.access.get(projectID, identityID, now)
 	if ok {
@@ -144,7 +158,8 @@ type accessCached struct {
 	expires  time.Time
 }
 
-// accessCache holds one entry per (project, identity), a non-member included, each for ttl. gen
+// accessCache holds one entry per (project, identity), a non-member included, each for ttl, and at
+// most accessCacheSweep of them (put). gen
 // counts invalidations: a read-through that began before one does not store what it read, so an
 // invalidation is never undone by a lookup already in flight.
 type accessCache struct {
@@ -154,8 +169,15 @@ type accessCache struct {
 	entries map[[2]string]accessCached
 }
 
-// accessCacheSweep is the size past which a put first drops the expired entries.
+// accessCacheSweep is the size past which a put first drops the expired entries and then, while more
+// than three quarters of it are left, any others: the cache never holds more, and the next sweep is
+// at least a quarter of it away, so a put stays amortised O(1) however many entries are live.
 const accessCacheSweep = 10_000
+
+// maxIDLen is the longest projectId authorize looks up. The server's ids are 14 bytes (P- and 12 hex
+// digits); a longer one names no project, and refusing it before the lookup keeps a caller-chosen
+// string of any size out of the access cache.
+const maxIDLen = 64
 
 func newAccessCache(ttl time.Duration) *accessCache {
 	return &accessCache{ttl: ttl, entries: map[[2]string]accessCached{}}
@@ -183,9 +205,23 @@ func (a *accessCache) put(projectID, identityID string, e accessCached, gen uint
 				delete(a.entries, k)
 			}
 		}
+		for k := range a.entries {
+			if len(a.entries) <= accessCacheSweep*3/4 {
+				break
+			}
+			delete(a.entries, k)
+		}
 	}
 	e.expires = now.Add(a.ttl)
 	a.entries[[2]string{projectID, identityID}] = e
+}
+
+// invalidateAll drops every entry.
+func (a *accessCache) invalidateAll() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.gen++
+	clear(a.entries)
 }
 
 func (a *accessCache) invalidate(projectID, identityID string) {

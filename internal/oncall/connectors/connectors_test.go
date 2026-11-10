@@ -78,7 +78,10 @@ func TestEverySourceHasAConnector(t *testing.T) {
 func TestAlertmanager(t *testing.T) {
 	evs, id := run(t, "alertmanager", nil)
 	want(t, "events", len(evs), 2)
-	want(t, "delivery id", id, `{}:{alertname="HighLatency"}`)
+	// groupKey names the group, the same on every notification of it: each event carries its own key.
+	want(t, "delivery id (none: groupKey repeats)", id, "")
+	want(t, "firing key", evs[0].DeliveryKey, "firing@2026-10-24T08:00:00.000Z")
+	want(t, "resolved key", evs[1].DeliveryKey, "resolved@2026-10-24T07:00:00.000Z..2026-10-24T07:45:00.000Z")
 	e := evs[0]
 	want(t, "fingerprint", e.Fingerprint, "a1b2c3d4e5f60718")
 	want(t, "status", e.Status, "firing")
@@ -91,6 +94,13 @@ func TestAlertmanager(t *testing.T) {
 	want(t, "resolved status", r.Status, "resolved")
 	want(t, "resolved title falls back to alertname", r.Title, "DiskFull")
 	want(t, "resolved occurredAt is endsAt", r.OccurredAt, "2026-10-24T07:45:00.000Z")
+
+	// An entry that is not an object is no alert.
+	c, _ := connectors.For("alertmanager")
+	p, _ := connectors.Decode([]byte(`{"groupKey":"g","alerts":[1,"x",null,[]]}`))
+	if evs, err := c.Events(p, connectors.Context{Now: now}); err != nil || len(evs) != 0 {
+		t.Errorf("alerts that are not objects: %d events, %v; want none", len(evs), err)
+	}
 }
 
 func TestGrafana(t *testing.T) {
@@ -98,6 +108,7 @@ func TestGrafana(t *testing.T) {
 	want(t, "events", len(evs), 1)
 	want(t, "delivery id (none: groupKey repeats)", id, "")
 	e := evs[0]
+	want(t, "no per-event key (the body's hash, which changes with the values)", e.DeliveryKey, "")
 	want(t, "fingerprint", e.Fingerprint, "5f0c2d1e9a8b7c6d")
 	want(t, "title", e.Title, "CPU above 90% on web-1")
 	want(t, "severity", e.Severity, "high")
@@ -115,6 +126,25 @@ func TestDatadog(t *testing.T) {
 	want(t, "annotations", e.Annotations, map[string]string{"datadog_transition": "triggered", "datadog_event_type": "query_alert_monitor"})
 	want(t, "description", e.Description, "Error rate is 7.2% (threshold 5%)")
 	want(t, "occurredAt", e.OccurredAt, "2026-10-24T10:00:00.000Z")
+
+	// A multi-alert monitor notifies each group under the one alert_id; aggreg_key ($AGGREG_KEY)
+	// names the group, so one group's recovery is not another's.
+	c, _ := connectors.For("datadog")
+	fp := func(body string) string {
+		t.Helper()
+		p, _ := connectors.Decode([]byte(body))
+		evs, err := c.Events(p, connectors.Context{Now: now})
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("%s: %+v, %v", body, evs, err)
+		}
+		return evs[0].Fingerprint
+	}
+	a, b := fp(`{"alert_id":7001,"aggreg_key":"9bd4ac31","transition":"Triggered"}`), fp(`{"alert_id":7001,"aggreg_key":"5e1f0c77","transition":"Recovered"}`)
+	want(t, "group A's fingerprint", a, "7001:9bd4ac31")
+	if a == b {
+		t.Errorf("two groups of one monitor share fingerprint %q", a)
+	}
+	want(t, "no aggreg_key: the alert_id alone", fp(`{"alert_id":7001,"transition":"Triggered"}`), "7001")
 }
 
 func TestDynatrace(t *testing.T) {
@@ -159,6 +189,33 @@ func TestPagerDuty(t *testing.T) {
 	want(t, "upstream assignee", e.UpstreamAssignee, "PTUXL6G")
 	want(t, "labels", e.Labels, map[string]string{"urgency": "high", "pagerduty_service": "API Service", "pagerduty_priority": "P1"})
 	want(t, "links", e.Links, []string{"https://acme.pagerduty.com/incidents/PGR0VU2"})
+
+	// A subscription may carry every event type: only an incident event whose data is the incident
+	// is an alert. A note (its own id, the incident's in a reference), a service event and the
+	// subscription's test ping are accepted as no event, never filed as a new incident nor refused.
+	c, _ := connectors.For("pagerduty")
+	for _, name := range []string{"pagerduty_annotated", "pagerduty_ping", "service.updated"} {
+		body := []byte(`{"event":{"id":"01DEN1HNLBC1VITYLBI7MKHB03","event_type":"service.updated","resource_type":"service","data":{"id":"PF9KMXH","type":"service","name":"API Service"}}}`)
+		if name != "service.updated" {
+			var err error
+			if body, err = os.ReadFile(filepath.Join("testdata", name+".json")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p, err := connectors.Decode(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs, err := c.Events(p, connectors.Context{Now: now})
+		if err != nil || len(evs) != 0 {
+			t.Errorf("%s: %d events, %v; want none and no error", name, len(evs), err)
+		}
+	}
+	// control: an incident event with no data.type (an older payload) still maps by data.id.
+	p, _ := connectors.Decode([]byte(`{"event":{"id":"E2","event_type":"incident.acknowledged","data":{"id":"PGR0VU2","title":"t"}}}`))
+	if evs, err := c.Events(p, connectors.Context{Now: now}); err != nil || len(evs) != 1 || evs[0].Fingerprint != "PGR0VU2" || evs[0].Status != "firing" {
+		t.Errorf("an incident event without data.type: %+v, %v", evs, err)
+	}
 }
 
 // gcp: the fixture normalized, and the bearer it arrives with verified against a JWKS whose fetch is
@@ -230,6 +287,22 @@ func TestWebhook(t *testing.T) {
 		t.Fatal(err)
 	}
 	want(t, "fingerprints", []string{got[0].Fingerprint, got[1].Fingerprint, got[2].Fingerprint}, []string{"x#0", "y", "x#1"})
+}
+
+// Cap drops every NUL (U+0000) from what an event keeps, which Postgres cannot store in text: a key
+// that was nothing but NULs names nothing and goes.
+func TestCapDropsNUL(t *testing.T) {
+	e := connectors.Cap(oncall.Event{Source: "s", Fingerprint: "f\x00p", Status: "firing", Severity: "hi\x00gh", Title: "a\x00b",
+		Description: "\x00d", Labels: map[string]string{"k\x00": "v\x00", "\x00": "gone"}, Annotations: map[string]string{"a": "\x00"},
+		Links: []string{"https://x.example/\x00", "\x00\x00"}, UpstreamAssignee: "P\x001", OccurredAt: "2026-10-24T13:00:00.000Z", DeliveryKey: "k\x00"})
+	want(t, "capped", e, oncall.Event{Source: "s", Fingerprint: "fp", Status: "firing", Severity: "high", Title: "ab", Description: "d",
+		Labels: map[string]string{"k": "v"}, Annotations: map[string]string{"a": ""}, Links: []string{"https://x.example/"}, UpstreamAssignee: "P1",
+		OccurredAt: "2026-10-24T13:00:00.000Z", DeliveryKey: "k"})
+	// Two keys that differ only by a NUL become one: the one sent without it is kept.
+	e = connectors.Cap(oncall.Event{Labels: map[string]string{"env\x00": "nul", "env": "prod"}})
+	if len(e.Labels) != 1 || e.Labels["env"] != "prod" {
+		t.Fatalf("labels %q, want env=prod", e.Labels)
+	}
 }
 
 func TestValidateMapping(t *testing.T) {

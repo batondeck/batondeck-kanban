@@ -51,6 +51,22 @@ func TestSprintMembership(t *testing.T) {
 		{"add to a closed sprint", func() SprintMembership { m := base; m.SprintStatus = SprintClosed; return m }(), CodeInvalidTransition},
 		{"remove from an abandoned sprint", func() SprintMembership { m := base; m.SprintStatus = SprintAbandoned; m.Add = false; return m }(), CodeInvalidTransition},
 		{"exclusive, in another sprint", func() SprintMembership { m := base; m.TaskSprints = []string{"S-b"}; return m }(), CodeConflictLocked},
+		{"exclusive, in another sprint that ended", func() SprintMembership {
+			m := base
+			m.TaskSprints, m.EndedSprints = []string{"S-b"}, []string{"S-b"}
+			return m
+		}(), ""},
+		{"exclusive, in an ended sprint and an open one", func() SprintMembership {
+			m := base
+			m.TaskSprints, m.EndedSprints = []string{"S-b", "S-c"}, []string{"S-b"}
+			return m
+		}(), CodeConflictLocked},
+		{"at the sprintIds cap, every one ended", func() SprintMembership {
+			m := base
+			m.TaskSprints = []string{"1", "2", "3", "4", "5", "6", "7", "8"}
+			m.EndedSprints = m.TaskSprints
+			return m
+		}(), CodeValidation},
 		{"not exclusive, in another sprint", func() SprintMembership { m := base; m.Exclusive = false; m.TaskSprints = []string{"S-b"}; return m }(), ""},
 		{"at the member cap", func() SprintMembership { m := base; m.MemberCount = SprintMaxTasks; return m }(), CodeValidation},
 		{"at the sprintIds cap", func() SprintMembership {
@@ -69,7 +85,7 @@ func TestSprintMembership(t *testing.T) {
 
 func TestSprintActivation(t *testing.T) {
 	id := "T-9"
-	done := &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", UpdatedBy: "bob"}
+	done := &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", DoneBy: "bob"}
 	base := SprintActivation{SprintID: "S-a", ProposalTaskID: &id, Proposal: done, ActorRole: RoleAdmin, SelfApproval: "warn"}
 	by, self, err := CheckSprintActivation(base)
 	if err != nil || by != "bob" || self {
@@ -109,7 +125,7 @@ func TestSprintActivation(t *testing.T) {
 	}
 	warn := base
 	warn.ActorIsCreator = true
-	warn.Proposal = &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", Reviewer: "rita", UpdatedBy: "bob"}
+	warn.Proposal = &SprintProposal{ID: id, Status: Done, SprintProposalFor: "S-a", Reviewer: "rita", DoneBy: "bob"}
 	if by, self, err := CheckSprintActivation(warn); err != nil || by != "rita" || !self {
 		t.Fatalf("self-approval under warn = %q %v %v, want rita and a self-approval", by, self, err)
 	}

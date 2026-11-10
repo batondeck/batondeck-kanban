@@ -73,9 +73,11 @@ func anomalyTask(t store.Task) domain.AnomalyTask {
 }
 
 // Detect is detect_anomalies: the board's task pages (at most five) and one feed page, then at
-// most one transaction for the first sightings.
+// most one transaction for the first sightings. A grant is judged on the board it scans: the boardId
+// it names, else the task it names (the grant check is finished against that task).
 func (s anomaliesSvc) Detect(ctx context.Context, caller domain.Caller, req DetectAnomaliesReq) (DetectAnomaliesResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "detect_anomalies", domain.GrantSubject{}, false)
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "detect_anomalies", domain.GrantSubject{BoardID: req.BoardID},
+		req.BoardID == "" && req.TaskID != "")
 	if err != nil {
 		return DetectAnomaliesResp{}, err
 	}
@@ -99,6 +101,10 @@ func (s anomaliesSvc) Detect(ctx context.Context, caller domain.Caller, req Dete
 		if err != nil {
 			return DetectAnomaliesResp{}, s.c.mapErr("detect_anomalies", err)
 		}
+		if err := a.permit(&t); err != nil {
+			return DetectAnomaliesResp{}, err
+		}
+		a.pending = false
 		boardID = t.BoardID
 	}
 	proj, err := s.c.store.GetProject(ctx, req.ProjectID)

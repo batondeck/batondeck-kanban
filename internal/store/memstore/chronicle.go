@@ -43,7 +43,7 @@ func (st *state) chronicleEvent(projectID, actor string, agent *string, typ doma
 	if err != nil {
 		panic(fmt.Sprintf("memstore: marshal chronicle event: %v", err))
 	}
-	e := store.Event{ProjectID: projectID, ID: newID("E-", 24), Actor: actor, Agent: clonePtr(agent), Type: typ, Data: raw, Ts: nowMillis()}
+	e := store.Event{ProjectID: projectID, ID: store.NewEventID(), Actor: actor, Agent: clonePtr(agent), Type: typ, Data: raw, Ts: nowMillis()}
 	st.events[[2]string{projectID, e.ID}] = e
 }
 
@@ -258,6 +258,11 @@ func (s *Store) AppendChronicleVersion(ctx context.Context, projectID, pageID st
 		}
 		oldBase, oldConflict := p.LastDerivedObject, p.Conflict
 		base := p.LastDerivedObject
+		if !in.HasDerived && oldConflict != nil {
+			// A human write settles the standing conflict: its derivation becomes the base.
+			settled := oldConflict.TheirsObject
+			base = &settled
+		}
 		var conflict *store.ChronicleConflict
 		st.putChronicleBody(projectID, key, body)
 		if in.HasDerived {
@@ -285,7 +290,7 @@ func (s *Store) AppendChronicleVersion(ctx context.Context, projectID, pageID st
 			newTheirs = &conflict.TheirsObject
 		}
 		st.chronicleEvent(projectID, in.Author, in.Agent, domain.EventChronicleVersionAdded, data)
-		if in.HasDerived {
+		if in.HasDerived || base != oldBase {
 			st.dropChronicleBody(projectID, pageID, oldBase, base, newTheirs)
 		}
 		if oldConflict != nil {

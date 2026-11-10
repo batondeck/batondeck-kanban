@@ -114,27 +114,62 @@ func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.
 // leaseYields is the lease test of the routes that end or drop a lease without a lease id (P-399):
 // cancel_task, move_task, start_runs, and delete_task over every task it would delete. A lapsed
 // lease yields to anyone. A live one yields to its holder, the owning identity under the agent the
-// claim recorded (leaseAgent, P-320), and, at master, to the owning identity's caller that names no
+// claim recorded (ownedAgent: leaseAgent, P-320, where a name the caller's client chose is not a
+// token's label, P-277), and, at master, to the owning identity's caller that names no
 // agent: its browser's Status select is how a self-hoster frees a task its own agent is stuck on.
 // Another agent of that identity is another holder, as another identity is. The role clause is a
 // guard no caller reaches today: all four routes are master tier or refuse a non-holder below
 // master first; it is kept so a later caller below master is not handed another agent's lease.
-func leaseYields(t store.Task, caller domain.Caller, role domain.Role, now int64) bool {
+// st is the store it reads through (a transaction's own).
+func leaseYields(ctx context.Context, st store.Store, t store.Task, caller domain.Caller, role domain.Role, now int64) (bool, error) {
 	if !liveLease(t, now) {
-		return true
+		return true, nil
 	}
 	if t.Claim.Owner != caller.Identity {
-		return false
+		return false, nil
 	}
-	return leaseAgent(t.Claim, caller) || (caller.Agent == "" && domain.RoleMeetsTier(role, domain.TierMaster))
+	if caller.Agent == "" && domain.RoleMeetsTier(role, domain.TierMaster) {
+		return true, nil
+	}
+	return ownedAgent(ctx, st, t.Claim, caller, now)
+}
+
+// ownedAgent is leaseAgent with P-277's rule on labels: a claim's agent that a live API
+// token of the caller's identity carries as its label is that token's agent, so a caller whose
+// client registered (an OAuth client_name) or declared (clientInfo.name) the same name, and is not
+// that token (Caller.Labelled), does not hold the lease by it. One read of the identity's tokens,
+// made only when an unlabelled caller's name is the claim's agent; the lease-id outcomes do not
+// call it (the lease id is their guard), so their statement pins do not move.
+func ownedAgent(ctx context.Context, st store.Store, claim *store.TaskClaim, caller domain.Caller, now int64) (bool, error) {
+	if !leaseAgent(claim, caller) {
+		return false, nil
+	}
+	if claim.AgentID == nil || caller.Labelled {
+		return true, nil
+	}
+	tokens, err := st.ListTokens(ctx, caller.Identity)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range tokens {
+		if t.IdentityID == caller.Identity && t.RevokedAt == 0 && t.ExpiresAt > now && domain.TokenAgent(t.Label) == *claim.AgentID {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // heldBy is whether t is IN_PROGRESS under a live lease of the caller that store.ClaimTask would
 // replace as the caller's own (the same identity under the same agent, claimInput's AgentID), on a
 // task it would still claim.
 func heldBy(t store.Task, caller domain.Caller, now int64) bool {
-	return t.Status == domain.InProgress && liveLease(t, now) && t.Claim.Owner == caller.Identity &&
-		sameAgentID(t.Claim.AgentID, callerAgent(caller)) && !t.Racing && len(t.BlockedBy) == 0
+	return t.Status == domain.InProgress && sameHolder(t, caller, now) && !t.Racing && len(t.BlockedBy) == 0
+}
+
+// sameHolder is store.ClaimTask's "mine" on a live lease: the caller's identity under the claim's
+// agent, by name (sameAgentID). Claim asks ownedAgent too before it acts on it.
+func sameHolder(t store.Task, caller domain.Caller, now int64) bool {
+	return liveLease(t, now) && t.Claim.Owner == caller.Identity && sameAgentID(t.Claim.AgentID, callerAgent(caller))
 }
 
 // sameAgentID is store's sameAgent: two agent handles, nil only equal to nil.
@@ -272,13 +307,17 @@ func replayedLease(task *Task, now time.Time) error {
 // and writes nothing to the task but a longer expiry, when this claim's leaseSeconds asks for one
 // (G6): one agent in several sessions never mints a second lease that would silently end the
 // first. Another agent of the same identity (Caller.Agent, P-257) is another holder and is refused
-// CONFLICT_LOCKED, as conductor does for two distinct handles. Below master, a task assigned to
+// CONFLICT_LOCKED, as conductor does for two distinct handles, and so is a client that registered or
+// declared the label a live API token of its identity carries (ownedAgent, P-277): it is not that
+// token, so it is neither handed the token's lease nor lets ClaimTask replace it. Below master, a task assigned to
 // someone else is refused FORBIDDEN by claim_next's rule, ownAssignee (P-334, P-297; owner ruling
 // 2026-10-30): another account's id or login, another member's id, or another agent's label. An
 // unassigned task, the caller's own id or login, its own label on that label's token, and a string
 // naming no identity and no token's label are claimed. The rule reads through the transaction, on
 // the task as loaded, before the re-claim path, so a task reassigned to another is not re-claimed;
-// an unassigned task, or one assigned to the caller's id, reads nothing more.
+// an unassigned task, or one assigned to the caller's id, reads nothing more. A WIP_EXCEEDED runs
+// claim_next's lazy recovery over the task's board (reap, under claim_task's access) and, when it
+// reaped anything, tries once more: expired leases do not hold the column's slots.
 func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTaskReq) (ClaimTaskResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_task", domain.GrantSubject{}, true)
 	if err != nil {
@@ -295,62 +334,25 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 		return ClaimTaskResp{}, err
 	}
 	leaseID := newLeaseID()
-	resp, err := retryStale(func() (ClaimTaskResp, error) {
-		return mutate(ctx, l.c, caller, mutation{
-			Tool: "claim_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
-		}, func(t *txn) (ClaimTaskResp, error) {
-			cur := *t.Task
-			if as := cur.Assignee; as != nil && *as != "" {
-				if err := l.ownAssignee(ctx, t.Tx, txMember(t.Tx), caller, a, req.ProjectID, *as); err != nil {
-					return ClaimTaskResp{}, err
-				}
-			}
-			if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
-				// The second claim's leaseSeconds lengthens the shared lease, never shortens it.
-				held, err := t.Tx.Heartbeat(ctx, req.ProjectID, cur.ID, cur.Claim.LeaseID, caller.Identity, now+secs*1000, now, true)
-				if err != nil {
-					return ClaimTaskResp{}, err
-				}
-				out, err := withSummary(ctx, t.Tx, held)
-				if err != nil {
-					return ClaimTaskResp{}, err
-				}
-				sprint, err := sprintBrief(ctx, t.Tx, held)
-				if err != nil {
-					return ClaimTaskResp{}, err
-				}
-				return ClaimTaskResp{LeaseID: cur.Claim.LeaseID, Sprint: sprint, Task: out}, nil
-			}
-			board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
-			if err != nil {
-				return ClaimTaskResp{}, err
-			}
-			if cur.Status == domain.Todo {
-				if err := t.checkWIP(board, cur.Status); err != nil {
-					return ClaimTaskResp{}, err
-				}
-			}
-			now := t.Now.UnixMilli()
-			task, err := t.Tx.ClaimTask(ctx, req.ProjectID, cur.ID, cur.Version, claimInput(caller, leaseID, now, secs, statusColumn(board, domain.InProgress)))
-			if err != nil {
-				return ClaimTaskResp{}, err
-			}
-			t.Wrote(task)
-			if err := t.event(task, domain.EventTaskClaimed, map[string]any{"leaseSeconds": secs}); err != nil {
-				return ClaimTaskResp{}, err
-			}
-			out, err := withSummary(ctx, t.Tx, task)
-			if err != nil {
-				return ClaimTaskResp{}, err
-			}
-			sprint, err := sprintBrief(ctx, t.Tx, task)
-			if err != nil {
-				return ClaimTaskResp{}, err
-			}
-			return ClaimTaskResp{LeaseID: leaseID, Sprint: sprint, Task: out}, nil
+	boardID := "" // the task's board, for the lazy recovery below
+	attempt := func() (ClaimTaskResp, error) {
+		return retryStale(func() (ClaimTaskResp, error) {
+			return l.claimOnce(ctx, caller, a, req, leaseID, secs, &boardID)
 		})
-	})
+	}
+	resp, err := attempt()
+	if isCode(err, domain.CodeWIPExceeded) && boardID != "" {
+		// The WIP limit may be held by leases that have expired: claim_next's lazy recovery, here
+		// too, so a crashed agent's IN_PROGRESS task does not keep its slot for ever. The reap runs
+		// under claim_task's access: a task the caller's grant would not let it claim is left.
+		sum, rerr := l.c.reap(ctx, caller, a, req.ProjectID, boardID)
+		if rerr != nil {
+			return ClaimTaskResp{}, rerr
+		}
+		if sum.reaped() > 0 {
+			resp, err = attempt()
+		}
+	}
 	if err != nil {
 		return ClaimTaskResp{}, err
 	}
@@ -367,15 +369,96 @@ func (l lifecycle) Claim(ctx context.Context, caller domain.Caller, req ClaimTas
 	return resp, nil
 }
 
+// isCode reports whether err is a BatonDeckError of code.
+func isCode(err error, code domain.Code) bool {
+	e, ok := domain.AsBatonDeckError(err)
+	return ok && e.Code == code
+}
+
+// claimOnce is one claim_task transaction; boardID is set to the task's board once it is loaded.
+func (l lifecycle) claimOnce(ctx context.Context, caller domain.Caller, a access, req ClaimTaskReq, leaseID string, secs int64, boardID *string) (ClaimTaskResp, error) {
+	return mutate(ctx, l.c, caller, mutation{
+		Tool: "claim_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, KeepVersion: true,
+	}, func(t *txn) (ClaimTaskResp, error) {
+		cur := *t.Task
+		*boardID = cur.BoardID
+		if as := cur.Assignee; as != nil && *as != "" {
+			if err := l.ownAssignee(ctx, t.Tx, txMember(t.Tx), caller, a, req.ProjectID, *as); err != nil {
+				return ClaimTaskResp{}, err
+			}
+		}
+		if now := t.Now.UnixMilli(); sameHolder(cur, caller, now) {
+			// A live lease store.ClaimTask takes as the caller's own (the re-claim below hands
+			// back its leaseId, and ClaimTask would replace it) is the caller's only when the
+			// caller is the claim's agent by P-277's rule: a client named like a live token
+			// label of its identity is not that token. One read, for an unlabelled caller only.
+			owned, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+			if err != nil {
+				return ClaimTaskResp{}, err
+			}
+			if !owned {
+				return ClaimTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
+			}
+		}
+		if now := t.Now.UnixMilli(); heldBy(cur, caller, now) {
+			// The second claim's leaseSeconds lengthens the shared lease, never shortens it.
+			held, err := t.Tx.Heartbeat(ctx, req.ProjectID, cur.ID, cur.Claim.LeaseID, caller.Identity, now+secs*1000, now, true)
+			if err != nil {
+				return ClaimTaskResp{}, err
+			}
+			out, err := withSummary(ctx, t.Tx, held)
+			if err != nil {
+				return ClaimTaskResp{}, err
+			}
+			sprint, err := sprintBrief(ctx, t.Tx, held)
+			if err != nil {
+				return ClaimTaskResp{}, err
+			}
+			return ClaimTaskResp{LeaseID: cur.Claim.LeaseID, Sprint: sprint, Task: out}, nil
+		}
+		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
+		if err != nil {
+			return ClaimTaskResp{}, err
+		}
+		if cur.Status == domain.Todo {
+			if err := t.checkWIP(board, cur.Status); err != nil {
+				return ClaimTaskResp{}, err
+			}
+		}
+		now := t.Now.UnixMilli()
+		task, err := t.Tx.ClaimTask(ctx, req.ProjectID, cur.ID, cur.Version, claimInput(caller, leaseID, now, secs, statusColumn(board, domain.InProgress)))
+		if err != nil {
+			return ClaimTaskResp{}, err
+		}
+		t.Wrote(task)
+		if err := t.event(task, domain.EventTaskClaimed, map[string]any{"leaseSeconds": secs}); err != nil {
+			return ClaimTaskResp{}, err
+		}
+		out, err := withSummary(ctx, t.Tx, task)
+		if err != nil {
+			return ClaimTaskResp{}, err
+		}
+		sprint, err := sprintBrief(ctx, t.Tx, task)
+		if err != nil {
+			return ClaimTaskResp{}, err
+		}
+		return ClaimTaskResp{LeaseID: leaseID, Sprint: sprint, Task: out}, nil
+	})
+}
+
 // ClaimNext is claim_next: the frontier's best task (store.Claims.ClaimNext, one statement, score
 // then priority then order; poison, blocked, leased and backed-off tasks are never in it), claimed
-// inside mutate. An empty frontier writes nothing; it reaps the board's expired leases (lazy
-// recovery, no sweeper) and, when any were reaped, tries once more. Statements when the board has no
+// inside mutate. An empty frontier writes nothing; it, and a WIP_EXCEEDED (the slots may be held by
+// expired leases), reaps the board's expired leases (lazy recovery, no sweeper) and, when any were
+// reaped, tries once more. Statements when the board has no
 // WIP limit and the membership is cached: the board (GetBoard's 2, or 0 from the snapshot cache), the
-// claim (1) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
+// claim (2: the IN_PROGRESS column's first order key, the claimed task landing before it, and the
+// claim statement) and the summary (1), and the sprint (1) for a claimed sprint member. It rings nobody, as
 // Claim. sprintId narrows the frontier to that sprint's members (frontierQuery); useProfile to the
 // tasks the caller's own registered profile covers (claimNext; the project, the profile and its
-// stats are three more reads, plus the frontier page each attempt; no profile falls back to
+// stats are three more reads, plus a frontier page each attempt, more when the first 200 tasks hold
+// none it covers (frontierScan, at most five); no profile falls back to
 // capabilities); shard lanes and maxConcurrency are refused, not ignored.
 func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req ClaimNextReq) (ClaimNextResp, error) {
 	a, err := l.c.authorize(ctx, caller, req.ProjectID, "claim_next", domain.GrantSubject{BoardID: req.BoardID}, false)
@@ -425,12 +508,17 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 		}
 	}
 	resp, err := l.claimNext(ctx, caller, a, req, q, sc, board, secs)
-	if errors.Is(err, errEmptyFrontier) {
-		var sum reapSummary
-		if sum, err = l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID); err != nil {
-			return ClaimNextResp{}, err
+	// The lazy recovery: an empty frontier, or a WIP limit that refused the claim (its slots may be
+	// held by leases that have expired), reaps the board and tries once more.
+	if wip := isCode(err, domain.CodeWIPExceeded); wip || errors.Is(err, errEmptyFrontier) {
+		sum, rerr := l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID)
+		if rerr != nil {
+			return ClaimNextResp{}, rerr
 		}
 		if sum.reaped() == 0 {
+			if wip {
+				return ClaimNextResp{}, err
+			}
 			return ClaimNextResp{}, nil
 		}
 		if resp, err = l.claimNext(ctx, caller, a, req, q, sc, board, secs); errors.Is(err, errEmptyFrontier) {
@@ -440,27 +528,30 @@ func (l lifecycle) ClaimNext(ctx context.Context, caller domain.Caller, req Clai
 	return resp, err
 }
 
-// claimNext is one claim attempt. With a profile, the frontier's first frontierPage tasks that it
-// covers become q.TaskIDs, so the store's one claim statement takes the best of them and re-checks
-// every frontier condition at the claim; none covered is an empty frontier.
+// claimNext is one claim attempt. With a profile, the tasks it covers in the first frontier page
+// that holds any (frontierScan) become q.TaskIDs, so the store's one claim statement takes the best
+// of them and re-checks every frontier condition at the claim; none covered is an empty frontier.
 func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access, req ClaimNextReq, q store.FrontierQuery, sc scorer, board store.Board, secs int64) (ClaimNextResp, error) {
 	if sc.profile != nil {
 		q.Now = l.c.nowMs()
-		pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+		covered := []string{}
+		err := l.frontierScan(ctx, q, func(pool []store.Task) bool {
+			for _, t := range pool {
+				if sc.covers(t) {
+					covered = append(covered, t.ID)
+				}
+			}
+			return len(covered) > 0
+		})
 		if err != nil {
 			return ClaimNextResp{}, l.c.mapErr("claim_next", err)
 		}
-		q.TaskIDs = []string{}
-		for _, t := range pool {
-			if sc.covers(t) {
-				q.TaskIDs = append(q.TaskIDs, t.ID)
-			}
-		}
+		q.TaskIDs = covered
 	}
 	leaseID := newLeaseID()
 	resp, err := mutate(ctx, l.c, caller, mutation{
 		Tool: "claim_next", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (ClaimNextResp, error) {
 		if err := t.checkWIP(board, domain.Todo); err != nil {
 			return ClaimNextResp{}, err
@@ -556,14 +647,15 @@ func (l lifecycle) frontierQuery(ctx context.Context, caller domain.Caller, a ac
 	return q, nil
 }
 
-// sprintBrief is a claim's sprint {id, name, goal, status}: the sprint the claimed task belongs to
-// (one at most, sprints being exclusive), or nil. It reads the sprint only for a task that has one,
-// so a claim outside a sprint makes no extra statement (P-239).
+// sprintBrief is a claim's sprint {id, name, goal, status}: the sprint the claimed task belongs to,
+// its newest (sprints being exclusive among those that have not ended, every earlier one is CLOSED
+// or ABANDONED and kept for history), or nil. It reads the sprint only for a task that has one, so a
+// claim outside a sprint makes no extra statement (P-239).
 func sprintBrief(ctx context.Context, tx store.Store, task store.Task) (*Sprint, error) {
 	if len(task.SprintIDs) == 0 {
 		return nil, nil
 	}
-	sp, err := tx.GetSprint(ctx, task.ProjectID, task.SprintIDs[0])
+	sp, err := tx.GetSprint(ctx, task.ProjectID, task.SprintIDs[len(task.SprintIDs)-1])
 	if err != nil {
 		return nil, err
 	}
@@ -756,7 +848,7 @@ func (l lifecycle) Release(ctx context.Context, caller domain.Caller, req Releas
 	return retryStale(func() (ReleaseTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "release_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 		}, func(t *txn) (ReleaseTaskResp, error) {
 			cur := *t.Task
 			if err := leaseHeld(cur, req.LeaseID, caller, t.Now.UnixMilli()); err != nil {
@@ -800,9 +892,12 @@ func (l lifecycle) leaseArgs(ctx context.Context, caller domain.Caller, tool, pr
 }
 
 // Next is next_task: the frontier's best task, claiming nothing (store PreviewFrontier, limit 1),
-// and its summary: two statements, three when the frontier is empty (the lazy reap's
-// ListExpiredLeases). includeInbox adds two (REVIEW, then BLOCKED split into blocked and poisoned).
-// strategy "score" ranks the frontier's first frontierPage tasks with the scorer rank_tasks uses
+// its summary and its resume (claim_task's: the artifacts and one context-items page): four
+// statements, one when the frontier is empty. It is a read (read tier, grant-exempt, readOnlyHint)
+// and writes nothing: an expired lease is reaped by claim_next's lazy recovery or
+// reap_stale_leases, never by a preview, which would write as a viewer. includeInbox adds two
+// (REVIEW, then BLOCKED split into blocked and poisoned).
+// strategy "score" ranks the frontier (frontierScan: up to 1000 tasks) with the scorer rank_tasks uses
 // (scorer.rank: the project's selectionWeights and agingCeilingMs) and previews the best; explain,
 // which needs it, adds the top task's factors and the runner-up. useProfile judges eligibility by
 // the caller's own registered profile instead of capabilities (FORBIDDEN under another agent's
@@ -856,17 +951,6 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	if err != nil {
 		return NextTaskResp{}, err
 	}
-	if len(head) == 0 {
-		sum, err := l.c.reap(ctx, caller, a, req.ProjectID, req.BoardID)
-		if err != nil {
-			return NextTaskResp{}, err
-		}
-		if sum.reaped() > 0 {
-			if head, err = l.nextHead(ctx, q, sc, score); err != nil {
-				return NextTaskResp{}, err
-			}
-		}
-	}
 	var resp NextTaskResp
 	if len(head) > 0 {
 		out, err := withSummary(ctx, l.c.store, head[0].task)
@@ -874,6 +958,10 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 			return NextTaskResp{}, l.c.mapErr("next_task", err)
 		}
 		resp.Task = &out
+		// resume, as claim_task's: the previewed task's (two reads, only when there is one).
+		if resp.Resume, err = l.c.resumeOf(ctx, req.ProjectID, out.ID); err != nil {
+			return NextTaskResp{}, l.c.mapErr("next_task", err)
+		}
 		if req.Explain {
 			top := head[0].score
 			resp.Explanation = NextExplanation{AgedOut: top.AgedOut, Factors: factorsOut(top), Reason: top.Reason, Score: top.Score}
@@ -894,13 +982,34 @@ func (l lifecycle) Next(ctx context.Context, caller domain.Caller, req NextTaskR
 	return resp, nil
 }
 
-// frontierPage is how much of the frontier the score and profile paths judge: PreviewFrontier's
-// largest page.
-const frontierPage = 200
+// frontierPage is a page of the frontier the score and profile paths judge: PreviewFrontier's
+// largest. frontierPages bounds how many they read (frontierScan): 1000 tasks.
+const (
+	frontierPage  = 200
+	frontierPages = 5
+)
+
+// frontierScan reads q's frontier best first, frontierPage tasks a page (q.Offset), handing each
+// page to visit until visit answers true, a page is short (the frontier's end) or frontierPages pages
+// are read. A frontier that fits one page costs one statement, as before; a profile whose tasks sit
+// behind the first 200 is no longer told there is no work.
+func (l lifecycle) frontierScan(ctx context.Context, q store.FrontierQuery, visit func([]store.Task) bool) error {
+	for page := range frontierPages {
+		q.Offset = page * frontierPage
+		pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+		if err != nil {
+			return err
+		}
+		if visit(pool) || len(pool) < frontierPage {
+			return nil
+		}
+	}
+	return nil
+}
 
 // nextHead is next_task's choice, best first: the fifo frontier's head (one row), or with score
-// the first frontierPage tasks ranked by sc, or with a profile and no score the first of them in
-// frontier order that the profile covers.
+// the frontier ranked by sc (frontierScan's pages), or with a profile and no score the first task
+// in frontier order that the profile covers.
 func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc scorer, score bool) ([]ranked, error) {
 	now := l.c.now()
 	q.Now = now.UnixMilli()
@@ -911,7 +1020,21 @@ func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc score
 		}
 		return []ranked{{task: head[0]}}, nil
 	}
-	pool, err := l.c.store.PreviewFrontier(ctx, q, frontierPage)
+	var pool []store.Task
+	var head []ranked
+	err := l.frontierScan(ctx, q, func(page []store.Task) bool {
+		if score {
+			pool = append(pool, page...)
+			return false
+		}
+		for _, t := range page {
+			if sc.covers(t) {
+				head = []ranked{{task: t}}
+				return true
+			}
+		}
+		return false
+	})
 	if err != nil {
 		return nil, l.c.mapErr("next_task", err)
 	}
@@ -919,12 +1042,7 @@ func (l lifecycle) nextHead(ctx context.Context, q store.FrontierQuery, sc score
 		// The frontier already holds capabilities' tasks only; the profile, when there is one, filters.
 		return sc.rank(pool, now, nil), nil
 	}
-	for _, t := range pool {
-		if sc.covers(t) {
-			return []ranked{{task: t}}, nil
-		}
-	}
-	return nil, nil
+	return head, nil
 }
 
 // inbox is next_task's inbox: the board's REVIEW and BLOCKED tasks (of assignee, when given), the
@@ -1023,7 +1141,7 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 	return retryStale(func() (CompleteTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "complete_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 			LockProject: target == domain.Done,
 		}, func(t *txn) (CompleteTaskResp, error) {
 			cur := *t.Task
@@ -1212,8 +1330,10 @@ func (t *txn) completeArtifacts(task store.Task, incoming []store.AddArtifactInp
 // Block is block_task: the caller's live lease dropped and the task BLOCKED with the reason. Each
 // blockedBy id becomes a blocks edge (store.AddEdge: the cycle check and both caches) in the SAME
 // transaction, under the project lock taken first, so a cycle or a missing blocker writes nothing at
-// all (conductor wrote the edges in their own transactions and could leave some behind). A reason of
-// "poison" is refused: only the retry policy poisons a task.
+// all (conductor wrote the edges in their own transactions and could leave some behind). A blocker
+// already DONE is refused (VALIDATION naming it): it would gate nothing, and the task would wait
+// BLOCKED for an unblock that never comes. A reason of "poison" is refused: only the retry policy
+// poisons a task.
 func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTaskReq) (BlockTaskResp, error) {
 	a, err := l.leaseArgs(ctx, caller, "block_task", req.ProjectID, req.TaskID, req.LeaseID, domain.GrantSubject{})
 	if err != nil {
@@ -1243,7 +1363,7 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 	return retryStale(func() (BlockTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "block_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 			LockProject: len(blockers) > 0,
 		}, func(t *txn) (BlockTaskResp, error) {
 			cur := *t.Task
@@ -1252,14 +1372,30 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 				return BlockTaskResp{}, err
 			}
 			for _, b := range blockers {
+				// A blocker already DONE would gate nothing (blockedBy holds open blockers only), so
+				// the task would sit BLOCKED with nothing ever to clear it: refused, and the caller
+				// keeps its lease.
+				var other store.Task
+				if !slices.Contains(cur.BlockedBy, b) {
+					var err error
+					if other, err = t.Tx.GetTask(ctx, req.ProjectID, b); err != nil {
+						return BlockTaskResp{}, err
+					}
+					if other.Status == domain.Done {
+						return BlockTaskResp{}, domain.Validation(fmt.Sprintf("Task %s is already DONE: it cannot block %s", b, cur.ID),
+							map[string]any{"field": "blockedBy", "blockedBy": b, "status": domain.Done})
+					}
+				}
 				if _, err := t.Tx.AddEdge(ctx, store.AddEdgeInput{ProjectID: req.ProjectID, FromTaskID: b, ToTaskID: cur.ID, Type: store.DependencyBlocks, CreatedBy: caller.Identity}); err != nil {
 					return BlockTaskResp{}, err
 				}
 				if slices.Contains(cur.BlockedBy, b) {
 					continue
 				}
-				if err := t.bumpOther(b); err != nil {
-					return BlockTaskResp{}, err
+				if !slices.Contains(other.Blocks, cur.ID) {
+					if _, err := t.bump(other); err != nil {
+						return BlockTaskResp{}, err
+					}
 				}
 				if err := t.event(cur, domain.EventDependencyAdded, map[string]any{"fromTaskId": b, "type": "blocks"}); err != nil {
 					return BlockTaskResp{}, err
@@ -1311,7 +1447,7 @@ func (l lifecycle) Fail(ctx context.Context, caller domain.Caller, req FailTaskR
 	return retryStale(func() (FailTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "fail_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 		}, func(t *txn) (FailTaskResp, error) {
 			cur := *t.Task
 			if err := leaseHeld(cur, req.LeaseID, caller, t.Now.UnixMilli()); err != nil {
@@ -1384,11 +1520,13 @@ func (l lifecycle) Reap(ctx context.Context, caller domain.Caller, req ReapStale
 	return ReapStaleLeasesResp{Reaped: int64(sum.reaped())}, nil
 }
 
-// reap is the one reaper: reap_stale_leases, and the lazy recovery of claim_next and next_task
-// when their frontier is empty (no background sweeper). One ListExpiredLeases (at most 200 tasks,
-// oldest expiry first); the project's retry policy is read only when there is something to reap. A
-// task resolved since the read (heartbeat, completion, a new claim) is skipped. The access is the
-// calling tool's: a grant check left pending is finished against each reaped task.
+// reap is the one reaper (no background sweeper): reap_stale_leases, and the lazy recovery of
+// claim_next when its frontier is empty or the In progress lane's WIP limit refuses it, and of
+// claim_task when that limit refuses it (expired leases hold no slot). next_task is a read and never
+// reaps. One ListExpiredLeases (at most 200 tasks, oldest expiry first); the project's retry policy
+// is read only when there is something to reap. A task resolved since the read (heartbeat,
+// completion, a new claim) is skipped. The access is the calling tool's: a grant check left pending
+// (claim_task's) is finished against each reaped task, and a task it refuses is skipped.
 func (c *Core) reap(ctx context.Context, caller domain.Caller, a access, projectID, boardID string) (reapSummary, error) {
 	sum := reapSummary{Retried: []string{}, Poisoned: []string{}}
 	expired, err := c.store.ListExpiredLeases(ctx, projectID, boardID, c.nowMs(), 200)
@@ -1419,6 +1557,9 @@ func (c *Core) reap(ctx context.Context, caller domain.Caller, a access, project
 		}
 		if e, ok := domain.AsBatonDeckError(err); ok && (e.Code == domain.CodeStale || e.Code == domain.CodeNotFound) {
 			continue // written or deleted since the read: someone else resolved it
+		}
+		if isCode(err, domain.CodeForbidden) {
+			continue // a pending grant check the task fails: claim_task's recovery reaps what it could claim
 		}
 		if err != nil {
 			return sum, err
@@ -1517,7 +1658,8 @@ func (t *txn) handoffTarget(to string) (*string, error) {
 
 // Cancel is cancel_task (ADR-0001): DONE with the system label cancelled and the reason as a note
 // context item, from any status (a server action, like auto-unblock, not a move through the fixed
-// table). The master role, or the holder of the task's live lease (its identity under the agent the
+// table); a poisoned task is un-poisoned on the way (its poisoned label dropped). A later write that
+// takes the task out of DONE drops cancelled again (store.StatusChange). The master role, or the holder of the task's live lease (its identity under the agent the
 // claim recorded, leaseAgent: P-320, P-399); a master is CONFLICT_LOCKED by a live lease that does
 // not yield to it (leaseYields: another identity's, or another agent's). Version-checked by mutate (STALE before any other judgement). As a
 // landing on DONE it runs the poison-aware unblock under the project lock. A task already DONE is
@@ -1542,7 +1684,18 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 	}, func(t *txn) (CancelTaskResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()
-		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity && leaseAgent(cur.Claim, caller)
+		// The holder's pass: its own live lease, under its own agent (ownedAgent), and, for a caller
+		// whose token carries a role (an OAuth grant), a role that could have claimed it: a viewer
+		// grant holds no lease, whatever its client is named.
+		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity &&
+			(caller.Role == "" || domain.RoleMeetsTier(a.Role, domain.TierWrite))
+		if owner {
+			own, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+			if err != nil {
+				return CancelTaskResp{}, err
+			}
+			owner = own
+		}
 		if !owner && !domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 			return CancelTaskResp{}, forbidden("cancel_task needs the master role or the task's live lease",
 				map[string]any{"tool": "cancel_task", "role": a.Role, "requiredRole": domain.TierMinRole(domain.TierMaster)})
@@ -1554,17 +1707,27 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 			return CancelTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if !owner && !leaseYields(cur, caller, a.Role, now) {
-			return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
+		if !owner {
+			yields, err := leaseYields(ctx, t.Tx, cur, caller, a.Role, now)
+			if err != nil {
+				return CancelTaskResp{}, err
+			}
+			if !yields {
+				return CancelTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
+			}
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
 		if err != nil {
 			return CancelTaskResp{}, err
 		}
-		after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, store.StatusChange{
-			Status: domain.Done, ColumnID: statusColumn(board, domain.Done), ClearClaim: true,
-			Labels: domain.WithLabel(nonNil(cur.Labels), domain.LabelCancelled), UpdatedBy: caller.Identity, UpdatedAt: now,
-		})
+		ch := store.StatusChange{Status: domain.Done, ColumnID: statusColumn(board, domain.Done), ClearClaim: true, UpdatedBy: caller.Identity, UpdatedAt: now}
+		labels := nonNil(cur.Labels)
+		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
+			// A cancelled task leaves the poison queue: the un-poison, as a master's move to TODO.
+			ch.Unpoison, labels = true, domain.Unpoison(labels).Labels
+		}
+		ch.Labels = domain.WithLabel(labels, domain.LabelCancelled)
+		after, err := t.Tx.SetStatus(ctx, req.ProjectID, cur.ID, cur.Version, ch)
 		if err != nil {
 			return CancelTaskResp{}, err
 		}

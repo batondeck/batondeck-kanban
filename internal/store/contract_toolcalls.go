@@ -26,8 +26,9 @@ type ToolCall struct {
 
 // ToolCalls is the tool-call analytics table: written in batches by service.ToolCalls.Record
 // (ADR-0003), swept by retention, read by service.Analytics. Errors: a row with an empty tool,
-// identity or code, an outcome other than ok or error, or a negative latency is
-// domain.Validation, and the whole batch is refused; a delete limit <= 0 is domain.Validation; a
+// identity or code, an outcome other than ok or error, a negative latency, or a NUL character in any
+// text field (Postgres cannot store one) is domain.Validation, and the whole batch is refused (the
+// service drops such a row before it can ride in one); a delete limit <= 0 is domain.Validation; a
 // summary of an empty project id is domain.Validation.
 type ToolCalls interface {
 	// InsertToolCalls writes the batch in one transaction: every row or none. An empty batch writes

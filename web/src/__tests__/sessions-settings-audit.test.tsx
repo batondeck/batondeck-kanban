@@ -53,7 +53,7 @@ async function mount(path: string, admin: boolean, routes: Record<string, (init?
 
 describe('Settings: CLI tokens and your MCP sessions', () => {
   it('counts the live token and the logged session, shows a minted token once, and calls no marketplace route', async () => {
-    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live' }];
+    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live' }];
     await mount('/settings', false, {
       'GET /api/me/cli-tokens': () => ({ tokens }),
       'POST /api/me/cli-tokens': () => ({ ...tokens[0], id: 'fedcba9876543210', label: 'laptop', token: MINTED, shownOnce: true }),
@@ -71,12 +71,39 @@ describe('Settings: CLI tokens and your MCP sessions', () => {
     expect(fetched.filter((f) => f.includes('marketplace'))).toEqual([]);
     expect(fetched).toContain('POST /api/me/cli-tokens');
   });
+
+  it('claims no last use for a token: the server records none, so there is no Last used column', async () => {
+    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live' }];
+    await mount('/settings', false, { 'GET /api/me/cli-tokens': () => ({ tokens }) });
+    const row = (await screen.findByText('cli', { selector: 'td' })).closest('tr')!;
+    const table = row.closest('table')!;
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Label', 'Status', 'Expires', '']);
+    expect(within(row).queryByText('never')).toBeNull();
+  });
+});
+
+describe('Settings: the shared session cache keeps the device rows', () => {
+  // Settings reads the ['agentSessions'] entry Agents merges presence frames into. A plain list
+  // answer replaced the entry, so visiting Settings dropped every live device row from Agents until
+  // the directory next changed (P-394).
+  it('its list answer keeps the device rows a presence frame put in the cache', async () => {
+    const frame = presenceSessions({ sessions: [{ pid: 4242, role: 'worker', identityId: 'U-1', agentId: 'claude', registeredAt: '2026-10-24T08:00:00Z' }] }, '2026-10-24T08:00:00Z');
+    const qc = await mount('/settings', false, { 'GET /api/agents/sessions': () => ({ sessions: [session({})] }) }, (q) =>
+      q.setQueryData(['agentSessions'], { sessions: frame }, { updatedAt: 0 }),
+    );
+    await waitFor(() => expect(fetched.some((f) => f.includes('/api/agents/sessions'))).toBe(true));
+    await waitFor(() => expect(qc.isFetching({ queryKey: ['agentSessions'] })).toBe(0));
+    const keys = qc.getQueryData<{ sessions: Array<{ sessionKey: string }> }>(['agentSessions'])!.sessions.map((r) => r.sessionKey);
+    expect(keys, 'the device row was dropped by the Settings refetch').toEqual(expect.arrayContaining(['U-1::agent-a', 'device:4242']));
+    // Settings itself still lists only the MCP session (a device row is not something it can end).
+    expect(await screen.findByText('1 logged')).toBeInTheDocument();
+  });
 });
 
 describe('Settings: the minted plaintext leaves memory', () => {
   it('is in no mutation once Done is pressed, nor after the screen unmounts', async () => {
     const qc = await mount('/settings', false, {
-      'POST /api/me/cli-tokens': () => ({ id: 'fedcba9876543210', label: 'laptop', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live', token: MINTED, shownOnce: true }),
+      'POST /api/me/cli-tokens': () => ({ id: 'fedcba9876543210', label: 'laptop', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live', token: MINTED, shownOnce: true }),
     });
     const held = () => qc.getMutationCache().getAll().filter((m) => JSON.stringify(m.state.data ?? null).includes(MINTED)).length;
     fireEvent.change(await screen.findByLabelText('Token label'), { target: { value: 'laptop' } });
@@ -153,6 +180,21 @@ describe('Workspace Log: the audit panel', () => {
     expect(within(row).getByText('task.deleted')).toBeInTheDocument();
     expect(within(row).getByText('T-7')).toBeInTheDocument();
     expect(within(row).getByText('U-1 (claude)')).toBeInTheDocument();
+  });
+
+  it('pages past the first rows: Load more asks for the nextCursor the route answered and appends what it returns', async () => {
+    const older = { days: 90, entries: [{ ...rows.entries[0]!, ts: '2026-10-20T08:00:00.000Z', action: 'token.revoked', subject: 'T-3' }] };
+    await mount('/activity', true, {
+      'GET /api/audit': () => (fetched.at(-1)!.includes('cursor=c1') ? older : { ...rows, nextCursor: 'c1' }),
+    });
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByTestId('audit-row')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(within(table).getAllByTestId('audit-row')).toHaveLength(2));
+    expect(within(table).getByText('token.revoked')).toBeInTheDocument();
+    expect(fetched.filter((f) => f.includes('/api/audit')).at(-1)).toContain('cursor=c1');
+    // The last page answered no nextCursor: nothing more to load.
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
 
   it('REFUSAL: a member sees no audit panel and never asks for it', async () => {

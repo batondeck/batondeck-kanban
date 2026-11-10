@@ -30,7 +30,7 @@ func TestSettingsCLITokenAuthenticatesMCPUntilRevoked(t *testing.T) {
 		var minted struct {
 			ID, Label, Token, Status string
 			ShownOnce                bool
-			LastUsedAt, RevokedAt    *string
+			RevokedAt                *string
 		}
 		if err := json.Unmarshal([]byte(body), &minted); err != nil || code != http.StatusOK {
 			t.Fatalf("mint: %d %s", code, body)

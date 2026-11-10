@@ -32,6 +32,7 @@ type chronicleRig struct {
 	t      *testing.T
 	ada    *caller
 	grace  *caller
+	root   *caller // u-ada as the workspace admin, who alone reads the audit log
 	store  chronicleObjects
 	p, q   string // ada's project, grace's project
 	engine string
@@ -51,6 +52,7 @@ func chronicleStacks(t *testing.T, maxBytes int64, fn func(t *testing.T, r *chro
 			r := &chronicleRig{t: t, store: st, engine: e,
 				ada:   &caller{t: t, cs: h.Connect(t, stackOwner), called: map[string]int{}},
 				grace: &caller{t: t, cs: h.Connect(t, stackGrace), called: map[string]int{}},
+				root:  &caller{t: t, cs: h.Connect(t, stackRoot), called: map[string]int{}},
 			}
 			r.p = str(r.ada.call("create_project", map[string]any{"name": "Ada's"})["projectId"])
 			r.q = str(r.grace.call("create_project", map[string]any{"name": "Grace's"})["projectId"])
@@ -341,6 +343,15 @@ func TestChronicleDeletePage(t *testing.T) {
 			t.Fatalf("after the delete: %d versions, version %v, %d bodies of the page, %d of the kept page", len(hist.Versions), ver.Version, bodies(page), bodies(kept))
 		}
 		t.Logf("%s: %d bodies before the delete, 0 after; 0 versions; the other page keeps %d", r.engine, before, bodies(kept))
+		// No version is left to say the page existed, so the audit log does: who, which page, which
+		// project. The STALE refusal above wrote none.
+		rows, _ := r.root.call("list_audit_log", map[string]any{"action": "chronicle.page_deleted"})["entries"].([]any)
+		if len(rows) != 1 {
+			t.Fatalf("audit rows for the delete: %v, want one chronicle.page_deleted", rows)
+		}
+		if row := obj(rows[0]); row["actor"] != "u-ada" || row["subject"] != page || row["projectId"] != r.p || row["result"] != "ok" {
+			t.Fatalf("audit row for the delete: %v, want one chronicle.page_deleted by u-ada on %s in %s", row, page, r.p)
+		}
 		t.Run("NOT_FOUND: a page already deleted", func(t *testing.T) {
 			r.wantCode(r.ada, "delete_chronicle_page", map[string]any{"projectId": r.p, "pageId": page}, "NOT_FOUND")
 		})

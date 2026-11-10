@@ -1,7 +1,8 @@
 # batondeck-kanban on Postgres 16. README.md's quickstart says how to run it; in short:
 #
-#   printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
-#   printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
+#   ( umask 077
+#     printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+#     printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env )
 #   docker compose up -d --wait
 #   curl -fsS http://127.0.0.1:8080/healthz
 #
@@ -17,7 +18,9 @@
 # .env keeps both lines). The image alone (`docker run`) runs on that SQLite file by default.
 #
 # The board is published on 127.0.0.1 only. The claude.ai connector needs it at a public HTTPS URL:
-# put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL.
+# put a TLS reverse proxy in front of 127.0.0.1:8080 and set BATONDECK_PUBLIC_URL to that URL. The
+# proxy should forward the original Host and send X-Forwarded-Proto: https and X-Forwarded-For
+# (README step 6); an https BATONDECK_PUBLIC_URL makes the sign-in cookies Secure in any case.
 services:
   batondeck-kanban:
     image: ghcr.io/batondeck/batondeck-kanban:0.1.0
@@ -55,7 +58,10 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16
+    # By digest (Postgres 16.15's multi-platform index), so a moved tag cannot change the image that
+    # holds the database, and `docker compose pull` fetches this image and no other. A release moves it
+    # to a newer 16.x, which starts on the same volume.
+    image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
     environment:
       POSTGRES_USER: batondeck
       POSTGRES_PASSWORD: ${BATONDECK_POSTGRES_PASSWORD:?set BATONDECK_POSTGRES_PASSWORD, for example in .env beside compose.yaml - openssl rand -hex 24 (hex, since it goes into the URL unescaped)}

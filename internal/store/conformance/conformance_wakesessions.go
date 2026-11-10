@@ -12,8 +12,8 @@ import (
 func init() { register("wakesessions", wakeSessions) }
 
 // wakeSessions is the wake-session area: put, get, list, the cursor and delete, a replace keeping its
-// creation time, expiry judged at the read (and not by the list), one pid per session, and the
-// refusals.
+// creation time, expiry judged at the read (and not by the list), one pid per session of a device,
+// and the refusals.
 func wakeSessions(t *testing.T, newStore Factory) {
 	ctx := context.Background()
 	probe := func(s store.Store) error {
@@ -81,6 +81,18 @@ func wakeSessions(t *testing.T, newStore Factory) {
 			taken := live("W-d", 300)
 			taken.PID = 4242
 			wantErr(t, s.PutWakeSession(ctx, taken), domain.CodeValidation, "")
+			// P-167: a pid is unique per device. Another device's session holds the same pid number,
+			// and reads back its device; a second one there is refused.
+			there := live("W-e", 300)
+			there.PID, there.DeviceID = 4242, "dev-b"
+			noErr(t, s.PutWakeSession(ctx, there))
+			if got, err := s.GetWakeSession(ctx, "W-e"); err != nil || got.DeviceID != "dev-b" || got.PID != 4242 {
+				t.Fatalf("another device's session of pid 4242 read back %+v, %v", got, err)
+			}
+			again := live("W-f", 300)
+			again.PID, again.DeviceID = 4242, "dev-b"
+			wantErr(t, s.PutWakeSession(ctx, again), domain.CodeValidation, "")
+			noErr(t, s.DeleteWakeSession(ctx, "W-e"))
 			a.Role = "master" // the same id may keep its pid
 			noErr(t, s.PutWakeSession(ctx, a))
 			noErr(t, s.SetWakeSessionCursor(ctx, "W-a", 77, 900))

@@ -27,14 +27,12 @@ export async function logout(): Promise<void> {
   await req<void>('POST', '/api/logout');
 }
 
-// `tenantName` (T-453) is the organization's DISPLAY name, served from the session cookie jar so the
-// identity menu can render it with no request of its own. OPTIONAL on the wire and `null` for any
-// session minted before `cn` shipped — the renderer falls back to `tenantId`, never to blank.
-export async function session(): Promise<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin: boolean; permissions?: string[]; subscriptionsEnabled: boolean; uiSettings: Record<string, number | boolean>; tenantId?: string | null; tenantName?: string | null; pullBase?: string | null }> {
-  // `permissions` is OPTIONAL on the wire and stays optional (T-378): it is absent until the BFF
-  // lands it, and optional-here forces every reader through `can()`'s `?? []` rather than letting a
-  // non-null assertion invent an empty array somewhere less careful.
-  const s = await req<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin?: boolean; permissions?: string[]; subscriptionsEnabled?: boolean; uiSettings?: Record<string, number | boolean>; tenantId?: string | null; tenantName?: string | null; pullBase?: string | null }>('GET', '/api/session');
+// The answer of internal/api/session.go's sessionResp.
+export async function session(): Promise<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin: boolean; permissions?: string[]; subscriptionsEnabled: boolean; uiSettings: Record<string, number | boolean> }> {
+  // `permissions` stays OPTIONAL here (T-378) although the server always sends it: optional forces
+  // every reader through `can()`'s `?? []` rather than letting a non-null assertion invent an empty
+  // array somewhere less careful.
+  const s = await req<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin?: boolean; permissions?: string[]; subscriptionsEnabled?: boolean; uiSettings?: Record<string, number | boolean> }>('GET', '/api/session');
   return { ...s, isAdmin: s.isAdmin ?? false, subscriptionsEnabled: s.subscriptionsEnabled ?? false, uiSettings: s.uiSettings ?? {} };
 }
 

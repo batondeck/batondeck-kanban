@@ -42,6 +42,19 @@ describe('useTaskCreate optimistic placeholder', () => {
     expect(rows(qc)[0]?.title).toBe('brand new');
   });
 
+  // An infinite query under the board's prefix (the Analytics census's old key) must not make the
+  // create throw before its request is sent.
+  it('skips a non-page entry under the prefix instead of throwing on it', async () => {
+    createTask.mockImplementation(() => new Promise(() => {}));
+    const { qc, wrapper } = harness();
+    qc.setQueryData(['tasks', 'P-1', 'B-1'], { pages: [{ tasks: [{ id: 'T-1' } as Task] }], pageParams: [''] });
+    const { result } = renderHook(() => useTaskCreate('P-1', 'B-1'), { wrapper });
+    act(() => result.current.mutate({ title: 'still sent' }));
+    await waitFor(() => expect(rows(qc)).toHaveLength(2));
+    expect(result.current.isError, String(result.current.error)).toBe(false);
+    expect(createTask).toHaveBeenCalled();
+  });
+
   it('rolls the placeholder back when the create fails', async () => {
     createTask.mockRejectedValue(new Error('boom'));
     const { qc, wrapper } = harness();

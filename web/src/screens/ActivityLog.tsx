@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useDisplayNames } from '../displayNames.js';
+import { useDisplayNames, useWorkspaceNames } from '../displayNames.js';
 import { Link } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
 import * as auditApi from '../api/audit.js';
 import * as boardsApi from '../api/boards.js';
@@ -12,29 +12,39 @@ import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
 import { Avatar, PageHeader, PriorityDot, StatusPill, eventActor, eventVerb, timeAgo } from '../components.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { composeResults, descriptionSnippet, looksLikeTaskId, parseTicketQuery } from '../ticketSearch.js';
 import type { ActivityEvent, Task } from '../types.js';
 import { Panel, Stack } from '../ui.js';
 
-/** Human-readable label for a date-bucket key (YYYY-MM-DD). */
-function dayLabel(key: string): string {
+/**
+ * The viewer's LOCAL calendar day of `d`, as YYYY-MM-DD. The buckets and their labels are local
+ * because each row's time reads local: keyed by UTC date, an afternoon's actions in UTC-8 split
+ * across "Today" and "Yesterday" at 16:00.
+ */
+const localDayKey = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Human-readable label for a date-bucket key (YYYY-MM-DD, the viewer's local day). */
+export function dayLabel(key: string): string {
   const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-  const yest = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+  const todayKey = localDayKey(today);
+  // The calendar day before, not 24 hours before: a DST change makes one day 23 or 25 hours long.
+  const yest = localDayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1));
   if (key === todayKey) return 'Today';
   if (key === yest) return 'Yesterday';
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** Group events (already newest-first) into ordered date buckets. */
-function groupByDay(events: ActivityEvent[]): Array<{ key: string; items: ActivityEvent[] }> {
+export function groupByDay(events: ActivityEvent[]): Array<{ key: string; items: ActivityEvent[] }> {
   const sorted = [...events].sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
   const out: Array<{ key: string; items: ActivityEvent[] }> = [];
   let current: { key: string; items: ActivityEvent[] } | null = null;
   for (const e of sorted) {
-    const key = new Date(e.ts).toISOString().slice(0, 10);
+    const key = localDayKey(new Date(e.ts));
     if (!current || current.key !== key) {
       current = { key, items: [] };
       out.push(current);
@@ -274,7 +284,9 @@ export function ActivityLog() {
           <>
         {isError && <p className="error" style={{ fontSize: 12 }}>Couldn’t load the activity feed.</p>}
         {loading && !feedQ.data && <WaitLoader />}
-        {!loading && !isError && events.length === 0 && (
+        {/* On "All projects" there is no feed to be empty: ask for a project (P-457). */}
+        {!projectId && !projectsLoading && <PickProject what="Activity feeds" none="Create a project and a board; what happens on it will appear here." />}
+        {!!projectId && !loading && !isError && events.length === 0 && (
           <p className="muted" style={{ fontSize: 14 }}>No activity yet. Actions on the board will appear here.</p>
         )}
 
@@ -394,11 +406,25 @@ export function ActivityLog() {
  */
 export function AuditLog() {
   const [action, setAction] = useState('');
-  const q = useQuery({
+  // Pages of 100, older ones on Load more through the nextCursor each page answers.
+  const q = useInfiniteQuery({
     queryKey: ['auditLog', action],
-    queryFn: () => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100 }),
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100, cursor: pageParam || undefined }),
+    getNextPageParam: (last) => last.nextCursor || null,
   });
-  const entries = q.data?.entries ?? [];
+  const entries = q.data?.pages.flatMap((p) => p.entries) ?? [];
+  // A name beside each account id the caller's projects can name (P-457). The id stays: this is the
+  // forensic record, and two accounts may share a name. Subjects are stored lower-cased (P-441), so
+  // the lookup ignores case.
+  const names = useWorkspaceNames();
+  const byLower = useMemo(() => Object.fromEntries(Object.entries(names).map(([id, n]) => [id.toLowerCase(), n])), [names]);
+  const account = (id: string, suffix = '') => {
+    const name = byLower[id.toLowerCase()];
+    return name
+      ? <><span>{name}</span> <span className="mono muted" style={{ fontSize: 11 }}>{id}{suffix}</span></>
+      : <span className="mono">{id}{suffix}</span>;
+  };
   return (
     <section id="audit-log" style={{ marginTop: 24 }}>
       <Panel
@@ -417,7 +443,7 @@ export function AuditLog() {
         {q.isError && <p className="error" style={{ fontSize: 12, margin: '8px 12px' }}>Couldn’t load the audit log.</p>}
         {q.isLoading && <WaitLoader />}
         {!q.isLoading && !q.isError && entries.length === 0 && (
-          <p className="muted" style={{ fontSize: 12, padding: 12, margin: 0 }}>No audit rows in the last {q.data?.days ?? 90} days.</p>
+          <p className="muted" style={{ fontSize: 12, padding: 12, margin: 0 }}>No audit rows in the last {q.data?.pages[0]?.days ?? 90} days.</p>
         )}
         {entries.length > 0 && (
           <div style={{ overflowX: 'auto' }}>
@@ -430,8 +456,8 @@ export function AuditLog() {
                   <tr key={`${e.ts}-${i}`} data-testid="audit-row">
                     <td className="muted" title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</td>
                     <td className="mono">{e.action}</td>
-                    <td className="mono">{e.actor}{e.agent ? ` (${e.agent})` : ''}</td>
-                    <td className="mono">{e.subject || '—'}</td>
+                    <td>{account(e.actor, e.agent ? ` (${e.agent})` : '')}</td>
+                    <td>{e.subject ? account(e.subject) : '—'}</td>
                     <td>{e.result}{e.errorCode ? ` ${e.errorCode}` : ''}</td>
                     <td className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{e.data === '{}' ? '' : e.data}</td>
                   </tr>
@@ -439,6 +465,11 @@ export function AuditLog() {
               </tbody>
             </table>
           </div>
+        )}
+        {q.hasNextPage && (
+          <button className="btn secondary" style={{ margin: '8px 12px' }} disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
+            {q.isFetchingNextPage ? 'Loading…' : 'Load more'}
+          </button>
         )}
       </Panel>
     </section>

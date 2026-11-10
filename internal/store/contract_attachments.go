@@ -21,6 +21,7 @@ const (
 )
 
 // Attachment is one file on a task. BlobSHA256 is "" while pending. TS is Unix milliseconds.
+// FileName is the name attach_file was given, "" on a row from before it was kept.
 type Attachment struct {
 	ProjectID  string
 	TaskID     string
@@ -32,6 +33,7 @@ type Attachment struct {
 	Status     AttachmentStatus
 	CreatedBy  string
 	TS         int64
+	FileName   string
 }
 
 // CreateAttachmentInput is an attachment to create, pending.
@@ -42,6 +44,7 @@ type CreateAttachmentInput struct {
 	Bytes     int64
 	Kind      AttachmentKind
 	CreatedBy string
+	FileName  string
 }
 
 // Attachments is the attachment area. Keys: (project_id, task_id, id). Errors: a missing task is
@@ -60,6 +63,11 @@ type Attachments interface {
 	// DeleteAttachmentsByTask deletes the task's attachment rows and returns how many; their blobs
 	// are left for ListUnreferencedBlobs (delete_task's cascade, plan §Fold 2).
 	DeleteAttachmentsByTask(ctx context.Context, projectID, taskID string) (int64, error)
+	// DeleteStalePendingAttachments deletes at most limit attachments still pending that were
+	// created before before (Unix ms), oldest first, and returns how many: the retention sweep's
+	// uploads that never came. A ready attachment is never deleted. A limit <= 0 is
+	// domain.Validation.
+	DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error)
 }
 
 var (

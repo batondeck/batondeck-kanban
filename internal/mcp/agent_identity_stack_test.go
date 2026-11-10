@@ -191,3 +191,27 @@ func TestASwappedBearerRunsNoToolOnTheSessionOnTheRealStack(t *testing.T) {
 		}
 	})
 }
+
+// "id:<identity>" is the id service.AgentID derives, never a name a client
+// declares. A client whose clientInfo.name is "id:" and another identity names no agent: its
+// task's createdByAgent and its agent_sessions row are the caller's own derived id, as for a token
+// label of that shape (auth.ResolveCaller) and a wake registration (service.CheckWakeAgent).
+func TestAClientInfoNameCannotBeAnotherIdentitysID(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := bk.BootHarness(t, s.Services, agentResolver(), func(o *bk.Options) { o.HiddenTools = s.Core.HiddenTools })
+		tools.Register(h.Server(), s.Services)
+		s.Core.SetAgentSessionEnder(h.Server())
+		z := &caller{t: t, cs: h.ConnectAs(t, agentPlain, "id:u-bob"), called: map[string]int{}}
+		p := str(z.call("create_project", map[string]any{"name": "Spoof", "idempotencyKey": "p-spoof"})["projectId"])
+		b := str(obj(z.call("create_board", map[string]any{"projectId": p, "name": "Main"})["board"])["id"])
+		created := obj(z.call("create_task", map[string]any{"projectId": p, "boardId": b, "title": "one", "description": "spoofed"})["task"])
+		if got := str(created["createdByAgent"]); strings.Contains(got, "u-bob") {
+			t.Fatalf("create_task createdByAgent %q: a client named itself another identity's id", got)
+		}
+		for _, r := range z.call("list_agent_sessions", map[string]any{})["sessions"].([]any) {
+			if got := str(obj(r)["agentId"]); got != "id:u-ada" {
+				t.Fatalf("list_agent_sessions agentId %q, want the caller's own id:u-ada", got)
+			}
+		}
+	})
+}

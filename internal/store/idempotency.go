@@ -16,6 +16,26 @@ type idempotencyQueries interface {
 	GetIdempotencyKey(ctx context.Context, arg sqlitedb.GetIdempotencyKeyParams) (sqlitedb.IdempotencyKey, error)
 	SetIdempotencyResult(ctx context.Context, arg sqlitedb.SetIdempotencyResultParams) error
 	DeleteProjectIdempotencyKeys(ctx context.Context, projectID string) error
+	DeleteExpiredIdempotencyKeys(ctx context.Context, arg sqlitedb.DeleteExpiredIdempotencyKeysParams) (int64, error)
+}
+
+func (s *SQLite) DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error) {
+	return deleteExpiredIdempotencyKeys(ctx, s, now, limit)
+}
+
+func (s *Postgres) DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error) {
+	return deleteExpiredIdempotencyKeys(ctx, s, now, limit)
+}
+
+func deleteExpiredIdempotencyKeys(ctx context.Context, e engine, now int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a sweep needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := e.queries(true).DeleteExpiredIdempotencyKeys(ctx, sqlitedb.DeleteExpiredIdempotencyKeysParams{Now: now, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, fmt.Errorf("store: sweep idempotency keys: %w", err)
+	}
+	return n, nil
 }
 
 func (s *SQLite) WithIdempotency(ctx context.Context, projectID, identity, key string, ttl time.Duration, fn func(tx Store) ([]byte, error)) ([]byte, error) {
@@ -107,6 +127,10 @@ func (p pgQueries) GetIdempotencyKey(ctx context.Context, arg sqlitedb.GetIdempo
 
 func (p pgQueries) SetIdempotencyResult(ctx context.Context, arg sqlitedb.SetIdempotencyResultParams) error {
 	return p.q.SetIdempotencyResult(ctx, pgdb.SetIdempotencyResultParams(arg))
+}
+
+func (p pgQueries) DeleteExpiredIdempotencyKeys(ctx context.Context, arg sqlitedb.DeleteExpiredIdempotencyKeysParams) (int64, error) {
+	return p.q.DeleteExpiredIdempotencyKeys(ctx, pgdb.DeleteExpiredIdempotencyKeysParams(arg))
 }
 
 func (p pgQueries) DeleteProjectIdempotencyKeys(ctx context.Context, projectID string) error {

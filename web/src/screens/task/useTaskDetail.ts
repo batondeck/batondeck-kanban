@@ -5,7 +5,7 @@
  * derived state they would drift — different move targets, different lease maths, two caches. So the
  * data path is defined once here and both screens render the same panels (`./panels.tsx`) off it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../../api/agents.js';
 import * as boardsApi from '../../api/boards.js';
@@ -15,8 +15,9 @@ import * as mediaApi from '../../api/media.js';
 import * as projectsApi from '../../api/projects.js';
 import * as streamApi from '../../api/stream.js';
 import * as tasksApi from '../../api/tasks.js';
+import { ApiError } from '../../api/http.js';
 import { useAuth } from '../../auth.js';
-import { boardTasksKey, useTaskAction } from '../../mutations.js';
+import { boardTasksKey, readBoardTasks, useTaskAction } from '../../mutations.js';
 import { uiSettings } from '../../settings.js';
 import { buildAgentList, busyAgentKeys } from '../../agentStatus.js';
 import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../../displayNames.js';
@@ -24,6 +25,7 @@ import { closedWhy, mayCall, type GatedTool } from '../../toolFloors.js';
 import { isCancelled } from '../../reports.js';
 import type { ActivityEvent, AgentSession, Status, Task } from '../../types.js';
 import { keepCachedDevices, replaceDevicePresence } from '../../presenceMerge.js';
+import { forgetLease, onLeaseStorage, recallLease, rememberLease } from './leases.js';
 
 // The fixed table (ADR-0005), the fallback until the board's own `transitions` (the same table, as
 // get_board answers it) has loaded — so the buttons offer exactly the moves the server accepts.
@@ -35,13 +37,23 @@ const NEXT: Record<Status, Status[]> = {
   DONE: ['IN_PROGRESS'],
 };
 
+/**
+ * The Edit draft: the title and description being edited, and the version and text they were taken
+ * from. Save sends only the fields changed from `base`, and holds when someone else changed the title
+ * or description since (see `editConflict`): the task keeps refreshing under an open editor, so the
+ * version read at Save time is not the one the draft was based on.
+ */
+export interface EditDraft { title: string; description: string; version: number; base: { title: string; description: string } }
+
 /** Fire a write, refresh the ticket's caches, surface the error instead of throwing. */
 export type Run = <T>(p: Promise<T>, onSuccess?: (r: T) => void) => Promise<void>;
 
 // Live ticking lease countdown ("4m 12s") + fraction remaining for the progress bar. Recomputes once
-// a second off a now() tick; assumes the core's default 5-minute lease window (LEASE_DEFAULT_SECONDS)
-// for the bar fill (purely cosmetic — same window the board card's lease bar uses).
-function useLeaseCountdown(expiresAt: string | null | undefined): { label: string; frac: number; expired: boolean } {
+// a second off a now() tick. The claim on the wire carries its expiry, not its length, so the bar
+// measures this browser's own claim from when it answered (`since`: a browser claim holds an hour)
+// and any other against the server's default 5-minute lease (purely cosmetic — the window the board
+// card's lease bar uses).
+function useLeaseCountdown(expiresAt: string | null | undefined, since: number | null): { label: string; frac: number; expired: boolean } {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!expiresAt) return;
@@ -51,24 +63,42 @@ function useLeaseCountdown(expiresAt: string | null | undefined): { label: strin
   if (!expiresAt) return { label: '', frac: 0, expired: true };
   const ms = new Date(expiresAt).getTime() - now;
   if (ms <= 0) return { label: 'expired', frac: 0, expired: true };
-  const total = 5 * 60 * 1000;
+  const end = new Date(expiresAt).getTime();
+  const total = since !== null && end > since ? end - since : 5 * 60 * 1000;
   const s = Math.floor(ms / 1000);
   const label = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
   return { label, frac: Math.max(0, Math.min(1, ms / total)), expired: false };
 }
 
-export function useTaskDetail(projectId: string, taskId: string) {
+/**
+ * `refreshBoard`: the caller has no Board mounted to refresh the board's own reads on a frame (the
+ * full ticket page), so the hook refreshes them too. The drawer leaves it off: its Board does that,
+ * and a second invalidation could refetch the board's task list twice.
+ */
+export function useTaskDetail(projectId: string, taskId: string, { refreshBoard = false }: { refreshBoard?: boolean } = {}) {
   const qc = useQueryClient();
   const { identity } = useAuth();
-  const [lease, setLease] = useState<string | null>(null);
+  // The lease id this browser's claim was given (see ./leases.ts): kept outside the component, so
+  // closing the drawer, j/k or a reload does not strand the claim's holder. Read on every render, so
+  // the page following a link to another ticket reads that ticket's entry, not this one's.
+  const [, leaseChanged] = useReducer((n: number) => n + 1, 0);
+  const leaseEntry = identity ? recallLease(identity, projectId, taskId) : null;
+  // Another tab of this browser claimed or released: read the entry again.
+  useEffect(() => onLeaseStorage(leaseChanged), []);
+  /** Remember the claim's lease (with the task's version in the claim's answer), or forget it (null). */
+  const setLease = (claim: { leaseId: string; version: number } | null): void => {
+    if (!identity) return;
+    if (claim) rememberLease(identity, projectId, taskId, claim.leaseId, claim.version);
+    else forgetLease(identity, projectId, taskId);
+    leaseChanged();
+  };
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<{ title: string; description: string }>({ title: '', description: '' });
+  const [draft, setDraft] = useState<EditDraft>({ title: '', description: '', version: 0, base: { title: '', description: '' } });
 
-  // The board's SSE stream invalidates ['task', projectId, …] on every board change (the ui-backend keeps
-  // a stateful MCP session even under STATELESS_MCP=true, so resource subscriptions fire), keeping
-  // task.version fresh for version-checked actions (Pick, Cancel race, follow-ups, moves). This 30s poll
-  // is just a backstop for a dropped stream.
+  // The board's stream refreshes the ticket on every change on its board (the subscription below),
+  // keeping task.version fresh for version-checked actions (Pick, Cancel race, follow-ups, moves). This
+  // 30s poll is just a backstop for a dropped stream.
   const taskQ = useQuery({ queryKey: ['task', projectId, taskId], queryFn: () => tasksApi.getTask(projectId, taskId), refetchInterval: 30000 });
   const projectQ = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.getProject(projectId) });
   // Account id → display name, for the header's "created by" (P-314). The same cache entry the
@@ -86,21 +116,35 @@ export function useTaskDetail(projectId: string, taskId: string) {
     },
     staleTime: 60_000,
   });
+  const task = taskQ.data?.task;
+  // The shared socket, scoped to the ticket's board once the ticket has loaded (joining it opens no
+  // second one). A board frame names no task, so each refreshes this ticket's own reads: on the full
+  // page no Board is mounted to do it, and comments are in no board nudge. In the drawer the Board's
+  // nudge refetches most of these first; `cancelRefetch: false` joins that fetch instead of restarting it.
   // The kept device rows are retired only by a presence frame, so this hook writes the frames itself:
   // on the full task page no Board is mounted to do it, and a session that left would otherwise stay
   // listed through every refetch (P-197). In the drawer the Board writes the same rows the same way.
-  // Joining the shared socket opens no second one; a frame is the device's whole live list.
-  useEffect(
-    () =>
-      streamApi.userStream({
-        onPresence: (sessions) =>
-          qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
-            sessions: replaceDevicePresence(old?.sessions, sessions),
-          })),
-      }),
-    [qc],
-  );
-  const task = taskQ.data?.task;
+  // A frame is the device's whole live list.
+  const streamBoardId = task?.boardId;
+  useEffect(() => {
+    const onPresence = (sessions: AgentSession[]): void => {
+      qc.setQueryData<{ sessions: AgentSession[] }>(['agentsessions'], (old) => ({
+        sessions: replaceDevicePresence(old?.sessions, sessions),
+      }));
+    };
+    if (!streamBoardId) return streamApi.userStream({ onPresence });
+    const onUpdate = (): void => {
+      for (const k of ['task', 'ctx', 'subs', 'mem', 'att', 'comments', 'followups', 'runs']) {
+        void qc.invalidateQueries({ queryKey: [k, projectId, taskId] }, { cancelRefetch: false });
+      }
+      void qc.invalidateQueries({ queryKey: ['hist', projectId, streamBoardId, taskId] }, { cancelRefetch: false });
+      if (refreshBoard) {
+        void qc.invalidateQueries({ queryKey: ['board', projectId, streamBoardId] }, { cancelRefetch: false });
+        void qc.invalidateQueries({ queryKey: ['tasks', projectId, streamBoardId] }, { cancelRefetch: false });
+      }
+    };
+    return streamApi.stream(projectId, streamBoardId, onUpdate, undefined, onPresence);
+  }, [qc, projectId, streamBoardId, taskId, refreshBoard]);
   const [ctxQ, subQ, memQ, attQ] = useQueries({
     queries: [
       { queryKey: ['ctx', projectId, taskId], queryFn: () => contextApi.taskContext(projectId, taskId) },
@@ -109,9 +153,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
       { queryKey: ['att', projectId, taskId], queryFn: () => mediaApi.listAttachments(projectId, taskId) },
     ],
   });
+  // The board's newest events: the agents seen on this board (the Assignee list, @mentions).
   const histQ = useQuery({
     queryKey: ['hist', projectId, task?.boardId, taskId],
     queryFn: () => feedApi.feed(projectId, task!.boardId),
+    enabled: !!task,
+  });
+  // The ticket's own events, for its Activity: the board's newest page holds the board's newest
+  // events whatever task they are on, so filtering it by task read an older ticket as "No activity".
+  // Under the same ['hist', projectId] prefix every refresh and the board's nudge invalidate.
+  const ownHistQ = useQuery({
+    queryKey: ['hist', projectId, task?.boardId, taskId, 'own'],
+    queryFn: () => feedApi.taskFeed(projectId, task!.boardId, taskId),
     enabled: !!task,
   });
   // Board (for column-aware "Move to" labels) + board tasks (to derive which agents are "busy" = hold a
@@ -119,8 +172,10 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const boardQ = useQuery({ queryKey: ['board', projectId, task?.boardId], queryFn: () => boardsApi.getBoard(projectId, task!.boardId), enabled: !!task });
   // The page size is IN the key (see `boardTasksKey`). At the default limit this is byte-identical to
   // Board's key, so opening the drawer from the board is still free; once the board has loaded more,
-  // the two get their own entries instead of fighting over one.
-  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => boardsApi.listTasks(projectId, task!.boardId, { limit: String(uiSettings().taskPageLimit) }), enabled: !!task });
+  // the two get their own entries instead of fighting over one. Both read through `readBoardTasks`: the
+  // shared entry runs the read of whichever observer rendered last, and a raw read could put rows older
+  // than the board's last frame back on screen.
+  const boardTasksQ = useQuery({ queryKey: boardTasksKey(projectId, task?.boardId, uiSettings().taskPageLimit), queryFn: () => readBoardTasks(qc, projectId, task!.boardId, uiSettings().taskPageLimit), enabled: !!task });
   const busyKeys = useMemo(() => busyAgentKeys(boardTasksQ.data?.tasks ?? []), [boardTasksQ.data]);
   const agentList = useMemo(
     () => buildAgentList(
@@ -158,7 +213,13 @@ export function useTaskDetail(projectId: string, taskId: string) {
     // Every detail write (labels, fields, summary, subtasks, memory, deps, claim/release/complete/
     // block/handoff) is marked as a local edit inside req() (api/http.ts), so the board's "changed under you"
     // ring keeps meaning "someone ELSE touched this" rather than firing on your own typing.
-    return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => { setErr(String(e instanceof Error ? e.message : e)); });
+    return p.then((r) => { refresh(); onSuccess?.(r); }).catch((e) => {
+      // Only a lease outcome answers LEASE_EXPIRED: the remembered lease is spent, so stop offering it.
+      if (e instanceof ApiError && e.code === 'LEASE_EXPIRED') setLease(null);
+      // STALE: the task moved on. Read it now, so an open editor shows what changed under it.
+      if (e instanceof ApiError && e.code === 'STALE') void qc.invalidateQueries({ queryKey: ['task', projectId, taskId] });
+      setErr(String(e instanceof Error ? e.message : e));
+    });
   };
 
   // Shared upload path for the attachments dropzone (click-to-browse and drag-drop both call this).
@@ -168,7 +229,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     void run(
       mediaApi
         .createAttachment(projectId, taskId, { fileName: file.name, mimeType, kind, bytes: file.size })
-        .then((r) => fetch(r.uploadUrl, { method: 'PUT', headers: { 'content-type': mimeType }, body: file }))
+        .then((r) => fetch(mediaApi.onOwnOrigin(r.uploadUrl), { method: 'PUT', headers: { 'content-type': mimeType }, body: file }))
         // Surface a failed object-store PUT instead of leaving the attachment "pending" forever with no feedback.
         .then((res) => { if (!res.ok) throw new Error(`Upload failed (${res.status})`); }),
     );
@@ -181,14 +242,26 @@ export function useTaskDetail(projectId: string, taskId: string) {
     (to, t) => tasksApi.moveTask(projectId, t.id, t.version, { toStatus: to }),
   );
 
-  const countdown = useLeaseCountdown(task?.claim?.expiresAt);
+  // The remembered lease is offered only while the live claim is this identity's with no agent named
+  // (a claim that names an agent is that agent's, even under this identity's token: P-320). A claim
+  // with no lease here is someone else's, or this identity's from another browser or session.
+  const claimIsMine = !!task?.claim && !!identity && task.claim.owner === identity && !task.claim.agent;
+  const myLease = claimIsMine && leaseEntry ? leaseEntry.leaseId : null;
+  const countdown = useLeaseCountdown(task?.claim?.expiresAt, myLease ? leaseEntry!.at : null);
+  const heldByOther = !!task?.claim && !myLease;
+  // Drop a remembered lease once a read of the task made after the claim shows the claim gone or not
+  // this browser's (released, completed or reaped elsewhere), so storage does not collect them. "Made
+  // after the claim" is the task's version, not when the read answered: a read another tab of this
+  // browser sent before the claim committed can answer after the claim stored its lease, and it holds
+  // the older version. A read at the claim's own version or later was made after it, hence `>=`.
+  const staleLease = !!leaseEntry && !!task && !claimIsMine && task.version >= leaseEntry.version;
+  useEffect(() => {
+    if (staleLease && identity) { forgetLease(identity, projectId, taskId); leaseChanged(); }
+  }, [staleLease, identity, projectId, taskId]);
 
-  // The leaseId survives a reload via task.claim: if the signed-in human owns the live claim, they can
-  // act on it even though the in-session `lease` state was reset. (lease covers the just-claimed case.)
-  const myLease = lease ?? (task?.claim && task.claim.owner === identity ? task.claim.leaseId : null);
-  const heldByOther = !!task?.claim && task.claim.owner !== identity && !lease;
-
-  const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
+  const history = (ownHistQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
+  /** The ticket's events loaded so far; `truncated` when the read stopped before its first event. */
+  const historyState = { loading: ownHistQ.isLoading || !task, failed: ownHistQ.isError, truncated: !!ownHistQ.data?.truncated };
   const subs = subQ.data?.tasks ?? [];
   // A cancelled subtask is DONE but not delivered: it counts in the total and not in done (P-208).
   const subsDone = subs.filter((s) => s.status === 'DONE' && !isCancelled(s)).length;
@@ -209,7 +282,9 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // that have a column on THIS board once it loads (labels use the column's name).
   const cols = boardQ.data?.board.columns ?? [];
   const colFor = (s: string): { name: string } | undefined => cols.find((c) => c.status === s);
-  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? NEXT[task.status])) ?? [];
+  /** The statuses `s` may move to: the board's table once it has loaded, else the fixed one. */
+  const nextOf = (s: Status): Status[] => boardQ.data?.board.transitions?.[s] ?? NEXT[s];
+  const transitions = task ? nextOf(task.status) : [];
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
@@ -253,16 +328,39 @@ export function useTaskDetail(projectId: string, taskId: string) {
   const startEdit = (): void => {
     if (!task || !canEdit) return;
     setEditing(true);
-    setDraft({ title: task.title, description: task.description });
+    setDraft({ title: task.title, description: task.description, version: task.version, base: { title: task.title, description: task.description } });
+  };
+  // Someone else changed the title or the description since the draft was taken. Save holds until the
+  // editor chooses: `keepMyEdit` or Cancel. A version bump that changed neither (a label, a claim)
+  // is no conflict: Save then sends only the edited fields on the version last read, and the server's
+  // check refuses it (STALE) if the task has moved on again.
+  const editConflict = editing && !!task && (task.title !== draft.base.title || task.description !== draft.base.description);
+  /** Keep my edit over the newer version: a field I did not touch takes the newer text. */
+  const keepMyEdit = (): void => {
+    if (!task) return;
+    setDraft((dr) => ({
+      title: dr.title === dr.base.title ? task.title : dr.title,
+      description: dr.description === dr.base.description ? task.description : dr.description,
+      version: task.version,
+      base: { title: task.title, description: task.description },
+    }));
+  };
+  const saveEdit = (): void => {
+    if (!task || editConflict) return;
+    const patch: { title?: string; description?: string } = {};
+    if (draft.title !== draft.base.title) patch.title = draft.title;
+    if (draft.description !== draft.base.description) patch.description = draft.description;
+    if (patch.title === undefined && patch.description === undefined) { setEditing(false); return; }
+    void run(tasksApi.updateTask(projectId, taskId, task.version, patch), () => setEditing(false));
   };
 
   return {
-    projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, memQ, attQ,
-    err, setErr, run, uploadFile, move, countdown, myLease, heldByOther, setLease,
-    editing, setEditing, draft, setDraft, startEdit,
-    agentList, mentionCandidates, history,
+    projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, ctxQ, subQ, memQ, attQ,
+    err, setErr, run, uploadFile, move, countdown, myLease, claimIsMine, heldByOther, setLease,
+    editing, setEditing, draft, setDraft, startEdit, editConflict, keepMyEdit, saveEdit,
+    agentList, mentionCandidates, history, historyState, ownHistQ,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
+    colFor, moveTargets, nextOf, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
     canEdit, canSummarise, canLink, canAddSubtask, canAnnotate, canWriteMemory, canAttach, canFollowUp, canAck, canRace, why,
   };
 }

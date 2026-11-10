@@ -69,6 +69,12 @@ func (s sessions) TouchAgentSession(ctx context.Context, caller domain.Caller, r
 	if !slices.Contains(SessionKindValues, req.Kind) {
 		return resp, domain.Validation("unknown session kind: "+string(req.Kind), map[string]any{"field": "kind", "allowed": SessionKindValues})
 	}
+	// The transport cleans and bounds what a client sends; this is the second line, so a NUL never
+	// reaches the store (Postgres refuses it) and no field grows the row past a name's length.
+	if why := badText("sessionKey", req.SessionKey, "agentName", req.AgentName, "clientName", req.ClientName, "clientVersion", req.ClientVersion,
+		"oauthClientId", req.OAuthClientID, "tool", req.Tool, "projectId", req.ProjectID); why != "" {
+		return resp, domain.Validation(why, nil)
+	}
 	at := s.c.nowMs()
 	if req.Tool == "" {
 		_, err = s.c.store.UpsertAgentSession(ctx, store.AgentSessionStart{
@@ -200,6 +206,7 @@ func (s sessions) RegisterWakeSession(ctx context.Context, caller domain.Caller,
 		ID: id, IdentityID: caller.Identity, AgentID: agent, SocketPath: req.SocketPath,
 		LastCursor: req.Cursor, CreatedAt: now.UnixMilli(), LastSeenAt: now.UnixMilli(), ExpiresAt: now.Add(s.c.wakeTTL).UnixMilli(),
 		PID: req.PID, Role: req.Role, ClientSessionID: req.ClientSessionID, ProcStart: req.ProcStart,
+		DeviceID: s.c.device,
 	}
 	if w.BearerSealed, err = s.c.sealer.Encrypt([]byte(req.Bearer), BearerAAD(w.ID)); err != nil {
 		return resp, s.c.mapErr("register_wake_session", err)
@@ -243,7 +250,9 @@ func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agen
 	return nil
 }
 
-// ListWakeSessions opens each row's bearer and socket token under the row's own AAD.
+// ListWakeSessions is this device's rows and the rows that name no device (written before
+// 0010), each with its bearer and socket token opened under the row's own AAD. Another device's
+// row is not listed: its pid names a process on that device, not here (P-167).
 func (s sessions) ListWakeSessions(ctx context.Context) (out []WakeSessionRow, err error) {
 	defer s.c.recovered("list_wake_sessions", &err)
 	rows, err := s.c.store.ListWakeSessions(ctx)
@@ -251,6 +260,9 @@ func (s sessions) ListWakeSessions(ctx context.Context) (out []WakeSessionRow, e
 		return nil, s.c.mapErr("list_wake_sessions", err)
 	}
 	for _, w := range rows {
+		if w.DeviceID != "" && w.DeviceID != s.c.device {
+			continue
+		}
 		r := WakeSessionRow{ID: w.ID, IdentityID: w.IdentityID, AgentID: w.AgentID, PID: w.PID, Role: w.Role,
 			SocketPath: w.SocketPath, ClientSessionID: w.ClientSessionID, ProcStart: w.ProcStart, LastCursor: w.LastCursor, CreatedAt: w.CreatedAt}
 		if s.c.sealer != nil && w.BearerSealed != nil {

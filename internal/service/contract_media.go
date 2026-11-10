@@ -71,6 +71,7 @@ type Attachment struct {
 	CreatedBy     string           `json:"createdBy"`
 	DownloadURL   *string          `json:"downloadUrl"`
 	ExtractedText *string          `json:"extractedText"`
+	FileName      string           `json:"fileName"`
 	GCSURI        string           `json:"gcsUri"`
 	ID            string           `json:"id"`
 	Kind          MediaKind        `json:"kind"`

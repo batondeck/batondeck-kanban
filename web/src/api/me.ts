@@ -9,6 +9,14 @@ export const getMySettings = () => req<MySettings>('GET', '/api/me/settings');
 export const setMySettings = (patch: { maxTicketTokens?: number | null; tokenPolicy?: string | null; starredAssets?: string[] }) =>
   req<MySettings>('PATCH', '/api/me/settings', patch);
 
+/**
+ * The signed-in user's own password change: the current password and a new one of at least 12
+ * characters. It signs out every other session of the user; this browser carries on, on the fresh
+ * session cookies the answer sets.
+ */
+export const changePassword = (body: { currentPassword: string; newPassword: string }) =>
+  req<{ otherSessionsEnded: number }>('POST', '/api/me/password', body);
+
 // CLI tokens (T-457). There is deliberately NO `getCliToken` — the value is returned by the mint and
 // nowhere else, so a compromised session cannot walk the list to harvest secrets.
 export const listCliTokens = () => req<{ tokens: CliTokenRow[] }>('GET', '/api/me/cli-tokens');
@@ -28,7 +36,6 @@ export interface CliTokenRow {
   label: string;
   createdAt: string;
   expiresAt: string;
-  lastUsedAt: string | null;
   revokedAt: string | null;
   status: 'live' | 'expired' | 'revoked';
 }

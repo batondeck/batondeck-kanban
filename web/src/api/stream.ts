@@ -1,4 +1,4 @@
-// The live area: /api/stream (internal/api/stream.go), one EventSource per tab shared by every screen.
+// The live area: /api/stream (internal/api/stream.go), one EventSource per visible tab shared by every screen.
 import type { AgentSession } from '../types.js';
 
 /**
@@ -19,6 +19,8 @@ function sseConnect(
   onLive: ((live: boolean) => void) | undefined,
   listeners: Record<string, (data: unknown) => void>,
   onReconnect?: () => void,
+  /** This socket replaces one closed while the tab was hidden: its first open is a reconnect too. */
+  resumed = false,
 ): () => void {
   const STALL_MS = 60_000; // server pings every 20s; tolerate two dropped ones before reconnecting
   let es: EventSource | undefined;
@@ -26,7 +28,7 @@ function sseConnect(
   let stall: ReturnType<typeof setTimeout> | undefined;
   let delay = 1000;
   let stopped = false;
-  let reconnected = false;
+  let reconnected = resumed;
   // *** A CLOSED STREAM MAY BE A SIGNED-OUT ONE (P-282). *** Once the session ends the server closes the
   // stream and the browser's reconnect meets 401 (internal/api/stream.go, P-219), but EventSource hides
   // the status: CLOSED looks exactly like a 5xx blip, so the backoff below would retry every 30s forever
@@ -151,50 +153,143 @@ type Sub = { key: { projectId?: string; boardId?: string }; h: StreamHandlers };
 const subs = new Set<Sub>();
 let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
+/** The board the open socket streams, or null for a socket that names none. */
+let servedBoard: { projectId: string; boardId: string } | null = null;
+/**
+ * The last `presence` payload the CURRENT socket carried, for a subscriber that joins it later. The
+ * server sends presence once on open and then only on a change, and the nav badge opens the socket at
+ * app mount, so a screen joining on the same URL (Agents with no board, the full task page) would
+ * otherwise not see it until the next change. Cleared whenever the socket is replaced or goes down:
+ * a rebuilt or reconnected socket sends its own on open.
+ *
+ * NOT `notifications`: the server sends those on open and per new row, but not when one is marked
+ * read, so the last frame can be older than the reader's own mark-read, and every notifications
+ * subscriber reads the list over REST first anyway.
+ */
+let lastPresence: unknown;
 
-/** The board the shared socket should be scoped to: whichever subscriber named one. */
-function desiredUrl(): string {
-  for (const s of subs) {
-    if (s.key.projectId && s.key.boardId) {
-      return `/api/stream?projectId=${encodeURIComponent(s.key.projectId)}&boardId=${encodeURIComponent(s.key.boardId)}`;
+/**
+ * *** A HIDDEN TAB GIVES ITS SOCKET BACK. *** On plain HTTP (the Quickstart's http://localhost:8080)
+ * the server speaks HTTP/1.1, and a browser holds at most six connections per host, EventSource
+ * included. One always-open stream per tab meant the sixth tab took the last connection and every
+ * fetch in every tab then waited for good. So a tab hidden for longer than this closes its stream, a
+ * tab opened in the background opens none, and either opens it when shown, its first `open` counting
+ * as a reconnect (onReconnect: refetch what the tab may have missed).
+ */
+export const HIDDEN_STREAM_GRACE_MS = 10_000;
+let suspended = false;
+let hideTimer: ReturnType<typeof setTimeout> | undefined;
+let watching = false;
+/** The stream was wanted while suspended: the socket opened next is a resumption. */
+let missed = false;
+
+const tabHidden = (): boolean => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
+function onVisibility(): void {
+  if (tabHidden()) {
+    if (!suspended && hideTimer === undefined) {
+      hideTimer = setTimeout(() => {
+        hideTimer = undefined;
+        suspended = true;
+        reconcile();
+      }, HIDDEN_STREAM_GRACE_MS);
     }
+    return;
   }
-  return '/api/stream';
+  clearTimeout(hideTimer);
+  hideTimer = undefined;
+  if (suspended) {
+    suspended = false;
+    reconcile();
+  }
 }
 
-function fanout<K extends keyof StreamHandlers>(name: K, apply: (h: StreamHandlers) => void): void {
+function watchVisibility(): void {
+  if (watching || typeof document === 'undefined') return;
+  watching = true;
+  document.addEventListener('visibilitychange', onVisibility);
+}
+
+
+/**
+ * ONE BOARD PER SOCKET. The server streams the board the URL names and drops every other board's
+ * changes (internal/api/stream.go), so the shared socket is scoped to the FIRST subscriber that names a
+ * board. A subscriber naming another board is not served: it gets no board frames, nudges or resyncs
+ * (the first board's snapshot used to land in its cache keys), and its `onLive` says false, so it
+ * polls. When the served board's last subscriber leaves, the socket is rebuilt for the next one.
+ */
+function boardOf(s: Sub): { projectId: string; boardId: string } | null {
+  return s.key.projectId && s.key.boardId ? { projectId: s.key.projectId, boardId: s.key.boardId } : null;
+}
+function served(s: Sub): boolean {
+  const b = boardOf(s);
+  return !b || (!!servedBoard && b.projectId === servedBoard.projectId && b.boardId === servedBoard.boardId);
+}
+
+/** The board the shared socket should be scoped to: the first subscriber that named one. */
+function desiredBoard(): { projectId: string; boardId: string } | null {
+  for (const s of subs) {
+    const b = boardOf(s);
+    if (b) return b;
+  }
+  return null;
+}
+function urlOf(b: { projectId: string; boardId: string } | null): string {
+  return b ? `/api/stream?projectId=${encodeURIComponent(b.projectId)}&boardId=${encodeURIComponent(b.boardId)}` : '/api/stream';
+}
+
+/** Hand a frame to every subscriber, or (`boardOnly`) to those whose board this socket streams. */
+function fanout(apply: (h: StreamHandlers, s: Sub) => void, boardOnly = false): void {
   for (const s of [...subs]) {
+    if (boardOnly && (!boardOf(s) || !served(s))) continue;
     try {
-      apply(s.h);
+      apply(s.h, s);
     } catch {
       /* one bad subscriber must not stop the others */
     }
   }
-  void name;
 }
 
 function reconcile(): void {
-  const want = subs.size === 0 ? '' : desiredUrl();
+  watchVisibility();
+  // No socket to keep and nothing on screen (a tab opened in the background): no grace.
+  if (subs.size > 0 && !currentUrl && tabHidden()) suspended = true;
+  if (subs.size === 0) missed = false;
+  else if (suspended) missed = true;
+  const board = subs.size === 0 || suspended ? null : desiredBoard();
+  const want = subs.size === 0 || suspended ? '' : urlOf(board);
   if (want === currentUrl) return;
   closeCurrent?.();
   closeCurrent = undefined;
   currentUrl = want;
+  servedBoard = board;
+  lastPresence = undefined;
   if (!want) return;
+  const resumed = missed;
+  missed = false;
   closeCurrent = sseConnect(
     want,
-    (live) => fanout('onLive', (h) => h.onLive?.(live)),
+    // An unserved board subscriber is never live: its board is not on this socket.
+    (live) => {
+      if (!live) lastPresence = undefined;
+      fanout((h, sub) => h.onLive?.(live && served(sub)));
+    },
     {
-      updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
-      board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
-      presence: (d) => fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
+      updated: () => fanout((h) => h.onUpdate?.(), true),
+      board: (d) => fanout((h) => h.onBoard?.(d), true),
+      presence: (d) => {
+        lastPresence = d;
+        fanout((h) => h.onPresence?.(presenceSessions(d, new Date().toISOString())));
+      },
       // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
-      notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
-      resync: () => fanout('onResync', (h) => h.onResync?.()),
+      notifications: (d) => fanout((h) => h.onNotifications?.(d)),
+      resync: () => fanout((h) => h.onResync?.(), true),
     },
     () => {
-      fanout('onUpdate', (h) => h.onUpdate?.());
-      fanout('onResync', (h) => h.onResync?.());
+      fanout((h) => h.onUpdate?.(), true);
+      fanout((h) => h.onResync?.(), true);
     },
+    resumed,
   );
 }
 
@@ -237,7 +332,31 @@ export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
 export function joinStream(key: { projectId?: string; boardId?: string }, h: StreamHandlers): () => void {
   const sub: Sub = { key, h };
   subs.add(sub);
+  const before = currentUrl;
   reconcile();
+  // Another board holds the socket: say so now, or the caller believes it is live and never polls.
+  if (!served(sub)) {
+    try {
+      h.onLive?.(false);
+    } catch {
+      /* as in fanout */
+    }
+  }
+  // Joined a socket that was already open: hand over the presence it carried (see `lastPresence`).
+  // Next microtask, so the frame lands after the caller's effect has returned; and only while this
+  // subscriber is still here and the frame is still the socket's last (a newer one was fanned out).
+  if (currentUrl === before && lastPresence !== undefined && h.onPresence) {
+    const replay = lastPresence;
+    const onPresence = h.onPresence;
+    queueMicrotask(() => {
+      if (!subs.has(sub) || replay !== lastPresence) return;
+      try {
+        onPresence(presenceSessions(replay, new Date().toISOString()));
+      } catch {
+        /* a bad subscriber must not break the join */
+      }
+    });
+  }
   return () => {
     subs.delete(sub);
     reconcile();
@@ -251,11 +370,12 @@ export function joinStream(key: { projectId?: string; boardId?: string }, h: Str
  * bad reconnect silently killed live push until the user reloaded the page (T-47). Reconnect with
  * backoff, and report liveness so callers can poll faster while the stream is down.
  *
- * The other half: a socket that stays OPEN but stops carrying data (a proxy or Cloud Run dropping a
- * half-open connection without an RST) never fires `error`, so it looked perfectly healthy and live
- * push was dead with only the 30s poll behind it. The gateway already emits a keep-alive every 20s —
- * now as a named `ping` event rather than an SSE comment, which EventSource does not surface — so
- * silence past three of them is a stall: force the same reconnect an error would have.
+ * The other half: a socket that stays OPEN but stops carrying data (a proxy or load balancer dropping
+ * a half-open connection without an RST) never fires `error`, so it looked perfectly healthy and live
+ * push was dead with only the 30s poll behind it. The server emits a keep-alive every 20s
+ * (`internal/api/stream.go`, StreamPing) as a named `ping` event rather than an SSE comment, which
+ * EventSource does not surface — so silence past three of them is a stall: force the same reconnect
+ * an error would have.
  */
 /**
  * Identity-keyed stream (Tier 2) — presence + notifications for screens with NO board open.
@@ -272,7 +392,8 @@ export function userStream(handlers: { onPresence?: (sessions: AgentSession[]) =
 
 /**
  * Board updates + presence. Shares the SAME socket as `userStream` — naming a board just scopes the
- * shared connection, it does not open a second one.
+ * shared connection, it does not open a second one. One board at a time: while another board's
+ * subscriber holds the socket this one gets no board frames and `onLive(false)` (see `served`).
  */
 export function stream(
   projectId: string,

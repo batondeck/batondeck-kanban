@@ -10,6 +10,8 @@ import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { Avatar, EmptyState, PageHeader, eventActor, leaseLeft, personName, timeAgo } from '../components.js';
+import { useWorkspaceNames } from '../displayNames.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { displayAgentName, isSessionOnline } from '../agentStatus.js';
 import { ToolLogo, toolKey, toolLabel } from '../ToolLogo.js';
@@ -19,21 +21,27 @@ import { Cluster, Panel, Stack, Tile, Tiles } from '../ui.js';
 import type { ActivityEvent, AgentSession, Task } from '../types.js';
 import { mergePresence, replaceDevicePresence } from '../presenceMerge.js';
 
+/** How often the aggregate refreshes when the project has boards the stream does not cover. */
+const AGGREGATE_POLL_MS = 30_000;
+
 export function Agents() {
   const { ui } = useAuth();
   const { projectId } = useProject();
+  const workspaceNames = useWorkspaceNames();
   const [connectOpen, setConnectOpen] = useState(false);
 
   const qc = useQueryClient();
   const boardsQ = useQuery({ queryKey: ['boards', projectId], queryFn: () => boardsApi.listBoards(projectId), enabled: !!projectId });
 
-  // Composed here from get_project and each board's tasks and feed: no overview route is served
-  // (ui-backend's aggregate had no lane). One fetch per board, bounded by the boards list, as
-  // ActivityLog's feed is.
+  // Composed here from get_project and each board's tasks and feed: the server has no overview
+  // route. One fetch per board, bounded by the boards list, as ActivityLog's feed is.
   const boardIds = (boardsQ.data?.boards ?? []).map((b) => b.id);
   const data = useQuery({
     queryKey: ['agentsdata', projectId, boardIds.join(',')],
     enabled: !!projectId && !!boardsQ.data,
+    // The stream below covers ONE board (see there); past one, the others' claims and handoffs reach
+    // this page by a poll.
+    refetchInterval: boardIds.length > 1 ? AGGREGATE_POLL_MS : false,
     queryFn: async () => {
       const [p, perBoard] = await Promise.all([
         projectsApi.getProject(projectId),
@@ -52,8 +60,8 @@ export function Agents() {
   // logged by the core on initialize + each tool call.
   //
   // NO POLL. This screen is a standalone route, so no board stream is mounted here; it opens the
-  // identity-keyed `/api/stream` below instead and the gateway pushes presence snapshots down it. The
-  // initial fetch stays so the table renders before the first snapshot arrives.
+  // identity-keyed `/api/stream` below instead, which carries this device's presence frames (on open
+  // and on each change). The initial fetch stays so the table renders before the first frame arrives.
   // The fetch keeps the device rows a presence frame already put in the cache: a frame is sent only
   // on a change, so a list answering after it would otherwise drop them until the next one.
   const sessionsQ = useQuery({
@@ -91,14 +99,14 @@ export function Agents() {
   const topTools = (tc: Record<string, number>): string =>
     Object.entries(tc).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t, n]) => `${t}·${n}`).join('  ') || '—';
 
-  // Push-over-poll: refresh the aggregate on any board's SSE update instead of a 10s timer.
+  // Push for the first board: refresh the aggregate on its SSE update. ONE board, because the tab's
+  // shared socket is scoped to one board and the server sends only that board's changes
+  // (api/stream.ts); subscribing to the others opened nothing for them. They are polled (above).
+  const firstBoard = boardsQ.data?.boards[0]?.id;
   useEffect(() => {
-    if (!projectId) return;
-    const unsubs = (boardsQ.data?.boards ?? []).map((b) =>
-      streamApi.stream(projectId, b.id, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] })),
-    );
-    return () => { for (const u of unsubs) u(); };
-  }, [projectId, boardsQ.data, qc]);
+    if (!projectId || !firstBoard) return;
+    return streamApi.stream(projectId, firstBoard, () => void qc.invalidateQueries({ queryKey: ['agentsdata', projectId] }));
+  }, [projectId, firstBoard, qc]);
 
   const project = data.data?.project;
   const tasks = data.data?.tasks ?? [];
@@ -108,13 +116,18 @@ export function Agents() {
   // a person. Absent = no better label than the id, which is what this table showed before.
   const memberDisplay = data.data?.memberDisplay ?? {};
   const activeClaims = tasks.filter((t: Task) => t.claim && leaseLeft(t.claim.expiresAt));
-  const claimByOwner = new Map<string, Task>();
-  for (const t of activeClaims) if (t.claim) claimByOwner.set(t.claim.owner, t);
+  // Every live lease of an account, not just the last one seen: one person's tokens may run several
+  // agents at once, and each lease names its agent (P-457).
+  const claimsByOwner = new Map<string, Task[]>();
+  for (const t of activeClaims) if (t.claim) claimsByOwner.set(t.claim.owner, [...(claimsByOwner.get(t.claim.owner) ?? []), t]);
+  // The agents holding a lease right now, by the name each claim carries (else its account).
+  const claimingAgents = new Set(activeClaims.map((t: Task) => t.claim!.agent || t.claim!.owner)).size;
 
-  // Capabilities surfaced per identity: union of requiredCapabilities on tasks they touch.
+  // Capabilities surfaced per identity: the union of requiredCapabilities on tasks assigned to or
+  // claimed by it. Not the tasks it CREATED: writing a task that needs "go" is not having "go".
   const capsByOwner = new Map<string, Set<string>>();
   for (const t of tasks) {
-    const owners = [t.assignee, t.claim?.owner, t.createdBy].filter(Boolean) as string[];
+    const owners = [t.assignee, t.claim?.owner].filter(Boolean) as string[];
     for (const o of owners) {
       const set = capsByOwner.get(o) ?? new Set<string>();
       for (const c of t.requiredCapabilities ?? []) set.add(c);
@@ -127,8 +140,6 @@ export function Agents() {
   for (const e of events) {
     if (!lastActivityByOwner.has(e.actor)) lastActivityByOwner.set(e.actor, e.ts);
   }
-  const agentCount = members.filter(([id]) => isAgent(id)).length;
-
   const idTag = (id: string) => {
     const norm = id.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
     return `${norm.slice(0, 1)}-${norm.slice(-2)}`;
@@ -155,7 +166,7 @@ export function Agents() {
             {/* Stat cards — driven by live MCP session telemetry (+ task claims) */}
             <Tiles>
               <Tile label="Agents online" value={onlineSessions.length} />
-              <Tile label="Tasks claimed" value={activeClaims.length} note={`${agentCount} agents`} />
+              <Tile label="Tasks claimed" value={projectId ? activeClaims.length : '—'} note={projectId ? `by ${claimingAgents} ${claimingAgents === 1 ? 'agent' : 'agents'}` : 'pick a project'} />
               <Tile label="Sessions" value={sessions.length} />
               <Tile label="Operations" value={totalOps} />
             </Tiles>
@@ -166,12 +177,8 @@ export function Agents() {
               right={
                 <Cluster gap={12}>
                   <span>{sessions.length} logged · <span style={{ color: 'var(--done)' }}>{onlineSessions.length} online</span></span>
-                  {/* YOUR sessions, not the admin console. This linked to /admin, which is the
-                      workspace-wide view and is admin-only — so the one person who could click it was
-                      sent somewhere that manages EVERYONE's sessions, and everyone else got no way to
-                      stop their own at all. `list_agent_sessions` is caller-scoped, so this table is
-                      already the caller's own; Settings is where they can end them. Admin keeps the
-                      workspace-wide view, reached from the admin nav. */}
+                  {/* YOUR sessions: `list_agent_sessions` is caller-scoped, so this table is the caller's
+                      own, and Settings is where they end them. */}
                   <Link to="/settings#sessions">Manage your sessions →</Link>
                 </Cluster>
               }
@@ -202,7 +209,10 @@ export function Agents() {
                               <Avatar id={name} active={online} tool={tk} />
                               <span style={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
                                 <span style={{ fontSize: 14, fontWeight: 600, color: online ? 'var(--text)' : 'var(--text-2)' }}>{name}</span>
-                                <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{s.identityId}</span>
+                                {/* Whose token the agent runs on: the account's name when a project of the caller's names it, else the id (P-457). */}
+                                {workspaceNames[s.identityId]
+                                  ? <span style={{ fontSize: 11, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{workspaceNames[s.identityId]}</span>
+                                  : <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.identityId}>{s.identityId}</span>}
                               </span>
                             </span>
                           </td>
@@ -256,8 +266,8 @@ export function Agents() {
                   </thead>
                   <tbody>
                     {members.map(([id, role]) => {
-                      const t = claimByOwner.get(id);
-                      const active = !!t;
+                      const held = claimsByOwner.get(id) ?? [];
+                      const active = held.length > 0;
                       const caps = Array.from(capsByOwner.get(id) ?? []).slice(0, 4);
                       const last = lastActivityByOwner.get(id);
                       // A human member resolves to their name/email; an agent has no account and keeps
@@ -283,10 +293,16 @@ export function Agents() {
                             )}
                           </td>
                           <td>
-                            {t && t.claim ? (
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
-                                <span className="mono" style={{ fontSize: 11, color: 'var(--text)', background: 'var(--surface-highest)', border: '1px solid var(--outline-variant)', borderRadius: 'var(--r-2)', padding: '2px 6px' }}>{t.id}</span>
-                                <span className="mono" style={{ fontSize: 11, color: 'var(--progress)', letterSpacing: '0.05em' }}><Icon name="lock" size={11} /> {leaseLeft(t.claim.expiresAt)}</span>
+                            {held.length > 0 ? (
+                              <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+                                {held.map((t) => (
+                                  <span key={t.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                    <span className="mono" style={{ fontSize: 11, color: 'var(--text)', background: 'var(--surface-highest)', border: '1px solid var(--outline-variant)', borderRadius: 'var(--r-2)', padding: '2px 6px' }}>{t.id}</span>
+                                    {/* The agent that holds it, when the claim names one: the account alone hides which of its agents is working. */}
+                                    {t.claim!.agent && t.claim!.agent !== id && <span style={{ fontSize: 12 }}>{displayAgentName(t.claim!.agent)}</span>}
+                                    <span className="mono" style={{ fontSize: 11, color: 'var(--progress)', letterSpacing: '0.05em' }}><Icon name="lock" size={11} /> {leaseLeft(t.claim!.expiresAt)}</span>
+                                  </span>
+                                ))}
                               </span>
                             ) : (
                               <span className="muted" style={{ fontSize: 12, fontStyle: 'italic' }}>{isAgent(id) ? 'Idle' : 'Observing'}</span>
@@ -296,7 +312,10 @@ export function Agents() {
                         </tr>
                       );
                     })}
-                    {members.length === 0 && !data.isLoading && (
+                    {!projectId && (
+                      <tr><td colSpan={4}><PickProject what="Members and their leases" none="Create a project; its members and the leases they hold will appear here." /></td></tr>
+                    )}
+                    {!!projectId && members.length === 0 && !data.isLoading && (
                       <tr><td colSpan={4} className="muted" style={{ fontSize: 12 }}>No identities in this project yet.</td></tr>
                     )}
                   </tbody>

@@ -10,18 +10,18 @@ import (
 // A losing run leaves by the delete cascade (plan §Fold 2), never by a status.
 type Runs interface {
 	// Start is start_runs.
-	// Tier: master; version-checked on the parent (STALE); a racing, poisoned or ineligible parent
-	// INVALID_TRANSITION; another holder's live lease on the parent CONFLICT_LOCKED (another
-	// identity's, or another agent's of the caller's, P-399); more runs than maxRunsPerTask
-	// VALIDATION. Events: runs.started on the parent, task.created and run.opened on each run. Audit:
-	// none. Doorbell: assigned to each named run's agent, broadcast for each unnamed one. Replays on
-	// idempotencyKey.
+	// Tier: master; version-checked on the parent (STALE); a racing or poisoned parent, or one with
+	// an open blocker (blockedBy, named), INVALID_TRANSITION; another holder's live lease on the
+	// parent CONFLICT_LOCKED (another identity's, or another agent's of the caller's, P-399); more
+	// runs than maxRunsPerTask VALIDATION. Events: runs.started on the parent, task.created and
+	// run.opened on each run. Audit: none. Doorbell: assigned to each named run's agent, broadcast for
+	// each unnamed one. Replays on idempotencyKey.
 	Start(ctx context.Context, caller domain.Caller, req StartRunsReq) (StartRunsResp, error)
 
 	// Open is open_run.
-	// Tier: master; a parent that is not racing INVALID_TRANSITION; the run cap VALIDATION. Events:
-	// task.created and run.opened on the run. Audit: none. Doorbell: assigned to agent, else
-	// broadcast. Replays on idempotencyKey.
+	// Tier: master; a parent that is not racing, or has an open blocker, INVALID_TRANSITION; the run
+	// cap VALIDATION. Events: task.created and run.opened on the run. Audit: none. Doorbell: assigned
+	// to agent, else broadcast. Replays on idempotencyKey.
 	Open(ctx context.Context, caller domain.Caller, req OpenRunReq) (OpenRunResp, error)
 
 	// Pick is pick_run.

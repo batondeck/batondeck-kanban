@@ -36,14 +36,28 @@ func openLockFile(dataDir string) (*os.File, error) {
 	return f, nil
 }
 
+// ErrServeRunning is in AcquireLock's refusal when the lock is held shared, which only `serve` does:
+// it will not come free while that serve runs, so waiting for it is pointless.
+var ErrServeRunning = errors.New("a serve is running on it")
+
 // AcquireLock takes the exclusive data-dir lock, failing immediately (no blocking)
-// if another process holds it, shared or exclusive.
+// if another process holds it, shared or exclusive. Held shared, the refusal wraps ErrServeRunning:
+// a shared lock is granted beside the holders, so they are serve processes, and if even an
+// exclusive one is granted once it is, they all let go meanwhile and the lock is taken.
 func AcquireLock(dataDir string) (*Lock, error) {
 	f, err := openLockFile(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	fd := int(f.Fd())
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB) == nil {
+			if syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+				return &Lock{f: f, exclusive: true}, nil
+			}
+			f.Close()
+			return nil, fmt.Errorf("lock: data dir %s is in use by a running batondeck-kanban serve: %w", dataDir, ErrServeRunning)
+		}
 		f.Close()
 		return nil, fmt.Errorf("lock: data dir %s is in use by another batondeck-kanban process", dataDir)
 	}

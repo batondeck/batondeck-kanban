@@ -341,6 +341,33 @@ func (q *Queries) LockBoard(ctx context.Context, arg LockBoardParams) (Board, er
 	return i, err
 }
 
+const lockColumn = `-- name: LockColumn :one
+SELECT project_id, board_id, id, name, position, status, wip_limit FROM columns WHERE project_id = ? AND board_id = ? AND id = ?
+`
+
+type LockColumnParams struct {
+	ProjectID string
+	BoardID   string
+	ID        string
+}
+
+// The column remove_column and update_column judge (on Postgres locked FOR UPDATE; SQLite's
+// transaction holds the write lock from BEGIN).
+func (q *Queries) LockColumn(ctx context.Context, arg LockColumnParams) (Column, error) {
+	row := q.db.QueryRowContext(ctx, lockColumn, arg.ProjectID, arg.BoardID, arg.ID)
+	var i Column
+	err := row.Scan(
+		&i.ProjectID,
+		&i.BoardID,
+		&i.ID,
+		&i.Name,
+		&i.Position,
+		&i.Status,
+		&i.WipLimit,
+	)
+	return i, err
+}
+
 const updateColumn = `-- name: UpdateColumn :exec
 UPDATE columns SET name = ?, position = ?, status = ?, wip_limit = ?
 WHERE project_id = ? AND board_id = ? AND id = ?

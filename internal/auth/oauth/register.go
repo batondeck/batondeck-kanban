@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/batondeck/batondeck-kanban/internal/auth"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -25,6 +26,11 @@ const (
 	maxRedirectURILen = 2000
 	maxClientNameLen  = 200
 	maxScopeLen       = 200
+
+	// maxRegistrationAuditData bounds the JSON data of an oauth.client.registered row, and
+	// maxAuditHostLen each place a redirect URI points at in it (JSON-encoded bytes).
+	maxRegistrationAuditData = 1024
+	maxAuditHostLen          = 64
 )
 
 // registration is the part of an RFC 7591 request this server reads; other members are ignored.
@@ -37,7 +43,8 @@ type registration struct {
 }
 
 // register is RFC 7591 dynamic registration of a public client. It is unauthenticated, so it is
-// bounded where it enters: a per-address rate limit (429 past it), a 64 KiB body, at most 10
+// bounded where it enters: a rate limit per address and one for every address together (429 past
+// either), a 64 KiB body, at most 10
 // redirect URIs; and each call first deletes the registrations no authorization used within
 // UnusedClientTTL. The client authenticates at /token by PKCE alone: whatever
 // token_endpoint_auth_method it asks for, it is registered "none", and the answer says so.
@@ -46,7 +53,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if ok, retry := s.limiter.allow(s.o.Auth.Proxies.ClientAddr(r), now); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
 		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable",
-			fmt.Sprintf("too many registrations from this address; retry after %d s", int(math.Ceil(retry.Seconds()))))
+			fmt.Sprintf("too many registrations; retry after %d s", int(math.Ceil(retry.Seconds()))))
 		return
 	}
 	var req registration
@@ -78,7 +85,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r.Context(), auth.AuditEvent{Action: "oauth.client.registered", Subject: "oauth_client:" + id, Result: "ok",
-		Data: map[string]any{"clientName": req.ClientName, "redirectUris": req.RedirectURIs}})
+		Data: registrationAudit(req)})
 	body := map[string]any{
 		"client_id":                  id,
 		"client_id_issued_at":        now.Unix(),
@@ -94,6 +101,81 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		body["scope"] = req.Scope
 	}
 	writeJSON(w, http.StatusCreated, body)
+}
+
+// registrationAudit is the data of the oauth.client.registered row: the client's name, how many
+// redirect URIs it registered and the distinct places they point at (a URI's host, or an app
+// scheme's name and ":"), a long one cut to its end, where its domain is. Not the URIs themselves:
+// anyone may register, audit rows are kept for good, and one registration may carry 20 KB of them,
+// so the data stays within maxRegistrationAuditData bytes of JSON (the name's 200, ten places of
+// maxAuditHostLen, the keys). The URI a code went to is in the oauth.consent.granted row, which a
+// signed-in user made.
+func registrationAudit(req registration) map[string]any {
+	var seen []string
+	hosts := []string{}
+	for _, u := range req.RedirectURIs {
+		p, err := url.Parse(u)
+		if err != nil {
+			continue
+		}
+		h := p.Host
+		if h == "" {
+			h = p.Scheme + ":"
+		}
+		if !slices.Contains(seen, h) {
+			seen = append(seen, h)
+			hosts = append(hosts, clipJSON(h, maxAuditHostLen, true))
+		}
+	}
+	return map[string]any{"clientName": clipJSON(req.ClientName, maxClientNameLen, false),
+		"redirectUriCount": len(req.RedirectURIs), "redirectHosts": hosts}
+}
+
+// clipJSON is s when encoding/json writes it in at most max bytes between its quotes; else the
+// longest start of it (with tail, end of it) that fits there with "…" marking the cut.
+func clipJSON(s string, max int, tail bool) string {
+	n := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		n, i = n+jsonLen(r, size), i+size
+	}
+	if n <= max {
+		return s
+	}
+	budget, n := max-len("…"), 0
+	if !tail {
+		i := 0
+		for i < len(s) {
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if n+jsonLen(r, size) > budget {
+				break
+			}
+			n, i = n+jsonLen(r, size), i+size
+		}
+		return s[:i] + "…"
+	}
+	j := len(s)
+	for j > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:j])
+		if n+jsonLen(r, size) > budget {
+			break
+		}
+		n, j = n+jsonLen(r, size), j-size
+	}
+	return "…" + s[j:]
+}
+
+// jsonLen is at most how many bytes encoding/json writes for the rune r, size bytes of a string: it
+// escapes a quote and a backslash in two, and a control character, <, > and & (for HTML), U+2028,
+// U+2029 and a byte that is no UTF-8 in six.
+func jsonLen(r rune, size int) int {
+	switch {
+	case r == '"' || r == '\\':
+		return 2
+	case r < 0x20 || r == '<' || r == '>' || r == '&' || r == '\u2028' || r == '\u2029' || (r == utf8.RuneError && size == 1):
+		return 6
+	}
+	return size
 }
 
 // checkRegistration is the RFC 7591 §3.2.2 error code and description for a request this server
@@ -120,8 +202,11 @@ func checkRegistration(req registration) (code, desc string) {
 			return "invalid_client_metadata", "response_types may hold only code"
 		}
 	}
-	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, unicode.IsControl) >= 0 {
-		return "invalid_client_metadata", fmt.Sprintf("client_name is at most %d characters, none of them a control character", maxClientNameLen)
+	// A format character (unicode.Cf: a bidi override, a zero-width joiner) is refused with the
+	// control characters: the name is shown on the sign-in and consent pages, where one can make it
+	// read as another.
+	if len(req.ClientName) > maxClientNameLen || strings.IndexFunc(req.ClientName, hiddenNameRune) >= 0 {
+		return "invalid_client_metadata", fmt.Sprintf("client_name is at most %d characters, none of them a control or format character", maxClientNameLen)
 	}
 	if len(req.Scope) > maxScopeLen {
 		return "invalid_client_metadata", fmt.Sprintf("scope is at most %d characters", maxScopeLen)
@@ -129,8 +214,12 @@ func checkRegistration(req registration) (code, desc string) {
 	return "", ""
 }
 
+// hiddenNameRune is a character /register refuses in a client_name: a control character, or a
+// format character (unicode.Cf) that can make a shown name read as another.
+func hiddenNameRune(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
+
 // badRedirectURI says why u cannot be a redirect URI, "" when it can: an absolute URI with no
-// fragment (RFC 6749 §3.1.2), https, or http only to a loopback host (RFC 8252 §7.3), or an app's
+// fragment (RFC 6749 §3.1.2) and no userinfo, https, or http only to a loopback host (RFC 8252 §7.3), or an app's
 // private-use scheme (§7.1); never a scheme that runs or reads in the browser.
 func badRedirectURI(u string) string {
 	if len(u) > maxRedirectURILen {
@@ -142,6 +231,11 @@ func badRedirectURI(u string) string {
 	}
 	if p.Fragment != "" || strings.Contains(u, "#") {
 		return "a redirect URI must not carry a fragment"
+	}
+	if p.User != nil {
+		// "https://claude.ai@evil.example/cb" goes to evil.example but reads as claude.ai on the
+		// consent page's "Returns to".
+		return "a redirect URI must not carry a user name or password"
 	}
 	switch strings.ToLower(p.Scheme) {
 	case "https":
@@ -174,13 +268,17 @@ func clientID() (string, error) {
 	return "bdc_" + hex.EncodeToString(b), nil
 }
 
-// limiter is a fixed window per address: max calls per window. It holds at most maxTracked
-// addresses; past that, the windows that have ended are dropped first.
+// limiter is a fixed window per address: max calls per window, an address counted by auth.AddrKey
+// (an IPv6 address by its /64, as the sign-in limits count it), and at most total calls per window
+// from every address together (0: no such bound). It holds at most maxTracked addresses; past that,
+// the windows that have ended are dropped, and while every window is live a new address is refused.
 type limiter struct {
 	mu     sync.Mutex
 	max    int
+	total  int
 	window time.Duration
 	hits   map[string]*hitWindow
+	all    hitWindow
 }
 
 type hitWindow struct {
@@ -190,37 +288,52 @@ type hitWindow struct {
 
 const maxTracked = 10000
 
-func newLimiter(max int, window time.Duration) *limiter {
-	return &limiter{max: max, window: window, hits: map[string]*hitWindow{}}
+func newLimiter(max, total int, window time.Duration) *limiter {
+	return &limiter{max: max, total: total, window: window, hits: map[string]*hitWindow{}}
 }
 
-// allow counts a call from addr at now: false, and the time until its window ends, past the limit.
+// allow counts a call from addr at now: false, and the time until a window ends, past a limit.
 func (l *limiter) allow(addr string, now time.Time) (bool, time.Duration) {
+	key := auth.AddrKey(addr)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	h, ok := l.hits[addr]
+	if l.total > 0 {
+		if now.Sub(l.all.start) >= l.window {
+			l.all = hitWindow{start: now}
+		}
+		if l.all.n >= l.total {
+			return false, l.all.start.Add(l.window).Sub(now)
+		}
+	}
+	h, ok := l.hits[key]
 	if !ok || now.Sub(h.start) >= l.window {
 		if !ok && len(l.hits) >= maxTracked {
-			l.prune(now)
+			// Forgetting live windows would hand the address that spent its budget a fresh one.
+			if wait := l.prune(now); len(l.hits) >= maxTracked {
+				return false, wait
+			}
 		}
 		h = &hitWindow{start: now}
-		l.hits[addr] = h
+		l.hits[key] = h
 	}
 	if h.n >= l.max {
 		return false, h.start.Add(l.window).Sub(now)
 	}
 	h.n++
+	l.all.n++
 	return true, 0
 }
 
-func (l *limiter) prune(now time.Time) {
+// prune drops the windows that have ended and returns the time until the soonest live one ends.
+func (l *limiter) prune(now time.Time) time.Duration {
+	soonest := l.window
 	for a, h := range l.hits {
-		if now.Sub(h.start) >= l.window {
+		left := h.start.Add(l.window).Sub(now)
+		if left <= 0 {
 			delete(l.hits, a)
+		} else if left < soonest {
+			soonest = left
 		}
 	}
-	if len(l.hits) >= maxTracked {
-		// Every window is live: forget them all rather than grow without bound.
-		clear(l.hits)
-	}
+	return soonest
 }

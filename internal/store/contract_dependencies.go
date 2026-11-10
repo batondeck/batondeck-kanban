@@ -46,13 +46,20 @@ type AddEdgeInput struct {
 type Dependencies interface {
 	// AddEdge adds the edge. It takes the project's lock (Locks.LockProject) before anything else,
 	// so concurrent edge writes of one project are serialised wherever they are called from. For
-	// blocks it runs domain.CheckCycle over the project's blocks edges first, then appends FromTaskID to the dependent's blockedBy and ToTaskID to the blocker's
-	// blocks (each at most once). An edge equal to an existing one (same from, to and type) returns
-	// the existing edge and writes nothing.
+	// blocks it runs domain.CheckCycle over the project's live gates first (the blocks edges whose
+	// blocker is still in the dependent's blockedBy: an edge whose blocker reached DONE stays but
+	// gates nothing), then appends FromTaskID to the dependent's blockedBy and ToTaskID to the
+	// blocker's blocks (each at most once). blockedBy holds open blockers only: a blocker already
+	// DONE gets its edge and the blocks entry, and the dependent's blockedBy does not gain it. An edge
+	// equal to an existing one (same from, to and type) returns the existing edge and writes nothing,
+	// unless it is a blocks edge whose gate cleared and whose blocker is open again: then, after the
+	// cycle check, the dependent's blockedBy regains the blocker (the gate re-opens).
 	AddEdge(ctx context.Context, in AddEdgeInput) (DependencyEdge, error)
 	// RemoveEdge removes the edge and returns it; for blocks it also removes FromTaskID from the
-	// dependent's blockedBy and ToTaskID from the blocker's blocks.
-	RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, error)
+	// dependent's blockedBy and ToTaskID from the blocker's blocks. gated reports whether the
+	// dependent's blockedBy named FromTaskID before the removal, i.e. whether the edge was a live
+	// gate (false for an edge whose gate had cleared, and for every edge that is not blocks).
+	RemoveEdge(ctx context.Context, projectID, edgeID string) (edge DependencyEdge, gated bool, err error)
 	// ListEdges is every edge of the project.
 	ListEdges(ctx context.Context, projectID string) ([]DependencyEdge, error)
 	// ListBlockers is the edges whose ToTaskID is the task: what it waits on.

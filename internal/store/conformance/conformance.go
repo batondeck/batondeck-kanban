@@ -5,9 +5,11 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
@@ -206,5 +208,41 @@ func lifecycle(t *testing.T, newStore Factory) {
 		if err != nil || inner != 1 {
 			t.Fatalf("a nested Atomically: err %v, ran %d times", err, inner)
 		}
+	})
+
+	t.Run("HoldsSealedValuesOnlyOverASealedSecretOrToken", func(t *testing.T) {
+		s, _, p, b := seeded(t, newStore)
+		ctx := context.Background()
+		held := func(want bool, after string) {
+			t.Helper()
+			if got, err := s.HoldsSealedValues(ctx); err != nil || got != want {
+				t.Fatalf("with %s: HoldsSealedValues = %v, %v; want %v", after, got, err, want)
+			}
+		}
+		integration := func(id, auth string) store.Integration {
+			t.Helper()
+			i, err := s.CreateIntegration(ctx, store.CreateIntegrationInput{ProjectID: p, ID: id, Name: id, Source: "generic", BoardID: b,
+				Auth: json.RawMessage(auth), Routing: json.RawMessage(`{"mode":"broadcast"}`), Lifecycle: "correlate",
+				Limits: json.RawMessage(`{}`), CreatedBy: "alice", CreatedAt: 1})
+			noErr(t, err)
+			return i
+		}
+		held(false, "nothing in the store")
+		integration("I-key", `{"mode":"api_key","apiKeyHash":"ab12"}`)
+		held(false, "an integration holding a hashed key")
+		i := integration("I-hmac", `{"mode":"hmac","hmac":{"currentEncrypted":"enc1:a:b:c:d:e:f","rotatedAt":1}}`)
+		held(true, "an integration holding a sealed secret")
+		_, err := s.DeleteIntegration(ctx, p, i.ID, i.Version, 2)
+		noErr(t, err)
+		held(false, "that integration tombstoned")
+		w := store.WakeSession{ID: "W-1", IdentityID: "alice", AgentID: "a1", CreatedAt: 1, LastSeenAt: 1, ExpiresAt: time.Now().Add(time.Hour).UnixMilli()}
+		noErr(t, s.PutWakeSession(ctx, w))
+		held(false, "a wake session with nothing sealed")
+		w.BearerSealed = []byte{1, 2, 3}
+		noErr(t, s.PutWakeSession(ctx, w))
+		held(true, "a wake session's sealed bearer")
+		w.BearerSealed, w.SocketTokenSealed = nil, []byte{4, 5, 6}
+		noErr(t, s.PutWakeSession(ctx, w))
+		held(true, "a wake session's sealed inbox token")
 	})
 }

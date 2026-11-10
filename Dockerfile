@@ -4,7 +4,9 @@
 # image's (TARGETOS/TARGETARCH, which buildx sets per --platform): Go needs no emulation to build
 # for another architecture, so `make image` builds linux/arm64 on an amd64 host without QEMU. The
 # final stage only copies, so it runs nothing on the target platform either.
-FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
+# Both base images are named by digest (multi-platform index), so a tag moved upstream cannot change
+# what the image is built from; moving to a newer base is an edit here, with the tag kept for readers.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -17,7 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       -o /batondeck-kanban ./cmd/batondeck-kanban
 RUN mkdir /data-skel
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 # The image's labels (`make image`, RELEASING.md). `source` is what links the package on ghcr.io to
 # this repository; VERSION is the build argument main.version is stamped with.
 ARG VERSION=0.1.0-dev
@@ -29,6 +31,9 @@ LABEL org.opencontainers.image.source="https://github.com/batondeck/batondeck-ka
 # resolves; /batondeck-kanban is the entrypoint.
 COPY --from=build /batondeck-kanban /batondeck-kanban
 COPY --from=build /batondeck-kanban /usr/local/bin/batondeck-kanban
+# The licence the image is under and the notices of what it redistributes, as files beside the
+# binary that also prints them (`batondeck-kanban licenses`).
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /licenses/
 # named volumes inherit the image's ownership of the mount point on first use;
 # distroless has no shell, so seed /data with the right owner at build time
 COPY --from=build --chown=nonroot:nonroot /data-skel /data

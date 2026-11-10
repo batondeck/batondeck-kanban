@@ -60,6 +60,30 @@ func TestCheckGrant(t *testing.T) {
 		// DEVIATION: an unknown priority fails closed; conductor's PRIORITY_RANK lookup compared undefined and let it pass.
 		expectGrant(t, g, GrantSubject{Tool: "complete_task", Task: &GrantTask{BoardID: "B-1", Priority: "critical"}}, "priority<=normal")
 	})
+	t.Run("a written priority is within the cap too", func(t *testing.T) {
+		g := CapabilityGrant{MaxPriority: PriorityNormal}
+		// create_task names no task: the priority it stores is what the cap judges.
+		expectGrant(t, g, GrantSubject{Tool: "create_task", Priorities: []Priority{PriorityLow}}, "")
+		expectGrant(t, g, GrantSubject{Tool: "create_task", Priorities: []Priority{PriorityNormal}}, "")
+		expectGrant(t, g, GrantSubject{Tool: "create_task", Priorities: []Priority{PriorityHigh}}, "priority<=normal")
+		expectGrant(t, g, GrantSubject{Tool: "create_task", Priorities: []Priority{"critical"}}, "priority<=normal")
+		// update_task: the loaded task and the patch's priority both.
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Priorities: []Priority{PriorityUrgent}, Task: grantTask}, "priority<=normal")
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Priorities: []Priority{PriorityLow}, Task: grantTask}, "")
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Priorities: []Priority{PriorityLow}, Task: &GrantTask{BoardID: "B-1", Priority: PriorityUrgent}}, "priority<=normal")
+		// orchestrate_subtasks: every child's.
+		expectGrant(t, g, GrantSubject{Tool: "orchestrate_subtasks", Priorities: []Priority{PriorityLow, PriorityUrgent}, Task: grantTask}, "priority<=normal")
+	})
+	t.Run("written labels stay in the grant too", func(t *testing.T) {
+		g := CapabilityGrant{Labels: []string{"ingest"}}
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Labels: []string{"deploy"}, Task: grantTask}, "label:ingest")
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Labels: []string{}, Task: grantTask}, "label:ingest")
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Labels: []string{"deploy", "ingest"}, Task: grantTask}, "")
+		// No labels written: the task's own decide.
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Task: grantTask}, "")
+		// A task outside the grant is not brought in by writing a granted label.
+		expectGrant(t, g, GrantSubject{Tool: "update_task", Labels: []string{"ingest"}, Task: &GrantTask{BoardID: "B-1", Labels: []string{"deploy"}}}, "label:ingest")
+	})
 	t.Run("fails closed when a task-scoped grant cannot resolve the target", func(t *testing.T) {
 		expectGrant(t, CapabilityGrant{Boards: []string{"B-1"}}, GrantSubject{Tool: "update_settings"}, "board:*")
 		expectGrant(t, CapabilityGrant{Labels: []string{"ingest"}}, GrantSubject{Tool: "update_settings"}, "label:ingest")

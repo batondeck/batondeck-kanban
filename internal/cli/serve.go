@@ -62,20 +62,25 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	return composeWith(st, version, publicURL, logger, sealer, media, ret, wakeTuning{registry: wakeRegistry(), sweep: wakeSweep})
 }
 
-// wakeTuning is the device session directory's registry, sweep interval and coalescing windows.
-// compose's, and so serve's, is wakeRegistry(), wakeSweep and the zero windows (ADR-0004's
-// numbers); a test passes its own to composeWith, so that tests running in parallel share no
-// package variable.
+// wakeTuning is the device session directory's registry, sweep interval and coalescing windows,
+// and the device id its rows name (P-167). compose's, and so serve's, is wakeRegistry(), wakeSweep
+// and the zero windows (ADR-0004's numbers), with serve's device id (runServer); a test passes its
+// own to composeWith, so that tests running in parallel share no package variable.
 type wakeTuning struct {
 	registry  string
 	sweep     time.Duration
 	windows   wake.Windows
 	tapBuffer int
+	device    string
 }
 
 // composeWith is compose with the directory's tuning given.
 func composeWith(st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, wt wakeTuning) (*app, error) {
-	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	resolver := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st, Audit: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	// The CSRF refusals and the OAuth server's events go to the audit log, as the token rows do.
+	resolver.Audit = auth.StoreAudit(st, nil, logger.Printf)
+	// An https public_url makes the session cookies Secure behind any TLS proxy (auth.Service.PublicURL).
+	resolver.PublicURL = publicURL
 	var as *oauth.Server
 	if publicURL != "" {
 		var err error
@@ -92,15 +97,15 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 		DeliveriesDays: cmp.Or(ret.DeliveriesDays, def.DeliveriesDays), RawBodiesDays: cmp.Or(ret.RawBodiesDays, def.RawBodiesDays),
 		SweepIntervalSeconds: cmp.Or(ret.SweepIntervalSeconds, def.SweepIntervalSeconds)}
 	day := 24 * time.Hour
-	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media,
+	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media, Device: wt.device,
 		DeliveryRetention: time.Duration(ret.DeliveriesDays) * day, RawBodyRetention: time.Duration(ret.RawBodiesDays) * day,
 		ToolCallRetentionDays: int64(ret.ToolCallsDays)})
 	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
 	if media.Files != nil {
-		sweep.CollectBlobs = sc.CollectBlobs
+		sweep.CollectBlobs, sweep.SweepBlobFiles = sc.CollectBlobs, sc.SweepBlobFiles
 	}
 	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
-	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse",
+	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse, idempotency keys once their replay window ends",
 		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle, int(retention.LapsedGrace/day))
 	opts := mcp.Options{
 		Version:   version,
@@ -205,21 +210,52 @@ var requestReadTimeout = 30 * time.Second
 // source): core.OpenKeyring from
 // BATONDECK_MASTER_KEY, else from master.key beside the SQLite file, or on Postgres beside the
 // config file. On Postgres with neither, serve runs without one (an inbox token is then refused)
-// and says so once.
-func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger) (*core.Keyring, error) {
-	var path string
-	_, fromEnv := lookup(core.MasterKeyEnv)
-	switch {
-	case fromEnv:
-	case cfg.Engine() == core.EngineSQLite:
-		path = filepath.Join(filepath.Dir(cfg.SQLitePath()), "master.key")
-	case cfgPath != "":
-		path = filepath.Join(filepath.Dir(cfgPath), "master.key")
-	default:
+// and says so once. A key file it creates is logged: as a plain line when the store holds nothing
+// sealed (a new database, whether serve or `migrate` made its schema), and as a WARN when it holds
+// values sealed under an earlier key (store.Lifecycle.HoldsSealedValues), which the new one does not
+// open.
+func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger, st sealedHolder) (*core.Keyring, error) {
+	path, none := keyFilePath(cfg, cfgPath, lookup)
+	if none {
 		logger.Printf("serve: WARN no keyring: set %s (or run with -config) to register a wake session with an inbox token", core.MasterKeyEnv)
 		return nil, nil
 	}
-	return core.OpenKeyring(path, lookup)
+	keys, err := core.OpenKeyring(path, lookup)
+	if err != nil || !keys.Created() {
+		return keys, err
+	}
+	held, herr := st.HoldsSealedValues(context.Background())
+	switch {
+	case herr != nil:
+		logger.Printf("serve: WARN created a new master key %s, and could not tell whether the database holds secrets sealed under an earlier key (%v); if it ran under one, put that master.key back; back the new one up with the database (README: Backup and restore)", path, herr)
+	case held:
+		logger.Printf("serve: WARN created a new master key %s, but the database holds secrets sealed under an earlier key (on-call integration secrets, wake-session inbox tokens): they do not open under this one, so every delivery to an HMAC-signed integration is refused 401; stop serve and put the earlier master.key back (or set %s as before), or rotate each integration's secret", path, core.MasterKeyEnv)
+	default:
+		logger.Printf("serve: created the master key %s; back it up with the database (README: Backup and restore)", path)
+	}
+	return keys, nil
+}
+
+// sealedHolder is what openKeyring asks of the store: whether it holds values sealed with a key.
+type sealedHolder interface {
+	HoldsSealedValues(ctx context.Context) (bool, error)
+}
+
+// keyFilePath is where serve's master key file is: beside the SQLite file, or on Postgres beside the
+// config file; "" when BATONDECK_MASTER_KEY is set, which the file never overrides. none says there
+// is neither: Postgres with no config file and no BATONDECK_MASTER_KEY, where serve runs without a
+// keyring.
+func keyFilePath(cfg *core.Config, cfgPath string, lookup func(string) (string, bool)) (path string, none bool) {
+	_, fromEnv := lookup(core.MasterKeyEnv)
+	switch {
+	case fromEnv:
+		return "", false
+	case cfg.Engine() == core.EngineSQLite:
+		return filepath.Join(filepath.Dir(cfg.SQLitePath()), "master.key"), false
+	case cfgPath != "":
+		return filepath.Join(filepath.Dir(cfgPath), "master.key"), false
+	}
+	return "", true
 }
 
 // mediaOptions is the blob store at cfg.BlobDir() and, with a keyring, the URL signer keyed by its
@@ -232,6 +268,7 @@ func mediaOptions(cfg *core.Config, keys *core.Keyring, lns []net.Listener, logg
 	if err != nil {
 		return service.MediaOptions{}, err
 	}
+	files.Reserve = core.BlobReserve
 	m := service.MediaOptions{Files: files, MaxBytes: cfg.Blob.MaxBytes, BaseURL: cfg.PublicURL}
 	if keys == nil {
 		logger.Printf("serve: WARN no keyring: attach_file is refused and no download URL is signed; set %s (or run with -config)", core.MasterKeyEnv)
@@ -299,28 +336,30 @@ var wakeRegistry = func() string {
 // snapshot.
 const snapshotTapBuffer = 1024
 
-// feedSnapshots hands every change the bus delivers to the board snapshot cache
-// (Core.ObserveChange, ADR-0004) until the tap closes with the bus, then turns the cache off. A change
-// the tap dropped clears every snapshot, since which board it named is unknown. It reads only the
-// tap: no statement, no poll.
+// feedSnapshots hands every change the bus delivers to the board snapshot cache and the access cache
+// (Core.ObserveChange, ADR-0004) until the tap closes with the bus, then turns the snapshot cache off.
+// A change the tap dropped clears every snapshot and every cached access entry, since which board it
+// named, or whether it changed a membership or grant, is unknown. It reads only the tap: no
+// statement, no poll.
 func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) {
 	defer sc.ResetSnapshots(false)
 	var dropped int64
 	for c := range tap.C() {
 		sc.ObserveChange(c)
 		if n := tap.Dropped(); n > dropped {
-			logger.Printf("serve: the board snapshot cache's tap dropped %d change(s); clearing every snapshot", n-dropped)
+			logger.Printf("serve: the board snapshot cache's tap dropped %d change(s); clearing every snapshot and cached access", n-dropped)
 			dropped = n
 			sc.ResetSnapshots(true)
+			sc.DropCachedAccess()
 		}
 	}
 }
 
 // runServer serves the app over st on every listener until ctx ends or one fails. proxies are the
 // trusted reverse proxies (trusted_proxies), whose X-Forwarded-For names the client the sign-in and
-// registration limits count.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies) error {
-	a, err := compose(st, version, publicURL, logger, sealer, media, ret)
+// registration limits count; device is the id the session directory's rows name (core.DeviceID).
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies, device string) error {
+	a, err := composeWith(st, version, publicURL, logger, sealer, media, ret, wakeTuning{registry: wakeRegistry(), sweep: wakeSweep, device: device})
 	if err != nil {
 		return err
 	}

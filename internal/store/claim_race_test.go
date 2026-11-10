@@ -145,7 +145,9 @@ func TestClaimRace(t *testing.T) {
 
 // statementsPerCall pins the statements a store call issues for the plan's per-tool pins
 // (get_task <= 2, list_tasks <= 2, claim_next <= 4): GetTask is one, a ListTasks page holding
-// tasks is one (an empty one asks for the board: two), and a winning ClaimNext is one.
+// tasks is one (an empty one asks for the board: two), and a winning ClaimNext is one, two when it
+// lands the task in a column: that column's first order key is read first, so the claimed task lands
+// before it with a key of its own (claim_next's service pin rose by one for it).
 func statementsPerCall(t *testing.T, s Store) {
 	ctx := context.Background()
 	q, col := raceBoard(t, s, 3)
@@ -172,8 +174,15 @@ func statementsPerCall(t *testing.T, s Store) {
 		_, err := s.ListTasks(ctx, q.ProjectID, TaskFilter{BoardID: q.BoardID, Label: "none"}, "", 2)
 		return err
 	})
-	count("ClaimNext (a win)", 1, func(ctx context.Context) error {
+	count("ClaimNext (a win into a column)", 2, func(ctx context.Context) error {
 		_, ok, err := s.ClaimNext(ctx, q, ClaimInput{Owner: "bob", LeaseID: "L-1", ExpiresAt: raceClock + 1, Now: raceClock, ColumnID: col})
+		if err == nil && !ok {
+			err = fmt.Errorf("no win")
+		}
+		return err
+	})
+	count("ClaimNext (a win keeping its column)", 1, func(ctx context.Context) error {
+		_, ok, err := s.ClaimNext(ctx, q, ClaimInput{Owner: "bob", LeaseID: "L-2", ExpiresAt: raceClock + 1, Now: raceClock})
 		if err == nil && !ok {
 			err = fmt.Errorf("no win")
 		}

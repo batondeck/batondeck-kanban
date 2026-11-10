@@ -8,7 +8,9 @@ import (
 )
 
 // datadog is a Datadog monitor webhook in the documented $-variable template (conductor
-// datadog.ts): {alert_id, event_type, transition, title, body, severity, link, tags}.
+// datadog.ts): {alert_id, aggreg_key, event_type, transition, title, body, severity, link, tags}.
+// $ALERT_ID is shared by every group of a multi-alert monitor; $AGGREG_KEY names the group, so the
+// fingerprint is alert_id:aggreg_key, alert_id alone when the template carries no aggreg_key.
 type datadog struct{}
 
 // tagLabels reads $TAGS, a comma-joined string or an array: k:v is labels[k] = v.
@@ -47,6 +49,10 @@ func (datadog) Events(p any, c Context) ([]oncall.Event, error) {
 	fingerprint := idString(m["alert_id"])
 	if fingerprint == "" {
 		return nil, errors.New("unrecognizable datadog payload: missing alert_id")
+	}
+	// One group's recovery must not resolve another group's ticket.
+	if group := idString(m["aggreg_key"]); group != "" {
+		fingerprint += ":" + group
 	}
 	transition := str(m["transition"])
 	if transition == "" {

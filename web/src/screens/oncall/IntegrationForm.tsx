@@ -11,8 +11,9 @@
  *
  *  1. **The auth mode is not a free choice, and the catalog decides it.** Most vendors cannot compute
  *     our HMAC and Cloud Monitoring cannot even set a header, so the mode select offers exactly
- *     `source.authModes` — served from `src/domain/oncall-sources.ts`, never hardcoded here. A form
- *     that offers a mode the vendor cannot send is how the commonest misconfiguration happens.
+ *     `source.authModes` — served from the source catalog (internal/oncall/sources.go), never
+ *     hardcoded here. A form that offers a mode the vendor cannot send is how the commonest
+ *     misconfiguration happens.
  *  2. **A credential the operator cannot supply is worse than no field.** `api_key`/`basic` mint the
  *     key in the browser and show it once, because the server only ever stores its hash; PagerDuty
  *     requires ITS OWN secret pasted in, because PagerDuty signs with it and the core now refuses the
@@ -51,6 +52,8 @@ export interface FormState {
   jwtIssuer: string;
   jwtAudience: string;
   jwtJwksUrl: string;
+  jwtSubject: string;
+  jwtEmail: string;
   routingMode: RoutingMode;
   onCallAgent: string;
   pdUserMap: Record<string, string>;
@@ -80,6 +83,8 @@ export function blankForm(source: OncallSource | undefined): FormState {
     jwtIssuer: '',
     jwtAudience: '',
     jwtJwksUrl: '',
+    jwtSubject: '',
+    jwtEmail: '',
     routingMode: 'broadcast',
     onCallAgent: '',
     pdUserMap: {},
@@ -160,7 +165,14 @@ function authOf(f: FormState): CreateIntegrationBody['auth'] {
   if (f.authMode === 'jwt') {
     return {
       mode: 'jwt',
-      jwt: { issuer: f.jwtIssuer.trim(), audience: f.jwtAudience.trim(), jwksUrl: f.jwtJwksUrl.trim() },
+      jwt: {
+        issuer: f.jwtIssuer.trim(),
+        audience: f.jwtAudience.trim(),
+        jwksUrl: f.jwtJwksUrl.trim(),
+        // The pins are sent only when filled in: blank pins nothing.
+        ...(trimmed(f.jwtSubject) ? { subject: f.jwtSubject.trim() } : {}),
+        ...(trimmed(f.jwtEmail) ? { email: f.jwtEmail.trim() } : {}),
+      },
     };
   }
   return {
@@ -202,29 +214,65 @@ export function createBodyOf(f: FormState, source: OncallSource): CreateIntegrat
  * The edit body. `auth` is OMITTED unless the operator actually supplied new material: sending it
  * unchanged would re-run `buildAuth`, which MINTS a fresh hmac secret — silently rotating the
  * integration on every save and breaking the live sender.
+ *
+ * A CLEARED SETTING MUST BE SAID, because the core reads an absent field as "unchanged". It clears
+ * the target column only on an explicit `null`, and it replaces the stored mapping whole with any
+ * mapping the patch carries — so when the operator has cleared the last mapping setting, the patch
+ * carries `mapping: {}`.
  */
 export function patchBodyOf(f: FormState, source: OncallSource, current: Integration): IntegrationPatchBody {
   const modeChanged = f.authMode !== current.auth.mode;
   const suppliedMaterial =
     (f.authMode === 'api_key' || f.authMode === 'basic') && f.apiKey.trim().length > 0;
-  const suppliedJwt = f.authMode === 'jwt' && f.jwtIssuer.trim().length > 0;
+  const suppliedJwt = f.authMode === 'jwt' && jwtTyped(f);
   const suppliedExternal = f.authMode === 'hmac' && f.externalSecret.trim().length > 0;
   const sendAuth = modeChanged || suppliedMaterial || suppliedJwt || suppliedExternal;
+  const body = commonBody(f, source.id === 'webhook');
+  const clearsColumn = !trimmed(f.columnId) && Boolean(current.target.columnId);
+  const clearsMapping = !body.mapping && Object.keys(current.mapping ?? {}).length > 0;
   return {
-    ...commonBody(f, source.id === 'webhook'),
+    ...body,
+    ...(clearsColumn ? { columnId: null } : {}),
+    ...(clearsMapping ? { mapping: {} } : {}),
     ...(sendAuth ? { auth: authOf(f) } : {}),
   };
 }
 
-/** True when this form can be submitted — the fields the core would refuse without. */
-export function formProblems(f: FormState, source: OncallSource, isCreate: boolean): string[] {
+/** True when the operator typed any jwt setting, a pin included: on an edit, that is new auth. */
+const jwtTyped = (f: FormState): boolean =>
+  [f.jwtIssuer, f.jwtAudience, f.jwtJwksUrl, f.jwtSubject, f.jwtEmail].some((v) => v.trim().length > 0);
+
+/**
+ * True when this form can be submitted — the fields the core would refuse without.
+ *
+ * `currentMode` is the edited integration's stored auth mode (absent on create). The server's view
+ * of an integration carries no issuer, audience or JWKS URL, so an edit opens with them blank, and
+ * blank then means "keep what is configured" (`patchBodyOf` sends no auth). They are required on
+ * create, on a switch to jwt, and once any jwt field (a pin included) is typed, because the patch
+ * then sends the whole block.
+ * A key mode likewise keeps its stored key on a blank edit, but a switch into api_key or basic has
+ * no key to keep, and the core refuses that patch without one.
+ */
+export function formProblems(
+  f: FormState,
+  source: OncallSource,
+  isCreate: boolean,
+  currentMode?: IntegrationAuthMode,
+): string[] {
   const out: string[] = [];
   if (!f.name.trim()) out.push('Name is required.');
   if (!f.boardId.trim()) out.push('Target board id is required.');
-  if (isCreate && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
+  // A key mode keeps its stored key on a blank edit, but a switch INTO one has no key to keep.
+  const keyNeeded = isCreate || f.authMode !== currentMode;
+  if (keyNeeded && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
     out.push('This mode needs a key — generate one.');
   }
-  if (f.authMode === 'jwt' && (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())) {
+  const jwtNeeded = isCreate || f.authMode !== currentMode || jwtTyped(f);
+  if (
+    f.authMode === 'jwt' &&
+    jwtNeeded &&
+    (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())
+  ) {
     out.push('JWT mode needs an issuer, an audience and a JWKS URL.');
   }
   // PagerDuty signs with its OWN secret; the core refuses a mint. Saying so here turns a server
@@ -243,15 +291,20 @@ export function IntegrationForm({
   form,
   set,
   isCreate,
+  currentMode,
   onGenerateKey,
 }: {
   source: OncallSource;
   form: FormState;
   set: (patch: Partial<FormState>) => void;
   isCreate: boolean;
+  /** The edited integration's stored auth mode; absent on create. */
+  currentMode?: IntegrationAuthMode;
   onGenerateKey: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // Blank auth fields keep the stored ones only on an edit that stays in the stored mode.
+  const keepsAuth = !isCreate && form.authMode === currentMode;
   const isWebhook = source.id === 'webhook';
   const setExtract = (patch: Partial<FormState['extract']>): void =>
     set({ extract: { ...form.extract, ...patch } });
@@ -286,7 +339,7 @@ export function IntegrationForm({
             label="Target column id"
             value={form.columnId}
             onChange={(columnId) => set({ columnId })}
-            placeholder="leave blank for the board's first column"
+            placeholder="leave blank for the board's first TODO column"
           />
         </Stack>
       </Panel>
@@ -311,7 +364,7 @@ export function IntegrationForm({
 
           {(form.authMode === 'api_key' || form.authMode === 'basic') && (
             <Field2
-              label={isCreate ? 'Key' : 'New key (leave blank to keep the current one)'}
+              label={keepsAuth ? 'New key (leave blank to keep the current one)' : 'Key'}
               hint={
                 form.authMode === 'basic'
                   ? 'Sent as the PASSWORD of HTTP Basic; the username is ignored. Stored as a hash — shown once.'
@@ -326,7 +379,7 @@ export function IntegrationForm({
                   aria-label="API key"
                   value={form.apiKey}
                   onChange={(e) => set({ apiKey: e.target.value })}
-                  placeholder={isCreate ? 'generate, or paste your own' : 'unchanged'}
+                  placeholder={keepsAuth ? 'unchanged' : 'generate, or paste your own'}
                 />
                 <button className="btn secondary" type="button" onClick={onGenerateKey}>
                   Generate
@@ -349,19 +402,29 @@ export function IntegrationForm({
               hint={
                 source.id === 'pagerduty'
                   ? 'PagerDuty signs with a secret IT issues when you create the webhook subscription. A secret minted here would never be used, so every delivery would be refused.'
-                  : 'Leave blank and BatonDeck mints a whsec_… and shows it once. Fill it in only when the source issues its own.'
+                  : 'Leave blank and BatonDeck mints a whsec_… and shows it once. Fill it in to use a secret your sender already holds; either way the sender signs the same timestamped v0 form, shown on the endpoint panel.'
               }
             />
           )}
 
           {form.authMode === 'jwt' && (
             <Stack gap={12}>
+              {/* The stored jwt block is never shown back, so an edit cannot prefill it: blank keeps
+                  it whole, pins included, and anything typed replaces it whole. */}
+              {keepsAuth && (
+                <Note>
+                  The configured issuer, audience, JWKS URL and pins are not shown back. Leave them all
+                  blank to keep them; to change any, type the issuer, audience and JWKS URL and re-enter
+                  the pins too: a blank pin then removes the one stored.
+                </Note>
+              )}
               <TextField
                 id="oc-jwt-iss"
                 label="Issuer"
                 value={form.jwtIssuer}
                 onChange={(jwtIssuer) => set({ jwtIssuer })}
                 placeholder="https://idp.example.com/"
+                hint="On a shared issuer (Google, GitHub Actions) anyone with an account there can mint a token for your audience, so issuer and audience alone do not identify the sender: pin the subject or email below."
               />
               <TextField
                 id="oc-jwt-aud"
@@ -376,6 +439,22 @@ export function IntegrationForm({
                 onChange={(jwtJwksUrl) => set({ jwtJwksUrl })}
                 placeholder="https://idp.example.com/.well-known/jwks.json"
                 hint="RS256 only. Must be https, on a public address — private ranges are refused."
+              />
+              <TextField
+                id="oc-jwt-sub"
+                label="Subject pin (sub)"
+                value={form.jwtSubject}
+                onChange={(jwtSubject) => set({ jwtSubject })}
+                placeholder="blank → any subject"
+                hint="The token's sub must equal this exactly: a service account's unique id, or a GitHub Actions repo:owner/name:ref:… subject."
+              />
+              <TextField
+                id="oc-jwt-email"
+                label="Email pin"
+                value={form.jwtEmail}
+                onChange={(jwtEmail) => set({ jwtEmail })}
+                placeholder="blank → any email"
+                hint="The token's email must equal this exactly, and the token must say email_verified."
               />
             </Stack>
           )}
@@ -605,7 +684,7 @@ export function IntegrationForm({
                 value={form.extract.dedupKey}
                 onChange={(dedupKey) => setExtract({ dedupKey })}
                 placeholder="notification.id"
-                hint="Your tool's own per-notification id, if it has one. Blank → the body hash, so an identical redelivery is treated as a retry."
+                hint="Your tool's own per-notification id, if it has one. Blank → the body hash: an identical body within 10 minutes is treated as a retry; under Correlate or Auto-close, only while nothing else from that alert came in between."
               />
             </FieldGroup>
             <Cluster gap={8} wrap>
@@ -690,7 +769,7 @@ export function IntegrationForm({
                 value={form.payloadCapKb}
                 onChange={(payloadCapKb) => set({ payloadCapKb })}
                 placeholder="256"
-                hint="Max 512 — the core's own request limit is 1 MB and the forwarded envelope carries the body twice."
+                hint="At most 512: the /hooks route refuses a larger body (413) before reading it."
               />
             </Cluster>
           </Stack>

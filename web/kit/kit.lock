@@ -18,30 +18,6 @@
       "to": "public/brand/favicon.svg",
       "sha256": "6677ba53d28b8abfe7de78cc9b2bad1bd5ac9ecc8290c909f0000ae71d78d942"
     },
-    "kit/brand/hdtp-gateway-inline-dark.svg": {
-      "to": "public/brand/hdtp-gateway-inline-dark.svg",
-      "sha256": "8bb7ea7d283b29236aeb54033e7fa5daaf78c499e977ca6436eb1c037c9aa2e4"
-    },
-    "kit/brand/hdtp-gateway-inline.svg": {
-      "to": "public/brand/hdtp-gateway-inline.svg",
-      "sha256": "93e3a08bbaa116f58ff29a1ae17bcc7cbcaa113211c7e91030489b6fc5886d06"
-    },
-    "kit/brand/hdtp-identity-inline-dark.svg": {
-      "to": "public/brand/hdtp-identity-inline-dark.svg",
-      "sha256": "ccc005cefecd9a95e42b96ae7ac593b8dce43ac3f300a772c4d91f8a1aeae41a"
-    },
-    "kit/brand/hdtp-identity-inline.svg": {
-      "to": "public/brand/hdtp-identity-inline.svg",
-      "sha256": "f6df3fb83eeb08c62d5dff6e0c19787ad7e3cb09134a992dcbef1299d4f244a1"
-    },
-    "kit/brand/hdtp-inline-dark.svg": {
-      "to": "public/brand/hdtp-inline-dark.svg",
-      "sha256": "c09e15d624e885281606e3978bc830ccb0ca7d2585a9248f1277882dd9a5a75d"
-    },
-    "kit/brand/hdtp-inline.svg": {
-      "to": "public/brand/hdtp-inline.svg",
-      "sha256": "45fbc60bf248a4f87a6e48711ce9e062895e8f19a9f9fc581281cdcc1932d3fa"
-    },
     "kit/brand/mark.svg": {
       "to": "public/brand/mark.svg",
       "sha256": "f15565dc198a65daa964546470e04e26e6ecfdc9f207c1e4cada14a42e2500de"

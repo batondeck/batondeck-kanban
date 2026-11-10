@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Pre-push: the gate, run here before anything leaves this machine: `make check` (fmt vet
-# staticcheck notices-check release-check sqlc-check web-dist-check test conformance contract) on
-# both engines, with BATONDECK_TEST_POSTGRES_DSN pointing at a Postgres this hook starts, so every
-# test that needs Postgres runs rather than skips. Without Docker the push is refused.
+# Pre-push: the gate, run here before anything leaves this machine: `make check` (the Makefile's
+# `check` target names its steps) on both engines, with BATONDECK_TEST_POSTGRES_DSN pointing at a
+# Postgres this hook starts, so every test that needs Postgres runs rather than skips. Without
+# Docker the push is refused.
 #
 # This project does not bypass its hooks: a gate that is wrong is fixed, not skipped.
 set -euo pipefail

@@ -11,6 +11,6 @@ func init() { register("audit", RegisterAudit) }
 // anyone else by service.authorize).
 func RegisterAudit(s *mcp.Server, svc service.Services) {
 	mcp.Tool(s, "audit", "list_audit_log",
-		"Workspace admin: the audit log, newest first: who (actor) did what (action) to whom (subject), and whether it took effect. Filters are ANDed; days defaults to 90 (max 365).",
+		"Workspace admin: the audit log, newest first: who (actor) did what (action) to whom (subject), whether it took effect. Filters ANDed; days default 90 (max 365); nextCursor as cursor pages older.",
 		svc.Audit.ListAuditLog)
 }

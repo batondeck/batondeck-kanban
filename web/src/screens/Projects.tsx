@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
@@ -26,6 +26,17 @@ import type { AgentSession } from '../types.js';
 // chroma, in the gap between --done (154) and --ready (263) that nothing else occupies.
 const PALETTE = ['#6A35FF', '#00C5D4', '#3BFFAD', '#AA3FFF', '#3F6FD9', '#FF426F'];
 
+/**
+ * Copy an id from a card. `navigator.clipboard` is undefined on a plain-HTTP origin that is not
+ * localhost, where reading `.writeText` off it threw; a refused write rejected unhandled. Both now
+ * say so, and the id stays on the card to select by hand.
+ */
+function copyId(id: string): void {
+  const fail = () => pushToast(`Could not copy — select ${id} and copy it manually.`);
+  if (!navigator.clipboard) { fail(); return; }
+  void navigator.clipboard.writeText(id).then(() => pushToast('Copied', 'info'), fail);
+}
+
 export function Projects() {
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -39,7 +50,7 @@ export function Projects() {
   // The sidebar switcher scopes this grid: "All projects" ('') shows every PROJECT card; a selected
   // project shows THAT project's BOARDS instead (a project has many boards).
   const selectedName = roster.find((p) => p.projectId === selected)?.name ?? '';
-  // A board is `create_board`, tier write (P-440): below it "New board" is closed and says why, and
+  // A board is `create_board`, tier master (P-440): below it "New board" is closed and says why, and
   // opening a project with no board shows its empty board list instead of creating one.
   const selectedRole = useMyProjectRole(selected);
   const canNewBoard = mayCall(selectedRole, 'create_board');
@@ -48,11 +59,9 @@ export function Projects() {
   // The card's members/avatars/colour ride along on `list_projects` — ONE request for the whole grid,
   // the same shape as the sessions fetch below.
   //
-  // This used to be a `useQueries` fan-out of one `getProject` per project. With 19 projects that was
-  // 19 concurrent `/api/projects/P-*` requests fired inside 18ms; measured in prod they all landed on
-  // ONE core instance (containerConcurrency 80 >> 19, so Cloud Run never scales out) and every one took
-  // 1.52-2.12s, against 0.086-0.233s for the same endpoints once the burst had drained. Self-inflicted
-  // contention, on every mount of this screen.
+  // This used to be a `useQueries` fan-out of one `getProject` per project: with 19 projects, 19
+  // concurrent `/api/projects/P-*` requests fired inside 18ms on every mount of this screen, each one
+  // slowed by the others. Self-inflicted contention.
 
   const boardsQ = useQuery({
     queryKey: ['boards', selected],
@@ -108,15 +117,24 @@ export function Projects() {
     },
   });
 
+  // The projects being opened right now. A double click ran `open` twice: both runs found no board
+  // and both created one, so a new project started with two identical boards.
+  const opening = useRef(new Set<string>());
   async function open(projectId: string): Promise<void> {
-    const projectName = list.find((p) => p.projectId === projectId)?.name;
-    const { boards } = await boardsApi.listBoards(projectId);
-    if (!boards[0] && !mayCall(roster.find((p) => p.projectId === projectId)?.role, 'create_board')) {
-      setProjectId(projectId);
-      return;
+    if (opening.current.has(projectId)) return;
+    opening.current.add(projectId);
+    try {
+      const projectName = list.find((p) => p.projectId === projectId)?.name;
+      const { boards } = await boardsApi.listBoards(projectId);
+      if (!boards[0] && !mayCall(roster.find((p) => p.projectId === projectId)?.role, 'create_board')) {
+        setProjectId(projectId);
+        return;
+      }
+      const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
+      nav(`/projects/${projectId}/boards/${board.id}`);
+    } finally {
+      opening.current.delete(projectId);
     }
-    const board = boards[0] ?? (await boardsApi.createBoard(projectId, defaultBoardName(projectName))).board;
-    nav(`/projects/${projectId}/boards/${board.id}`);
   }
 
   return (
@@ -194,7 +212,7 @@ export function Projects() {
                     style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, cursor: 'pointer' }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      void navigator.clipboard.writeText(b.id).then(() => pushToast('Copied', 'info'));
+                      copyId(b.id);
                     }}
                   >
                     {b.id}
@@ -237,7 +255,7 @@ export function Projects() {
                     style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, cursor: 'pointer' }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      void navigator.clipboard.writeText(p.projectId).then(() => pushToast('Copied', 'info'));
+                      copyId(p.projectId);
                     }}
                   >
                     {p.projectId}

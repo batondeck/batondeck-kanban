@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -57,6 +58,18 @@ func raceKey(key, parentID string) string {
 func isSubmitted(r store.Task) bool {
 	return (r.Status == domain.Review || r.Status == domain.Done) && r.Deliverable != nil && *r.Deliverable != "" &&
 		!slices.Contains(r.Labels, domain.LabelCancelled)
+}
+
+// blockedRace is INVALID_TRANSITION naming the parent's open blockers, nil when it has none. A run
+// is a TODO task with no blockedBy, claimable at once, so a race of a gated parent would carry its
+// work past the dependency gate, and pick_run land it DONE ahead of its blockers.
+func blockedRace(parent store.Task) error {
+	if len(parent.BlockedBy) == 0 {
+		return nil
+	}
+	return domain.NewError(domain.CodeInvalidTransition,
+		fmt.Sprintf("Task %s is blocked by %s: a race carries its work, so it waits until they are DONE", parent.ID, strings.Join(parent.BlockedBy, ", ")),
+		map[string]any{"taskId": parent.ID, "blockedBy": slices.Clone(parent.BlockedBy)})
 }
 
 // runCopyLabels is the parent's labels a run carries: the system labels stay with the parent
@@ -134,7 +147,8 @@ func runsOut(runs []store.Task) ([]Task, error) {
 // same transaction. A live lease that does not yield to the caller (leaseYields: another identity's,
 // or another agent's of the caller's identity, P-399) is CONFLICT_LOCKED, as move_task answers it. n is len(agents) when agents is sent, else count, else 1. Every status may
 // enter a race on the fixed table (each reaches IN_PROGRESS), but a poisoned parent may not: its
-// conductor counterpart, DEAD_LETTER, had no edge to IN_PROGRESS. A retried call with the same
+// conductor counterpart, DEAD_LETTER, had no edge to IN_PROGRESS; nor may a parent with an open
+// blocker (blockedRace). A retried call with the same
 // idempotencyKey replays the race it opened (the mutation's replay: no per-run keys).
 func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsReq) (StartRunsResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "start_runs", domain.GrantSubject{}, true)
@@ -180,7 +194,7 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 	version := req.Version
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "start_runs", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), Access: a,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), Request: req, Access: a,
 	}, func(t *txn) (StartRunsResp, error) {
 		cur := *t.Task
 		if cur.Racing {
@@ -189,7 +203,14 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
 			return StartRunsResp{}, domain.InvalidTransition(cur.Status, domain.InProgress, domain.AllowedNext(cur.Status), nil)
 		}
-		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
+		if err := blockedRace(cur); err != nil {
+			return StartRunsResp{}, err
+		}
+		yields, err := leaseYields(ctx, t.Tx, cur, caller, a.Role, t.Now.UnixMilli())
+		if err != nil {
+			return StartRunsResp{}, err
+		}
+		if !yields {
 			return StartRunsResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
@@ -252,7 +273,11 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 
 // Open is open_run (conductor runs.ts:325-383): one more run of a racing parent, ordinal one past
 // the highest recorded, ordered after the last run. The parent is read, not written: its version
-// does not move. Capped by maxRunsPerTask counted over the runs that exist.
+// does not move. Capped by maxRunsPerTask counted over the runs that exist; a parent that gained an
+// open blocker while racing takes no new run (blockedRace). It runs under the project
+// lock, as pick_run and cancel_runs do, so the racing flag it reads cannot be settled under it: under
+// Postgres READ COMMITTED a pick that committed after that read left a claimable run of a parent
+// whose race was over, which no race tool could reach.
 func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq) (OpenRunResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "open_run", domain.GrantSubject{}, true)
 	if err != nil {
@@ -278,7 +303,7 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "open_run", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID),
+		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), LockProject: true, Request: req,
 	}, func(t *txn) (OpenRunResp, error) {
 		parent, err := t.Tx.GetTask(ctx, req.ProjectID, req.TaskID)
 		if err != nil {
@@ -289,6 +314,9 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 		}
 		if !parent.Racing {
 			return OpenRunResp{}, domain.InvalidTransition(parent.Status, "racing", nil, nil)
+		}
+		if err := blockedRace(parent); err != nil {
+			return OpenRunResp{}, err
 		}
 		existing, err := t.runsOf(parent)
 		if err != nil {
@@ -343,9 +371,20 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 // are promoted onto the parent (promoteArtifacts), so a picked parent is not a second completion path
 // that lands REVIEW or DONE carrying no evidence (conductor T-52).
 func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq) (PickRunResp, error) {
-	a, err := s.c.authorize(ctx, caller, req.ProjectID, "pick_run", domain.GrantSubject{}, true)
+	// The landing is the project's reviewEnabled, which a statuses grant needs to decide (as
+	// complete_task's): the settings are read first, and their error answered after authorize.
+	ps, settings, serr := s.runSettings(ctx, req.ProjectID)
+	subject := domain.GrantSubject{}
+	if serr == nil {
+		rev := ps.ReviewEnabled
+		subject.ReviewEnabled = &rev
+	}
+	a, err := s.c.authorize(ctx, caller, req.ProjectID, "pick_run", subject, true)
 	if err != nil {
 		return PickRunResp{}, err
+	}
+	if serr != nil {
+		return PickRunResp{}, s.c.mapErr("pick_run", serr)
 	}
 	if err := required("taskId", req.TaskID); err != nil {
 		return PickRunResp{}, err
@@ -355,10 +394,6 @@ func (s runsSvc) Pick(ctx context.Context, caller domain.Caller, req PickRunReq)
 	}
 	if req.Version < 0 {
 		return PickRunResp{}, domain.Validation("version must be a nonnegative integer", map[string]any{"field": "version"})
-	}
-	ps, settings, err := s.runSettings(ctx, req.ProjectID)
-	if err != nil {
-		return PickRunResp{}, s.c.mapErr("pick_run", err)
 	}
 	target := domain.Done
 	if ps.ReviewEnabled {

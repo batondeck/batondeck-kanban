@@ -9,9 +9,10 @@ ships; there is no sidecar.
 
 v0.1.0 is released, cut by the two workflows (so its tag is lightweight). What follows is the local
 sequence, written with v0.1.0's values; a later release runs the same lines with its own version.
-From v0.1.0 on, a published release is not replaced: a fix ships as the next patch version, with its
-own tag, and `release-draft`'s `replace` input is not used on a published release. Steps 1, 4, 5
-and 6 also run on demand as the `release-draft` workflow (`.github/workflows/release-draft.yml`,
+Once the repository is public, a published release is not replaced: a fix ships as the next patch
+version, with its own tag, and `release-draft`'s `replace` input is not used on a published release.
+(Before the public flip, v0.1.0 was re-cut in place while nobody outside had downloaded it.)
+Steps 1, 4, 5 and 6 also run on demand as the `release-draft` workflow (`.github/workflows/release-draft.yml`,
 `workflow_dispatch` with the candidate's full SHA), with step 3's tag made locally in the runner
 only: it ends in a draft release with the assets and the pushed image, and a maintainer publishes the
 draft, which creates the tag at the candidate (a lightweight tag, where step 3 makes an annotated
@@ -145,12 +146,18 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
    ```
 
    `THIRD_PARTY_NOTICES` is the licence text of every Go module the binary links, taken for every
-   platform in the Makefile's `PLATFORMS`; `make notices-check`, in the gate, holds it to that list
-   and to `go.sum`.
+   platform in the Makefile's `PLATFORMS`, and of every npm package the embedded web UI is built
+   from; `make notices-check`, in the gate, holds it to that list, to `go.sum` and to
+   `web/package-lock.json`. The binary carries it too, with `LICENSE` and `NOTICE`
+   (`batondeck-kanban licenses` prints the three), and the image holds them under `/licenses/`.
 
 7. **Visibility is the organisation owner's, not this sequence's.** The owner sets the repository's
    visibility (the README's download URLs and `git clone` need it public) and the image package's,
-   in the package's settings on GitHub (an anonymous `docker pull` needs it public).
+   in the package's settings on GitHub (an anonymous `docker pull` needs it public). Two settings go
+   with making the repository public, and neither can be set while it is private: private
+   vulnerability reporting (Settings, then Code security; `SECURITY.md` sends reporters to it, and
+   until it is on they have no private channel), and a branch protection rule on `main` that
+   requires a pull request and the `check` and `e2e` statuses.
 
 ## Verifying a release you downloaded
 
@@ -176,10 +183,13 @@ reporting.
 
 **The image:** its binary prints the release (`docker run --rm ghcr.io/batondeck/batondeck-kanban:1.2.3 version`
 prints `batondeck-kanban 1.2.3`), and the release notes carry the manifest digest it was pushed
-under. The image is not reproducible byte for byte: of the `Dockerfile`'s two base images only the
-Go one is named by digest; `gcr.io/distroless/static-debian12:nonroot` is named by tag, so a rebuild
-later may start from other bytes. What ties it to the tag is that it was built by `make image` from
-the tag's commit, in a fresh clone or in the `release-draft` workflow's checkout of the candidate.
+under. Both of the `Dockerfile`'s base images, the Go builder and
+`gcr.io/distroless/static-debian12:nonroot`, are named by digest, so a rebuild of the tag starts from
+the same bases; the image itself is not promised to be reproducible byte for byte. What ties it to
+the tag is that it was built by `make image` from the tag's commit, in a fresh clone or in the
+`release-draft` workflow's checkout of the candidate. That workflow names every action it runs by
+commit SHA, and its build runs under a read-only token: only the job that pushes the image holds
+`packages: write`, and only the job that creates the draft holds `contents: write`.
 
 **SBOM:** `sbom.cdx.json` (CycloneDX 1.6) lists the Go modules `cmd/batondeck-kanban` links
 (`cyclonedx-gomod app`).

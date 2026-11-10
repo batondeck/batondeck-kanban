@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as runsApi from '../api/runs.js';
 import { Avatar, timeAgo } from '../components.js';
 import type { RunView, Task } from '../types.js';
+import { ReadFailed } from '../ui.js';
 
 // A run is "submitted" (pickable) when it carries a deliverable in REVIEW/DONE and was not cancelled —
 // the core's own rule for pick_run, so a run cancel_task closed (DONE with the cancelled label, even one
@@ -129,9 +130,9 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
   const racing = !!task.racing;
   // Only fetch runs when this task is (or was) a parent of a race — a never-raced task has none, and the
   // query is cheap to keep mounted so it refreshes live once a race opens.
-  // Live updates arrive via the board's SSE stream, which invalidates ['runs', projectId, …] on every
-  // board change (the ui-backend keeps a stateful MCP session even under STATELESS_MCP=true, so resource
-  // subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
+  // Live updates arrive via the board's stream: every board change invalidates ['runs', projectId, …]
+  // (Board.tsx's nudge, and the ticket's own subscription in useTaskDetail) — this 30s poll is just a
+  // backstop for a dropped stream. Only mounts while the drawer is open.
   const runsQ = useQuery({
     queryKey: ['runs', projectId, taskId],
     queryFn: () => runsApi.listRuns(projectId, taskId),
@@ -146,6 +147,8 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
   const [count, setCount] = useState(2);
 
   const runs = runsQ.data?.runs ?? [];
+  // A failed or pending read is not "no runs": the race prompt and the run count wait for an answer.
+  const runsRead = runsQ.data !== undefined;
 
   const refresh = (): void => {
     void qc.invalidateQueries({ queryKey: ['runs', projectId, taskId] });
@@ -201,14 +204,20 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
           )}
         </span>
       </div>
-      {closedWhy && !canRace && (racing || runs.length === 0) && (
+      {closedWhy && !canRace && (racing || (runsRead && runs.length === 0)) && (
         <p id="runs-closed" className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>{closedWhy}</p>
+      )}
+      {/* A failed read says so, rather than showing a race with no runs. */}
+      {runsQ.isError && (
+        <div style={{ marginBottom: 8 }}>
+          <ReadFailed what="the runs" error={runsQ.error} stale={!!runsQ.data} onRetry={() => void runsQ.refetch()} />
+        </div>
       )}
 
       {/* Start-race affordance — only when this task is NOT racing and has no runs yet. A human lead
           initiates the "race this task across N agents" flow here: fan the task out into N run children
           (each a real claimable task) that workers pick up and a lead later PICKS the winner from. */}
-      {!racing && runs.length === 0 && (
+      {!racing && runsRead && runs.length === 0 && (
         <div style={{ background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 'var(--r-2)', padding: 12 }}>
           {startOpen && canRace ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -259,7 +268,7 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
         <div style={{ position: 'relative', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 12px', marginBottom: 12, borderRadius: 'var(--r-2)', background: 'color-mix(in srgb, var(--progress) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--progress) 25%, transparent)' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--progress)' }}>
             <Icon name="finish" size={12} />
-            Racing · {runs.length} runs open
+            Racing{runsRead && <> · {runs.length} runs open</>}
             {task.raceOpenedAt && <span className="mono" style={{ fontSize: 11 }}>· started {timeAgo(task.raceOpenedAt)}</span>}
           </span>
           <button className="btn secondary" style={{ padding: '2px 10px', fontSize: 12 }} disabled={busy} {...closedProps} onClick={() => void guard(() => runsApi.cancelRuns(projectId, taskId, task.version))}>

@@ -339,3 +339,37 @@ func TestOncallRefusals(t *testing.T) {
 		t.Errorf("audit actions %v", actions)
 	}
 }
+
+// A jwksUrl the delivery-time fetch would always refuse is refused when it is saved, on create and
+// on update, naming auth.jwt.jwksUrl: not a URL, not https, no host, credentials in it, the
+// metadata or localhost names, and an IP literal in a forbidden range. A host name is not resolved
+// here (the fetch vets every address it resolves to). Control: a public https URL is saved.
+func TestOncallRefusesAnUnfetchableJWKSURL(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	o := f.c.Oncall()
+	jwt := func(u string) IntegrationAuthInput {
+		return IntegrationAuthInput{Mode: "jwt", JWT: IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: u}}
+	}
+	req := func(u string) CreateIntegrationReq {
+		return CreateIntegrationReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "j", Source: "webhook", Auth: jwt(u), Routing: IntegrationRouting{Mode: "broadcast"}}
+	}
+	ok := f.integration(t, root, req("https://www.googleapis.com/oauth2/v3/certs"))
+	for _, u := range []string{
+		"not a url at all", "http://169.254.169.254/latest/meta-data/", "https:///jwks", "ftp://keys.example.com/jwks",
+		"https://user:pass@keys.example.com/jwks", "https://localhost/jwks", "https://metadata.google.internal/x",
+		"https://127.0.0.1:9/jwks", "https://10.0.0.1/jwks", "https://[::1]/jwks", "https://100.100.100.200/jwks", "https://[::ffff:169.254.169.254]/jwks",
+	} {
+		_, err := o.CreateIntegration(f.ctx, root, req(u))
+		if e, isErr := domain.AsBatonDeckError(err); !isErr || e.Code != domain.CodeValidation || e.Details["field"] != "auth.jwt.jwksUrl" {
+			t.Errorf("create with jwksUrl %q: %v, want VALIDATION naming auth.jwt.jwksUrl", u, err)
+		}
+		_, err = o.UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: ok.Integration.ID, Version: 1, Patch: IntegrationPatch{Auth: jwt(u)}})
+		if e, isErr := domain.AsBatonDeckError(err); !isErr || e.Code != domain.CodeValidation || e.Details["field"] != "auth.jwt.jwksUrl" {
+			t.Errorf("update with jwksUrl %q: %v, want VALIDATION naming auth.jwt.jwksUrl", u, err)
+		}
+	}
+	if _, err := o.UpdateIntegration(f.ctx, root, UpdateIntegrationReq{ProjectID: f.project.ID, IntegrationID: ok.Integration.ID, Version: 1,
+		Patch: IntegrationPatch{Auth: jwt("https://keys.example.com:8443/.well-known/jwks.json")}}); err != nil {
+		t.Errorf("update to a public https jwksUrl (control): %v", err)
+	}
+}

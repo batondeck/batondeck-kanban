@@ -80,18 +80,17 @@ func (s *Store) ReadMemory(ctx context.Context, projectID, taskID string, q stor
 		at := nowMillis()
 		var window []store.MemoryEntry
 		for _, e := range st.memory {
-			if e.ProjectID == projectID && e.TaskID == taskID && isTaskScope(e.Scope) {
+			if e.ProjectID == projectID && e.TaskID == taskID && isTaskScope(e.Scope) && liveEntry(e, at) &&
+				(q.Scope == "" || e.Scope == q.Scope) && (q.Key == "" || e.Key == q.Key) &&
+				(e.Scope != store.MemoryAgent || e.Author == q.Identity) {
 				window = append(window, e)
 			}
 		}
 		memoryNewestFirst(window)
 		window = window[:min(len(window), clamp(q.Limit, 200, 200))]
-		out := []store.MemoryEntry{}
-		for _, e := range window {
-			if liveEntry(e, at) && (q.Scope == "" || e.Scope == q.Scope) && (q.Key == "" || e.Key == q.Key) &&
-				(e.Scope != store.MemoryAgent || e.Author == q.Identity) {
-				out = append(out, cloneMemory(e))
-			}
+		out := make([]store.MemoryEntry, len(window))
+		for i, e := range window {
+			out[i] = cloneMemory(e)
 		}
 		return out, nil
 	})

@@ -731,7 +731,8 @@ func TestJoinDoorbellRows(t *testing.T) {
 
 // TestJoinStreamFrameAfterAnMCPMove: an /api/stream subscriber of the board, signed in through POST
 // /api/login on the same mux, gets a board frame within 200 ms of an agent's move_task over /mcp
-// returning.
+// returning. The 200 ms is held on the build that ships, run alone (make stream-latency); under the
+// race detector (raceDetector) each frame must still come within the second wait allows.
 func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 	onJoined(t, func(t *testing.T, j *joined) {
 		owner := j.user("ada")
@@ -821,7 +822,7 @@ func TestJoinStreamFrameAfterAnMCPMove(t *testing.T) {
 		quiet := move("IN_PROGRESS")
 		t.Logf("%s: board frame after an MCP move_task returned: %v quiet (no write in the last %v), %v busy (writes just before); end to end %v, the calls themselves %v", j.engine, quiet.Round(time.Millisecond), bus.PollInterval, busy, ends, writes)
 		// memstore has no commit wake (store.ChangeWatcher): its bus polls, so the bound is the engines'.
-		if j.engine == servicetest.Memstore {
+		if j.engine == servicetest.Memstore || raceDetector {
 			return
 		}
 		for i, d := range append(busy, quiet) {

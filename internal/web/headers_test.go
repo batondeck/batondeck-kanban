@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -36,13 +35,20 @@ func TestAppCSPHashesTheInlineScripts(t *testing.T) {
 	}
 }
 
-// TestAppCSPAdmitsTheFaviconHosts: the favicon proxy answers a redirect to gstatic, and img-src
-// checks the redirect target, so both hosts must be named for a link card's favicon to load.
-func TestAppCSPAdmitsTheFaviconHosts(t *testing.T) {
-	img := strings.Fields(regexp.MustCompile(`img-src ([^;]*)`).FindStringSubmatch(AppCSP)[1])
-	for _, host := range []string{"https://www.google.com", "https://*.gstatic.com"} {
-		if !slices.Contains(img, host) {
-			t.Errorf("img-src %q does not admit %s", img, host)
+// TestAppCSPNamesNoThirdPartyHost: the SPA bundles its fonts and its link cards ask no favicon
+// service (web/src/AppLink.tsx has no such lookup), so every source is this origin, a hash, a
+// keyword or data:. A host here would let a page tell a third party what a viewer is looking at.
+func TestAppCSPNamesNoThirdPartyHost(t *testing.T) {
+	for _, directive := range strings.Split(AppCSP, ";") {
+		fields := strings.Fields(directive)
+		if len(fields) == 0 {
+			continue
+		}
+		for _, src := range fields[1:] {
+			if strings.HasPrefix(src, "'") || src == "data:" {
+				continue
+			}
+			t.Errorf("%s names %q, a host other than this origin", fields[0], src)
 		}
 	}
 }

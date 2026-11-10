@@ -43,7 +43,8 @@ func parseTTL(ttl string) (int64, error) {
 
 // WriteMemory is write_memory. A task scope (task, agent, shared) lives under taskId and bumps that
 // task's version once; a durable scope (project, agent_global) moves no task, its taskId only
-// provenance, checked to exist. Event memory.written {scope, key} on the task when one is named.
+// provenance, checked to exist. Event memory.written {scope, key} on the task when one is named; a
+// private scope's (agent, agent_global) carries no key.
 // DEVIATION: a durable entry with no taskId appends no event (the store has no project-level event,
 // P-98); conductor appends one with no task.
 func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req WriteMemoryReq) (WriteMemoryResp, error) {
@@ -70,7 +71,7 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 	if req.LargeArtifact != (LargeArtifact{}) {
 		// TODO(spec): the signed-upload path waits for the blob store (R0.19 left Blobs unbuilt on
 		// the engines); until it lands a large value is refused rather than written half.
-		return WriteMemoryResp{}, domain.Validation("largeArtifact uploads are not available yet; write an inline value", map[string]any{"field": "largeArtifact"})
+		return WriteMemoryResp{}, domain.Validation("largeArtifact uploads are not available yet: write an inline value of at most 32768 characters, or attach the content to the task with attach_file", map[string]any{"field": "largeArtifact"})
 	}
 	expires, err := parseTTL(req.TTL)
 	if err != nil {
@@ -87,12 +88,14 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 		}
 		value = bytes.TrimSuffix(b.Bytes(), []byte("\n"))
 		if jsLen(string(value)) > memoryInlineMax {
-			return WriteMemoryResp{}, domain.Validation("Memory value exceeds MEMORY_INLINE_MAX (32768); use largeArtifact", map[string]any{"field": "value"})
+			// Not "use largeArtifact" (conductor's): that path is refused above until the blob store
+			// backs it, so the refusal names the one that works.
+			return WriteMemoryResp{}, domain.Validation("Memory value exceeds MEMORY_INLINE_MAX (32768 characters of JSON); a larger value cannot be stored in memory: attach it to the task with attach_file and keep a short note here", map[string]any{"field": "value", "max": memoryInlineMax})
 		}
 	}
 	m := mutation{
 		Tool: "write_memory", Args: map[string]any{"projectId": req.ProjectID, "scope": req.Scope, "key": req.Key},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}
 	// A durable entry's provenance task is loaded in fn, not by mutate (it is not bumped), so a grant
 	// check pending on it is finished there.
@@ -126,7 +129,14 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 			return WriteMemoryResp{}, err
 		}
 		if on != nil {
-			data, err := json.Marshal(map[string]any{"scope": req.Scope, "key": req.Key})
+			// The task's history and the board feed are every member's: a private scope's key (agent,
+			// its author's; agent_global, private to it) is left out, so the event says only that one
+			// was written.
+			ev := map[string]any{"scope": req.Scope}
+			if req.Scope != domain.MemoryScopeAgent && req.Scope != domain.MemoryScopeAgentGlobal {
+				ev["key"] = req.Key
+			}
+			data, err := json.Marshal(ev)
 			if err != nil {
 				return WriteMemoryResp{}, err
 			}
@@ -139,8 +149,8 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 	})
 }
 
-// ReadMemory is read_memory: the task's newest 200 task, agent and shared entries, then the scope,
-// key, agent-privacy and TTL filters (store.Memory.ReadMemory's window-then-filter).
+// ReadMemory is read_memory: the task's newest 200 task, agent and shared entries that pass the
+// scope, key, agent-privacy and TTL filters (store.Memory.ReadMemory's filter-then-window).
 func (s contextSvc) ReadMemory(ctx context.Context, caller domain.Caller, req ReadMemoryReq) (ReadMemoryResp, error) {
 	if _, err := s.c.authorize(ctx, caller, req.ProjectID, "read_memory", domain.GrantSubject{}, true); err != nil {
 		return ReadMemoryResp{}, err

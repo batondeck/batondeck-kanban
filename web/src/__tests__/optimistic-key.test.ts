@@ -56,12 +56,27 @@ describe('patchTaskCaches — the optimistic write reaches what the board render
     expect(pageAt(qc, boardTasksKey(P, B, 400)).find((t) => t.id === 'T-1')!.columnId).toBe('C-review');
   });
 
-  it('a screen keyed 3-segment (Analytics) is patched CONSISTENTLY, not instead of the board', () => {
+  it('a flat page keyed 3-segment is patched CONSISTENTLY, not instead of the board', () => {
     const qc = seeded();
     qc.setQueryData(['tasks', P, B], { tasks: [task('T-1'), task('T-2')] });
     patchTaskCaches(qc, P, 'T-1', (t) => ({ ...t, columnId: 'C-review' }));
     expect(pageAt(qc, boardTasksKey(P, B, 200)).find((t) => t.id === 'T-1')!.columnId, 'the board must move').toBe('C-review');
     expect(pageAt(qc, ['tasks', P, B]).find((t) => t.id === 'T-1')!.columnId, 'and stay consistent with it').toBe('C-review');
+  });
+
+  /**
+   * An INFINITE query under the prefix — the shape the Analytics census had when it was keyed
+   * `['tasks', P, B]`. It outlived the screen by gcTime, and the flat-page map threw on it, so every
+   * optimistic write in the project failed before its request was sent. A screen that keys a
+   * non-page entry under the prefix again must cost it nothing more than not being patched.
+   */
+  it('a NON-PAGE entry under the prefix (an infinite query) is skipped, not thrown on', () => {
+    const qc = seeded();
+    const infinite = { pages: [{ tasks: [task('T-1')] }], pageParams: [''] };
+    qc.setQueryData(['tasks', P, B], infinite);
+    expect(() => patchTaskCaches(qc, P, 'T-1', (t) => ({ ...t, columnId: 'C-review' }))).not.toThrow();
+    expect(pageAt(qc, boardTasksKey(P, B, 200)).find((t) => t.id === 'T-1')!.columnId, 'the board must still move').toBe('C-review');
+    expect(qc.getQueryData(['tasks', P, B]), 'the foreign entry is left as it was').toEqual(infinite);
   });
 
   it('the SNAPSHOT round-trips: restore() undoes the patch across every entry', () => {
@@ -114,6 +129,21 @@ describe('mergeSnapshotPreservingLocalEdits — a snapshot must not undo your ow
     const out = mergeSnapshotPreservingLocalEdits(optimistic, incoming, (id) => id === 'T-1');
     expect(out.tasks.find((t) => t.id === 'T-1')!.columnId).toBe('C-review');
     expect(out.tasks.find((t) => t.id === 'T-2')!.title, 'an unrelated card must not be held back').toBe('renamed by a colleague');
+  });
+
+  it('a NEWER server copy wins even inside the window: it already holds your write', () => {
+    // An optimistic patch keeps the version it was made from, and the server bumps it when the write
+    // lands. A snapshot at a later version therefore carries this tab's own edit, and keeping the
+    // older local copy would send that older version with the next write (a drag after a drawer edit
+    // answered STALE "expected 1, found 2", and the card snapped back).
+    const local = page([task('T-1', { title: 'mine', version: 1 }), task('T-2')]);
+    const newer = page([task('T-1', { title: 'mine, saved', version: 2 }), task('T-2')]);
+    const out = mergeSnapshotPreservingLocalEdits(local, newer, (id) => id === 'T-1');
+    expect(out.tasks.find((t) => t.id === 'T-1')!.version, 'the server copy, at its own version').toBe(2);
+    // An in-flight move (same version as the snapshot) still keeps the local copy.
+    const sameVersion = page([task('T-1', { columnId: 'C-ready', version: 1 })]);
+    const moving = page([task('T-1', { columnId: 'C-review', version: 1 })]);
+    expect(mergeSnapshotPreservingLocalEdits(moving, sameVersion, (id) => id === 'T-1').tasks[0]!.columnId).toBe('C-review');
   });
 
   it('with NOTHING in flight the snapshot wins outright — no staleness is introduced', () => {

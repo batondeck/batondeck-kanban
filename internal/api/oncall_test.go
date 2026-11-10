@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -274,5 +275,71 @@ func TestOncallRetiredSettingsRefusedOverREST(t *testing.T) {
 			errCode(t, "POST integration with "+what, code, got, http.StatusBadRequest, domain.CodeValidation)
 		}
 		okJSON(t, "POST integration")(root.do("POST", one, `{"version":1,"patch":{"routing":{"mode":"broadcast"}}}`, nil))
+	})
+}
+
+// TestOncallUpdateReplacesMappingAndClearsColumnOverREST: update_integration's patch replaces each
+// field it carries, which the on-call editor's Edit relies on to clear a setting. An absent mapping
+// or column keeps the stored one (a rename is the positive control); a present mapping replaces
+// the stored one whole, so {labels:[]} (what the editor sends) and {} both clear it; columnId null
+// clears the target column. The next incident then lands in the board's TODO column with no
+// stamped label.
+func TestOncallUpdateReplacesMappingAndClearsColumnOverREST(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		h := newStackHarness(t, s, Options{})
+		root := h.asAdmin("root")
+		ctx := context.Background()
+		rootCaller := domain.Caller{Identity: root.userID, TokenScope: root.userID, WorkspaceAdmin: true}
+		pid, bid := seedBoard(t, root, s.Core, "Oncall")
+		added, err := s.Core.Boards().AddColumn(ctx, root.caller(), service.AddColumnReq{ProjectID: pid, BoardID: bid, Name: "Pager", Status: domain.Todo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		col := added.Column.ID
+		on := "/api/oncall/" + pid + "/integrations"
+		ig := okJSON(t, "POST integrations")(root.do("POST", on, `{"name":"Alerts","source":"generic","boardId":"`+bid+`","columnId":"`+col+
+			`","auth":{"mode":"hmac"},"routing":{"mode":"broadcast"},"mapping":{"labels":["oncall"],"titleTemplate":"x"}}`, nil))["integration"].(map[string]any)
+		one := on + "/" + ig["id"].(string)
+		version := ig["version"].(float64)
+		patch := func(what, p string) (mapping map[string]any, column any) {
+			t.Helper()
+			got := okJSON(t, what)(root.do("POST", one, `{"version":`+strconv.FormatFloat(version, 'f', -1, 64)+`,"patch":`+p+`}`, nil))["integration"].(map[string]any)
+			if got["version"].(float64) != version+1 {
+				t.Fatalf("%s: version %v, want %v", what, got["version"], version+1)
+			}
+			version = got["version"].(float64)
+			return got["mapping"].(map[string]any), got["target"].(map[string]any)["columnId"]
+		}
+		cleared := func(what string, m map[string]any) {
+			t.Helper()
+			if l, _ := m["labels"].([]any); len(l) != 0 || m["titleTemplate"] != nil {
+				t.Fatalf("%s: mapping %v, want no label and no title template", what, m)
+			}
+		}
+
+		m, c := patch("a rename", `{"name":"Renamed"}`)
+		if l, _ := m["labels"].([]any); len(l) != 1 || l[0] != "oncall" || m["titleTemplate"] != "x" || c != col {
+			t.Fatalf("a rename: mapping %v, column %v, want both kept", m, c)
+		}
+
+		m, c = patch("the editor's clear", `{"mapping":{"labels":[]},"columnId":null}`)
+		cleared("the editor's clear", m)
+		if c != nil {
+			t.Fatalf("the editor's clear: column %v, want none", c)
+		}
+		test := okJSON(t, "POST test")(root.do("POST", one+"/test", `{"title":"After the clear"}`, nil))
+		task, err := s.Core.Tasks().Get(ctx, rootCaller, service.GetTaskReq{ProjectID: pid, TaskID: test["taskId"].(string)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Task.ColumnID == col || slices.Contains(task.Task.Labels, "oncall") {
+			t.Fatalf("an incident after the clear: column %s labels %v, want the board's TODO column and no stamped label", task.Task.ColumnID, task.Task.Labels)
+		}
+
+		if m, _ = patch("a mapping set again", `{"mapping":{"labels":["oncall"],"titleTemplate":"x"}}`); m["titleTemplate"] != "x" {
+			t.Fatalf("a mapping set again: %v", m)
+		}
+		m, _ = patch("an empty mapping", `{"mapping":{}}`)
+		cleared("an empty mapping", m)
 	})
 }

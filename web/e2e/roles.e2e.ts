@@ -1,7 +1,8 @@
 // Roles: a viewer and a worker of the same project, each signed in as themselves. Each sees what
 // its tier allows and is refused the rest: the screen says so, with a closed control and its reason
 // (P-432: "+ New task", Comment and "+ Add Member" join Status and Claim; P-440: every other write,
-// from "+ New board" and "+ assign" to the file drop and the palette), or with the on-call
+// from "+ New board" and "+ assign" to the file drop and the palette; "+ New board", "+ Add Column"
+// and a record's Delete are a master's since the owner's ruling of 2026-11-10), or with the on-call
 // refusal. A closed action is also read back from the server (nothing was written), so "nothing
 // happened on screen" cannot pass for "refused"; the on-call refusal is checked on screen.
 import type { Locator, Page } from '@playwright/test';
@@ -15,6 +16,9 @@ test.beforeAll(async () => {
 });
 
 const taskPath = (id: string): string => `/projects/${b.projectId}/boards/${b.boardId}/tasks/${id}`;
+
+/** Below master the Settings columns name both floors: adding is a master's, the rest a member's. */
+const BELOW_ADD_COLUMN = 'Only a master can add columns. Only a member or an admin can rename, limit or delete them.';
 
 async function taskCount(): Promise<number> {
   const r = await new McpClient('admin').call<{ tasks: unknown[] }>('list_tasks', { projectId: b.projectId, boardId: b.boardId });
@@ -93,7 +97,7 @@ test.describe('as a viewer', () => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto(`/projects/${p.projectId}/boards/${p.boardId}`);
     await expect(page.getByRole('heading', { name: p.boardName })).toBeVisible();
-    await expect(page.getByText('A viewer cannot create boards.')).toBeVisible();
+    await expect(page.getByText('Only a master can create boards.')).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'Switch board' })).toBeVisible();
     await expect(page.getByText('One task')).toBeVisible();
     await titleOnOneLine(page);
@@ -170,8 +174,8 @@ test.describe('as a viewer', () => {
     await expect(card).toBeVisible();
     const newBoard = page.getByRole('button', { name: '+ New board' });
     await expect(newBoard).toBeDisabled();
-    await expect(page.getByText('A viewer cannot create boards.')).toBeVisible();
-    await expect(newBoard).toHaveAccessibleDescription('A viewer cannot create boards.');
+    await expect(page.getByText('Only a master can create boards.')).toBeVisible();
+    await expect(newBoard).toHaveAccessibleDescription('Only a master can create boards.');
     const cardsWhy = 'Only a master can assign, move or reprioritise tasks.';
     await expect(page.getByText(cardsWhy)).toBeVisible();
     await card.hover();
@@ -238,14 +242,14 @@ test.describe('as a viewer', () => {
     await expect(page.locator('#cli-tokens')).toBeVisible();
     await expect(page.locator('#users')).toHaveCount(0);
 
-    // add_member and remove_member are tier admin, the columns write and structural, the review step admin.
+    // add_member and remove_member are tier admin, the columns master and structural, the review step admin.
     const addMember = page.getByRole('button', { name: '+ Add Member' });
     await expect(addMember).toBeDisabled();
     await expect(page.getByText('Only a project admin can add or remove members.')).toBeVisible();
     await expect(addMember).toHaveAccessibleDescription('Only a project admin can add or remove members.');
     await expect(page.getByLabel('New member login')).toBeDisabled();
     await expect(page.getByRole('button', { name: '+ Add Column' })).toBeDisabled();
-    await expect(page.getByText('A viewer cannot change columns.')).toBeVisible();
+    await expect(page.getByText(BELOW_ADD_COLUMN)).toBeVisible();
     await expect(page.getByRole('switch', { name: 'Require review step' })).toBeDisabled();
     await expect(page.getByText('Only a project admin can change workflow settings.')).toBeVisible();
     const { project } = await new McpClient('admin').call<{ project: { members: Record<string, string> } }>('get_project', {
@@ -344,6 +348,57 @@ test.describe('as a worker', () => {
       .toContain('Keys are per tenant.');
     await expect(page.getByText('Keys are per tenant.')).toBeVisible();
     await atRoute(page, '/projects/:projectId/boards/:boardId/tasks/:taskId', 'worker: note stored, edit closed');
+  });
+
+  test('"+ New board", "+ Add Column" and a record\'s Delete are a master\'s: closed with their reason, and nothing is written', async ({ page }) => {
+    const admin = new McpClient('admin');
+    const { pageId } = await admin.call<{ pageId: string }>('create_chronicle_page', {
+      projectId: b.projectId, kind: 'adr', slug: `adr/keep-${Date.now().toString(36)}`, title: 'Keep this record', blocks: [{ id: 'a', text: 'Kept on purpose.' }],
+    });
+    const shape = async (): Promise<unknown> => {
+      const [{ boards }, { board }] = await Promise.all([
+        admin.call<{ boards: Array<{ id: string }> }>('list_boards', { projectId: b.projectId }),
+        admin.call<{ board: { columns: Array<{ id: string }> } }>('get_board', { projectId: b.projectId, boardId: b.boardId }),
+      ]);
+      return { boards: boards.map((x) => x.id), columns: board.columns.map((c) => c.id) };
+    };
+    const before = await shape();
+
+    // The board: "+ New board" is closed and says why.
+    await page.goto(`/projects/${b.projectId}/boards/${b.boardId}`);
+    await expect(page.getByRole('heading', { name: b.boardName })).toBeVisible();
+    const newBoard = page.getByRole('button', { name: '+ New board' });
+    await expect(newBoard).toBeDisabled();
+    await expect(newBoard).toHaveAccessibleDescription('Only a master can create boards.');
+    await newBoard.click({ force: true });
+    await atRoute(page, '/projects/:projectId/boards/:boardId', 'worker: new board closed');
+
+    // Settings: adding a column is a master's, renaming, limiting and deleting one a member's.
+    await page.goto('/settings');
+    await page.getByLabel('Project to configure').selectOption({ label: b.projectName });
+    const addColumn = page.getByRole('button', { name: '+ Add Column' });
+    await expect(addColumn).toBeDisabled();
+    await expect(addColumn).toHaveAccessibleDescription(BELOW_ADD_COLUMN);
+    await expect(page.getByPlaceholder('New column name')).toBeDisabled();
+    await atRoute(page, '/settings', 'worker: add column closed');
+
+    // Chronicle: the worker may edit the record, but Delete is closed and says why.
+    await page.goto('/chronicle');
+    await page.getByLabel('Project', { exact: true }).selectOption({ label: b.projectName });
+    await page.getByText('Keep this record').click();
+    await expect(page.getByRole('heading', { name: 'Keep this record' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeEnabled();
+    const del = page.getByRole('button', { name: 'Delete', exact: true });
+    await expect(del).toBeDisabled();
+    await expect(del).toHaveAccessibleDescription('Only a master can delete records.');
+    await expect(page.getByText('Only a master can delete records.')).toBeVisible();
+    await del.click({ force: true });
+    await expect(page.getByRole('button', { name: 'Delete permanently' })).toHaveCount(0);
+    await atRoute(page, '/chronicle/:pageId', 'worker: delete closed');
+
+    expect(await shape()).toEqual(before);
+    const kept = await page.request.get(`/api/projects/${b.projectId}/chronicle/${pageId}`);
+    expect(((await kept.json()) as { page: { id: string } | null }).page?.id).toBe(pageId);
   });
 
   test('a worker claims and completes a task and comments, but cannot move its status', async ({ page }) => {

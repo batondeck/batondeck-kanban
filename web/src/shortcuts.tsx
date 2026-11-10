@@ -2,7 +2,7 @@
  * The keyboard layer (Phase 2). One registry is the single source of truth: screens register scoped
  * bindings via useShortcuts(); the dispatcher fires the deepest active scope first; the `?` overlay
  * renders whatever is currently registered. Keys never fire while typing in an input/textarea/select
- * or a contenteditable.
+ * or a contenteditable, nor for Enter/Space on a focused button, link or ARIA widget (its own press).
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 // NOTE: the registry is deliberately IDENTITY-STABLE — registering/unregistering bindings causes no
@@ -32,6 +32,24 @@ function isTyping(e: KeyboardEvent): boolean {
   return (
     t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
   );
+}
+
+/**
+ * Is this a key the focused control acts on itself? Enter and Space activate a button, a link, a
+ * summary or an ARIA widget, and arrows move inside a menu, listbox, tab list and the like. The
+ * dispatcher listens on `window`, so without this the board's `Enter` ("open the selected task") took
+ * Enter from every focused button and link while a card was selected, and its `preventDefault`
+ * cancelled the control's own press. A chord with a modifier (⌘K) is never the control's.
+ */
+const ACTIVATES = 'button, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="switch"], [role="checkbox"], [role="radio"], [role="tab"]';
+const ARROW_WIDGETS = '[role="menu"], [role="menubar"], [role="listbox"], [role="tablist"], [role="radiogroup"], [role="slider"], [role="tree"], [role="grid"]';
+function controlOwns(e: KeyboardEvent): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  const t = e.target as Element | null;
+  if (!t || typeof t.closest !== 'function') return false;
+  if (e.key === 'Enter' || e.key === ' ') return !!t.closest(ACTIVATES);
+  if (e.key.startsWith('Arrow')) return !!t.closest(ARROW_WIDGETS);
+  return false;
 }
 
 /** Normalize an event to a chord string the registry matches on ("k", "⌘k", "shift+/" → "?"). */
@@ -66,7 +84,8 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (isTyping(e)) return;
+      // Typing, a key the focused control acts on, or one a component has already handled: not ours.
+      if (isTyping(e) || controlOwns(e) || e.defaultPrevented) return;
       const chord = chordOf(e);
 
       // g-chords: "g" arms a 1.2s window; the next key resolves "g x".

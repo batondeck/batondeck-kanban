@@ -99,6 +99,15 @@ func (s *Postgres) ServerVersion(ctx context.Context) (string, error) {
 	return v, nil
 }
 
+// HoldsSealedValues reads holdsSealedSQL from the pool.
+func (s *Postgres) HoldsSealedValues(ctx context.Context) (bool, error) {
+	var held bool
+	if err := s.pool.QueryRow(ctx, holdsSealedSQL).Scan(&held); err != nil {
+		return false, fmt.Errorf("store: postgres: sealed values: %w", err)
+	}
+	return held, nil
+}
+
 // Atomically runs fn on a copy of this store whose statements all go through one transaction.
 func (s *Postgres) Atomically(ctx context.Context, fn func(tx Store) error) error {
 	if s.tx != nil {

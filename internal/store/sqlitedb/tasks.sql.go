@@ -185,6 +185,28 @@ func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (GetTaskRow, e
 	return i, err
 }
 
+const headOrderKey = `-- name: HeadOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = ?1 AND board_id = ?2 AND column_id = ?3
+ORDER BY order_key, id
+LIMIT 1
+`
+
+type HeadOrderKeyParams struct {
+	ProjectID string
+	BoardID   string
+	ColumnID  string
+}
+
+// The first order key of one column of the board (order key, then id, as bytes), through
+// tasks_column_order: a task moved into the column lands before it.
+func (q *Queries) HeadOrderKey(ctx context.Context, arg HeadOrderKeyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, headOrderKey, arg.ProjectID, arg.BoardID, arg.ColumnID)
+	var order_key string
+	err := row.Scan(&order_key)
+	return order_key, err
+}
+
 const insertTask = `-- name: InsertTask :one
 INSERT INTO tasks (project_id, id, board_id, column_id, title, description, status, priority, assignee, labels, required_capabilities, parent_task_id, order_key, custom_fields, model_hint, run_of, sprint_ids, version, created_by, created_by_agent, created_at, updated_by, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
@@ -334,6 +356,28 @@ func (q *Queries) InsertTask(ctx context.Context, arg InsertTaskParams) (InsertT
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const lastOrderKey = `-- name: LastOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = ?1 AND board_id = ?2 AND column_id = ?3
+ORDER BY order_key DESC, id DESC
+LIMIT 1
+`
+
+type LastOrderKeyParams struct {
+	ProjectID string
+	BoardID   string
+	ColumnID  string
+}
+
+// The column's last order key, bytes order (SQLite's BINARY collation): what a task appended to the
+// column goes after. No row is an empty column.
+func (q *Queries) LastOrderKey(ctx context.Context, arg LastOrderKeyParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lastOrderKey, arg.ProjectID, arg.BoardID, arg.ColumnID)
+	var order_key string
+	err := row.Scan(&order_key)
+	return order_key, err
 }
 
 const listTasks = `-- name: ListTasks :many

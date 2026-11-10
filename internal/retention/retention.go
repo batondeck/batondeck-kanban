@@ -7,7 +7,10 @@
 // that same delivery window once their ticket is DONE or gone, the browser sessions expired and
 // the API tokens expired or revoked more than LapsedGrace ago (a label's oldest and newest token rows
 // per identity stay, as the label-ownership record), the OAuth codes and tokens expired more than
-// LapsedGrace ago, and the blobs no attachment or memory entry references any more.
+// LapsedGrace ago, the idempotency keys past their replay window (each row holds a mutation's
+// whole result, and a key past its window counts as never seen), the attachments still pending
+// PendingAttachmentAge after they were created, the blobs no attachment or memory entry references
+// any more, and the blob files on disk that no blob row names.
 // Task events are kept. Each table's delete is bounded per
 // statement and per tick, so one sweep never holds the write lock for long: what a tick leaves, the
 // next one takes.
@@ -29,7 +32,9 @@ const (
 	Batch = 500
 	// MaxPerTick is the most rows one table loses in one sweep.
 	MaxPerTick = 50_000
-	// BlobGrace is how old an unreferenced blob is before a sweep collects it.
+	// BlobGrace is how old an unreferenced blob is before a sweep collects it, and how long ago a
+	// blob file or an upload's temporary file was last written before a sweep removes it for
+	// having no row.
 	BlobGrace = time.Hour
 	// AgentSessionIdle is how long an agent session row outlives its last request (ADR-0004: the
 	// GC that replaced prune_agent_sessions).
@@ -40,6 +45,11 @@ const (
 	// lapsed token with its status, and a rotated OAuth refresh token presented again still finds
 	// its row and revokes its family.
 	LapsedGrace = 7 * 24 * time.Hour
+	// PendingAttachmentAge is how long after its creation an attachment still pending is deleted: an
+	// upload that never came. Its upload URL lives 15 minutes, and a replay of attach_file's
+	// idempotency key, which a day keeps, answers it with a fresh one; past both the attachment can
+	// never be uploaded, and its row would show "pending" on the task for good.
+	PendingAttachmentAge = 25 * time.Hour
 )
 
 // Store is the slice of the store a sweep deletes through.
@@ -55,6 +65,8 @@ type Store interface {
 	DeleteExpiredDeliveries(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredDeliveryRawBodies(ctx context.Context, now int64, limit int) (int64, error)
 	DeleteExpiredAlertStates(ctx context.Context, now int64, limit int) (int64, error)
+	DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error)
+	DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error)
 	ListUnreferencedBlobs(ctx context.Context, olderThan int64, limit int) ([]store.Blob, error)
 }
 
@@ -74,8 +86,8 @@ func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
 
 // Swept is what one sweep deleted, per table.
 type Swept struct {
-	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens int64
-	Deliveries, RawBodies, AlertStates, Blobs                                              int64
+	Memory, ChangeLog, ToolCalls, AgentSessions, Sessions, Tokens, OAuthCodes, OAuthTokens    int64
+	Deliveries, RawBodies, AlertStates, PendingAttachments, IdempotencyKeys, Blobs, BlobFiles int64
 }
 
 // Sweeper is one store's sweep. Now defaults to time.Now; Report hears a step that failed (nil
@@ -83,21 +95,27 @@ type Swept struct {
 // sweep lists, row and file (service.Core.CollectBlobs); nil sweeps no blob. Live is the agent
 // sessions with a live MCP session in this process (mcp.Server.LiveAgentSessions), read once per
 // sweep: their rows are not idle however long ago their last request was (P-279); nil keeps none.
+// SweepBlobFiles removes the files on disk last written before its time that no blob row names,
+// and answers how many (service.Core.SweepBlobFiles); nil sweeps no file.
 type Sweeper struct {
-	Store        Store
-	Windows      Windows
-	Now          func() time.Time
-	Report       func(step string, err error)
-	CollectBlobs func(ctx context.Context, sha256s []string)
-	Live         func() []store.AgentSessionKey
+	Store          Store
+	Windows        Windows
+	Now            func() time.Time
+	Report         func(step string, err error)
+	CollectBlobs   func(ctx context.Context, sha256s []string)
+	SweepBlobFiles func(ctx context.Context, olderThan time.Time) int64
+	Live           func() []store.AgentSessionKey
 }
 
 // Sweep runs one pass: memory, then the change log, then tool calls, then the idle agent sessions,
 // then the browser sessions, API tokens, OAuth codes and OAuth tokens lapsed more than LapsedGrace
 // ago, then the expired deliveries (each with its raw body) and the expired raw bodies of kept
 // deliveries, then the expired alert states whose ticket is DONE or gone (an open ticket's stays, so
-// a late firing still appends to it), then one Batch of the blobs unreferenced for BlobGrace (a
-// blob CollectBlobs could not delete is listed again next tick).
+// a late firing still appends to it), then the attachments still pending PendingAttachmentAge after
+// their creation, then the idempotency keys past their window, then one Batch of the blobs unreferenced for BlobGrace (a
+// blob whose row CollectBlobs could not delete is listed again next tick), then the blob files last
+// written more than BlobGrace ago that no row names (among them a file whose unlink failed after
+// CollectBlobs deleted its row, and those an upload cut off between its file and its row left).
 func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	now := time.Now
 	if s.Now != nil {
@@ -144,6 +162,10 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 	out.Deliveries = step("deliveries", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveries(ctx, ms, limit) })
 	out.RawBodies = step("raw bodies", func(limit int) (int64, error) { return s.Store.DeleteExpiredDeliveryRawBodies(ctx, ms, limit) })
 	out.AlertStates = step("alert states", func(limit int) (int64, error) { return s.Store.DeleteExpiredAlertStates(ctx, ms, limit) })
+	out.PendingAttachments = step("pending attachments", func(limit int) (int64, error) {
+		return s.Store.DeleteStalePendingAttachments(ctx, ms-PendingAttachmentAge.Milliseconds(), limit)
+	})
+	out.IdempotencyKeys = step("idempotency keys", func(limit int) (int64, error) { return s.Store.DeleteExpiredIdempotencyKeys(ctx, ms, limit) })
 	if s.CollectBlobs != nil {
 		bs, err := s.Store.ListUnreferencedBlobs(ctx, ms-BlobGrace.Milliseconds(), Batch)
 		if err != nil && s.Report != nil && ctx.Err() == nil {
@@ -157,6 +179,9 @@ func (s *Sweeper) Sweep(ctx context.Context) Swept {
 			s.CollectBlobs(ctx, hashes)
 		}
 		out.Blobs = int64(len(hashes))
+	}
+	if s.SweepBlobFiles != nil {
+		out.BlobFiles = s.SweepBlobFiles(ctx, time.UnixMilli(ms-BlobGrace.Milliseconds()))
 	}
 	return out
 }

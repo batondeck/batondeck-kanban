@@ -53,11 +53,15 @@ func sameAgent(a, b *string) bool {
 	return *a == *b
 }
 
-// claim writes the lease on t: IN_PROGRESS, in.ColumnID when given, no backoff, the version one up.
+// claim writes the lease on t: IN_PROGRESS, in.ColumnID when given (at that column's head when it
+// is another, store.HeadKey), no backoff, the version one up.
 func (st *state) claim(t store.Task, in store.ClaimInput) (store.Task, error) {
 	if in.ColumnID != "" {
 		if err := st.columnOn(t.ProjectID, t.BoardID, in.ColumnID); err != nil {
 			return store.Task{}, err
+		}
+		if in.ColumnID != t.ColumnID {
+			t.OrderKey = st.headKey(t.ProjectID, t.BoardID, in.ColumnID, t.OrderKey)
 		}
 		t.ColumnID = in.ColumnID
 	}
@@ -93,7 +97,7 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 		if len(q.Capabilities) > 0 && !allIn(t.RequiredCapabilities, q.Capabilities) {
 			continue
 		}
-		if q.SprintID != "" && !slices.Contains(t.SprintIDs, q.SprintID) {
+		if q.SprintID != "" && !slices.Contains(t.SprintIDs, q.SprintID) && !st.runInSprint(k[0], t, q.SprintID) {
 			continue
 		}
 		if q.TaskIDs != nil && !slices.Contains(q.TaskIDs, t.ID) {
@@ -114,6 +118,16 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 
 // callers is the routing half of the frontier without an assignee: the task is unassigned, or
 // assigned to caller's id or, in any case, to its account's email.
+// runInSprint reports whether t is a run of a member of sprintID: the frontier's sprint filter
+// takes a raced member's runs with the member.
+func (st *state) runInSprint(projectID string, t store.Task, sprintID string) bool {
+	if t.RunOf == nil {
+		return false
+	}
+	parent, ok := st.tasks[[2]string{projectID, *t.RunOf}]
+	return ok && slices.Contains(parent.SprintIDs, sprintID)
+}
+
 func (st *state) callers(assignee *string, caller string) bool {
 	if assignee == nil {
 		return true
@@ -172,7 +186,10 @@ func (s *Store) ClaimTask(ctx context.Context, projectID, taskID string, expecte
 			return store.Task{}, domain.ConflictLocked(taskID, "race")
 		}
 		if len(t.BlockedBy) > 0 {
-			return store.Task{}, domain.InvalidTransition(t.Status, domain.InProgress, nil, nil)
+			return store.Task{}, domain.GatedClaim(taskID, t.Status, t.BlockedBy)
+		}
+		if t.Status == domain.Todo && t.NextEligibleAt != nil && *t.NextEligibleAt > in.Now {
+			return store.Task{}, domain.InBackoff(taskID, time.UnixMilli(*t.NextEligibleAt))
 		}
 		mine := t.Claim != nil && t.Claim.Owner == in.Owner && sameAgent(t.Claim.AgentID, in.AgentID)
 		if live(t.Claim, in.Now) && !mine {
@@ -257,6 +274,7 @@ func (s *Store) PreviewFrontier(ctx context.Context, q store.FrontierQuery, limi
 	limit = clamp(limit, 50, 200)
 	return get(ctx, s, func(st *state) ([]store.Task, error) {
 		f := st.frontier(q)
+		f = f[min(max(q.Offset, 0), len(f)):]
 		if len(f) > limit {
 			f = f[:limit]
 		}

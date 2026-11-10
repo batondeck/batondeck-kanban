@@ -126,6 +126,9 @@ func TestTokenSubcommandIsAudited(t *testing.T) {
 	}
 	var got []string
 	for _, r := range page.Rows {
+		if !strings.HasPrefix(r.Action, "cli_token.") {
+			continue // user add's own row (TestUserCommandsAreAudited)
+		}
 		got = append(got, r.Action+" "+r.Actor+">"+strings.SplitN(r.Subject, "-", 2)[0]+" "+string(r.Data))
 	}
 	// The subject is the identity stored canonical, lower-cased (P-441).

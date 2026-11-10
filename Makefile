@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test stream-latency conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -97,21 +97,25 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs, and CI (.github/workflows/ci.yml). Its steps, in order:
-# gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated
+# gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum and web/package-lock.json, the release fixtures, the generated
 # store code against its sources, web/dist against a fresh web build, the SPA's typecheck and tests
-# (web-check), the layering guard, the tests under the race detector, the store conformance suite
-# once per engine, the MCP contract (files and live server), the per-call statement pins, web/public
-# against its allow-list, the vendored brand kit against its lock, the plugin: its instructions
-# against the contract (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against
-# the five.
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
+# (web-check), the layering guard, the tests under the race detector, the board stream's latency
+# bound on the build that ships, the store conformance suite once per engine, the MCP contract
+# (files and live server), the per-call statement pins, web/public against its allow-list, the
+# vendored brand kit against its lock, the plugin: its instructions against the contract
+# (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against the five. `test`
+# skips the four tests conformance and contract run by name (CHECK_OWN_RUNS), which on CI's runner
+# were 8 minutes run twice. stream-latency's two tests run in `test` too: there under -race, and
+# without it for the bound.
+CHECK_OWN_RUNS := ^(TestSQLiteConformance|TestPostgresConformance|TestLiveContract|TestSurfaceSnapshot)$$
+check: TEST_SKIP = $(CHECK_OWN_RUNS)
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test stream-latency conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
 
 # sqlc-check fails when the committed generated code (internal/store/{sqlitedb,pgdb}, sqlc.yaml's
-# outputs) does not match what the current queries and migrations produce. Until queries/ holds a
-# .sql file there is nothing to generate, and it says so.
+# outputs) does not match what the current queries and migrations produce.
 sqlc-check:
 	@if ! find queries -name '*.sql' 2>/dev/null | grep -q .; then \
 		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
@@ -177,8 +181,11 @@ web-states-check:
 	echo "web-states-check: web/src names only the five states"
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
-# on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
-# PLATFORMS, the one list). notices-check holds the file to PLATFORMS, to go.sum by hash and to the
+# on any of PLATFORMS and of every npm package the embedded web UI is built from, as their own
+# sources hold them (scripts/notices.mjs says how; it is handed PLATFORMS, the one list, and reads
+# web/node_modules, so `cd web && npm ci` comes first). The binary embeds the file (legal.go) and
+# prints it with `licenses`. notices-check holds the file to PLATFORMS, to go.sum and
+# web/package-lock.json by hash and to the
 # set of modules the binary links (`go list -deps` per platform, by count and hash): it is part of
 # `check`. A dependency change, an import that links a module go.sum already held, or a change to
 # PLATFORMS, that forgets `make notices` fails there.
@@ -204,10 +211,21 @@ arch:
 # web/node_modules once the UI's packages are installed.
 # Under -race, internal/cli nears Go's 10m default on a loaded machine (P-289 shortens it).
 # TEST_TIMEOUT is 20m here and on the pre-push hook; CI's 2-vCPU runner passes 40m, where
-# internal/cli under -race alone ran 17 to 20+ minutes.
+# internal/cli under -race alone ran 17 to 20+ minutes. TEST_SKIP, a `go test -skip` pattern, is
+# empty when `test` runs alone (every test runs); check sets it to the tests its later steps run.
 TEST_TIMEOUT ?= 20m
 test:
-	go test -race -timeout $(TEST_TIMEOUT) ./cmd/... ./internal/...
+	go test -race -timeout $(TEST_TIMEOUT)$(if $(TEST_SKIP), -skip '$(TEST_SKIP)') ./cmd/... ./internal/...
+
+# stream-latency holds /api/stream's 200 ms from a write's return to its board frame
+# (TestStreamBoardFrameOnAChange on every engine, TestJoinStreamFrameAfterAnMCPMove at serve's real
+# poll) on the build that ships: without -race, which slows the frame's whole path several-fold, and
+# one package at a time, so no other test binary shares the CPUs. Beside other packages under -race
+# on a 2-vCPU runner, correct frames came 230-530 ms late. `test` runs both under -race as well, with
+# every assertion but that bound (raceDetector). Postgres too with BATONDECK_TEST_POSTGRES_DSN.
+STREAM_LATENCY_TESTS := ^(TestStreamBoardFrameOnAChange|TestJoinStreamFrameAfterAnMCPMove)$$
+stream-latency:
+	go test -count=1 -p 1 -v -run '$(STREAM_LATENCY_TESTS)' ./internal/api/ ./internal/cli/
 
 # conformance judges each store engine by internal/store/conformance, one run per engine, by name.
 # The Postgres run needs BATONDECK_TEST_POSTGRES_DSN: unset, it skips and prints why; set and
@@ -243,7 +261,7 @@ e2e:
 	go test -tags e2e -count=1 -timeout $(E2E_TIMEOUT) -v ./test/e2e/
 
 # bench runs plan §Performance's three numbers, outside check: the claim race (50 real MCP clients
-# call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 3 rounds), the
+# call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 5 rounds, after a warm-up round), the
 # idle cost (200 device-directory entries and 10 /api/stream clients held 60 s with no write: the
 # sweep's statements per entry, and none between sweeps, by the engine's own count) and the per-call
 # statement pins of test/perf, each in its three cache states. SQLite always, Postgres too with

@@ -25,3 +25,7 @@ func peerCred(c *net.UnixConn) (Peer, error) {
 	}
 	return Peer{UID: int(cred.Uid), PID: int(cred.Pid)}, nil
 }
+
+// MaxSocketPath is the longest Unix socket path the kernel binds: sun_path is 108 bytes on Linux,
+// one of them the terminating NUL.
+const MaxSocketPath = 107

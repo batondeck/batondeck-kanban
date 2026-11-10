@@ -7,6 +7,9 @@
 **/.env
 **/.env.*
 **/master.key
+**/*.env
+**/batondeck.sql
+**/batondeck-*.tgz
 /data/
 **/*.db
 **/*.db-wal

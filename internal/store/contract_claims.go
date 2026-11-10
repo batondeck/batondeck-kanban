@@ -9,7 +9,9 @@ import (
 // ClaimInput is a claim by one agent. LeaseID is the caller's new lease id, ExpiresAt when the
 // lease runs out, Now the time the claim is judged at and recorded under (UpdatedAt). ColumnID is
 // the IN_PROGRESS column the task lands in ("" keeps its column): the service resolves it from the
-// board. Agent and AgentID are nil for a claim that did not come through an agent.
+// board. A task that changes column lands at that column's head with a fresh order key (HeadKey),
+// never with the key it had in its old column. Agent and AgentID are nil for a claim that did not
+// come through an agent.
 type ClaimInput struct {
 	Owner     string
 	Agent     *string
@@ -26,10 +28,12 @@ type ClaimInput struct {
 // to Caller's id, or to its account's email in any case), so nobody takes work routed to another
 // (Caller "" is the unassigned ones alone), and with Capabilities not empty only those whose
 // RequiredCapabilities are all among them, and with SprintID set only the members of that sprint
-// (SprintIDs holds it; P-239), and with TaskIDs not nil only the tasks it names (an empty TaskIDs
-// matches none; P-258). The frontier is best first: Score descending, then
-// priority (urgent, high, normal, low), then order key, then id, the two keys compared as bytes
-// (Postgres: COLLATE "C"), so T-10 comes before T-9.
+// (SprintIDs holds it; P-239) and the runs of its members (RunOf a task whose SprintIDs hold it: a
+// raced member's work is in its runs, which are not members), and with TaskIDs not nil only the
+// tasks it names (an empty TaskIDs matches none; P-258). The frontier is best first: Score
+// descending, then priority (urgent, high, normal, low), then order key, then id, the two keys
+// compared as bytes (Postgres: COLLATE "C"), so T-10 comes before T-9. Offset skips the frontier's
+// first Offset tasks in PreviewFrontier (a page after the first); ClaimNext ignores it.
 type FrontierQuery struct {
 	ProjectID    string
 	BoardID      string
@@ -39,6 +43,7 @@ type FrontierQuery struct {
 	SprintID     string
 	TaskIDs      []string
 	Now          int64
+	Offset       int
 }
 
 // Claims is the lease area: who works a task, until when. Keys: (project_id, task_id). A claim
@@ -59,8 +64,10 @@ type Claims interface {
 	// when the frontier is empty (an unknown board's frontier is empty: the service has read the
 	// board for its column). Concurrent callers never win the same task.
 	ClaimNext(ctx context.Context, q FrontierQuery, in ClaimInput) (task Task, ok bool, err error)
-	// ClaimTask claims one task at expectedVersion. A task with BlockedBy not empty, or neither
-	// TODO nor IN_PROGRESS with an expired lease or the caller's own, is INVALID_TRANSITION;
+	// ClaimTask claims one task at expectedVersion. A task with BlockedBy not empty is
+	// domain.GatedClaim (INVALID_TRANSITION naming the blockers); a TODO task before its
+	// NextEligibleAt (the retry backoff) is domain.InBackoff; one neither TODO nor IN_PROGRESS
+	// with an expired lease or the caller's own is INVALID_TRANSITION;
 	// re-claiming one's own live lease replaces it. A version that is not the task's is STALE.
 	ClaimTask(ctx context.Context, projectID, taskID string, expectedVersion int64, in ClaimInput) (Task, error)
 	// Heartbeat moves the lease's expiry to expiresAt and returns the task; with keepLonger an
@@ -73,8 +80,8 @@ type Claims interface {
 	// holding a lease expired at now, the oldest expiry first (then id, as bytes). A limit <= 0 is 50 and
 	// above 200 is 200.
 	ListExpiredLeases(ctx context.Context, projectID, boardID string, now int64, limit int) ([]Task, error)
-	// PreviewFrontier is the first limit tasks of the frontier, best first, claiming nothing. A
-	// limit <= 0 is 50 and above 200 is 200.
+	// PreviewFrontier is the first limit tasks of the frontier after its first q.Offset, best first,
+	// claiming nothing. A limit <= 0 is 50 and above 200 is 200.
 	PreviewFrontier(ctx context.Context, q FrontierQuery, limit int) ([]Task, error)
 }
 

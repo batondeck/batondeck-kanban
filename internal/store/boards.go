@@ -22,6 +22,7 @@ type boardQueries interface {
 	ListProjectColumns(ctx context.Context, projectID string) ([]sqlitedb.Column, error)
 	ListColumnsWithTaskCounts(ctx context.Context, arg sqlitedb.ListColumnsWithTaskCountsParams) ([]sqlitedb.ListColumnsWithTaskCountsRow, error)
 	UpdateColumn(ctx context.Context, arg sqlitedb.UpdateColumnParams) error
+	LockColumn(ctx context.Context, arg sqlitedb.LockColumnParams) (sqlitedb.Column, error)
 	DeleteColumn(ctx context.Context, arg sqlitedb.DeleteColumnParams) error
 	CountColumnTasks(ctx context.Context, arg sqlitedb.CountColumnTasksParams) (int64, error)
 }
@@ -253,6 +254,21 @@ func updateColumn(ctx context.Context, e engine, projectID, boardID, columnID st
 		if err := validColumn(next); err != nil {
 			return err
 		}
+		if next.Status != c.Status {
+			// A column holding tasks keeps its status, as it keeps its place on the board
+			// (RemoveColumn): its tasks would disagree with it. The row is locked before the count,
+			// as RemoveColumn locks it.
+			if _, err := q.LockColumn(ctx, sqlitedb.LockColumnParams{ProjectID: projectID, BoardID: boardID, ID: columnID}); err != nil {
+				return found(err, "Column", columnID)
+			}
+			n, err := q.CountColumnTasks(ctx, sqlitedb.CountColumnTasksParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
+			if err != nil {
+				return fmt.Errorf("store: update column: %w", err)
+			}
+			if n > 0 {
+				return ColumnHoldsTasks(columnID, n, c.Status, next.Status)
+			}
+		}
 		cols[i].Name, cols[i].Status, cols[i].WipLimit, cols[i].Position = next.Name, string(next.Status), nullInt(next.WIPLimit), *next.Order
 		if err := q.UpdateColumn(ctx, sqlitedb.UpdateColumnParams{
 			Name: cols[i].Name, Position: cols[i].Position, Status: cols[i].Status, WipLimit: cols[i].WipLimit,
@@ -278,6 +294,11 @@ func removeColumn(ctx context.Context, e engine, projectID, boardID, columnID st
 		if i < 0 {
 			return domain.NotFound("Column", columnID)
 		}
+		// The column's row before its count (Postgres: FOR UPDATE), so a write putting a task into it
+		// (GetColumn, FOR KEY SHARE) commits before the count sees it, or waits and then finds none.
+		if _, err := q.LockColumn(ctx, sqlitedb.LockColumnParams{ProjectID: projectID, BoardID: boardID, ID: columnID}); err != nil {
+			return found(err, "Column", columnID)
+		}
 		n, err := q.CountColumnTasks(ctx, sqlitedb.CountColumnTasksParams{ProjectID: projectID, BoardID: boardID, ColumnID: columnID})
 		if err != nil {
 			return fmt.Errorf("store: remove column: %w", err)
@@ -295,6 +316,13 @@ func removeColumn(ctx context.Context, e engine, projectID, boardID, columnID st
 		return nil
 	})
 	return out, err
+}
+
+// ColumnHoldsTasks is UpdateColumn's refusal of a status change on a column that holds n tasks
+// (shared with memstore).
+func ColumnHoldsTasks(columnID string, n int64, from, to domain.Status) error {
+	return domain.Validation(fmt.Sprintf("Cannot change the status of a column that still has tasks (%d) — move them first", n),
+		map[string]any{"columnId": columnID, "tasks": n, "status": from, "toStatus": to})
 }
 
 // lockBoard reads the board, locked to the transaction on Postgres, and its columns.
@@ -368,6 +396,11 @@ func (p pgQueries) ListColumnsWithTaskCounts(ctx context.Context, arg sqlitedb.L
 
 func (p pgQueries) UpdateColumn(ctx context.Context, arg sqlitedb.UpdateColumnParams) error {
 	return p.q.UpdateColumn(ctx, pgdb.UpdateColumnParams(arg))
+}
+
+func (p pgQueries) LockColumn(ctx context.Context, arg sqlitedb.LockColumnParams) (sqlitedb.Column, error) {
+	r, err := p.q.LockColumn(ctx, pgdb.LockColumnParams(arg))
+	return sqlitedb.Column(r), err
 }
 
 func (p pgQueries) DeleteColumn(ctx context.Context, arg sqlitedb.DeleteColumnParams) error {

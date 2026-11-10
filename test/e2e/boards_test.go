@@ -20,12 +20,13 @@ var fixedTable = map[string][]string{
 	"DONE":        {"IN_PROGRESS"},
 }
 
-// A worker makes a board with its own columns and one with the defaults; both are listed, and
-// get_board answers the columns, the per-column task counts and the fixed transition table. A viewer
-// cannot make a board, a nameless board is refused, and an outsider cannot read one.
+// A master makes a board with its own columns and one with the defaults; both are listed, and
+// get_board answers the columns, the per-column task counts and the fixed transition table. A worker
+// or a viewer cannot make a board (create_board is master by the owner's ruling of 2026-11-10), a
+// nameless board is refused, and an outsider cannot read one.
 func boardCreateListGet(t *testing.T, e *env) {
 	p := e.project(t, "Boards")
-	custom := O(e.worker.Call(t, "create_board", M{"projectId": p.id, "name": "Ops", "idempotencyKey": uniq("b"), "columns": []any{
+	custom := O(e.master.Call(t, "create_board", M{"projectId": p.id, "name": "Ops", "idempotencyKey": uniq("b"), "columns": []any{
 		M{"name": "Inbox", "status": "TODO"},
 		M{"name": "Doing", "status": "IN_PROGRESS", "wipLimit": 2},
 		M{"name": "Shipped", "status": "DONE"},
@@ -51,24 +52,26 @@ func boardCreateListGet(t *testing.T, e *env) {
 
 	// With review off, the default columns leave Review out.
 	e.admin.Call(t, "update_settings", M{"projectId": p.id, "reviewEnabled": false})
-	noReview := O(e.worker.Call(t, "create_board", M{"projectId": p.id, "name": "Plain"}), "board")
+	noReview := O(e.master.Call(t, "create_board", M{"projectId": p.id, "name": "Plain"}), "board")
 	for _, c := range A(noReview, "columns") {
 		want(t, S(c, "status") != "REVIEW", "a board made with review off has a Review column: %s", js(noReview))
 	}
 
 	e.viewer.Refuse(t, "create_board", M{"projectId": p.id, "name": "Nope"}, "FORBIDDEN")
-	e.worker.Refuse(t, "create_board", M{"projectId": p.id, "name": ""}, "VALIDATION")
+	e.worker.Refuse(t, "create_board", M{"projectId": p.id, "name": "Nope"}, "FORBIDDEN")
+	e.master.Refuse(t, "create_board", M{"projectId": p.id, "name": ""}, "VALIDATION")
 	e.outsider.Refuse(t, "get_board", M{"projectId": p.id, "boardId": p.board}, "FORBIDDEN")
 	e.outsider.Refuse(t, "list_boards", M{"projectId": p.id}, "FORBIDDEN")
 	e.viewer.Refuse(t, "get_board", M{"projectId": p.id, "boardId": "B-nosuchboard"}, "NOT_FOUND")
 }
 
-// A worker adds a column; the project admin (a structural edit) renames it, re-maps it and sets a
-// WIP limit, which then refuses a claim past it; an empty column is removed and a column holding a
-// task is not. The master cannot make structural edits.
+// A master adds a column (a worker cannot: add_column is master by the owner's ruling of
+// 2026-11-10); the project admin (a structural edit) renames it, re-maps it and sets a WIP limit,
+// which then refuses a claim past it; an empty column is removed and a column holding a task is not.
+// The master cannot make structural edits.
 func boardColumns(t *testing.T, e *env) {
 	p := e.project(t, "Columns")
-	col := O(e.worker.Call(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "QA", "status": "REVIEW"}), "column")
+	col := O(e.master.Call(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "QA", "status": "REVIEW"}), "column")
 	qa := S(col, "id")
 	want(t, S(col, "status") == "REVIEW" && S(col, "name") == "QA", "add_column answered %s", js(col))
 	columns := func() []any {
@@ -76,7 +79,8 @@ func boardColumns(t *testing.T, e *env) {
 	}
 	want(t, has(ids(columns(), "id"), qa), "get_board does not list the added column %s", qa)
 	e.viewer.Refuse(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "X", "status": "TODO"}, "FORBIDDEN")
-	e.worker.Refuse(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "X", "status": "CANCELLED"}, "VALIDATION")
+	e.worker.Refuse(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "X", "status": "TODO", "wipLimit": 1, "order": 0}, "FORBIDDEN")
+	e.master.Refuse(t, "add_column", M{"projectId": p.id, "boardId": p.board, "name": "X", "status": "CANCELLED"}, "VALIDATION")
 
 	e.master.Refuse(t, "update_column", M{"projectId": p.id, "boardId": p.board, "columnId": qa, "name": "QA two"}, "FORBIDDEN")
 	upd := O(e.admin.Call(t, "update_column", M{"projectId": p.id, "boardId": p.board, "columnId": qa, "name": "Verify", "status": "DONE"}), "board")

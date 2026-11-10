@@ -4,7 +4,7 @@
  * WHAT WAS WRONG. Four screens render `eventActor(e)` — Activity, Analytics, the board's feed and the
  * ticket's Activity panel — and every one printed the raw id, because none of them fetched the data
  * that names it. Reported from staging twice: first the on-call rows
- * (`ingest:ing_ba3c6ec8c12cc970c3ae16e2f62ddbaf`), then the human ones
+ * (`ingest:I-ba3c6ec8c12cc970c3ae16e2f62ddbaf`), then the human ones
  * (`U-47f0d44f-7a04-4e44-a67f-a39601d12b79`). The second is the T-216 identity cutover working as
  * designed: the core stores an opaque account id and no email.
  *
@@ -12,7 +12,7 @@
  *   - `get_project` returns `memberDisplay` — a SIBLING of `project`, derived server-side per read,
  *     mapping account id → email. It names PROJECT MEMBERS only; the core carries a refusal test
  *     proving it cannot name a non-member, which is a privacy boundary, not a gap to work around.
- *   - `list_integrations` gives `ing_…` → the operator's own name for that webhook.
+ *   - `list_integrations` gives `I-…` → the operator's own name for that webhook.
  *
  * `get_project` is best-effort — it can fail for any ordinary reason, and a feed must never fail or
  * show an error because a LABEL could not load. `retry: false`, and `eventActor` falls back to a

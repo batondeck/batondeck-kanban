@@ -13,12 +13,14 @@ import (
 )
 
 // meRoutes are the Settings page's own-account routes (app.ts:2696-2733): the settings over
-// get_my_settings and set_my_settings, and the CLI tokens over the TokenService (ADR-0004: these
-// routes replace the dropped create/list/revoke_cli_token tools). A token is the caller's own: no
-// route takes an identity. No marketplace-key routes (the plan dropped them).
+// get_my_settings and set_my_settings, the CLI tokens over the TokenService (ADR-0004: these
+// routes replace the dropped create/list/revoke_cli_token tools), and the user's own password
+// change (auth.Service.PasswordChangeHandler). A token is the caller's own: no route takes an
+// identity. No marketplace-key routes (the plan dropped them).
 func meRoutes(o *Options) []route {
 	m := o.Services.Me
 	return []route{
+		{Method: "POST", Path: "/api/me/password", h: o.Auth.PasswordChangeHandler()},
 		{Method: "GET", Path: "/api/me/settings", h: call(o, m.GetMySettings, in{})},
 		{Method: "PATCH", Path: "/api/me/settings", h: call(o, m.SetMySettings, in{})},
 		{Method: "GET", Path: "/api/me/cli-tokens", h: tokenRoute(o, listCLITokens)},
@@ -34,15 +36,15 @@ const cliTokenVia = "settings"
 const maxLiveCLITokens = 10
 
 // cliTokenRow is one token as the page lists it (web/src/api/me.ts CliTokenRow): metadata only;
-// the secret is not on this shape. lastUsedAt is always null: no use is recorded.
+// the secret is not on this shape. It has no last use: none is recorded, and a field that was
+// always null read as "never used".
 type cliTokenRow struct {
-	ID         string  `json:"id"`
-	Label      string  `json:"label"`
-	CreatedAt  string  `json:"createdAt"`
-	ExpiresAt  string  `json:"expiresAt"`
-	LastUsedAt *string `json:"lastUsedAt"`
-	RevokedAt  *string `json:"revokedAt"`
-	Status     string  `json:"status"`
+	ID        string  `json:"id"`
+	Label     string  `json:"label"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt string  `json:"expiresAt"`
+	RevokedAt *string `json:"revokedAt"`
+	Status    string  `json:"status"`
 }
 
 func tokenRow(i auth.TokenInfo) cliTokenRow {
@@ -106,6 +108,11 @@ func createCLIToken(o *Options, c domain.Caller, w http.ResponseWriter, r *http.
 	}
 	if in.TTLSeconds < 0 {
 		return domain.Validation("ttlSeconds cannot be negative", map[string]any{"field": "ttlSeconds"})
+	}
+	// Bounded before the conversion to a Duration, whose nanoseconds would wrap past ~292 years
+	// into a short (or the default) life instead of this refusal.
+	if in.TTLSeconds > int64(auth.MaxTokenTTL/time.Second) {
+		return domain.Validation("a token lives from 1 minute to 365 days", map[string]any{"field": "ttlSeconds"})
 	}
 	// Conductor's blast-radius cap (CLI_TOKEN_MAX_PER_IDENTITY, me.ts:247-252): a leaked token cannot
 	// mint an unbounded fan of tokens that outlive it. The host's `token create` is not capped.

@@ -407,6 +407,17 @@ func (s *Store) UpdateColumn(ctx context.Context, projectID, boardID, columnID s
 		if err := validColumn(next); err != nil {
 			return store.Board{}, err
 		}
+		if next.Status != c.Status {
+			var n int64
+			for k, t := range st.tasks {
+				if k[0] == projectID && t.BoardID == boardID && t.ColumnID == columnID {
+					n++
+				}
+			}
+			if n > 0 {
+				return store.Board{}, store.ColumnHoldsTasks(columnID, n, c.Status, next.Status)
+			}
+		}
 		b.Columns[i] = store.Column{ID: c.ID, Name: next.Name, Order: *next.Order, Status: next.Status, WIPLimit: clonePtr(next.WIPLimit)}
 		st.boards[[2]string{projectID, boardID}] = cloneBoard(b)
 		return sortedBoard(b), nil
@@ -484,6 +495,30 @@ func (s *Store) WithIdempotency(ctx context.Context, projectID, identity, key st
 		return nil, err
 	}
 	return out, nil
+}
+
+// DeleteExpiredIdempotencyKeys is the engines' sweep: the keys whose window ended at or before now,
+// the oldest expiry first, at most limit.
+func (s *Store) DeleteExpiredIdempotencyKeys(ctx context.Context, now int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a sweep needs a positive limit", map[string]any{"limit": limit})
+	}
+	return get(ctx, s, func(st *state) (int64, error) {
+		var expired [][3]string
+		for k, e := range st.idem {
+			if e.expiresAt <= now {
+				expired = append(expired, k)
+			}
+		}
+		slices.SortFunc(expired, func(a, b [3]string) int {
+			return cmp.Or(cmp.Compare(st.idem[a].expiresAt, st.idem[b].expiresAt), cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]), cmp.Compare(a[2], b[2]))
+		})
+		expired = expired[:min(len(expired), limit)]
+		for _, k := range expired {
+			delete(st.idem, k)
+		}
+		return int64(len(expired)), nil
+	})
 }
 
 // idempotent is WithIdempotency for a typed result, as the engines keep it: fn's value as JSON,

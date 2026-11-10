@@ -86,6 +86,7 @@ type Attachment struct {
 	Status     string
 	CreatedBy  string
 	Ts         int64
+	FileName   string
 }
 
 type AuditLog struct {
@@ -137,6 +138,12 @@ type ChronicleBlob struct {
 	ObjectKey string
 	Body      []byte
 	CreatedAt int64
+}
+
+type ChronicleBlobRef struct {
+	ProjectID  string
+	ObjectKey  string
+	BlobSha256 string
 }
 
 type ChroniclePage struct {
@@ -555,4 +562,5 @@ type WakeSession struct {
 	ClientSessionID   sql.NullString
 	ProcStart         sql.NullString
 	BearerSealed      []byte
+	DeviceID          string
 }

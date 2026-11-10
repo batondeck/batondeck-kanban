@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // SprintStatus is a sprint's lifecycle state (conductor's domain/sprints.ts). Its table is fixed, not
 // a project setting.
@@ -58,7 +61,8 @@ func CheckSprintTransition(from, to SprintStatus) error {
 }
 
 // SprintMembership is what CheckSprintMembership judges: the sprint's id, status and member count,
-// the action, the task and its current sprintIds, and whether membership is exclusive.
+// the action, the task and its current sprintIds, those of them that have ended (CLOSED or
+// ABANDONED), and whether membership is exclusive.
 type SprintMembership struct {
 	SprintID     string
 	SprintStatus SprintStatus
@@ -66,13 +70,18 @@ type SprintMembership struct {
 	Add          bool
 	TaskID       string
 	TaskSprints  []string
+	// EndedSprints is the ids of TaskSprints whose sprint is CLOSED or ABANDONED: the task keeps
+	// them for history (a membership change on an ended sprint is refused), and they hold it out of
+	// no other sprint.
+	EndedSprints []string
 	Exclusive    bool
 }
 
 // CheckSprintMembership is conductor's assertSprintMembershipChange: a member is added or removed
 // only while the sprint is PROPOSED or ACTIVE (INVALID_TRANSITION); an add under exclusivity to a
-// task already in another sprint is CONFLICT_LOCKED; an add past SprintMaxTasks members, or to a
-// task already in SprintIDsMax sprints, is VALIDATION.
+// task already in another sprint that has not ended is CONFLICT_LOCKED, so the unfinished member of
+// a CLOSED or ABANDONED sprint is carried to a successor; an add past SprintMaxTasks members, or to a
+// task already in SprintIDsMax sprints (ended ones too), is VALIDATION.
 func CheckSprintMembership(m SprintMembership) error {
 	if m.SprintStatus != SprintProposed && m.SprintStatus != SprintActive {
 		return NewError(CodeInvalidTransition,
@@ -83,12 +92,16 @@ func CheckSprintMembership(m SprintMembership) error {
 		return nil
 	}
 	in := false
+	var holding []string
 	for _, s := range m.TaskSprints {
 		in = in || s == m.SprintID
+		if s != m.SprintID && !slices.Contains(m.EndedSprints, s) {
+			holding = append(holding, s)
+		}
 	}
-	if m.Exclusive && len(m.TaskSprints) > 0 && !in {
-		return NewError(CodeConflictLocked, fmt.Sprintf("Task %s is already in sprint %s (SPRINT_EXCLUSIVE)", m.TaskID, m.TaskSprints[0]),
-			map[string]any{"currentSprintIds": append([]string{}, m.TaskSprints...)})
+	if m.Exclusive && len(holding) > 0 && !in {
+		return NewError(CodeConflictLocked, fmt.Sprintf("Task %s is already in sprint %s (SPRINT_EXCLUSIVE)", m.TaskID, holding[0]),
+			map[string]any{"currentSprintIds": holding})
 	}
 	if m.MemberCount >= SprintMaxTasks {
 		return Validation(fmt.Sprintf("Sprint %s is at SPRINT_MAX_TASKS (%d) — a sprint is a bounded objective; open a successor sprint", m.SprintID, SprintMaxTasks),
@@ -116,21 +129,24 @@ type SprintActivation struct {
 
 // SprintProposal is the proposal task as the activation gate reads it: its status, whether it
 // carries the cancelled label, the customFields.sprintProposalFor it carries ("" when absent), its
-// review's reviewer ("" when none) and its updatedBy.
+// review's reviewer ("" when none) and who moved it to DONE.
 type SprintProposal struct {
 	ID                string
 	Status            Status
 	Cancelled         bool
 	SprintProposalFor string
 	Reviewer          string
-	UpdatedBy         string
+	// DoneBy is the actor of the newest move that landed the task DONE (its REVIEW → DONE approval, or
+	// the completion or pick that landed it DONE where the project does not review), "" when its
+	// history names none. Not its updatedBy: any later write to the task moves that.
+	DoneBy string
 }
 
 // CheckSprintActivation is conductor's assertSprintActivation, the PROPOSED → ACTIVE gates in order:
 // the admin role (FORBIDDEN), a bound DONE proposal task that was not cancelled (P-208) and whose
 // customFields.sprintProposalFor is the sprint (INVALID_TRANSITION), and self-approval under "enforce" (FORBIDDEN). It returns approvedBy
-// (the proposal's reviewer, else its updatedBy) and whether a sprint.self_approved event is due
-// (self-approval under "warn").
+// (the proposal's reviewer, else who moved it to DONE, "" when neither is known) and whether a
+// sprint.self_approved event is due (self-approval under "warn").
 func CheckSprintActivation(a SprintActivation) (approvedBy string, selfApproved bool, err error) {
 	if a.ActorRole != RoleAdmin {
 		return "", false, NewError(CodeForbidden, "Activating a sprint requires the project admin role",
@@ -160,7 +176,7 @@ func CheckSprintActivation(a SprintActivation) (approvedBy string, selfApproved 
 			fmt.Sprintf("Sprint %s was proposed by its activator and selfApprovalPolicy is 'enforce'", a.SprintID),
 			map[string]any{"sprintId": a.SprintID, "createdBy": a.CreatedBy})
 	}
-	approvedBy = p.UpdatedBy
+	approvedBy = p.DoneBy
 	if p.Reviewer != "" {
 		approvedBy = p.Reviewer
 	}

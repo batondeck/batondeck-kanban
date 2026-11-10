@@ -12,8 +12,10 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service/servicetest"
 )
 
-// gatedSessions holds disconnect_agent's session touch (it runs before the tool) until released, so
-// a test can drop the HTTP request before EndAgentSessions marks the session.
+// gatedSessions holds disconnect_agent's service call, before it reaches EndAgentSessions, until
+// released, so a test can drop the HTTP request before EndAgentSessions marks the session. (The
+// session touch, which this gated until the touch moved after the tool, now runs once the tool
+// has its outcome.)
 type gatedSessions struct {
 	service.Sessions
 	armed   chan struct{}
@@ -21,16 +23,14 @@ type gatedSessions struct {
 	release chan struct{}
 }
 
-func (g *gatedSessions) TouchAgentSession(ctx context.Context, c domain.Caller, req service.TouchAgentSessionReq) (service.TouchAgentSessionResp, error) {
-	if req.Tool == "disconnect_agent" {
-		select {
-		case <-g.armed:
-			close(g.entered)
-			<-g.release
-		default:
-		}
+func (g *gatedSessions) DisconnectAgent(ctx context.Context, c domain.Caller, req service.DisconnectAgentReq) (service.DisconnectAgentResp, error) {
+	select {
+	case <-g.armed:
+		close(g.entered)
+		<-g.release
+	default:
 	}
-	return g.Sessions.TouchAgentSession(ctx, c, req)
+	return g.Sessions.DisconnectAgent(ctx, c, req)
 }
 
 // A self-disconnect whose HTTP request its client abandons before the tool reaches

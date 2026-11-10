@@ -85,6 +85,23 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// blockedBy holds open blockers only: an edge from a blocker already DONE is recorded, and
+		// the blocker's blocks gains the dependent, but the dependent's blockedBy does not gain a
+		// blocker nothing would ever clear.
+		t.Run("AnEdgeFromADoneBlockerGatesNothing", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			done, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: "done", Status: domain.Done})
+			noErr(t, err)
+			dep := seedTasks(t, sd, p, b, "dep")[0]
+			e, err := s.AddEdge(ctx, blocks(p, done, dep))
+			noErr(t, err)
+			if e.FromTaskID != done || e.ToTaskID != dep {
+				t.Fatalf("AddEdge = %+v", e)
+			}
+			wantCaches(t, sd, p, done, []string{}, []string{dep})
+			wantCaches(t, sd, p, dep, []string{}, []string{})
+		})
+
 		t.Run("ARefusedCycleLeavesNoPartialEdgeOrCacheEntry", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")
@@ -160,6 +177,31 @@ func dependencies(t *testing.T, newStore Factory) {
 			wantCaches(t, sd, p, ts[1], []string{ts[0]}, []string{})
 		})
 
+		// A blocks edge outlives its gate: when its blocker reaches DONE the service clears it from
+		// the dependent's blockedBy (SetCaches) and the edge stays. Re-adding it while the blocker is
+		// open again re-opens the gate on the same edge, and a cleared edge closes no cycle.
+		t.Run("AClearedGateReopensOnTheSameEdgeAndClosesNoCycle", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			ts := seedTasks(t, sd, p, b, "a", "b", "c")
+			first, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
+			noErr(t, err)
+			noErr(t, s.SetCaches(ctx, p, ts[1], nil, nil))
+			back, err := s.AddEdge(ctx, blocks(p, ts[1], ts[0]))
+			noErr(t, err)
+			_, _, err = s.RemoveEdge(ctx, p, back.ID)
+			noErr(t, err)
+			again, err := s.AddEdge(ctx, blocks(p, ts[0], ts[1]))
+			noErr(t, err)
+			if again.ID != first.ID || len(edgeIDs(t, s, p)) != 1 {
+				t.Fatalf("the re-add returned %s (first %s) and the project holds %v", again.ID, first.ID, edgeIDs(t, s, p))
+			}
+			wantCaches(t, sd, p, ts[1], []string{ts[0]}, []string{})
+			wantCaches(t, sd, p, ts[0], []string{}, []string{ts[1]})
+			// The live gate ts[0] -> ts[1] closes one again.
+			_, err = s.AddEdge(ctx, blocks(p, ts[1], ts[0]))
+			wantErr(t, err, domain.CodeCycleDetected, "")
+		})
+
 		t.Run("RemoveEdgeRemovesTheEdgeAndItsCacheEntries", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")
@@ -168,10 +210,10 @@ func dependencies(t *testing.T, newStore Factory) {
 			noErr(t, err)
 			_, err = s.AddEdge(ctx, blocks(p, ts[2], ts[1]))
 			noErr(t, err)
-			removed, err := s.RemoveEdge(ctx, p, ab.ID)
+			removed, gated, err := s.RemoveEdge(ctx, p, ab.ID)
 			noErr(t, err)
-			if removed.ID != ab.ID || removed.FromTaskID != ts[0] || removed.ToTaskID != ts[1] {
-				t.Fatalf("RemoveEdge returned %+v, want %+v", removed, ab)
+			if removed.ID != ab.ID || removed.FromTaskID != ts[0] || removed.ToTaskID != ts[1] || !gated {
+				t.Fatalf("RemoveEdge returned %+v gated %v, want %+v gated: %s was in %s's blockedBy", removed, gated, ab, ts[0], ts[1])
 			}
 			if got := edgeIDs(t, s, p); !slices.Equal(got, [][2]string{{ts[2], ts[1]}}) {
 				t.Fatalf("edges %v, want the other one only", got)
@@ -179,8 +221,18 @@ func dependencies(t *testing.T, newStore Factory) {
 			wantCaches(t, sd, p, ts[0], []string{}, []string{})
 			wantCaches(t, sd, p, ts[1], []string{ts[2]}, []string{})
 			unbumped(t, sd, p, before, ts...)
-			_, err = s.RemoveEdge(ctx, p, ab.ID)
+			_, _, err = s.RemoveEdge(ctx, p, ab.ID)
 			wantErr(t, err, domain.CodeNotFound, "DependencyEdge")
+			// An edge whose gate cleared (its blocker left the dependent's blockedBy) gated nothing.
+			noErr(t, s.SetCaches(ctx, p, ts[1], nil, nil))
+			cb, err := s.ListBlockers(ctx, p, ts[1])
+			noErr(t, err)
+			if len(cb) != 1 {
+				t.Fatalf("blockers of %s %+v, want the one edge left", ts[1], cb)
+			}
+			if _, gated, err := s.RemoveEdge(ctx, p, cb[0].ID); err != nil || gated {
+				t.Fatalf("RemoveEdge of a cleared edge: gated %v (err %v), want false", gated, err)
+			}
 		})
 
 		t.Run("SetCachesReplacesBothInOrder", func(t *testing.T) {

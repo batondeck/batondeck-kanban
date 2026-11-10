@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,6 +207,8 @@ func decodeBoard(t *testing.T, f frame) boardData {
 
 // AC2: a change-log row written by a real mutation, delivered by the real bus on each engine, is one
 // board frame within 200 ms of the mutation's return, after ready and before the next ping, followed by its updated frame.
+// The 200 ms is held on the build that ships, run alone (make stream-latency); under the race
+// detector (raceDetector) the frame must still come within the second c.next waits.
 func TestStreamBoardFrameOnAChange(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		l := newLive(t, s, Options{Ping: time.Second})
@@ -225,7 +231,7 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 			t.Fatalf("after the change: %+v, want board", f)
 		}
 		// The clock is commit to frame: from the write's return, so the write's own round trip is not counted.
-		if took := f.at.Sub(returned); took > 200*time.Millisecond {
+		if took := f.at.Sub(returned); took > 200*time.Millisecond && !raceDetector {
 			t.Fatalf("the board frame came %v after the write returned, want <= 200ms (end to end %v, the write %v)", took, f.at.Sub(start), wrote)
 		}
 		d := decodeBoard(t, f)
@@ -854,4 +860,106 @@ func TestStreamClosesOnANotificationAfterLogout(t *testing.T) {
 		default:
 		}
 	})
+}
+
+// flakyAuth is an Auth whose Reauthenticate fails, with a plain error (a store hiccup, not a lapsed
+// credential), as many times as fails holds.
+type flakyAuth struct {
+	Auth
+	fails atomic.Int32
+}
+
+func (a *flakyAuth) Reauthenticate(r *http.Request) (domain.Caller, error) {
+	if a.fails.Add(-1) >= 0 {
+		return domain.Caller{}, errors.New("store: database is locked")
+	}
+	return a.Auth.Reauthenticate(r)
+}
+
+// api-http#6: a board frame whose re-resolve fails once (a store blip at flush time) is retried, so
+// the change still reaches the viewer without waiting for another change on the board.
+func TestStreamRetriesABoardFrameThatFailedOnce(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{})
+		flaky := &flakyAuth{Auth: l.auth}
+		mux := http.NewServeMux()
+		Mount(mux, Options{Services: s.Services, Bus: s.Bus, Auth: flaky, Users: l.auth.Accounts, Tokens: l.auth.Tokens, Logger: log.New(io.Discard, "", 0), Ping: time.Minute})
+		l.srv = httptest.NewServer(mux)
+		t.Cleanup(l.srv.Close)
+		pid, bid := seedBoard(t, l.harness, l.core, "Blip")
+		c := openBoardStream(t, l.harness, pid, bid, nil)
+		flaky.fails.Store(1)
+		l.addTask(t, l.caller(), pid, bid, "during the blip")
+		f := c.next(t, 3*time.Second)
+		if f.event != "board" {
+			t.Fatalf("after the change: %+v, want board", f)
+		}
+		if d := decodeBoard(t, f); len(d.Tasks.Tasks) != 1 || d.Tasks.Tasks[0].Title != "during the blip" {
+			t.Fatalf("board frame %s", f.data)
+		}
+		if flaky.fails.Load() >= 0 {
+			t.Fatalf("the failure was never met (fails %d)", flaky.fails.Load())
+		}
+	})
+}
+
+// api-http#6 (review): the notifications frame, like a board frame, is retried when the re-resolve
+// before it fails once, so the bell still hears the notification without waiting for another one.
+func TestStreamRetriesANotificationsFrameThatFailedOnce(t *testing.T) {
+	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
+		l := newLive(t, s, Options{})
+		flaky := &flakyAuth{Auth: l.auth}
+		mux := http.NewServeMux()
+		Mount(mux, Options{Services: s.Services, Bus: s.Bus, Auth: flaky, Users: l.auth.Accounts, Tokens: l.auth.Tokens, Logger: log.New(io.Discard, "", 0), Ping: time.Minute})
+		l.srv = httptest.NewServer(mux)
+		t.Cleanup(l.srv.Close)
+		pid, bid := seedBoard(t, l.harness, l.core, "Blip")
+		bob := l.as("bob")
+		ctx := context.Background()
+		if _, err := l.core.Projects().AddMember(ctx, l.caller(), service.AddMemberReq{ProjectID: pid, IdentityID: bob.userID, Role: domain.Role("member")}); err != nil {
+			t.Fatal(err)
+		}
+		task, err := l.core.Tasks().Create(ctx, l.caller(), service.CreateTaskReq{ProjectID: pid, BoardID: bid, Title: "for bob"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := l.core.Tasks().Update(ctx, l.caller(), service.UpdateTaskReq{ProjectID: pid, TaskID: task.Task.ID, Version: int64(task.Task.Version),
+			Patch: service.TaskPatch{Assignee: service.Value(bob.userID)}}); err != nil {
+			t.Fatal(err)
+		}
+		mine := bob.stream(t, "", nil)
+		if mine.status != http.StatusOK {
+			t.Fatalf("stream: %d %s", mine.status, mine.body)
+		}
+		if f := mine.nextNote(t, time.Second); f.Unread != 0 {
+			t.Fatalf("bob's feed on open %+v, want empty", f)
+		}
+		flaky.fails.Store(1)
+		if _, err := l.core.FollowUps().AddFollowUp(ctx, l.caller(), service.AddFollowUpReq{ProjectID: pid, TaskID: task.Task.ID, Body: "your turn"}); err != nil {
+			t.Fatal(err)
+		}
+		if f := mine.nextNote(t, 3*time.Second); f.Unread != 1 || len(f.Notifications) != 1 {
+			t.Fatalf("bob's frame after the follow-up %+v, want the one notification", f)
+		}
+		if flaky.fails.Load() >= 0 {
+			t.Fatalf("the failure was never met (fails %d)", flaky.fails.Load())
+		}
+	})
+}
+
+// api-http#13: the stream tells a buffering reverse proxy (nginx) not to hold its frames, and any
+// proxy not to transform it.
+func TestStreamAsksProxiesNotToBuffer(t *testing.T) {
+	l := newLive(t, servicetest.Open(t, servicetest.Memstore), Options{Ping: time.Minute})
+	req := l.request("GET", "/api/stream", "", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("X-Accel-Buffering") != "no" || resp.Header.Get("Cache-Control") != "no-cache, no-transform" {
+		t.Fatalf("stream %d, X-Accel-Buffering %q, Cache-Control %q", resp.StatusCode, resp.Header.Get("X-Accel-Buffering"), resp.Header.Get("Cache-Control"))
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -114,7 +115,10 @@ func withCaller(next mcp.MethodHandler) mcp.MethodHandler {
 	}
 }
 
-// clientAgent is the clientInfo.name of req's initialize, or of its session's, as an agent name.
+// clientAgent is the clientInfo.name of req's initialize, or of its session's, as an agent name. A
+// name starting "id:" names no agent, as a token label of that shape does (auth.ResolveCaller):
+// "id:<identity>" is the id service.AgentID derives, never a name a client declares, so a client
+// cannot stamp another identity's derived id on its own work.
 func clientAgent(req mcp.Request) string {
 	p, _ := req.GetParams().(*mcp.InitializeParams)
 	if p == nil {
@@ -125,7 +129,10 @@ func clientAgent(req mcp.Request) string {
 	if p == nil || p.ClientInfo == nil {
 		return ""
 	}
-	return domain.AgentLabel(p.ClientInfo.Name)
+	if name := domain.AgentLabel(p.ClientInfo.Name); !strings.HasPrefix(name, "id:") {
+		return name
+	}
+	return ""
 }
 
 func callerOf(req mcp.Request) (domain.Caller, bool) {

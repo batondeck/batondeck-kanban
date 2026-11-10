@@ -16,7 +16,14 @@ const TABS: ClientTab[] = ['Claude Code', 'Codex CLI', 'Gemini CLI', 'Cursor'];
 
 type Snippet = { blocks: Array<{ label: string; text: string }>; note: string };
 
+/** What the plugin's .mcp.json reaches when BATONDECK_URL is unset (plugin/.mcp.json). */
+const PLUGIN_DEFAULT_ORIGIN = 'http://localhost:8080';
+
 export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
+  // The plugin reads `${BATONDECK_URL:-http://localhost:8080}/mcp`: on any other address its command
+  // needs the variable set to this server's origin, or the session cannot reach the board.
+  const origin = mcpUrl.replace(/\/mcp$/, '');
+  const pluginEnv = origin === PLUGIN_DEFAULT_ORIGIN ? '' : `export BATONDECK_URL='${origin}'\n`;
   return {
     'Claude Code': {
       blocks: [
@@ -26,10 +33,10 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
         },
         {
           label: 'Or the plugin (MCP server, worker skill and the device wake)',
-          text: 'claude --plugin-dir /path/to/batondeck-kanban/plugin',
+          text: `${pluginEnv}claude --plugin-dir /path/to/batondeck-kanban/plugin`,
         },
       ],
-      note: "The plugin's .mcp.json reads http://localhost:8080/mcp and its wake needs a unix:// listen entry: plugin/README.md in your checkout has the setup.",
+      note: `The plugin's .mcp.json reads \${BATONDECK_URL:-${PLUGIN_DEFAULT_ORIGIN}}/mcp, so BATONDECK_URL names this server when it is elsewhere; its wake needs a unix:// listen entry: plugin/README.md in your checkout has the setup.`,
     },
     'Codex CLI': {
       blocks: [{ label: 'Terminal', text: `codex mcp add batondeck-kanban --url '${mcpUrl}' \\\n  --bearer-token-env-var BATONDECK_TOKEN` }],
@@ -57,7 +64,8 @@ export function snippets(mcpUrl: string): Record<ClientTab, Snippet> {
 }
 
 function CopyBlock({ label, text }: { label: string; text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'yes' | 'failed' | null>(null);
+  const pre = useRef<HTMLPreElement>(null);
   return (
     <div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{label}</div>
@@ -71,6 +79,7 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
         }}
       >
         <pre
+          ref={pre}
           className="mono"
           style={{ flex: 1, minWidth: 0, margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflowX: 'auto', whiteSpace: 'pre' }}
         >
@@ -80,13 +89,21 @@ function CopyBlock({ label, text }: { label: string; text: string }) {
           className="btn secondary"
           style={{ fontSize: 12, padding: '4px 10px', margin: '0 8px', flexShrink: 0 }}
           onClick={() => {
-            void navigator.clipboard?.writeText(text).then(() => {
-              setCopied(true);
-              setTimeout(() => { setCopied(false); }, 1500);
-            });
+            const done = (r: 'yes' | 'failed', ms: number) => {
+              setCopied(r);
+              setTimeout(() => { setCopied(null); }, ms);
+            };
+            // No clipboard (a plain-HTTP LAN origin) or a refused write: select the snippet so the
+            // reader can copy it by hand, and say so, rather than a button that does nothing.
+            const fail = () => {
+              if (pre.current) window.getSelection()?.selectAllChildren(pre.current);
+              done('failed', 4000);
+            };
+            if (!navigator.clipboard) { fail(); return; }
+            void navigator.clipboard.writeText(text).then(() => done('yes', 1500), fail);
           }}
         >
-          {copied ? 'Copied' : 'Copy'}
+          {copied === 'yes' ? 'Copied' : copied === 'failed' ? 'Select and copy' : 'Copy'}
         </button>
       </div>
     </div>

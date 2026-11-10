@@ -46,6 +46,12 @@ func claims(t *testing.T, newStore Factory) {
 		mustOK(t, err)
 		want := task
 		want.Status, want.ColumnID, want.NextEligibleAt, want.Version = domain.InProgress, f.col[domain.InProgress], nil, 3
+		// It lands at the head of the IN_PROGRESS column with a key of its own (empty there: any
+		// well-formed key), not the TODO key it carried.
+		if !domain.IsValidOrder(got.OrderKey) || got.OrderKey == task.OrderKey {
+			t.Fatalf("claimed into IN_PROGRESS at %q, want a fresh well-formed key, not %q", got.OrderKey, task.OrderKey)
+		}
+		want.OrderKey = got.OrderKey
 		want.Claim = &store.TaskClaim{Owner: "bob", Agent: ptr("agent a1"), AgentID: ptr("a1"), LeaseID: "L-1", ExpiresAt: taskClock + 60_000}
 		want.UpdatedBy, want.UpdatedAt = "bob", taskClock
 		sameTask(t, got, want)
@@ -295,6 +301,18 @@ func claims(t *testing.T, newStore Factory) {
 		if ids := taskIDs(top); !reflect.DeepEqual(ids, want[:2]) {
 			t.Fatalf("frontier limit 2: %v", ids)
 		}
+		// Offset: the page after the first two; past the end, none.
+		paged := f.frontier()
+		paged.Offset = 2
+		next, err := f.s.PreviewFrontier(ctx, paged, 2)
+		mustOK(t, err)
+		if ids := taskIDs(next); !reflect.DeepEqual(ids, want[2:4]) {
+			t.Fatalf("frontier offset 2 limit 2: %v, want %v", ids, want[2:4])
+		}
+		paged.Offset = len(want)
+		if none, err := f.s.PreviewFrontier(ctx, paged, 50); err != nil || len(none) != 0 {
+			t.Fatalf("frontier past its end: %v %v", taskIDs(none), err)
+		}
 		// Later, the backoff has passed too.
 		later := f.frontier()
 		later.Now = taskClock + 1
@@ -447,6 +465,46 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// A raced member's work is in its runs, which are not members: SprintID takes the runs of the
+	// sprint's members (RunOf a task whose SprintIDs hold it) with them, on the preview and on the
+	// claim statement alike, and no run of a non-member or of another sprint's member.
+	t.Run("FrontierTakesTheRunsOfASprintsMembers", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "member of S-a", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-a"}; in.OrderKey = "a1" })
+		f.add(t, "member of S-ab", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-ab"}; in.OrderKey = "a2" })
+		f.add(t, "no sprint", func(in *store.CreateTaskInput) { in.OrderKey = "a3" })
+		for i, of := range []string{"T-1", "T-2", "T-3"} {
+			f.add(t, "run of "+of, func(in *store.CreateTaskInput) { in.RunOf = &of; in.OrderKey = fmt.Sprintf("a%d", 4+i) })
+		}
+		for sprint, want := range map[string][]string{
+			"":     {"T-1", "T-2", "T-3", "T-4", "T-5", "T-6"},
+			"S-a":  {"T-1", "T-4"},
+			"S-ab": {"T-2", "T-5"},
+			"S-no": {},
+		} {
+			q := f.frontier()
+			q.SprintID = sprint
+			got, err := f.s.PreviewFrontier(ctx, q, 50)
+			mustOK(t, err)
+			if ids := taskIDs(got); !reflect.DeepEqual(ids, want) {
+				t.Fatalf("sprint %q: %v, want %v", sprint, ids, want)
+			}
+		}
+		q := f.frontier()
+		q.SprintID = "S-a"
+		var won []string
+		for i := range 3 {
+			got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("bob", "a", fmt.Sprintf("L-%d", i)))
+			mustOK(t, err)
+			if ok {
+				won = append(won, got.ID)
+			}
+		}
+		if !reflect.DeepEqual(won, []string{"T-1", "T-4"}) {
+			t.Fatalf("claimed %v in S-a, want [T-1 T-4]: the member and its run", won)
+		}
+	})
+
 	t.Run("FrontierNarrowsToTaskIDs", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "urgent, not named", func(in *store.CreateTaskInput) { in.Priority = domain.PriorityUrgent; in.OrderKey = "a1" })
@@ -494,6 +552,38 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	t.Run("ClaimsLandAtTheHeadOfTheirColumnWithAFreshKey", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "already there", func(in *store.CreateTaskInput) {
+			in.ColumnID, in.Status, in.OrderKey = f.col[domain.InProgress], domain.InProgress, "a5"
+		})
+		head := "a5"
+		seen := map[string]bool{head: true}
+		for i := range 4 {
+			task := f.add(t, fmt.Sprint("t", i), nil) // each at "a0", the key the one before carried away
+			var got store.Task
+			if i%2 == 0 {
+				var ok bool
+				var err error
+				got, ok, err = f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("bob", fmt.Sprint("a", i), fmt.Sprint("L-", i)))
+				if err != nil || !ok || got.ID != task.ID {
+					t.Fatalf("claim_next %d: %s ok %v, %v", i, got.ID, ok, err)
+				}
+			} else {
+				var err error
+				got, err = f.s.ClaimTask(ctx, f.project, task.ID, 1, f.leaseFor("bob", fmt.Sprint("a", i), fmt.Sprint("L-", i)))
+				mustOK(t, err)
+			}
+			if got.ColumnID != f.col[domain.InProgress] || !domain.IsValidOrder(got.OrderKey) || got.OrderKey >= head || seen[got.OrderKey] {
+				t.Fatalf("claim %d landed in %s at %q, want a fresh well-formed key before the IN_PROGRESS head %q (keys so far %v)", i, got.ColumnID, got.OrderKey, head, seen)
+			}
+			read, err := f.s.GetTask(ctx, f.project, task.ID)
+			mustOK(t, err)
+			sameTask(t, read, got)
+			head, seen[got.OrderKey] = got.OrderKey, true
+		}
+	})
+
 	t.Run("ClaimNextTakesTheFrontierInOrderThenReportsItEmpty", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "second", func(in *store.CreateTaskInput) { in.OrderKey = "a2" })
@@ -528,6 +618,11 @@ func claims(t *testing.T, newStore Factory) {
 		for i := range n {
 			f.add(t, fmt.Sprint("task ", i), nil)
 		}
+		// IN_PROGRESS is headed by a key whose fraction runs through low digits, which leaves no room
+		// after OrderBetween's key "a0" for a spread: the landings must still not share one key.
+		f.add(t, "crowded head", func(in *store.CreateTaskInput) {
+			in.ColumnID, in.Status, in.OrderKey = f.col[domain.InProgress], domain.InProgress, "a01111V"
+		})
 		ids := make([]string, n)
 		oks := make([]bool, n)
 		errs := make([]error, n)
@@ -555,6 +650,20 @@ func claims(t *testing.T, newStore Factory) {
 		t.Logf("%d callers: %d distinct winners, %d duplicates", n, len(seen), dup)
 		if len(seen) != n || dup != 0 {
 			t.Fatalf("%d distinct winners and %d duplicates, want %d and 0", len(seen), dup, n)
+		}
+		// Every winner left "a0" behind and landed in IN_PROGRESS before its head with a key of its
+		// own, though the claims read that column at once.
+		landed, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board, ColumnID: f.col[domain.InProgress]}, "", n+1)
+		mustOK(t, err)
+		keys := map[string]int{}
+		for _, task := range landed.Tasks {
+			keys[task.OrderKey]++
+		}
+		if len(landed.Tasks) != n+1 || len(keys) != n+1 {
+			t.Fatalf("%d tasks in IN_PROGRESS under %d distinct order keys, want %d and %d: %v", len(landed.Tasks), len(keys), n+1, n+1, keys)
+		}
+		if last := landed.Tasks[n].OrderKey; last != "a01111V" {
+			t.Fatalf("IN_PROGRESS ends at %q, want the claims before its head \"a01111V\"", last)
 		}
 		if _, ok, err := f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("late", "z", "L-z")); err != nil || ok {
 			t.Fatalf("the 51st caller: ok %v, %v; want an empty frontier", ok, err)

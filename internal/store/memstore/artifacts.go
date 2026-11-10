@@ -84,6 +84,11 @@ func (s *Store) AddComment(ctx context.Context, in store.AddCommentInput) (store
 		if _, err := st.task(in.ProjectID, in.TaskID); err != nil {
 			return store.Comment{}, err
 		}
+		if p := in.ParentCommentID; p != nil {
+			if _, ok := st.comments[[3]string{in.ProjectID, in.TaskID, *p}]; !ok {
+				return store.Comment{}, domain.NotFound("Comment", *p)
+			}
+		}
 		mentions := cloneStrings(in.Mentions)
 		if mentions == nil {
 			mentions = []string{}

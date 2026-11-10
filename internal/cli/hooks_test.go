@@ -352,6 +352,15 @@ func hookFixtures() []hookFixture {
 			}
 			m["groupKey"] = fmt.Sprintf(`{}:{alertname="HighLatency",n="%d"}`, n)
 			alerts := m["alerts"].([]any)
+			// A new notification of the alert is a new state of it: Alertmanager's delivery id is
+			// each alert's status and times, groupKey naming only the group.
+			for _, a := range alerts {
+				a := a.(map[string]any)
+				a["startsAt"] = fmt.Sprintf("2026-10-25T%02d:%02d:00Z", n/60, n%60)
+				if a["status"] == "resolved" {
+					a["endsAt"] = fmt.Sprintf("2026-10-26T%02d:%02d:00Z", n/60, n%60)
+				}
+			}
 			if fresh {
 				alerts[0].(map[string]any)["fingerprint"] = fmt.Sprintf("a1b2c3d4e5f6%04d", n)
 			}

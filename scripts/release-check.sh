@@ -16,9 +16,10 @@
 #       `make image` runs it before docker, so an image is never pushed under a version the compose
 #       file does not run.
 #   scripts/release-check.sh VERSION
-#       The release candidate's versions agree: compose.yaml (as above), the plugin's
-#       plugin/.claude-plugin/plugin.json "version", a "## [VERSION]" section in CHANGELOG.md, and
-#       the binary: `make build VERSION=VERSION` in a scratch file prints
+#       The release candidate's versions agree: compose.yaml (as above), README.md (every release
+#       it names: the download URL's tag, the binary's file name, the image tag and the sample
+#       /healthz answer), the plugin's plugin/.claude-plugin/plugin.json "version", a
+#       "## [VERSION]" section in CHANGELOG.md, and the binary: `make build VERSION=VERSION` in a scratch file prints
 #       "batondeck-kanban VERSION" from its `version` command. Each file that disagrees is named;
 #       it needs no tag, so it runs before the tag is made (RELEASING.md).
 #
@@ -53,6 +54,22 @@ compose_check() {
   done
 }
 
+# readme_check prints each release README.md names that is not $version: the tag in its download
+# URL, the binary's file name, the image tag and the sample /healthz answer. A README that names no
+# release at all is refused too: the check would otherwise pass on one whose wording moved.
+readme_check() {
+  [ -f README.md ] || { echo "README.md: missing"; return; }
+  local v='[0-9][0-9A-Za-z.+-]*' refs
+  refs=$(grep -oE "releases/download/v$v|batondeck-kanban_${v}_|$image:$v|batondeck-kanban $v ok" README.md | sort -u || true)
+  [ -n "$refs" ] || { echo "README.md: names no release (no download URL, binary file name or image tag)"; return; }
+  printf '%s\n' "$refs" | while IFS= read -r ref; do
+    case $ref in
+    "releases/download/v$version" | "batondeck-kanban_${version}_" | "$image:$version" | "batondeck-kanban $version ok") ;;
+    *) echo "README.md: names '$ref', not $version" ;;
+    esac
+  done
+}
+
 case $mode in
 compose)
   [ $# -eq 0 ] || die "compose takes no files"
@@ -62,6 +79,7 @@ compose)
   ;;
 versions)
   bad=$(compose_check)
+  bad+=$'\n'$(readme_check)
   plugin=plugin/.claude-plugin/plugin.json
   if [ ! -f $plugin ]; then
     bad+=$'\n'"$plugin: missing"
@@ -86,7 +104,7 @@ versions)
   bad=$(printf '%s\n' "$bad" | sed '/^$/d')
   [ -z "$bad" ] || die "the versions do not agree on $version:
 $bad"
-  echo "release-check: $version agrees in compose.yaml, $plugin, CHANGELOG.md and the binary"
+  echo "release-check: $version agrees in compose.yaml, README.md, $plugin, CHANGELOG.md and the binary"
   exit 0
   ;;
 esac

@@ -20,6 +20,7 @@ import { Notifications } from '../screens/Notifications.js';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
 import { TaskPage } from '../screens/TaskPage.js';
 import { Agents } from '../screens/Agents.js';
+import { TaskCard } from '../screens/Board.js';
 import { App } from '../App.js';
 import { AuthProvider } from '../auth.js';
 import { ProjectProvider } from '../projectContext.js';
@@ -513,6 +514,45 @@ describe("the ticket header's created by", () => {
     );
     await waitFor(() => expect(document.querySelector('.task-head')?.textContent).toContain('· created by Alice Doe'));
     noRawIds(document.querySelector('.task-head') as HTMLElement);
+  });
+});
+
+/**
+ * The claim and the context items name the person too. `claim.owner` and an item's `author` are
+ * account ids; "Held by", the Lease panel's holder, a note's avatar and a link's caption printed them
+ * as given ("Held by U-2c51…", initials "U2", "U-2c51… · 2m ago"), and so did a claimed card's avatar.
+ */
+describe("the ticket's claim and context authors", () => {
+  const held: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: BOB, agent: null, expiresAt: new Date(Date.now() + 600_000).toISOString() } };
+  const ctx = {
+    summary: '', fields: {}, memory: [], deps: { blockedBy: [], blocks: [], edges: [] },
+    items: [
+      { id: 'ci1', kind: 'note', body: 'checked the parser', author: BOB, ts: TS },
+      { id: 'ci2', kind: 'link', body: 'https://www.figma.com/file/xyz', author: BOB, ts: TS },
+    ],
+  };
+
+  it('names the holder and the authors on the drawer', async () => {
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: held } }, '/tasks/T-1/context$': { json: ctx }, '/projects/p1$': { json: project } }));
+    render(
+      <QueryClientProvider client={qc()}>
+        <AuthProvider><TaskDrawer projectId="p1" taskId="T-1" onClose={vi.fn()} /></AuthProvider>
+      </QueryClientProvider>,
+    );
+    const dlg = await screen.findByRole('dialog', { name: 'Task T-1' });
+    await waitFor(() => expect(within(dlg).getByText(/Held by/)).toHaveTextContent('Held by bob — wait for release to claim it.'));
+    await screen.findByText('checked the parser');
+    expect(within(dlg).getAllByLabelText('human bob').length).toBeGreaterThanOrEqual(2); // the holder and the note
+    expect(within(dlg).getByRole('link', { name: /Figma/ })).toHaveTextContent(/bob · /);
+    noRawIds(dlg);
+  });
+
+  it("names a claimed card's holder on the board", () => {
+    const { container } = render(
+      <TaskCard t={held} col={{ status: 'IN_PROGRESS' }} selected={false} onOpen={vi.fn()} agents={[]} onAssign={vi.fn()} canAssign names={memberDisplay} />,
+    );
+    expect(within(container).getByLabelText('human bob')).toBeInTheDocument();
+    noRawIds(container);
   });
 });
 

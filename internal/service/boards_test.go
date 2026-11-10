@@ -101,11 +101,13 @@ func TestRemoveColumnRefusedWhileItHoldsTasks(t *testing.T) {
 
 func TestColumns(t *testing.T) {
 	f := newFixture(t, Options{})
-	add, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "QA", Status: domain.Review, WIPLimit: ptr(int64(2)), IdempotencyKey: "c1"})
+	qa := AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "QA", Status: domain.Review, WIPLimit: ptr(int64(2)), IdempotencyKey: "c1"}
+	add, err := f.c.Boards().AddColumn(f.ctx, f.alice, qa)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := f.c.Boards().AddColumn(f.ctx, f.alice, AddColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, Name: "QA", Status: domain.Review, IdempotencyKey: "c1"})
+	// The same call again replays (a key is bound to the call's arguments).
+	again, err := f.c.Boards().AddColumn(f.ctx, f.alice, qa)
 	if err != nil || again.Column.ID != add.Column.ID {
 		t.Fatalf("the add_column replay made %s, first %s (err %v)", again.Column.ID, add.Column.ID, err)
 	}

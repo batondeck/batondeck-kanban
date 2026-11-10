@@ -10,7 +10,7 @@ package domain
 type MergeDisposition string
 
 const (
-	// TakenTheirs: nobody edited it here; the new derivation wins.
+	// TakenTheirs: nobody edited it here, or ours already reads as theirs; the new derivation wins.
 	TakenTheirs MergeDisposition = "taken-theirs"
 	// KeptOurs: a human edited it and the derivation did not change it.
 	KeptOurs MergeDisposition = "kept-ours"
@@ -90,7 +90,9 @@ func MergeVersions(base, ours, theirs []ChronicleBlock) MergeResult {
 		oursEdited := !sameText(o, b, true, inBase)
 		theirsChanged := !sameText(t, b, true, inBase)
 		switch {
-		case !oursEdited:
+		case !oursEdited, sameText(o, t, true, true):
+			// Unedited, or both sides landed the same text (a human took the derivation's side, or
+			// wrote what it now says): theirs, so the block is derived again rather than a conflict.
 			out = append(out, MergedBlock{Block: t, Disposition: TakenTheirs})
 		case !theirsChanged:
 			humanTouched = true

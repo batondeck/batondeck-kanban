@@ -67,14 +67,15 @@ var wakeForbidden = regexp.MustCompile(`Pub/Sub|/wake|channel|resources/subscrib
 
 // TestInstructionsNameBothWakes: initialize carries the instructions, which name the socket
 // doorbell and its two calls for a device CLI, the board taken from the doorbell (P-191), and "pull
-// each turn" for a hosted client, and none of the dropped wakes or retired states.
+// each turn" for a hosted client, where an attachment's link comes from (the context carries none),
+// and none of the dropped wakes or retired states.
 func TestInstructionsNameBothWakes(t *testing.T) {
 	h := bootHarness(t, servicefake.New().Services(), resolver())
 	got := h.connect(t, tokenAda).InitializeResult().Instructions
 	if got != Instructions {
 		t.Fatalf("initialize instructions = %q, want Instructions", got)
 	}
-	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "calling list_notifications, then claim_next { projectId, boardId } (no assignee needed)", "never another's", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context"} {
+	for _, want := range []string{"socket doorbell", "take projectId and boardId from the doorbell and call claim_next { projectId, boardId }", "then list_notifications", "reads the doorbell's board with next_task { projectId, boardId, includeInbox: true }", "pull each turn", "calling list_notifications, then claim_next { projectId, boardId } (no assignee needed)", "never another's", "TODO, IN_PROGRESS, BLOCKED, REVIEW, DONE", "get_task_context", "list_attachments"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("instructions lack %q", want)
 		}
@@ -125,9 +126,19 @@ func TestPromptsRender(t *testing.T) {
 		if m := wakeForbidden.FindAllString(text, -1); len(m) > 0 {
 			t.Errorf("%s says %q", p.Name, m)
 		}
-		for _, tool := range snakeName.FindAllString(text, -1) {
+		named := snakeName.FindAllString(text, -1)
+		for _, tool := range named {
 			if _, ok := contract.Tools[tool]; !ok {
 				t.Errorf("%s names %s, which is not a tool of contract/expected.json", p.Name, tool)
+			}
+		}
+		// A field the prompt tells the agent to read comes back from a tool it names.
+		for _, field := range promptCitedFields {
+			if !regexp.MustCompile(`\b` + field + `\b`).MatchString(text) {
+				continue
+			}
+			if !slices.ContainsFunc(named, func(tool string) bool { return outputCarries(t, contract.Tools[tool], field) }) {
+				t.Errorf("%s cites %s, which no tool it names (%v) returns", p.Name, field, named)
 			}
 		}
 		delete(args, p.Arguments[1].Name)
@@ -139,6 +150,49 @@ func TestPromptsRender(t *testing.T) {
 	if want := []string{"decompose_into_subtasks", "pick_up_next_task", "summarize_for_handoff", "triage_inbox"}; !slices.Equal(names, want) {
 		t.Errorf("prompts/list = %v, want %v", names, want)
 	}
+}
+
+// promptCitedFields are the output fields a prompt may tell an agent to read; TestPromptsRender
+// holds each one a prompt cites to a tool the same prompt names.
+var promptCitedFields = []string{"downloadUrl", "blockedBy", "modelHint", "upstream", "deliverable", "version"}
+
+// outputCarries is whether a tool's entry in contract/expected.json has field as a property anywhere
+// in its output schema.
+func outputCarries(t *testing.T, raw json.RawMessage, field string) bool {
+	t.Helper()
+	if raw == nil {
+		return false
+	}
+	var tool struct {
+		Output any `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &tool); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(v any) bool
+	walk = func(v any) bool {
+		switch x := v.(type) {
+		case map[string]any:
+			if props, ok := x["properties"].(map[string]any); ok {
+				if _, ok := props[field]; ok {
+					return true
+				}
+			}
+			for _, c := range x {
+				if walk(c) {
+					return true
+				}
+			}
+		case []any:
+			for _, c := range x {
+				if walk(c) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(tool.Output)
 }
 
 // The resource templates conductor serves (contract/tools.json) that this server does not, and the
@@ -272,6 +326,9 @@ func TestResourcesRead(t *testing.T) {
 		if len(res.Contents) != 1 || res.Contents[0].URI != c.uri || res.Contents[0].MIMEType != "application/json" || res.Contents[0].Text != string(want) {
 			t.Errorf("read %s = %+v, want %s", c.uri, res.Contents, want)
 		}
+		if res.CacheScope != "private" {
+			t.Errorf("read %s cacheScope %q, want private: the content is one member's view of a project", c.uri, res.CacheScope)
+		}
 		t.Logf("read %s -> %s %s", c.uri, c.method, res.Contents[0].Text)
 	}
 
@@ -302,6 +359,54 @@ func TestResourcesRead(t *testing.T) {
 			t.Errorf("read %s error data = %s, want code %s", uri, werr.Data, code)
 		}
 		t.Logf("read %s -> JSON-RPC %d %s", uri, werr.Code, werr.Data)
+	}
+
+	// A NUL or a byte that is not UTF-8 in an id or the cursor taken from the URI is VALIDATION
+	// (invalid params) before any service call, as domain.CheckText makes it for a tool's
+	// arguments: Postgres cannot store or compare either in text, so the engines would otherwise
+	// disagree (G3). A URI is percent-decoded, so unlike JSON it can carry bytes that are not UTF-8.
+	for _, uri := range []string{
+		"batondeck://P-1/task/T%00", "batondeck://P-1/board/B-1/feed?cursor=c%00", "batondeck://P-1/chronicle/C-1/versions/V%00",
+		"batondeck://P-1/task/T%FF", "batondeck://P-1/task/T%C3", "batondeck://P-%FF/task/T-1", "batondeck://P-1/board/B-1/feed?cursor=c%FE",
+	} {
+		before := len(f.Calls())
+		_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: uri})
+		var werr *jsonrpc.Error
+		var data domain.BatonDeckError
+		if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInvalidParams || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeValidation {
+			t.Errorf("read %s = %v, want JSON-RPC invalid params with VALIDATION", uri, err)
+		}
+		if n := len(f.Calls()) - before; n != 0 {
+			t.Errorf("read %s made %d service calls; want none", uri, n)
+		}
+	}
+}
+
+// panickingTasks is a Tasks whose Get panics.
+type panickingTasks struct{ service.Tasks }
+
+func (panickingTasks) Get(context.Context, domain.Caller, service.GetTaskReq) (service.GetTaskResp, error) {
+	panic("planted read panic")
+}
+
+// A panic in a resource read is INTERNAL with its stack logged, as a tool's is (errorMiddleware),
+// and the server keeps serving: go-sdk recovers no handler panic.
+func TestResourceReadPanicIsContained(t *testing.T) {
+	svc := servicefake.New().Services()
+	svc.Tasks = panickingTasks{svc.Tasks}
+	h := bootHarness(t, svc, resolver())
+	cs := h.connect(t, tokenAda)
+	_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: "batondeck://P-1/task/T-5"})
+	var werr *jsonrpc.Error
+	var data domain.BatonDeckError
+	if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInternalError || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeInternal || !data.Retryable {
+		t.Errorf("read with a panicking service = %v, want JSON-RPC internal error with INTERNAL retryable", err)
+	}
+	if logs := h.log.String(); !strings.Contains(logs, "planted read panic") || !strings.Contains(logs, "runtime/debug.Stack") {
+		t.Errorf("the panic was not logged with its stack:\n%s", logs)
+	}
+	if _, err := cs.ListResourceTemplates(ctx(t), nil); err != nil {
+		t.Errorf("after the panic the server stopped answering: %v", err)
 	}
 }
 

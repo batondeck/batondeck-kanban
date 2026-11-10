@@ -45,6 +45,14 @@ WHERE t.project_id = sqlc.arg(project_id) AND t.board_id = sqlc.arg(board_id)
 ORDER BY t.order_key, t.id
 LIMIT sqlc.arg(page_limit);
 
+-- The column's last order key, bytes order (SQLite's BINARY collation): what a task appended to the
+-- column goes after. No row is an empty column.
+-- name: LastOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND board_id = sqlc.arg(board_id) AND column_id = sqlc.arg(column_id)
+ORDER BY order_key DESC, id DESC
+LIMIT 1;
+
 -- How many of the board's tasks match, and whether the board is the project's, in one statement.
 -- name: CountTasks :one
 SELECT
@@ -66,3 +74,11 @@ FROM tasks WHERE project_id = sqlc.arg(project_id) AND id IN (sqlc.slice(ids));
 -- The delete at a version: no row is a missing task or another version, which the caller tells apart.
 -- name: DeleteTask :execrows
 DELETE FROM tasks WHERE project_id = ? AND id = ? AND version = ?;
+
+-- The first order key of one column of the board (order key, then id, as bytes), through
+-- tasks_column_order: a task moved into the column lands before it.
+-- name: HeadOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND board_id = sqlc.arg(board_id) AND column_id = sqlc.arg(column_id)
+ORDER BY order_key, id
+LIMIT 1;

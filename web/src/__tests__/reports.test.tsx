@@ -158,7 +158,7 @@ describe('failures are told apart, per panel', () => {
     stub({ pages: [{ tasks: [mkTask(1), mkTask(2)] }], opsStatus: 503 });
     renderReports();
     // The ops panels degrade with their own copy…
-    expect(await screen.findAllByText(/not configured in this environment/i)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/unavailable right now/i)).not.toHaveLength(0);
     // …while the census charts are unaffected.
     expect(screen.getByText('By status')).toBeTruthy();
     await waitFor(() => expect(document.querySelectorAll('svg').length).toBeGreaterThan(0));
@@ -169,7 +169,7 @@ describe('failures are told apart, per panel', () => {
     renderReports();
     const forbidden = await screen.findAllByText(/do not have access/i);
     expect(forbidden.length).toBeGreaterThan(0);
-    expect(screen.queryByText(/not configured in this environment/i)).toBeNull();
+    expect(screen.queryByText(/unavailable right now/i)).toBeNull();
   });
 });
 

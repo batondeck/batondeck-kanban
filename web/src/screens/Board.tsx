@@ -2,7 +2,8 @@
  * The Kanban board — Linear-grade interaction layer (Phases 1–3):
  *  - keyboard selection (j/k/arrows move, Enter opens, c creates, s/p open palette sub-pages)
  *  - URL-addressable drawer (?task=T-12 — deep links + working back button)
- *  - dnd-kit drag with drop highlight + lifted overlay; keyboard-draggable for free
+ *  - dnd-kit drag (pointer only) with drop highlight + lifted overlay. No KeyboardSensor: Enter or Space
+ *    on a focused card opens it, and the keyboard moves a card through `s` (Set status)
  *  - framer-motion card enter/leave; skeleton loading; optimistic create/move
  *  - one motion vocabulary (--ease/--t-1..3 in index.css) — extend it, don't invent alongside it
  */
@@ -12,7 +13,7 @@ import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../displayNames
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { Icon } from '../icons.js';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { DndContext, DragOverlay, PointerSensor, closestCorners, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -26,10 +27,10 @@ import * as sprintsApi from '../api/sprints.js';
 import * as streamApi from '../api/stream.js';
 import * as tasksApi from '../api/tasks.js';
 import { ApiError, isLocalEdit } from '../api/http.js';
-import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
+import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, personName, timeAgo, type DisplayNames } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
-import { boardTasksKey, mergeSnapshotPreservingLocalEdits, patchTaskCaches, restore, useTaskAction, useTaskCreate } from '../mutations.js';
+import { TEMP_TASK_ID, boardTasksKey, isTempTaskId, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, readBoardTasks, recordBoardFrame, restore, useTaskAction, useTaskCreate } from '../mutations.js';
 import { TaskDrawer } from './TaskDrawer.js';
 import { type AgentEntry, STATE_META, agentKey, buildAgentList, busyAgentKeys, isLiveEntry } from '../agentStatus.js';
 import { uiSettings } from '../settings.js';
@@ -226,11 +227,15 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true, canAss
   );
 }
 
-export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy }: {
+/** The sprint a task is in now: the LAST of its sprintIds. A member carried out of a CLOSED or
+ *  ABANDONED sprint keeps that sprint first, for history, and only one sprint is open at a time. */
+export const currentSprintId = (t: Task): string | undefined => t.sprintIds?.at(-1);
+
+export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy, names }: {
   t: Task;
   col: { status: Status };
   sub?: { done: number; total: number };
-  /** Name of the task's sprint (first of sprintIds); null/undefined → fall back to the raw id. */
+  /** Name of the task's sprint (currentSprintId); null/undefined → fall back to the raw id. */
   sprintName?: string | null;
   selected: boolean;
   /** Something (an agent, another human) changed this task under you — flash the ack ring. */
@@ -248,6 +253,8 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
   /** Passed to the assign chip (P-440). */
   canAssign: boolean;
   assignClosedWhy?: { id: string; text: string } | null;
+  /** Account id → name, so a human's claim shows the person, never the raw id (P-314). */
+  names?: DisplayNames;
 }) {
   const lease = t.claim ? leaseLeft(t.claim.expiresAt) : null;
   // The hover-reveal state that used to gate the "+ assign" chip is GONE, along with its two mouse
@@ -277,7 +284,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         </span>
       )}
       <div className="row" style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span className="id">{t.id}</span>
+        <span className="id">{isTempTaskId(t.id) ? TEMP_TASK_ID : t.id}</span>
         <PriorityDot priority={t.priority} />
       </div>
       <div className="title">{t.title}</div>
@@ -301,10 +308,10 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         <div className="card-badges">
           {t.status !== col.status && <StatusPill status={t.status} />}
           {isPoisoned(t) ? <PoisonBadge task={t} /> : (t.status === 'BLOCKED' || t.blockedBy.length > 0) && <span className="badge blocked">Blocked</span>}
-          {t.racing && <span className="badge racing" title="racing — N runs open"><Icon name="finish" size={11} /> Racing</span>}
+          {t.racing && <span className="badge racing" title="Racing: runs of this task are open until one is picked"><Icon name="finish" size={11} /> Racing</span>}
           {(t.sprintIds?.length ?? 0) > 0 && (
-            <span className="badge sprint" title={`Sprint: ${sprintName ?? t.sprintIds![0]!}`}>
-              <Icon name="flag" size={11} /> {sprintName ?? t.sprintIds![0]!}
+            <span className="badge sprint" title={`Sprint: ${sprintName ?? currentSprintId(t)}`}>
+              <Icon name="flag" size={11} /> {sprintName ?? currentSprintId(t)}
             </span>
           )}
           {t.modelHint?.effort && <span className="badge effort" title={t.modelHint.model}>{t.modelHint.effort}</span>}
@@ -313,7 +320,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         </div>
         <div className="card-who">
           {t.claim ? (
-            <Avatar id={t.claim.agent || t.claim.owner} active={!!lease} />
+            <Avatar id={t.claim.agent || t.claim.owner} label={t.claim.agent || personName(t.claim.owner, names)} nameOnly active={!!lease} />
           ) : (
             <>
               {/* Unclaimed + unassigned: at least show who authored the ticket (usually the planning agent). */}
@@ -351,13 +358,28 @@ function DraggableCard({ canMove, ...props }: Parameters<typeof TaskCard>[0] & {
   // ENTER is the plain `.card` CSS keyframe, which also gives the column-transition for free — the
   // card unmounts here and mounts in the destination column, where it plays in. Exit animates opacity
   // only: dnd-kit owns `transform` on this node and two owners of one property is a jank bug.
+  // dnd-kit makes this wrapper the card's tab stop (role=button, tabIndex 0) with no key handler of its
+  // own, and the board's `Enter` shortcut leaves a focused control its own keys (shortcuts.tsx). So
+  // Enter or Space here opens THIS card, not whichever one j/k last selected.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    listeners?.onKeyDown?.(e);
+    if (e.target !== e.currentTarget || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      props.onOpen();
+    }
+  };
   return (
     <motion.div
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      onKeyDown={onKeyDown}
+      data-card-for={props.t.id}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
-      exit={{ opacity: 0 }}
+      // A create's placeholder leaves at once: it is replaced by the server's card, which enters as it
+      // goes, and a fade would show the task twice for its length.
+      exit={isTempTaskId(props.t.id) ? undefined : { opacity: 0 }}
       transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
     >
       <TaskCard {...props} />
@@ -658,8 +680,8 @@ export function Board() {
   const myRole = useMyProjectRole(projectId);
   const canCreate = mayCall(myRole, 'create_task');
   const createClosedWhy = closedWhy(myRole, 'create_task', 'create tasks') ?? null;
-  // The rest of the board's writes, from the same table (P-440): a new board is `create_board` (write),
-  // the card's assign chip and the palette's priority are `update_task`, a drag and the palette's status
+  // The rest of the board's writes, from the same table (P-440): a new board is `create_board`, the
+  // card's assign chip and the palette's priority are `update_task`, a drag and the palette's status
   // are `move_task`, the sprint lifecycle is `update_sprint` (all master). Each is closed below its floor.
   const canNewBoard = mayCall(myRole, 'create_board');
   const newBoardWhy = closedWhy(myRole, 'create_board', 'create boards') ?? null;
@@ -717,10 +739,9 @@ export function Board() {
     },
   });
 
-  // Live updates arrive via the SSE stream below, and since T-191 that stream is fed by the
-  // `board-events` Pub/Sub carrier fanned out in-process by the gateway — NOT by `wait_for_updates`
-  // long-polls, which this comment described until the long-poll was deleted. Each 'updated' nudge
-  // triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
+  // Live updates arrive via the SSE stream below (`/api/stream`, internal/api/stream.go), which the
+  // server feeds from its change log through the in-process bus (internal/bus) — on Postgres a second
+  // server's writes reach it the same way. Each 'updated' nudge triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
   // framer-motion card glide animates moves.
   //
   // *** WHILE THE STREAM IS LIVE THERE IS NO POLL AT ALL. *** It used to run at 30s even in the healthy
@@ -752,14 +773,37 @@ export function Board() {
   const pollMs = streamLive ? (false as const) : 10000;
   const boardQ = useQuery({ queryKey: ['board', projectId, boardId], queryFn: () => boardsApi.getBoard(projectId, boardId), refetchInterval: pollMs });
   const [limit, setLimit] = useState(() => uiSettings().taskPageLimit);
+  // The stream's frame handler reads the key through this, so a "Load more" does not tear the shared
+  // socket down and up again to hand the handler a new `limit`.
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
   // `limit` IS part of the key — see `boardTasksKey`. It used to be held out of it and forced through a
   // manual invalidate effect, which left one cache entry shared with TaskDrawer's differently-sized
   // observer.
-  // `keepPreviousData` is load-bearing now that `limit` is in the key: "Load more" switches to a key
-  // with no cached entry, so without it `tasksQ.data` is undefined for a whole round-trip — the board
-  // would blank out and the "Load more" button (gated on `nextCursor`) would vanish mid-click. The old
-  // shape got this for free by mutating one entry; this restores it explicitly.
-  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => boardsApi.listTasks(projectId, boardId, { limit: String(limit) }), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  // `limit` is how many rows the board shows, NOT the `limit` of one request: `list_tasks` refuses more
+  // than 200, so `readBoardTasks` reads the rows page by page with the cursor. "Load more" asked for
+  // `limit=400` once, the server answered 400 VALIDATION, and every later refetch at that size failed.
+  // "Load more" reads the bigger list BEFORE switching to its key (`loadMore` below), so the board never
+  // renders a key with no data; `keepPreviousData` stays as the net for an entry collected meanwhile.
+  const tasksQ = useQuery({ queryKey: boardTasksKey(projectId, boardId, limit), queryFn: () => readBoardTasks(qc, projectId, boardId, limit), refetchInterval: pollMs, placeholderData: keepPreviousData });
+  const [moreErr, setMoreErr] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMore = async (): Promise<void> => {
+    const next = limit + boardsApi.LIST_TASKS_MAX;
+    setLoadingMore(true);
+    try {
+      // A frame that lands meanwhile goes to the list on screen; `readBoardTasks` lays it over this read.
+      await qc.fetchQuery({ queryKey: boardTasksKey(projectId, boardId, next), queryFn: () => readBoardTasks(qc, projectId, boardId, next, boardTasksKey(projectId, boardId, limitRef.current)), retry: false });
+      setMoreErr(null);
+      setLimit(next);
+    } catch (e) {
+      // A drag or an assign cancels every read of the project's lists so none lands over its optimistic
+      // card; that is not a failed load. The button is offered again.
+      if (!isCancelledError(e)) setMoreErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   const feedQ = useQuery({ queryKey: ['feed', projectId, boardId], queryFn: () => feedApi.feed(projectId, boardId), refetchInterval: pollMs });
   const searchQ = useQuery({
     queryKey: ['search', projectId, filters.q],
@@ -779,7 +823,7 @@ export function Board() {
   });
   const sprints = useMemo(() => sprintsQ.data?.sprints ?? [], [sprintsQ.data]);
   const sprintNameOf = useCallback(
-    (t: Task): string | null => sprints.find((s) => s.id === t.sprintIds?.[0])?.name ?? null,
+    (t: Task): string | null => sprints.find((s) => s.id === currentSprintId(t))?.name ?? null,
     [sprints],
   );
   // Connected agents in this workspace (available/busy/offline/connecting).
@@ -789,22 +833,24 @@ export function Board() {
   // a write per agent call. So there is nothing for the board-events carrier to fan out, and that has
   // not changed.
   //
-  // What changed is WHERE the poll lives. The gateway now pushes a periodic presence SNAPSHOT down this
-  // board's SSE connection (`event: presence`), so this query no longer polls at all — one server-side
-  // fetch per connected identity per tick serves every tab that identity has open, instead of every tab
-  // fetching for itself every 10s. Calling it a snapshot rather than "push" is deliberate: it is a poll
-  // moved to the server, which is the honest description and still removes the client cost.
+  // THE STREAM DOES NOT CARRY THIS LIST. Its presence frame is the device directory's entries for the
+  // viewer (CLI processes on this machine, internal/api/stream.go), sent on open and on a directory
+  // change. Every other session, an MCP client that pulls each turn (Cursor, a claude.ai connector), is
+  // only in `/api/agents/sessions`, and is online while its `lastSeenAt` is within
+  // `presenceOfflineAfterMs`. So the list is re-read every half of that window while the board is open
+  // (and its tab is in front): fetched once, an agent active seconds ago read offline 75 s after load,
+  // and one that connected later never appeared.
   //
-  // The initial fetch stays: a tab must render presence before the first tick arrives. It keeps the
-  // device rows a presence frame already put in the cache (P-197): the list never carries them, and a
-  // frame comes on open and then only on a directory change, so an answer landing after the open frame,
-  // or any refetch later, would show a live session as offline until the next change.
+  // Each answer keeps the device rows a presence frame already put in the cache (P-197): the list never
+  // carries them, and a frame comes on open and then only on a directory change, so an answer landing
+  // after the open frame, or any refetch later, would show a live session as offline until the next change.
   const agentsQ = useQuery({
     queryKey: ['agentsessions'],
     queryFn: async () => {
       const fresh = await agentsApi.agentSessions(uiSettings().sessionsLimit);
       return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentsessions'])?.sessions) };
     },
+    refetchInterval: Math.max(1000, Math.floor(uiSettings().presenceOfflineAfterMs / 2)),
   });
 
   // `resync`, or a rebuilt socket: no board frame comes until the next change, so the board, its tasks
@@ -855,16 +901,27 @@ export function Board() {
             //
             // MERGE, not skip: every OTHER task in the snapshot still lands, so a colleague's change to
             // a different card is not delayed by your in-flight drag.
-            const incoming = snap.tasks as { tasks: Task[] };
-            qc.setQueryData<{ tasks: Task[] }>(boardTasksKey(projectId, boardId, limit), (old) =>
-              mergeSnapshotPreservingLocalEdits(old, incoming, isLocalEdit),
+            //
+            // THE FRAME IS THE FIRST PAGE ONLY (200 tasks). Over a list "Load more" grew, it stands for
+            // that page and the rows past it are kept (`mergeFirstPage`); those rows are then re-read,
+            // since the frame says nothing about them, joining a read already out rather than
+            // restarting it (`cancelRefetch: false`). A read already out began before this change: it
+            // is not restarted either, `readBoardTasks` lays this frame over its answer. Otherwise a
+            // frame costs no read.
+            const incoming = snap.tasks as { tasks: Task[]; nextCursor?: string };
+            recordBoardFrame(projectId, boardId, incoming);
+            const key = boardTasksKey(projectId, boardId, limitRef.current);
+            const held = qc.getQueryData<{ tasks: Task[] }>(key)?.tasks.length ?? 0;
+            qc.setQueryData<{ tasks: Task[] }>(key, (old) =>
+              mergeSnapshotPreservingLocalEdits(old, mergeFirstPage(old, incoming), isLocalEdit),
             );
+            if (incoming.nextCursor && held > incoming.tasks.length) void qc.invalidateQueries({ queryKey: key, exact: true }, { cancelRefetch: false });
           }
           if (snap.feed) qc.setQueryData(['feed', projectId, boardId], snap.feed);
         },
         refetchBoard,
       ),
-    [projectId, boardId, qc, limit, refetchBoard],
+    [projectId, boardId, qc, refetchBoard],
   );
 
   const [newPriority, setNewPriority] = useState('normal');
@@ -879,14 +936,26 @@ export function Board() {
 
   const board = boardQ.data?.board;
   const allTasks = useMemo(() => tasksQ.data?.tasks ?? [], [tasksQ.data]);
+  // NOT LOADED IS NOT EMPTY. A list that failed (or is still on its way) has no rows to show, and
+  // drawing it as "0 tasks" with "No tasks" in every column tells the reader the board is empty.
+  const tasksLoaded = !!tasksQ.data;
+  // The board's own total, from the counts `get_board` answers, for when the list holds one page of it.
+  const boardTotal = Object.values(boardQ.data?.taskCounts ?? {}).reduce((n, c) => n + c, 0);
+  const tasksSubtitle = !tasksLoaded
+    ? tasksQ.isError ? 'tasks not loaded' : 'loading tasks…'
+    : tasksQ.data?.nextCursor && boardTotal > allTasks.length
+      ? `${allTasks.length} of ${boardTotal} tasks`
+      : `${allTasks.length} ${allTasks.length === 1 ? 'task' : 'tasks'}`;
   const changedTasks = useChangedTasks(allTasks);
 
   // Live agent presence: an agent holding a non-expired claim is "busy"; everything else is derived from
   // session recency. Recomputed as the (polled) sessions/tasks change, so the dots stay current.
   const busyKeys = useMemo(() => busyAgentKeys(allTasks), [allTasks]);
+  // `dataUpdatedAt` moves on every answer, even one equal to the last (which keeps the same `data`), so
+  // each poll re-derives the states against a fresh `Date.now()` and a silent agent goes offline.
   const agentList = useMemo(
     () => buildAgentList(agentsQ.data?.sessions ?? [], busyKeys, allTasks.map((t) => t.assignee).filter(Boolean) as string[], Date.now()),
-    [agentsQ.data, busyKeys, allTasks],
+    [agentsQ.data, agentsQ.dataUpdatedAt, busyKeys, allTasks],
   );
 
   const [moveErr, setMoveErr] = useState<string | null>(null);
@@ -971,11 +1040,11 @@ export function Board() {
       tasksApi.updateTask(projectId, v.taskId, v.version, { assignee: v.assignee }),
     onMutate: async (v) => {
       // THE SAME DEFECT `moveCard` HAD, still here twenty lines below the fix for it — found in review,
-      // not by me. And worse than moveCard's, because `['tasks', projectId, boardId]` is not merely an
-      // entry nobody reads: `Analytics.tsx` DECLARES a query at exactly that key. Board's `boardId`
-      // comes from `useParams()`, Analytics' from `boards[0].id` — identical on a single-board project
-      // — so this patched ANOTHER SCREEN'S cache and, on error, restored a pre-assign snapshot into it,
-      // while the board saw neither.
+      // not by me. And worse than moveCard's, because `['tasks', projectId, boardId]` was not merely an
+      // entry nobody reads: `Analytics.tsx` then declared a query at exactly that key (its census has
+      // its own `task-census` key now). Board's `boardId` comes from `useParams()`, Analytics' from
+      // `boards[0].id` — identical on a single-board project — so this patched ANOTHER SCREEN'S cache
+      // and, on error, restored a pre-assign snapshot into it, while the board saw neither.
       await qc.cancelQueries({ queryKey: ['tasks', projectId] });
       return { snapshot: patchTaskCaches(qc, projectId, v.taskId, (t) => ({ ...t, assignee: v.assignee })) };
     },
@@ -1051,6 +1120,12 @@ export function Board() {
     const next = visibleOrder[Math.min(visibleOrder.length - 1, Math.max(0, idx + delta))] ?? visibleOrder[0]!;
     setSelectedId(next);
     document.querySelector(`[data-task-id="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+    // Focus left on a card (a mouse drag ends with it on the dragged card's wrapper) follows the
+    // selection: a focused card takes Enter for itself, so it would open that card, not this one.
+    const focusedCard = document.activeElement?.closest('[data-card-for]');
+    if (focusedCard && focusedCard.getAttribute('data-card-for') !== next) {
+      document.querySelector<HTMLElement>(`[data-card-for="${next}"]`)?.focus({ preventScroll: true });
+    }
   };
 
   // board-scope keys (inert while the drawer is open for j/k — the drawer registers its own)
@@ -1060,7 +1135,9 @@ export function Board() {
     { keys: 'ArrowDown', label: '', run: () => (openTask ? false : moveSelection(1)) },
     { keys: 'ArrowUp', label: '', run: () => (openTask ? false : moveSelection(-1)) },
     { keys: 'Enter', label: 'Open selected task', run: () => (selectedId && !openTask ? setOpenTask(selectedId) : false) },
-    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
+    // Inert behind the drawer, as j/k are: it would open the new-task row under the modal and move
+    // focus into it, where typing goes unseen.
+    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { if (openTask) return false; setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
     { keys: 's', label: 'Set status (selection)', run: () => (selectedId ? openPalette('status') : false) },
     { keys: 'p', label: 'Set priority (selection)', run: () => (selectedId ? openPalette('priority') : false) },
     { keys: 'Escape', label: '', run: () => (openTask ? false : selectedId ? setSelectedId(null) : false) },
@@ -1165,7 +1242,7 @@ export function Board() {
       {/* Board header — identity + the two primary affordances (create, activity) */}
       <PageHeader
         title={board?.name ?? 'Board'}
-        subtitle={`${allTasks.length} ${allTasks.length === 1 ? 'task' : 'tasks'}`}
+        subtitle={tasksSubtitle}
         actions={
           <>
             {projectBoards.length > 1 && (
@@ -1291,13 +1368,31 @@ export function Board() {
         <div style={{ flex: 1 }} />
         <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: 'absolute', left: 9, pointerEvents: 'none' }}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-          <input className="input" style={{ paddingLeft: 30, width: 200 }} placeholder="Search the project…  ( / )" aria-label="Search tasks" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+          <input className="input" style={{ paddingLeft: 30, width: 200 }} placeholder="Search the project…" aria-label="Search tasks" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
         </div>
         {(filters.status || filters.assignee || filters.label || filters.sprint || filters.unblocked || filters.q) && (
           <button className="btn secondary" onClick={() => setFilters({ status: '', assignee: '', label: '', sprint: '', unblocked: false, q: '' })}>Clear</button>
         )}
-        {tasksQ.data?.nextCursor && <button className="btn secondary" onClick={() => setLimit((l) => l + 200)}>Load more</button>}
+        {tasksQ.data?.nextCursor && (
+          <button className="btn secondary" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? 'Loading…' : 'Load more'}</button>
+        )}
       </div>
+
+      {/* The task list's read failed: said, with a way to try again, rather than drawn as an empty
+          board. With rows from an earlier read still on screen, they stay and the line says so. */}
+      {tasksQ.isError && !tasksQ.isFetching && (
+        <p className="error" role="alert" style={{ fontSize: 12, margin: '6px 12px 0' }}>
+          {tasksLoaded ? 'Couldn’t refresh the tasks; showing the last ones read' : 'Couldn’t load the tasks'}
+          {tasksQ.error instanceof Error && tasksQ.error.message ? `: ${tasksQ.error.message}` : ''}.{' '}
+          <button type="button" className="btn secondary" style={{ fontSize: 11, padding: '1px 7px' }} onClick={() => void tasksQ.refetch()}>Retry</button>
+        </p>
+      )}
+      {moreErr && (
+        <p className="error" role="alert" style={{ fontSize: 12, margin: '6px 12px 0' }}>
+          Couldn’t load more tasks: {moreErr}.{' '}
+          <button type="button" className="btn secondary" style={{ fontSize: 11, padding: '1px 7px' }} onClick={() => setMoreErr(null)}>Dismiss</button>
+        </p>
+      )}
 
       {/* A refusal because the caller is not a member says so, as the closed controls above do (P-445).
           The server answers FORBIDDEN "Not a member of project …"; the roster may say it first. */}
@@ -1405,6 +1500,9 @@ export function Board() {
               try {
                 order = generateKeyBetween(prev, next);
               } catch {
+                // No key sorts between two equal keys (a board written before the server gave every
+                // landed card a key of its own can hold such a pair): say so rather than snap back.
+                setMoveErr('Cannot place the card there: the two cards around that spot share one position. Drop it above or below them, or move one of them first.');
                 return;
               }
               // Ripple immediately (the drop happened), spinner until the server agrees.
@@ -1448,6 +1546,7 @@ export function Board() {
                             col={col}
                             sub={childStats.get(t.id)}
                             sprintName={sprintNameOf(t)}
+                            names={displayNames}
                             selected={t.id === selectedId}
                             changed={changedTasks.has(t.id)}
                             pending={movingIds.has(t.id)}
@@ -1464,9 +1563,11 @@ export function Board() {
                           />
                         ))}
                       </AnimatePresence>
-                      {colTasks.length === 0 && (
+                      {colTasks.length === 0 && tasksLoaded && (
                         <div className="muted" style={{ fontSize: 12, padding: '8px 4px' }}>
-                          {canCreate ? (
+                          {/* A created task always lands in the board's first TODO column (create_task,
+                              ADR-0005; todoColumn in internal/service/dependencies.go), so only it offers c. */}
+                          {canCreate && col.id === board.columns.find((c) => c.status === 'TODO')?.id ? (
                             <>No tasks — press <span className="kbd">c</span></>
                           ) : (
                             'No tasks'
@@ -1493,7 +1594,7 @@ export function Board() {
               * (`.card` keyframe, --t-3 "travel"), which is the motion the board already speaks.
               */}
             <DragOverlay className="drag-overlay" dropAnimation={null}>
-              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} canAssign={canAssign} assignClosedWhy={assignClosedWhy} />}
+              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} names={displayNames} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} canAssign={canAssign} assignClosedWhy={assignClosedWhy} />}
             </DragOverlay>
           </DndContext>
         )}
@@ -1518,16 +1619,28 @@ export function Board() {
             <header><span>Activity</span></header>
             <div className="cards">
               {feedQ.isLoading && [0, 1, 2].map((i) => <div key={i} className="skeleton" style={{ height: 34 }} />)}
-              {(feedQ.data?.events ?? []).map((e: ActivityEvent) => (
-                <div key={e.id} className="row" style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, minWidth: 0 }}>
-                  <Avatar id={eventActor(e, displayNames)} />
-                  <Marquee label={eventActor(e, displayNames)} style={{ maxWidth: 120 }}>{eventActor(e, displayNames).split('@')[0]}</Marquee>
-                  <span className="muted" style={{ whiteSpace: 'nowrap' }}>{eventVerb(e.type)}</span>
-                  {e.taskId && <span className="mono" style={{ whiteSpace: 'nowrap' }}>{e.taskId}</span>}
-                  <span style={{ flex: 1 }} />
-                  <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
-                </div>
-              ))}
+              {/* WHO GETS A LINE OF ITS OWN. The row was one nowrap line (avatar, name, verb, task id,
+                  time) in which only the name could shrink, so beside a long verb ("updated an
+                  attachment on") it was cut to a few letters and claude-code read as claude-codex.
+                  The name now shares its line with the time only; the action goes underneath. */}
+              {(feedQ.data?.events ?? []).map((e: ActivityEvent) => {
+                const actor = eventActor(e, displayNames);
+                return (
+                  <div key={e.id} className="row" style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, minWidth: 0 }}>
+                    <Avatar id={actor} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 7, alignItems: 'center', minWidth: 0 }}>
+                        <Marquee label={actor} style={{ flex: 1 }}>{actor.split('@')[0]}</Marquee>
+                        <span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
+                      </div>
+                      <div className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {eventVerb(e.type)}
+                        {e.taskId && <> <span className="mono" style={{ color: 'var(--text)' }}>{e.taskId}</span></>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
               {feedQ.data && feedQ.data.events.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No activity yet.</div>}
             </div>
           </div>

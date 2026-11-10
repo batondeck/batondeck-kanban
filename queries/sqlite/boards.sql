@@ -20,6 +20,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?);
 -- name: GetColumn :one
 SELECT * FROM columns WHERE project_id = ? AND board_id = ? AND id = ?;
 
+-- The column remove_column and update_column judge (on Postgres locked FOR UPDATE; SQLite's
+-- transaction holds the write lock from BEGIN).
+-- name: LockColumn :one
+SELECT * FROM columns WHERE project_id = ? AND board_id = ? AND id = ?;
+
 -- name: ListColumns :many
 SELECT project_id, board_id, id, name, position, status, wip_limit
 FROM columns WHERE project_id = ? AND board_id = ?

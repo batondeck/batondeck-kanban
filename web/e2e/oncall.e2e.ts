@@ -77,7 +77,9 @@ test.describe('on-call', () => {
     // The key is shown once, with the endpoint to paste into Grafana.
     const shown = setup.locator('.record').filter({ hasText: 'Your API key — shown once' });
     await expect(shown.locator('code').first()).toHaveText(key);
-    await expect(shown.getByText(/Endpoint path:/)).toBeVisible();
+    // The full URL to paste into the sender, ending with the integration's own path.
+    await expect(shown.getByText(/Endpoint URL:/)).toBeVisible();
+    await expect(shown.locator('code').nth(1)).toHaveText(/^https?:\/\/[^/]+\/hooks\/I-[^/]+$/);
     await atRoute(page, '/oncall', 'setup: key shown once');
     await shown.getByRole('button', { name: 'I have stored it' }).click();
     await expect(setup.getByText('Your API key — shown once')).toHaveCount(0);
