@@ -130,8 +130,19 @@ const textOf = (n: MdNode): string => n.value ?? (n.children ?? []).map(textOf).
  */
 const RECORD_SLUG = /(^|[^\w/-])((?:adr|topic|feature)\/[a-z0-9][a-z0-9-]*)/g;
 
+/**
+ * A record's URL. It NAMES ITS PROJECT: a page id is a hash of the slug alone, so two projects
+ * recording the same slug share it (internal/domain/chronicle.go), and a link that left the project
+ * to the reader's sidebar opened "Pick a project", "No such record" or the other project's record.
+ * The page reads `?project=` before the sidebar (Chronicle.tsx `useRecordProject`). `suffix` is a
+ * sub-path such as `/history`. With no project, the bare form the sidebar resolves.
+ */
+export function recordHref(projectId: string, pageId: string, suffix = ''): string {
+  return `/chronicle/${pageId}${suffix}${projectId ? `?project=${encodeURIComponent(projectId)}` : ''}`;
+}
+
 /** Split one text node around every slug that RESOLVES. Returns [] when none did. */
-function splitSlugs(value: string, resolve: (slug: string) => string | null): MdNode[] {
+function splitSlugs(value: string, resolve: (slug: string) => string | null, projectId: string): MdNode[] {
   const out: MdNode[] = [];
   let last = 0;
   for (const m of value.matchAll(RECORD_SLUG)) {
@@ -142,7 +153,7 @@ function splitSlugs(value: string, resolve: (slug: string) => string | null): Md
     if (!id) continue;
     const at = m.index + m[1]!.length;
     if (at > last) out.push({ type: 'text', value: value.slice(last, at) });
-    out.push({ type: 'link', url: `/chronicle/${id}`, title: slug, children: [{ type: 'text', value: slug }] });
+    out.push({ type: 'link', url: recordHref(projectId, id), title: slug, children: [{ type: 'text', value: slug }] });
     last = at + slug.length;
   }
   if (!out.length) return [];
@@ -151,7 +162,7 @@ function splitSlugs(value: string, resolve: (slug: string) => string | null): Md
 }
 
 /** remark plugin: turn resolvable record slugs in prose into links. Code and links are left alone. */
-const recordLinks = (resolve: (slug: string) => string | null) => () => (tree: MdNode) => {
+const recordLinks = (resolve: (slug: string) => string | null, projectId: string) => () => (tree: MdNode) => {
   const walk = (node: MdNode): void => {
     if (!node.children || node.type === 'link') return;
     const out: MdNode[] = [];
@@ -162,7 +173,7 @@ const recordLinks = (resolve: (slug: string) => string | null) => () => (tree: M
         out.push(child);
         continue;
       }
-      const parts = splitSlugs(child.value, resolve);
+      const parts = splitSlugs(child.value, resolve, projectId);
       if (!parts.length) { out.push(child); continue; }
       changed = true;
       out.push(...parts);
@@ -309,17 +320,20 @@ const NO_RESOLVE = (): null => null;
 export function ChronicleBlockView({
   block,
   resolveSlug = NO_RESOLVE,
+  projectId = '',
 }: {
   block: ChronicleBlock;
   /** slug -> page id, for internal record links. Absent means no link is offered, never a dead one. */
   resolveSlug?: (slug: string) => string | null;
+  /** The project `resolveSlug` answers for: every record link it makes names it (`recordHref`). */
+  projectId?: string;
 }) {
   const chip = PROVENANCE[block.state];
   const components = useMemo(() => blockComponents(block.id), [block.id]);
   // Composed off the SHARED list rather than holding its own `remarkGfm`: the ticket surfaces and the
   // Chronicle rendered the same bytes two ways until `mdPlugins` existed, and a second reference here
   // is how that comes back.
-  const plugins = useMemo(() => [...(mdPlugins ?? []), recordLinks(resolveSlug)], [resolveSlug]);
+  const plugins = useMemo(() => [...(mdPlugins ?? []), recordLinks(resolveSlug, projectId)], [resolveSlug, projectId]);
   return (
     <div className={block.state === 'derived-then-edited' ? 'chr-block is-drifted' : 'chr-block'}>
       {chip ? <Tag kind={chip.kind}>{chip.label}</Tag> : null}

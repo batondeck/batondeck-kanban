@@ -26,7 +26,7 @@ import * as projectsApi from '../api/projects.js';
 import { Avatar, EmptyState, PageHeader, timeAgo } from '../components.js';
 import { displayAgentName } from '../agentStatus.js';
 import { Button, Chip, Chips, Cluster, Empty, Note, Panel, Section, Stack, Tag } from '../ui.js';
-import { ChronicleBlockView, sameBlockText } from '../chronicleBlocks.js';
+import { ChronicleBlockView, recordHref, sameBlockText } from '../chronicleBlocks.js';
 import { useProject } from '../projectContext.js';
 import { useMyProjectRole } from '../displayNames.js';
 import { closedWhy, mayCall } from '../toolFloors.js';
@@ -319,7 +319,7 @@ export function Chronicle() {
                     <Link
                       key={`${p.projectId}/${pg.id}`}
                       className="line-row"
-                      to={`/chronicle/${pg.id}`}
+                      to={recordHref(p.projectId, pg.id)}
                       onClick={() => setProjectId(p.projectId)}
                     >
                       <span className="line-row-label">
@@ -371,7 +371,7 @@ export function Chronicle() {
                 <Link
                   key={r.id}
                   className="chip"
-                  to={`/chronicle/${r.id}`}
+                  to={recordHref(projectId, r.id)}
                   title={r.title}
                   /* THE COUNT NEEDS ITS OWN ACCESSIBLE NAME, and finding that out cost a red test.
                      The accessible-name algorithm TRIMS each child's text before concatenating, so a
@@ -418,7 +418,7 @@ export function Chronicle() {
         {Object.entries(byKind).map(([kind, ps]) => (
           <Panel key={kind} title={kind} right={ps.length}>
             {ps.map((p) => (
-              <Link key={p.id} className="line-row" to={`/chronicle/${p.id}`}>
+              <Link key={p.id} className="line-row" to={recordHref(projectId, p.id)}>
                 <span className="line-row-label">
                   {p.title}{' '}
                   {/* The persisted sweep-conflict flag (T-298): the queryable signal, visible where a
@@ -533,7 +533,7 @@ export function ChronicleNew() {
       }),
     onSuccess: async ({ pageId }) => {
       await qc.invalidateQueries({ queryKey: ['chronicle', projectId] });
-      await nav(`/chronicle/${pageId}`);
+      await nav(recordHref(projectId, pageId));
     },
     onError: (e: Error) => setNote(e.message),
   });
@@ -627,9 +627,26 @@ export function ChronicleNew() {
   );
 }
 
+/**
+ * The project a record screen works in: the one its URL names (`?project=`, see `recordHref`), else
+ * the sidebar's. A named project the reader is a member of becomes the sidebar's selection too, so
+ * the rest of the app agrees with the record on screen. A project they cannot read is still asked
+ * for, and the answer says so ("No such record … a project you cannot read").
+ */
+function useRecordProject(): string {
+  const [params] = useSearchParams();
+  const { projectId: selected, projects, setProjectId } = useProject();
+  const named = params.get('project') ?? '';
+  const member = !!named && projects.some((p) => p.projectId === named);
+  useEffect(() => {
+    if (member && named !== selected) setProjectId(named);
+  }, [member, named, selected, setProjectId]);
+  return named || selected;
+}
+
 /** One page: read, edit inline, delete, reach its history. */
 export function ChroniclePageView() {
-  const { projectId } = useProject();
+  const projectId = useRecordProject();
   // Edit and Land are `edit_chronicle_page`, Delete `delete_chronicle_page`, both tier write (P-440):
   // below it they are closed and say why.
   const myRole = useMyProjectRole(projectId);
@@ -892,7 +909,7 @@ export function ChroniclePageView() {
         subtitle={page?.slug}
         actions={
           <Cluster gap={8}>
-            <Link to={`/chronicle/${pageId}/history`}>History</Link>
+            <Link to={recordHref(projectId, pageId, '/history')}>History</Link>
             {editing ? (
               <>
                 {/* In a conflict this button is the only way OUT, and it throws the draft away — so it
@@ -1181,7 +1198,7 @@ export function ChroniclePageView() {
               const folded = blocks.filter((b) => /^(ev|cov)/.test(b.id));
               const lead = blocks.filter((b) => !/^(ev|cov)/.test(b.id));
               const render = (b: ChronicleBlock) => (
-                <ChronicleBlockView key={b.id} block={b} resolveSlug={resolveSlug} />
+                <ChronicleBlockView key={b.id} block={b} resolveSlug={resolveSlug} projectId={projectId} />
               );
               return (
                 <>
@@ -1204,7 +1221,7 @@ export function ChroniclePageView() {
 
 /** History: version list, diff between any two, revert. */
 export function ChronicleHistory() {
-  const { projectId } = useProject();
+  const projectId = useRecordProject();
   // A revert writes a new version: `edit_chronicle_page`, tier write (P-440).
   const myRole = useMyProjectRole(projectId);
   const canRevert = mayCall(myRole, 'edit_chronicle_page');
@@ -1219,9 +1236,18 @@ export function ChronicleHistory() {
     queryFn: () => projectsApi.getProject(projectId),
   });
   const names = proj.data?.memberDisplay;
-  const [params, setParams] = useSearchParams();
+  const [params, setSearchParams] = useSearchParams();
   const a = params.get('a');
   const b = params.get('b');
+  /** Picks the two versions to compare; the record's `?project=` stays in the URL. */
+  const setParams = (pick: { a?: string; b?: string }): void => {
+    const next = new URLSearchParams();
+    const project = params.get('project');
+    if (project) next.set('project', project);
+    if (pick.a) next.set('a', pick.a);
+    if (pick.b) next.set('b', pick.b);
+    setSearchParams(next);
+  };
 
   /**
    * PAGED, and the paging is VISIBLE — the index's pattern (see `Chronicle` above), applied to
@@ -1277,7 +1303,7 @@ export function ChronicleHistory() {
 
   return (
     <div className="page">
-      <PageHeader title="History" actions={<Link to={`/chronicle/${pageId}`}>Back to page</Link>} />
+      <PageHeader title="History" actions={<Link to={recordHref(projectId, pageId)}>Back to page</Link>} />
       {list.isError && <Note>{(list.error as Error).message}</Note>}
       {revert.isError && <Note>{(revert.error as Error).message}</Note>}
 

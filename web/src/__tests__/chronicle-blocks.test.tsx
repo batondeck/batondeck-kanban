@@ -161,7 +161,7 @@ describe('T-513 internal record links', () => {
     // Waits for the slug-map query, which is a SEPARATE fetch from the page itself.
     await waitFor(() => expect(screen.getByText('adr/t-494').closest('a')).toBeTruthy());
     const a = screen.getByText('adr/t-494').closest('a')!;
-    expect(a.getAttribute('href')).toBe('/chronicle/CP-2');
+    expect(a.getAttribute('href')).toBe('/chronicle/CP-2?project=P-1');
   });
 
   it('REFUSAL: an unknown slug stays plain text — no dead link, no "missing" label', async () => {
@@ -181,8 +181,8 @@ describe('T-513 internal record links', () => {
     const linked = new Map(
       [...document.querySelectorAll('a.chr-record-link')].map((a) => [a.textContent, a.getAttribute('href')]),
     );
-    expect(linked.get('topic/wake'), 'a topic/ reference is not linkified — the namespaces do not match emit.py').toBe('/chronicle/CP-3');
-    expect(linked.get('feature/t-292'), 'a feature/ reference is not linkified').toBe('/chronicle/CP-4');
+    expect(linked.get('topic/wake'), 'a topic/ reference is not linkified — the namespaces do not match emit.py').toBe('/chronicle/CP-3?project=P-1');
+    expect(linked.get('feature/t-292'), 'a feature/ reference is not linkified').toBe('/chronicle/CP-4?project=P-1');
   });
 
   it('REFUSAL: a plural `topics/`/`features/` repo path is prose, not a record reference', async () => {

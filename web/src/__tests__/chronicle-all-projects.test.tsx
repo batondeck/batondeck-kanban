@@ -88,7 +88,7 @@ describe('Chronicle at the "All projects" scope (T-429)', () => {
     await waitFor(() => expect(screen.getByText('P-1 decision 1')).toBeTruthy());
     expect(screen.getByText('Alpha')).toBeTruthy();
     expect(screen.getByText('P-1 decision 2')).toBeTruthy();
-    expect(screen.getByText('P-1 decision 1').closest('a')?.getAttribute('href')).toBe('/chronicle/CP-P-1-1');
+    expect(screen.getByText('P-1 decision 1').closest('a')?.getAttribute('href')).toBe('/chronicle/CP-P-1-1?project=P-1');
 
     // Gamma's failure is INLINE, named, and the rest of the screen survived it.
     await waitFor(() => expect(screen.getByText(/could not load this project/i)).toBeTruthy());
