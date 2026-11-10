@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -148,5 +150,79 @@ func TestKeyringDeriveKey(t *testing.T) {
 	}
 	if bytes.Equal(a, bytes.Repeat([]byte{7}, 32)) {
 		t.Error("the derived key is the master key")
+	}
+}
+
+// Processes making the key file at once (two replicas' first start, on Postgres with no data-dir
+// lock) all end on the one key the file holds: one creates it, the rest read it. Each wrote its own
+// key over the others', so a process kept sealing under a key that was no longer on disk. Only the
+// one that made the file says it created it.
+func TestConcurrentFirstStartsAgreeOnTheKeyOnDisk(t *testing.T) {
+	const rounds, racers = 20, 8
+	for r := 0; r < rounds; r++ {
+		path := filepath.Join(t.TempDir(), "master.key")
+		keys := make([]*Keyring, racers)
+		errs := make([]error, racers)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range racers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				keys[i], errs[i] = OpenKeyring(path, func(string) (string, bool) { return "", false })
+			}()
+		}
+		close(start)
+		wg.Wait()
+		onDisk, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created := 0
+		for i, kr := range keys {
+			if errs[i] != nil {
+				t.Fatalf("round %d, racer %d: %v", r, i, errs[i])
+			}
+			if !bytes.Equal(kr.key, onDisk) {
+				t.Fatalf("round %d, racer %d runs on a key that is not the one in %s", r, i, path)
+			}
+			if kr.Created() {
+				created++
+			}
+		}
+		if created != 1 {
+			t.Fatalf("round %d: %d racers say they created the key file, want 1", r, created)
+		}
+		// No temporary file is left beside it.
+		if entries, _ := os.ReadDir(filepath.Dir(path)); len(entries) != 1 {
+			t.Fatalf("round %d: the key's directory holds %d entries, want master.key alone", r, len(entries))
+		}
+	}
+}
+
+// A key file a crash left empty (made, then killed before the write) is refused with the remedy,
+// not as a bare byte count; a reopened file and an environment key were not created.
+func TestKeyringNamesAnEmptyFileAndWhoCreated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "master.key")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := OpenKeyring(path, func(string) (string, bool) { return "", false })
+	if err == nil || !strings.Contains(err.Error(), "is empty") || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("an empty key file: %v", err)
+	}
+	path = filepath.Join(t.TempDir(), "master.key")
+	first, err := OpenKeyring(path, func(string) (string, bool) { return "", false })
+	if err != nil || !first.Created() {
+		t.Fatalf("the first open: created %v, %v", first != nil && first.Created(), err)
+	}
+	again, err := OpenKeyring(path, func(string) (string, bool) { return "", false })
+	if err != nil || again.Created() {
+		t.Fatalf("a reopen: created %v, %v", again != nil && again.Created(), err)
+	}
+	env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
+	if kr, err := OpenKeyring(path, func(string) (string, bool) { return env, true }); err != nil || kr.Created() {
+		t.Fatalf("an environment key: %v", err)
 	}
 }
