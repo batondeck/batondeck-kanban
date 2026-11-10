@@ -1,7 +1,8 @@
 # batondeck-kanban on Postgres 16. README.md's quickstart says how to run it; in short:
 #
-#   printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
-#   printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
+#   ( umask 077
+#     printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+#     printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env )
 #   docker compose up -d --wait
 #   curl -fsS http://127.0.0.1:8080/healthz
 #

@@ -48,11 +48,14 @@ batondeck-kanban serve          # leave it running; the next steps are in anothe
 **Or the image**, on Postgres 16, with `compose.yaml` from this repository. On Postgres there is no
 `master.key` file beside a SQLite file, so the key comes from `.env`, and so does the database
 password (hex, since it goes into the connection URL unescaped); compose refuses to start without
-either.
+either. `.env` holds both secrets, so it is made readable by you alone (`umask 077`), and the
+repository's `.gitignore` keeps it out of a commit.
 
 ```bash
-printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
-printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env
+git clone https://github.com/batondeck/batondeck-kanban.git && cd batondeck-kanban
+( umask 077
+  printf 'BATONDECK_MASTER_KEY=%s\n' "$(openssl rand -base64 32)" > .env
+  printf 'BATONDECK_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" >> .env )
 docker compose up -d --wait    # returns once the board answers its health check
 curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 ```
@@ -93,7 +96,7 @@ SessionEnd hook removes it, so the server rings the session over its own messagi
 is assigned to it or becomes claimable, and Claude Code starts a turn, even in an idle session.
 
 ```bash
-git clone https://github.com/batondeck/batondeck-kanban.git
+git clone https://github.com/batondeck/batondeck-kanban.git    # unless step 1 already did
 export BATONDECK_TOKEN=<token>
 export BATONDECK_LISTEN=tcp://127.0.0.1:8080,unix://$HOME/.batondeck/bk.sock
 claude --plugin-dir batondeck-kanban/plugin
