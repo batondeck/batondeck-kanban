@@ -137,6 +137,47 @@ func TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient(t *testing.T) 
 	}
 }
 
+// The walk past the hook's shells (tested on a process table): it stops at the nearest ancestor that
+// is not a shell, which may be pid 1 (a client that is a container's first process; the walk
+// stopped short of pid 1 and registered the hook's shell), and never at another uid's process or one
+// it cannot read.
+func TestClientProcessWalksPastShells(t *testing.T) {
+	type proc struct {
+		ppid int
+		name string
+		uid  int
+	}
+	me := os.Getuid()
+	for _, c := range []struct {
+		what  string
+		table map[int]proc
+		from  int
+		want  int
+	}{
+		{"a client as pid 1", map[int]proc{40: {12, "sh", me}, 12: {1, "dash", me}, 1: {0, "claude", me}}, 40, 1},
+		{"a client under init", map[int]proc{40: {12, "sh", me}, 12: {30, "dash", me}, 30: {1, "node", me}, 1: {0, "systemd", 0}}, 40, 30},
+		{"a client that is no shell", map[int]proc{40: {30, "node", me}}, 40, 40},
+		{"another uid's parent", map[int]proc{40: {12, "sh", me}, 12: {1, "sshd", me + 1}}, 40, 40},
+		{"an unreadable parent", map[int]proc{40: {12, "sh", me}}, 40, 40},
+	} {
+		parent := func(pid int) (int, string, error) {
+			if p, ok := c.table[pid]; ok {
+				return p.ppid, p.name, nil
+			}
+			return 0, "", core.ErrNoProcess
+		}
+		uid := func(pid int) (int, error) {
+			if p, ok := c.table[pid]; ok {
+				return p.uid, nil
+			}
+			return 0, core.ErrNoProcess
+		}
+		if got := walkPastShells(c.from, parent, uid); got != c.want {
+			t.Errorf("%s: the client of %d is %d, want %d", c.what, c.from, got, c.want)
+		}
+	}
+}
+
 // TestSessionHookChild is no test of its own: it is the command the hook script of
 // TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient runs.
 func TestSessionHookChild(t *testing.T) {

@@ -5,8 +5,11 @@ package core
 import (
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -137,9 +140,15 @@ func TestExitWatcherClosesWithExitsUnread(t *testing.T) {
 // ProcessParent names a process's parent and the program it runs; a reaped pid is ErrNoProcess.
 func TestProcessParent(t *testing.T) {
 	cmd := startSleeper(t)
+	// The program's name, or on Linux its executable's: a multicall binary's (busybox, coreutils)
+	// where sleep is a link to one.
+	names := map[string]bool{"sleep": true}
+	if exe, err := filepath.EvalSymlinks(cmd.Path); err == nil {
+		names[filepath.Base(exe)] = true
+	}
 	ppid, name, err := ProcessParent(cmd.Process.Pid)
-	if err != nil || ppid != os.Getpid() || name != "sleep" {
-		t.Fatalf("ProcessParent(child) = %d, %q, %v; want %d, \"sleep\"", ppid, name, err, os.Getpid())
+	if err != nil || ppid != os.Getpid() || !names[name] {
+		t.Fatalf("ProcessParent(child) = %d, %q, %v; want %d and one of %v", ppid, name, err, os.Getpid(), slices.Sorted(maps.Keys(names)))
 	}
 	if ppid, _, err := ProcessParent(os.Getpid()); err != nil || ppid != os.Getppid() {
 		t.Fatalf("ProcessParent(self) = %d, %v; want %d", ppid, err, os.Getppid())

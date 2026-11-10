@@ -24,12 +24,13 @@ func sessionUsage(w io.Writer) {
 Both run from a client's SessionStart and SessionEnd hooks. They reach the server only on the
 first unix:// entry of its listen config, with the bearer in BATONDECK_TOKEN. The session is the
 Claude Code process whose registry entry names $CLAUDE_CODE_MESSAGING_SOCKET, else the parent
-process, past the shells a hook's command runs under (sh, bash, zsh and the like). --agent takes only a label the bearer may claim for: its token's own label, or a name no
-other account's token and no live token of its own carries (its own revoked or expired label
-included). Another account's label is refused FORBIDDEN (revoked or expired tokens included), so
-is a live label of the bearer's own account named from a token that does not carry it, and so is
-id:<identity> for any identity but the bearer's own. A failure is one line on stderr and exit 0,
-so a hook never breaks a session start.
+process, past the shells a hook's command runs under (sh, bash, zsh and the like). --agent takes
+only a label the bearer may claim for: its token's own label, or a name no other account's token
+and no live token of its own carries (its own revoked or expired label included). Another
+account's label is refused FORBIDDEN (revoked or expired tokens included), so is a live label of
+the bearer's own account named from a token that does not carry it, and so is id:<identity> for
+any identity but the bearer's own. A failure is one line on stderr and exit 0, so a hook never
+breaks a session start.
 every subcommand takes -config PATH.
 `)
 }
@@ -171,15 +172,21 @@ var hookShells = map[string]bool{"sh": true, "dash": true, "bash": true, "zsh": 
 
 // clientProcess is the parent process, or, while that is a hook shell, the shell's parent, as
 // long as it is a live process of this uid (the server registers no other uid's): the nearest
-// ancestor that is not a shell. A process it cannot read ends the walk where it is.
+// ancestor that is not a shell, pid 1 included (a client that is a container's first process). A
+// process it cannot read ends the walk where it is.
 func clientProcess() int {
-	pid := os.Getppid()
+	return walkPastShells(os.Getppid(), core.ProcessParent, core.ProcessUID)
+}
+
+// walkPastShells is clientProcess from pid, over parent (core.ProcessParent) and uid
+// (core.ProcessUID).
+func walkPastShells(pid int, parent func(int) (int, string, error), uid func(int) (int, error)) int {
 	for range 8 { // a hook's command is a shell or two deep
-		ppid, name, err := core.ProcessParent(pid)
-		if err != nil || !hookShells[name] || ppid <= 1 {
+		ppid, name, err := parent(pid)
+		if err != nil || !hookShells[name] || ppid < 1 {
 			break
 		}
-		if uid, err := core.ProcessUID(ppid); err != nil || uid != os.Getuid() {
+		if u, err := uid(ppid); err != nil || u != os.Getuid() {
 			break
 		}
 		pid = ppid
