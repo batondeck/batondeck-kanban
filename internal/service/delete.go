@@ -47,7 +47,7 @@ func (s tasksSvc) Delete(ctx context.Context, caller domain.Caller, req DeleteTa
 			return DeleteTaskResp{}, err
 		}
 		for _, x := range set {
-			yields, err := s.c.leaseYields(ctx, t.Tx, x, caller, a.Role, t.Now.UnixMilli())
+			yields, err := leaseYields(ctx, t.Tx, x, caller, a.Role, t.Now.UnixMilli())
 			if err != nil {
 				return DeleteTaskResp{}, err
 			}

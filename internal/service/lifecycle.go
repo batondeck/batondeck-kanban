@@ -121,7 +121,7 @@ func liveLease(t store.Task, now int64) bool { return t.Claim != nil && t.Claim.
 // guard no caller reaches today: all four routes are master tier or refuse a non-holder below
 // master first; it is kept so a later caller below master is not handed another agent's lease.
 // st is the store it reads through (a transaction's own).
-func (c *Core) leaseYields(ctx context.Context, st store.Store, t store.Task, caller domain.Caller, role domain.Role, now int64) (bool, error) {
+func leaseYields(ctx context.Context, st store.Store, t store.Task, caller domain.Caller, role domain.Role, now int64) (bool, error) {
 	if !liveLease(t, now) {
 		return true, nil
 	}
@@ -1578,9 +1578,11 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 		owner := liveLease(cur, now) && cur.Claim.Owner == caller.Identity &&
 			(caller.Role == "" || domain.RoleMeetsTier(a.Role, domain.TierWrite))
 		if owner {
-			if owner, err = ownedAgent(ctx, t.Tx, cur.Claim, caller, now); err != nil {
+			own, err := ownedAgent(ctx, t.Tx, cur.Claim, caller, now)
+			if err != nil {
 				return CancelTaskResp{}, err
 			}
+			owner = own
 		}
 		if !owner && !domain.RoleMeetsTier(a.Role, domain.TierMaster) {
 			return CancelTaskResp{}, forbidden("cancel_task needs the master role or the task's live lease",
@@ -1594,7 +1596,7 @@ func (l lifecycle) Cancel(ctx context.Context, caller domain.Caller, req CancelT
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
 		if !owner {
-			yields, err := l.c.leaseYields(ctx, t.Tx, cur, caller, a.Role, now)
+			yields, err := leaseYields(ctx, t.Tx, cur, caller, a.Role, now)
 			if err != nil {
 				return CancelTaskResp{}, err
 			}
