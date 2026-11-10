@@ -110,7 +110,8 @@ func sprintText(name, goal, acceptance Optional[string]) error {
 // activation gates against the proposal task read in the transaction and stamps approvedBy and
 // startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
 // "open" is status != DONE (plan §Fold 2), so a BLOCKED-poison member is open and a cancelled one
-// (DONE with the cancelled label, ADR-0001) is not.
+// (DONE with the cancelled label, ADR-0001) is not. It runs under the project lock, as set_sprint and
+// create_task {sprintId} do, so a member cannot join between the close and its warning.
 func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req UpdateSprintReq) (UpdateSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_sprint", domain.GrantSubject{}, false)
 	if err != nil {
@@ -155,7 +156,7 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "update_sprint", Args: map[string]any{"projectId": req.ProjectID, "sprintId": req.SprintID},
-		ProjectID: req.ProjectID, Access: a,
+		ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (UpdateSprintResp, error) {
 		cur, err := t.Tx.GetSprint(ctx, req.ProjectID, req.SprintID)
 		if err != nil {
@@ -312,6 +313,9 @@ func samePtr(a, b *string) bool {
 // unchanged before the version check (retry-safe); otherwise the task is version-checked, the
 // membership is judged (domain.CheckSprintMembership, exclusive), and the task's sprintIds and the
 // sprint's member count move together, with sprint.task_added or sprint.task_removed on the task.
+// It runs under the project lock, as update_sprint does: under Postgres READ COMMITTED a close that
+// committed after this call read the sprint ACTIVE would otherwise let the task join a CLOSED sprint
+// its close warning never named.
 func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprintReq) (SetSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "set_sprint", domain.GrantSubject{}, true)
 	if err != nil {
@@ -332,7 +336,7 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 	add := req.Action == "add"
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "set_sprint", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID,
+		ProjectID: req.ProjectID, LockProject: true,
 	}, func(t *txn) (SetSprintResp, error) {
 		task, err := t.Tx.GetTask(ctx, req.ProjectID, req.TaskID)
 		if err != nil {

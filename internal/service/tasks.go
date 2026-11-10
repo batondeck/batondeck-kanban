@@ -145,7 +145,8 @@ func callerAgent(c domain.Caller) *string {
 // assignee). With sprintId the task is created a member of that sprint in the same transaction, as
 // set_sprint add makes one (P-239): the sprint must exist (NOT_FOUND), be on the task's board
 // (VALIDATION) and pass domain.CheckSprintMembership; its memberCount moves by one and the task gets
-// sprint.task_added {sprintId, memberCount}. Without sprintId no statement is added.
+// sprint.task_added {sprintId, memberCount}, under the project lock. Without sprintId no statement
+// is added.
 func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTaskReq) (CreateTaskResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "create_task", domain.GrantSubject{BoardID: req.BoardID, Labels: req.Labels}, false)
 	if err != nil {
@@ -203,6 +204,9 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_task", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
 		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		// With sprintId, the project lock orders the sprint's read before update_sprint's close
+		// (Sprints.Set's reason); without it no statement is added.
+		LockProject: req.SprintID != "",
 	}, func(t *txn) (CreateTaskResp, error) {
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, req.BoardID)
 		if err != nil {

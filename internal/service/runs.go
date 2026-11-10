@@ -252,7 +252,10 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 
 // Open is open_run (conductor runs.ts:325-383): one more run of a racing parent, ordinal one past
 // the highest recorded, ordered after the last run. The parent is read, not written: its version
-// does not move. Capped by maxRunsPerTask counted over the runs that exist.
+// does not move. Capped by maxRunsPerTask counted over the runs that exist. It runs under the project
+// lock, as pick_run and cancel_runs do, so the racing flag it reads cannot be settled under it: under
+// Postgres READ COMMITTED a pick that committed after that read left a claimable run of a parent
+// whose race was over, which no race tool could reach.
 func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq) (OpenRunResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "open_run", domain.GrantSubject{}, true)
 	if err != nil {
@@ -278,7 +281,7 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "open_run", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID),
+		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), LockProject: true,
 	}, func(t *txn) (OpenRunResp, error) {
 		parent, err := t.Tx.GetTask(ctx, req.ProjectID, req.TaskID)
 		if err != nil {
