@@ -9,7 +9,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { pushToast } from '../toast.js';
+import { copyLink } from '../clipboard.js';
 import { Avatar, Marquee, PoisonBadge, PriorityDot, StatusPill, isPoisoned, personName, timeAgo } from '../components.js';
 import { LIMITS } from '../types.js';
 import { Cluster } from '../ui.js';
@@ -156,7 +156,7 @@ export function TaskDrawer({ projectId, taskId, onClose, onOpenTask }: {
                 onClick={() => {
                   const url = new URL(window.location.href);
                   url.searchParams.set('task', task.id);
-                  void navigator.clipboard.writeText(url.toString()).then(() => pushToast(`Link to ${task.id} copied`, 'info'));
+                  copyLink(url.toString(), `Link to ${task.id} copied`);
                 }}
               >
                 <Icon name="link" />
