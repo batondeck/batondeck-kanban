@@ -60,10 +60,10 @@ type Service struct {
 	// X-Forwarded-For names (TrustedProxies.ClientAddr); nil reads no header.
 	Proxies TrustedProxies
 
-	mu           sync.Mutex
-	cache        map[string]accountEntry
-	clientNames  map[string]string // OAuth client id -> its agent name (oauthClientName)
-	anonRefusals *buckets          // the audit budget of refusals with no credential (csrf.go)
+	mu          sync.Mutex
+	cache       map[string]accountEntry
+	clientNames map[string]string // OAuth client id -> its agent name (oauthClientName)
+	refusals    *buckets          // the audit budget of refusals, per actor (csrf.go)
 }
 
 type accountEntry struct {

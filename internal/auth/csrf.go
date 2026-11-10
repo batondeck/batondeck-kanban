@@ -3,6 +3,8 @@ package auth
 import (
 	"crypto/subtle"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 )
 
 // CSRF refuses, with 403, a state change that a page of another origin could have made. Ported
@@ -19,8 +21,9 @@ import (
 //     carries no ambient credential and needs none.
 //
 // GET, HEAD and OPTIONS pass. Mount it inside Authenticate (which puts the session on the context);
-// the login route mounts it alone. Every refusal is audited, one of a request with no credential at
-// most anonymousRefusalRows a minute (anyone can send those, and the audit log is kept).
+// the login route mounts it alone. Every refusal is audited, at most refusalRows a minute of each
+// actor, the requests with no credential counting as one (anyone can send those, and the audit log
+// is kept).
 func (s *Service) CSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -49,33 +52,53 @@ func (s *Service) CSRF(next http.Handler) http.Handler {
 	})
 }
 
-// anonymousRefusalRows is how many CSRF refusals of requests that carried no credential the audit
-// log takes a minute, and in one burst; past it they are refused unrecorded. Anyone who reaches the
-// server can make such a refusal (a cross-site POST to a sign-in route), and audit rows are never
-// swept, so without the bound they could grow the database without limit.
-const anonymousRefusalRows = 30
+// refusalRows is how many CSRF refusals of one actor the audit log takes a minute, and in one
+// burst, the requests that carried no credential counting as one actor; past it they are refused
+// unrecorded. Anyone who reaches the server can make a refusal with no credential (a cross-site
+// POST to a sign-in route), and a page of a sibling subdomain can make a signed-in browser's (its
+// SameSite=Lax cookie rides a same-site POST). Audit rows are never swept, so the budget bounds how
+// fast such pages add to the log, and maxRefusedPath how much of the path each row holds.
+const (
+	refusalRows    = 30
+	maxRefusedPath = 256
+)
 
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, why string) {
 	if s.Audit != nil {
-		c, ok := CallerFrom(r.Context())
-		if ok || s.anonymousRefusalAllowed() {
-			s.Audit(r.Context(), AuditEvent{Action: "request.refused", Actor: c.Identity, Subject: "path:" + r.URL.Path,
+		c, _ := CallerFrom(r.Context())
+		if s.refusalAllowed(c.Identity) {
+			s.Audit(r.Context(), AuditEvent{Action: "request.refused", Actor: c.Identity, Subject: "path:" + refusedPath(r.URL.Path),
 				Result: "refused", ErrorCode: "FORBIDDEN", Data: map[string]any{"reason": why, "method": r.Method}})
 		}
 	}
 	http.Error(w, "cross-site request refused", http.StatusForbidden)
 }
 
-// anonymousRefusalAllowed takes one of the anonymousRefusalRows a minute: false when none is left.
-func (s *Service) anonymousRefusalAllowed() bool {
+// refusalAllowed takes one of actor's refusalRows a minute ("" is every request with no
+// credential): false when none is left.
+func (s *Service) refusalAllowed(actor string) bool {
 	s.mu.Lock()
-	if s.anonRefusals == nil {
-		s.anonRefusals = newBuckets(anonymousRefusalRows)
+	if s.refusals == nil {
+		s.refusals = newBuckets(refusalRows)
 	}
-	b := s.anonRefusals
+	b := s.refusals
 	s.mu.Unlock()
-	_, ok := b.take("", s.now())
+	_, ok := b.take(actor, s.now())
 	return ok
+}
+
+// refusedPath is a refused request's path as its audit row names it: UTF-8 (a run of bytes that is
+// none becomes U+FFFD) and at most maxRefusedPath bytes, cut where a character starts.
+func refusedPath(p string) string {
+	p = strings.ToValidUTF8(p, "\uFFFD")
+	if len(p) <= maxRefusedPath {
+		return p
+	}
+	i := maxRefusedPath
+	for i > 0 && !utf8.RuneStart(p[i]) {
+		i--
+	}
+	return p[:i]
 }
 
 // sameOrigin is hdtp's: Fetch Metadata when present, else Origin when present, else true (no
