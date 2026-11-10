@@ -597,6 +597,57 @@ func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
 	})
 }
 
+// api-http#7: attach_file replayed under its idempotency key (as the key invites after a failed
+// PUT) answers the same attachment with an upload URL signed at the replay, not the stored URL,
+// which lapsed BlobURLTTL after the first call while the key lives a day.
+func TestAnAttachReplayedAfterItsURLLapsedAnswersAFreshURLOverTheEngines(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			st := ec.open(t)
+			m := newMediaEnv(t, st, true)
+			if err := m.c.Close(m.ctx); err != nil {
+				t.Fatal(err)
+			}
+			var at atomic.Int64
+			at.Store(time.Now().UnixNano())
+			clock := func() time.Time { return time.Unix(0, at.Load()) }
+			m.c = New(st, Options{Logger: log.New(&logBuf{}, "", 0), ToolCallFlush: -1, Now: clock,
+				Media: MediaOptions{Files: m.files, Signer: m.signer, BaseURL: "http://bk.test", MaxBytes: 64}})
+			t.Cleanup(func() { _ = m.c.Close(context.Background()) })
+			task := m.newTask(t)
+			req := AttachFileReq{ProjectID: m.project, TaskID: task.ID, FileName: "f.txt", MimeType: "text/plain", Kind: "file", Bytes: 3, IdempotencyKey: "retry-me"}
+			first, err := m.c.Media().AttachFile(m.ctx, m.alice, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			at.Add(int64(BlobURLTTL + time.Minute))
+			second, err := m.c.Media().AttachFile(m.ctx, m.alice, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.AttachmentID != first.AttachmentID || len(m.list(t, task.ID)) != 1 {
+				t.Fatalf("the replay answered %s, the first call %s, with %d attachments: want the same one", second.AttachmentID, first.AttachmentID, len(m.list(t, task.ID)))
+			}
+			check := func(raw string) error {
+				u, err := url.Parse(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return m.signer.Verify(strings.TrimPrefix(u.Path, "/blobs/"), blob.Upload, u.Query().Get("exp"), u.Query().Get("sig"), clock())
+			}
+			if err := check(first.UploadURL); !errors.Is(err, blob.ErrExpired) {
+				t.Fatalf("the first URL at the replay: %v, want expired (the control)", err)
+			}
+			if err := check(second.UploadURL); err != nil {
+				t.Fatalf("the replay's upload URL at the replay: %v (URL %s, expiresAt %s)", err, second.UploadURL, second.ExpiresAt)
+			}
+			if exp, _ := time.Parse(time.RFC3339Nano, second.ExpiresAt); !exp.After(clock()) {
+				t.Fatalf("the replay's expiresAt %s is not after the replay", second.ExpiresAt)
+			}
+		})
+	}
+}
+
 // api-http#4: list_attachments answers the fileName attach_file was given, pending and ready.
 func TestListAttachmentsAnswersTheFileNameOverTheEngines(t *testing.T) {
 	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {

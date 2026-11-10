@@ -19,6 +19,7 @@ type attachmentQueries interface {
 	SetAttachmentReady(ctx context.Context, arg sqlitedb.SetAttachmentReadyParams) (sqlitedb.Attachment, error)
 	ListAttachments(ctx context.Context, arg sqlitedb.ListAttachmentsParams) ([]sqlitedb.ListAttachmentsRow, error)
 	DeleteAttachmentsByTask(ctx context.Context, arg sqlitedb.DeleteAttachmentsByTaskParams) (int64, error)
+	DeleteStalePendingAttachments(ctx context.Context, arg sqlitedb.DeleteStalePendingAttachmentsParams) (int64, error)
 }
 
 var attachmentKinds = map[AttachmentKind]bool{AttachmentFile: true, AttachmentImage: true, AttachmentAudio: true, AttachmentVideo: true}
@@ -53,6 +54,14 @@ func (s *SQLite) DeleteAttachmentsByTask(ctx context.Context, projectID, taskID 
 
 func (s *Postgres) DeleteAttachmentsByTask(ctx context.Context, projectID, taskID string) (int64, error) {
 	return deleteAttachmentsByTask(ctx, s, projectID, taskID)
+}
+
+func (s *SQLite) DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteStalePendingAttachments(ctx, s, before, limit)
+}
+
+func (s *Postgres) DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error) {
+	return deleteStalePendingAttachments(ctx, s, before, limit)
 }
 
 func attachmentFrom(r sqlitedb.Attachment) Attachment {
@@ -149,6 +158,17 @@ func deleteAttachmentsByTask(ctx context.Context, e engine, projectID, taskID st
 	return n, nil
 }
 
+func deleteStalePendingAttachments(ctx context.Context, e engine, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	n, err := e.queries(true).DeleteStalePendingAttachments(ctx, sqlitedb.DeleteStalePendingAttachmentsParams{Before: before, PageLimit: int64(limit)})
+	if err != nil {
+		return 0, fmt.Errorf("store: delete stale pending attachments: %w", err)
+	}
+	return n, nil
+}
+
 // --- the Postgres queries in sqlitedb's types ---
 
 func (p pgQueries) InsertAttachment(ctx context.Context, arg sqlitedb.InsertAttachmentParams) (sqlitedb.Attachment, error) {
@@ -177,4 +197,8 @@ func (p pgQueries) ListAttachments(ctx context.Context, arg sqlitedb.ListAttachm
 
 func (p pgQueries) DeleteAttachmentsByTask(ctx context.Context, arg sqlitedb.DeleteAttachmentsByTaskParams) (int64, error) {
 	return p.q.DeleteAttachmentsByTask(ctx, pgdb.DeleteAttachmentsByTaskParams(arg))
+}
+
+func (p pgQueries) DeleteStalePendingAttachments(ctx context.Context, arg sqlitedb.DeleteStalePendingAttachmentsParams) (int64, error) {
+	return p.q.DeleteStalePendingAttachments(ctx, pgdb.DeleteStalePendingAttachmentsParams(arg))
 }

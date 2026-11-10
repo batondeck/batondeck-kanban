@@ -27,6 +27,27 @@ func (q *Queries) DeleteAttachmentsByTask(ctx context.Context, arg DeleteAttachm
 	return result.RowsAffected()
 }
 
+const deleteStalePendingAttachments = `-- name: DeleteStalePendingAttachments :execrows
+DELETE FROM attachments WHERE rowid IN (
+  SELECT a.rowid FROM attachments a WHERE a.status = 'pending' AND a.ts < CAST(?1 AS INTEGER)
+  ORDER BY a.ts, a.id LIMIT ?2)
+`
+
+type DeleteStalePendingAttachmentsParams struct {
+	Before    int64
+	PageLimit int64
+}
+
+// The retention sweep: the pending attachments created before the cutoff, oldest first, a page at a
+// time (an upload that never came, whose URL no call can sign again).
+func (q *Queries) DeleteStalePendingAttachments(ctx context.Context, arg DeleteStalePendingAttachmentsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteStalePendingAttachments, arg.Before, arg.PageLimit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getAttachment = `-- name: GetAttachment :one
 SELECT project_id, task_id, id, blob_sha256, mime_type, bytes, kind, status, created_by, ts, file_name
 FROM attachments WHERE project_id = ? AND task_id = ? AND id = ?

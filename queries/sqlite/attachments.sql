@@ -26,3 +26,9 @@ ORDER BY a.ts, a.id;
 -- name: DeleteAttachmentsByTask :execrows
 DELETE FROM attachments WHERE project_id = ? AND task_id = ?;
 
+-- The retention sweep: the pending attachments created before the cutoff, oldest first, a page at a
+-- time (an upload that never came, whose URL no call can sign again).
+-- name: DeleteStalePendingAttachments :execrows
+DELETE FROM attachments WHERE rowid IN (
+  SELECT a.rowid FROM attachments a WHERE a.status = 'pending' AND a.ts < CAST(sqlc.arg(before) AS INTEGER)
+  ORDER BY a.ts, a.id LIMIT sqlc.arg(page_limit));

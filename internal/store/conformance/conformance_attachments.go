@@ -90,6 +90,41 @@ func attachments(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// api-http#7: the retention sweep's delete takes the pending attachments created before its
+		// cutoff, oldest first and at most its limit, and never a ready one or a younger one.
+		t.Run("DeleteStalePendingTakesOnlyOldPendingRows", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			task := seedTasks(t, sd, p, b, "a")[0]
+			ready := create(t, s, p, task, "text/plain")
+			_, err := s.PutBlob(ctx, sha, 10)
+			noErr(t, err)
+			_, err = s.SetAttachmentReady(ctx, p, task, ready.ID, sha)
+			noErr(t, err)
+			older := create(t, s, p, task, "text/plain")
+			newer := create(t, s, p, task, "text/plain")
+			n, err := s.DeleteStalePendingAttachments(ctx, older.TS, 10)
+			noErr(t, err)
+			if n != 0 {
+				t.Fatalf("a cutoff at the older one's own time deleted %d, want 0", n)
+			}
+			n, err = s.DeleteStalePendingAttachments(ctx, time.Now().Add(time.Hour).UnixMilli(), 1)
+			noErr(t, err)
+			list, err := s.ListAttachments(ctx, p, task)
+			noErr(t, err)
+			if n != 1 || len(list) != 2 || list[0].ID != ready.ID || list[1].ID != newer.ID {
+				t.Fatalf("deleted %d, left %+v; want the older pending one gone, the ready one and the newer one kept", n, list)
+			}
+			n, err = s.DeleteStalePendingAttachments(ctx, time.Now().Add(time.Hour).UnixMilli(), 10)
+			noErr(t, err)
+			list, err = s.ListAttachments(ctx, p, task)
+			noErr(t, err)
+			if n != 1 || len(list) != 1 || list[0].ID != ready.ID {
+				t.Fatalf("deleted %d, left %+v; want only the ready one left", n, list)
+			}
+			_, err = s.DeleteStalePendingAttachments(ctx, 0, 0)
+			wantErr(t, err, domain.CodeValidation, "")
+		})
+
 		t.Run("ATaskIDIsScopedByItsProject", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			q, qb, err := sd.seedProject(ctx)

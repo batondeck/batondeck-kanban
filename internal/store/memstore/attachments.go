@@ -85,3 +85,23 @@ func (s *Store) DeleteAttachmentsByTask(ctx context.Context, projectID, taskID s
 		return n, nil
 	})
 }
+
+func (s *Store) DeleteStalePendingAttachments(ctx context.Context, before int64, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, domain.Validation("a delete needs a positive limit", map[string]any{"limit": limit})
+	}
+	return get(ctx, s, func(st *state) (int64, error) {
+		var stale []store.Attachment
+		for _, a := range st.attachments {
+			if a.Status == store.AttachmentPending && a.TS < before {
+				stale = append(stale, a)
+			}
+		}
+		slices.SortFunc(stale, func(a, b store.Attachment) int { return byTSAndID(a.TS, b.TS, a.ID, b.ID) })
+		stale = stale[:min(len(stale), limit)]
+		for _, a := range stale {
+			delete(st.attachments, [3]string{a.ProjectID, a.TaskID, a.ID})
+		}
+		return int64(len(stale)), nil
+	})
+}

@@ -97,7 +97,8 @@ func (c *Core) signedExpiry() time.Time {
 }
 
 // AttachFile is attach_file: a pending attachment row and an upload URL for it, signed for upload
-// until expiresAt. The task's version moves once; the event is attachment.created.
+// until expiresAt. The task's version moves once; the event is attachment.created. A replay of its
+// idempotency key answers the same attachment with a URL signed at the replay.
 func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachFileReq) (AttachFileResp, error) {
 	c := m.c
 	a, err := c.authorize(ctx, caller, req.ProjectID, "attach_file", domain.GrantSubject{}, true)
@@ -125,7 +126,7 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 	if c.media.Files == nil || c.media.Signer == nil {
 		return AttachFileResp{}, internalf("attach_file: no blob signing key (serve found no keyring)")
 	}
-	return mutate(ctx, c, caller, mutation{
+	resp, err := mutate(ctx, c, caller, mutation{
 		Tool: "attach_file", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
 		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
 	}, func(t *txn) (AttachFileResp, error) {
@@ -147,6 +148,16 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 			AttachmentID: att.ID, ExpiresAt: isoMs(exp.UnixMilli()), UploadURL: c.SignBlobURL(ctx, ref.String(), blob.Upload, exp),
 		}, nil
 	})
+	if err != nil {
+		return AttachFileResp{}, err
+	}
+	// A replay of the idempotency key answers the attachment the first call created, with its upload
+	// URL signed now: the stored one lapsed BlobURLTTL after that call, and the key lives a day, so
+	// a caller retrying a failed PUT under its key could otherwise only ever get a dead URL.
+	exp := c.signedExpiry()
+	ref := blob.Ref{ProjectID: req.ProjectID, TaskID: req.TaskID, AttachmentID: resp.AttachmentID}
+	resp.ExpiresAt, resp.UploadURL = isoMs(exp.UnixMilli()), c.SignBlobURL(ctx, ref.String(), blob.Upload, exp)
+	return resp, nil
 }
 
 // ListAttachments is list_attachments: the task's attachments, oldest first, each with the fileName
