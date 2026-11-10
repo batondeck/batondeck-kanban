@@ -685,11 +685,12 @@ export function IncidentPanel({ d }: P) {
               {brief.body}
             </ReactMarkdown>
           </div>
-        ) : (
+        ) : ctx ? (
+          // Only once the context has been read: a failed read is said in the Context panel.
           <span className="muted" style={{ fontSize: 12 }}>
             No telemetry snapshot on this ticket.
           </span>
-        )}
+        ) : null}
       </Stack>
     </Panel>
   );

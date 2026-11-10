@@ -11,8 +11,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
+import { Runs } from '../screens/Runs.js';
 import { AuthProvider } from '../auth.js';
-import { routeFetch } from './taskFixtures.js';
+import { routeFetch, task } from './taskFixtures.js';
 
 afterEach(() => {
   cleanup();
@@ -111,5 +112,53 @@ describe('ticket side reads that fail', () => {
     expect(await screen.findByText('No follow-ups yet.')).toBeInTheDocument();
     expect(await screen.findByText('No memory entries.')).toBeInTheDocument();
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
+  });
+});
+
+describe('what a failed read leaves out beside its alert', () => {
+  const incident = { json: { task: { ...task, customFields: { 'incident.fingerprint': 'fp-1', 'incident.source': 'alertmanager' } } } };
+
+  it('an incident ticket whose context read failed does not say it has no telemetry snapshot', async () => {
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': incident, '/tasks/T-1/context$': fail }));
+    renderDrawer();
+    await screen.findByText('fp-1');
+    await waitFor(() => expect(within(region(/^Context items$/)).getByRole('alert')).toBeInTheDocument());
+    expect(screen.queryByText('No telemetry snapshot on this ticket.')).toBeNull();
+  });
+
+  it('CONTROL: an incident ticket whose context was read and holds no snapshot says so', async () => {
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': incident }));
+    renderDrawer();
+    expect(await screen.findByText('No telemetry snapshot on this ticket.')).toBeInTheDocument();
+  });
+
+  const renderRuns = (racing: boolean) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <Runs projectId="p1" canRace task={{ ...task, racing }} />
+      </QueryClientProvider>,
+    );
+  };
+
+  it('a runs read that failed offers no race, as if the task had none', async () => {
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1/runs$': fail }));
+    renderRuns(false);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Couldn’t load the runs/));
+    expect(screen.queryByText('Race this task')).toBeNull();
+  });
+
+  it('a racing task whose runs read failed does not count 0 runs open', async () => {
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1/runs$': fail }));
+    renderRuns(true);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Couldn’t load the runs/));
+    expect(screen.getByText(/^Racing/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 runs open/)).toBeNull();
+  });
+
+  it('CONTROL: a runs read that answered none offers the race', async () => {
+    vi.stubGlobal('fetch', routeFetch());
+    renderRuns(false);
+    expect(await screen.findByText('Race this task')).toBeInTheDocument();
   });
 });
