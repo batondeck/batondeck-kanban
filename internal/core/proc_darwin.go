@@ -47,12 +47,14 @@ func ProcessParent(pid int) (ppid int, name string, err error) {
 const sZOMB = 5
 
 // kqueueWatch is one kqueue holding an EVFILT_PROC NOTE_EXIT filter per watched pid and an
-// EVFILT_USER filter that close triggers to end the loop.
+// EVFILT_USER filter that close triggers to end the loop. quit, closed by close, ends a send on
+// exited that nobody reads.
 type kqueueWatch struct {
 	kq     int
 	mu     sync.Mutex
 	pids   map[int]struct{}
 	closed bool
+	quit   chan struct{}
 	done   chan struct{}
 }
 
@@ -69,7 +71,7 @@ func newExitImpl(exited chan<- int) (exitImpl, error) {
 		unix.Close(kq)
 		return nil, fmt.Errorf("exit watch: kevent: %w", err)
 	}
-	w := &kqueueWatch{kq: kq, pids: map[int]struct{}{}, done: make(chan struct{})}
+	w := &kqueueWatch{kq: kq, pids: map[int]struct{}{}, quit: make(chan struct{}), done: make(chan struct{})}
 	go w.loop(exited)
 	return w, nil
 }
@@ -98,7 +100,11 @@ func (w *kqueueWatch) loop(exited chan<- int) {
 			delete(w.pids, pid)
 			w.mu.Unlock()
 			if watched {
-				exited <- pid
+				select {
+				case exited <- pid:
+				case <-w.quit:
+					return
+				}
 			}
 		}
 	}
@@ -139,6 +145,7 @@ func (w *kqueueWatch) close() error {
 	w.mu.Lock()
 	w.closed = true
 	w.mu.Unlock()
+	close(w.quit)
 	trig := []unix.Kevent_t{{Ident: wakeIdent, Filter: unix.EVFILT_USER, Fflags: unix.NOTE_TRIGGER}}
 	if _, err := unix.Kevent(w.kq, trig, nil, nil); err != nil {
 		return fmt.Errorf("exit watch: waking the loop: %w", err)

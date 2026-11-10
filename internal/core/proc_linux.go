@@ -74,13 +74,15 @@ func ProcessParent(pid int) (ppid int, name string, err error) {
 // pidfdWatch holds a pidfd per watched pid and polls them with an eventfd that add, remove and
 // close write to so the loop rebuilds its set. A removed pidfd is closed by the loop, after the
 // poll that may still hold it returns. Once closed, add and remove touch no descriptor: the
-// eventfd's number may already belong to another file.
+// eventfd's number may already belong to another file. quit, closed by close, ends a send on
+// exited that nobody reads.
 type pidfdWatch struct {
 	efd     int
 	mu      sync.Mutex
 	fds     map[int]int // pid → pidfd
 	retired []int
 	closed  bool
+	quit    chan struct{}
 	done    chan struct{}
 }
 
@@ -89,7 +91,7 @@ func newExitImpl(exited chan<- int) (exitImpl, error) {
 	if err != nil {
 		return nil, fmt.Errorf("exit watch: eventfd: %w", err)
 	}
-	w := &pidfdWatch{efd: efd, fds: map[int]int{}, done: make(chan struct{})}
+	w := &pidfdWatch{efd: efd, fds: map[int]int{}, quit: make(chan struct{}), done: make(chan struct{})}
 	go w.loop(exited)
 	return w, nil
 }
@@ -147,7 +149,10 @@ func (w *pidfdWatch) loop(exited chan<- int) {
 			}
 			w.mu.Unlock()
 			if watched {
-				exited <- pid
+				select {
+				case exited <- pid:
+				case <-w.quit: // the next round sees closed
+				}
 			}
 		}
 	}
@@ -192,6 +197,7 @@ func (w *pidfdWatch) close() error {
 	w.closed = true
 	w.kick()
 	w.mu.Unlock()
+	close(w.quit)
 	<-w.done
 	return unix.Close(w.efd)
 }
