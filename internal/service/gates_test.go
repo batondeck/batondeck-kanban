@@ -173,3 +173,41 @@ func TestNextTaskReapsNothing(t *testing.T) {
 		}
 	})
 }
+
+// A WIP limit on In progress full of tasks whose leases have expired stops no claim: claim_next and
+// claim_task reap the board when the limit refuses them and try once more, so the crashed agents'
+// slots come back. Before, WIP_EXCEEDED was returned before the lazy reap could run, for ever.
+func TestAnExpiredLeaseDoesNotHoldAWIPSlot(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		ip := e.column(t, domain.InProgress)
+		if _, err := e.c.Boards().UpdateColumn(e.ctx, e.alice, UpdateColumnReq{ProjectID: e.project, BoardID: e.board.ID, ColumnID: ip, WIPLimit: Value(int64(1))}); err != nil {
+			t.Fatal(err)
+		}
+		e.board, _, _ = e.st.GetBoard(e.ctx, e.project, e.board.ID)
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		lc := e.c.Lifecycle()
+		a, b, c := e.task(t, domain.Todo), e.task(t, domain.Todo), e.task(t, domain.Todo)
+		e.claim(t, e.alice, a.ID, 5)
+		if _, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID}); err == nil {
+			t.Fatal("control: claim_next under a live lease in the one WIP slot succeeded")
+		}
+		e.clock.advance(10 * time.Minute)
+		r, err := lc.ClaimNext(e.ctx, bob, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, LeaseSeconds: 5})
+		t.Logf("WIP 1, %s's lease expired: claim_next -> %v (err %v); %s now %s", a.ID, r.Task, err, a.ID, e.get(t, a.ID).Status)
+		if err != nil || r.Task == nil {
+			t.Fatalf("claim_next = %+v, %v; want a claim once the expired lease is reaped", r.Task, err)
+		}
+		if got := e.get(t, a.ID); got.Status != domain.Todo || got.ClaimAttempts != 1 {
+			t.Fatalf("%s %s attempts %d, want reaped to TODO with one attempt", a.ID, got.Status, got.ClaimAttempts)
+		}
+		// claim_task: bob's claim lapses in turn and alice names the remaining task.
+		e.clock.advance(10 * time.Minute)
+		other := b.ID
+		if r.Task.ID == b.ID {
+			other = c.ID
+		}
+		if _, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: other}); err != nil {
+			t.Fatalf("claim_task %s with the one WIP slot held by an expired lease: %v", other, err)
+		}
+	})
+}
