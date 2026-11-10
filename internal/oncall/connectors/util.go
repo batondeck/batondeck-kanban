@@ -132,7 +132,8 @@ func cut(s string, n int) string {
 
 // capMap keeps at most MapEntriesMax members, in key order so the cut is the same every time, each
 // key and value truncated (and without NULs); an empty key is dropped (it names nothing a reader
-// could show).
+// could show), and of keys that become one the first in key order is kept (the one sent without a
+// NUL, when there is one).
 func capMap(m map[string]string) map[string]string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -146,7 +147,10 @@ func capMap(m map[string]string) map[string]string {
 		if len(out) >= MapEntriesMax {
 			break
 		}
-		out[cut(k, MapKeyMax)] = cut(m[k], MapValueMax)
+		ck := cut(k, MapKeyMax)
+		if _, dup := out[ck]; !dup {
+			out[ck] = cut(m[k], MapValueMax)
+		}
 	}
 	return out
 }
@@ -163,8 +167,8 @@ func Cap(e oncall.Event) oncall.Event {
 	e.Labels, e.Annotations = capMap(e.Labels), capMap(e.Annotations)
 	links := []string{}
 	for _, l := range e.Links {
-		if l != "" && len(links) < LinksMax {
-			links = append(links, cut(l, LinkMax))
+		if l = cut(l, LinkMax); l != "" && len(links) < LinksMax {
+			links = append(links, l)
 		}
 	}
 	e.Links = links
