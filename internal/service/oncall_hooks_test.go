@@ -200,13 +200,16 @@ func TestHookRateLimit(t *testing.T) {
 	}
 }
 
-// A delivery whose id was recorded answers that outcome and files no second ticket.
+// A delivery whose id was recorded answers that outcome and files no second ticket. It writes
+// nothing either: no change row (which would drop the project's board snapshots and ring every
+// master session for no change), no event, no audit row.
 func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 	f, _, root := oncallFixture(t)
 	created := f.integration(t, root, CreateIntegrationReq{Lifecycle: "per_event"})
 	iid := created.Integration.ID
 	body := genericBody("fp", "firing", "t", "deliveryId", "src-1")
 	first := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
+	before := f.count(t)
 	again := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), body))
 	if first.Refusal != "" || again.Refusal != "" || again.Results[0].DeliveryID != "src-1#fp" || !again.Results[0].Replayed ||
 		*again.Results[0].TaskID != *first.Results[0].TaskID {
@@ -215,10 +218,40 @@ func TestHookRepeatedDeliveryWritesNoSecondTask(t *testing.T) {
 	if n := f.taskCount(t); n != 1 {
 		t.Fatalf("%d tickets, want 1", n)
 	}
+	if after := f.count(t); after != before {
+		t.Fatalf("a replayed delivery wrote rows (events, audit, changes): %+v -> %+v", before, after)
+	}
 	// control: a new delivery id under per_event files a second ticket.
 	f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody("fp", "firing", "t", "deliveryId", "src-2")))
 	if n := f.taskCount(t); n != 2 {
 		t.Fatalf("%d tickets after a new delivery id, want 2", n)
+	}
+}
+
+// The race half of a replay: an ingest that finds its delivery id recorded only inside its
+// transaction (another took the project lock first) marks the mutation NoChange, and mutate writes
+// nothing for it; NoChange beside a recorded write is INTERNAL.
+func TestMutateNoChangeWritesNothing(t *testing.T) {
+	f := newFixture(t, Options{})
+	before := f.count(t)
+	got, err := mutate(f.ctx, f.c, f.alice, mutation{Tool: "ingest", ProjectID: f.project.ID, LockProject: true}, func(x *txn) (int, error) {
+		x.NoChange()
+		return 7, nil
+	})
+	if err != nil || got != 7 {
+		t.Fatalf("a NoChange mutation = %d, %v", got, err)
+	}
+	if after := f.count(t); after != before {
+		t.Fatalf("a NoChange mutation wrote rows: %+v -> %+v", before, after)
+	}
+	_, err = mutate(f.ctx, f.c, f.alice, mutation{Tool: "ingest", ProjectID: f.project.ID}, func(x *txn) (int, error) {
+		x.BoardEvent(store.EventInput{BoardID: f.board.ID, Type: domain.EventIncidentDelivery, Data: json.RawMessage(`{}`)})
+		x.NoChange()
+		return 0, nil
+	})
+	wantCode(t, err, domain.CodeInternal)
+	if after := f.count(t); after != before {
+		t.Fatalf("a refused NoChange mutation wrote rows: %+v -> %+v", before, after)
 	}
 }
 

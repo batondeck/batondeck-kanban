@@ -112,6 +112,8 @@ type txn struct {
 	// boards is every (project, board) the mutation's change rows name ("" board: the project),
 	// and its task's board: what mutate drops from the snapshot cache once the transaction commits.
 	boards [][2]string
+	// unchanged is NoChange: fn wrote nothing, so finish writes nothing.
+	unchanged bool
 }
 
 type pendingEvent struct {
@@ -126,6 +128,12 @@ func (t *txn) Wrote(task store.Task) { t.after = &task }
 
 // Deleted records that fn deleted the task: there is nothing to bump.
 func (t *txn) Deleted() { t.deleted = true }
+
+// NoChange records that fn found nothing to do and wrote nothing (an ingest whose delivery id was
+// recorded while it waited for the project lock): finish writes no bump, event, audit or change row,
+// so no board snapshot is dropped and no device is rung for a change that did not happen. fn having
+// recorded a write as well is a bug, INTERNAL.
+func (t *txn) NoChange() { t.unchanged = true }
 
 // Bump bumps the loaded task's version now and returns it, for an fn whose result carries the task
 // after a write that does not bump (context items, a heartbeat). It counts as fn's one bump.
@@ -299,8 +307,15 @@ func unversionedRetry(m mutation, run func() error) error {
 	return err
 }
 
-// finish writes what fn did not: the bump, the events, the audit row and the change-log rows.
+// finish writes what fn did not: the bump, the events, the audit row and the change-log rows;
+// nothing at all after NoChange.
 func (t *txn) finish(c *Core, m mutation) error {
+	if t.unchanged {
+		if t.after != nil || t.deleted || len(t.events) > 0 || len(t.bells) > 0 || len(t.notified) > 0 {
+			return internalf("mutate %s: fn recorded a write and NoChange", m.Tool)
+		}
+		return nil
+	}
 	if t.Task != nil && !t.deleted && !(m.KeepVersion && t.after == nil) {
 		switch {
 		case t.after == nil || t.after.Version == t.Task.Version:

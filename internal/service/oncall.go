@@ -820,12 +820,13 @@ func incidentTitle(ev oncall.Event, m IntegrationMapping) string {
 
 // ingest files one verified, normalized event against integration under deliveryID, in one
 // transaction under the project lock (two firings of one fingerprint must not both find no open
-// ticket and both file one): a delivery id already recorded answers its recorded outcome and changes
-// nothing; otherwise the fingerprint's alert state names the open ticket (one not DONE), oncall.Decide
-// picks the action (incident.ts:167-182), the action's writes land, and the delivery row and the
-// incident.delivery event record it. Before the transaction the delivery is charged to the
-// integration's rate budget, which POST /hooks, send_test_event and replay_delivery share: over it
-// is RATE_LIMITED and nothing is written. A created incident lands TODO on the integration's column
+// ticket and both file one): a delivery id already recorded answers its recorded outcome and writes
+// nothing, not even a change row (it is looked up before the charge and the transaction, and again
+// inside it for one recorded while this one waited for the lock); otherwise the fingerprint's alert
+// state names the open ticket (one not DONE), oncall.Decide picks the action (incident.ts:167-182),
+// the action's writes land, and the delivery row and the incident.delivery event record it. Before
+// the transaction a new delivery is charged to the integration's rate budget, which POST /hooks,
+// send_test_event and replay_delivery share: over it is RATE_LIMITED and nothing is written. A created incident lands TODO on the integration's column
 // (or the board's first TODO column), labelled incident (and test for a test event), and rings its
 // routed assignee assigned, else the project broadcast; an append, annotation or close rings nobody.
 // A close deletes an untouched ticket through delete_task's cascade (its delivery rows keep the
@@ -842,6 +843,22 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		if err := json.Unmarshal(f.raw, f.dst); err != nil {
 			return Ingested{}, c.mapErr(tool, fmt.Errorf("integration %s %s: %w", integration.ID, f.name, err))
 		}
+	}
+	recorded := func(s store.Store) (*Ingested, error) {
+		prior, err := s.GetDelivery(ctx, integration.ProjectID, integration.ID, deliveryID)
+		if isNotFound(err) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &Ingested{Result: prior.Result, TaskID: prior.TaskID, Replayed: true, Doorbell: "none"}, nil
+	}
+	if prior, err := recorded(c.store); err != nil || prior != nil {
+		if err != nil {
+			return Ingested{}, c.mapErr(tool, err)
+		}
+		return *prior, nil
 	}
 	if !c.limiter.Check(integration.ID, int(limits.RatePerMin), c.now(), deliveryID) {
 		c.log.Printf("ingest: integration %s over its rate limit (%d a minute): delivery %s refused", integration.ID, int(limits.RatePerMin), deliveryID)
@@ -866,10 +883,13 @@ func (c *Core) ingest(ctx context.Context, caller domain.Caller, tool string, a 
 		ProjectID: integration.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (Ingested, error) {
 		blobs = nil
-		if prior, err := t.Tx.GetDelivery(ctx, integration.ProjectID, integration.ID, deliveryID); err == nil {
-			return Ingested{Result: prior.Result, TaskID: prior.TaskID, Replayed: true, Doorbell: "none"}, nil
-		} else if !isNotFound(err) {
-			return Ingested{}, err
+		if prior, err := recorded(t.Tx); err != nil || prior != nil {
+			if err != nil {
+				return Ingested{}, err
+			}
+			// Recorded while this one waited for the lock: still a replay, and still no change.
+			t.NoChange()
+			return *prior, nil
 		}
 		ts := t.Now.UnixMilli()
 		// The lifecycle table consults correlation only for a correlated, non-test event.
