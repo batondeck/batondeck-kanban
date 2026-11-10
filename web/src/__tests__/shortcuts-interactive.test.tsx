@@ -107,6 +107,11 @@ describe('on the board', () => {
         const url = String(input);
         const routes: Array<[RegExp, unknown]> = [
           [/\/boards\/b1\/tasks\?/, { tasks: [mk(1), mk(2)] }],
+          // What the drawer reads once a card opens, so the open drawer renders its task.
+          [/\/tasks\/T-1$/, { task: mk(1) }],
+          [/\/tasks\/T-2$/, { task: mk(2) }],
+          [/\/projects\/p1$/, { project: { id: 'p1', name: 'P1', members: {}, settings: {} } }],
+          [/\/tasks\/T-\d\/context$/, { summary: '', fields: {}, items: [], memory: [], deps: { blockedBy: [], blocks: [], edges: [] } }],
           [/\/boards\/b1\/feed$/, { events: [] }],
           [/\/boards\/b1$/, { board, taskCounts: { c1: 2 } }],
           [/\/boards$/, { boards: [board] }],
@@ -143,6 +148,29 @@ describe('on the board', () => {
     expect(card2.getAttribute('role')).toBe('button');
     card2.focus();
     fireEvent.keyDown(card2, { key: 'Enter' });
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('?task=T-2'));
+  });
+
+  it('with focus left on a card (after a mouse drag), j/k moves focus with the selection, so Enter opens the selected card', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ShortcutProvider>
+          <MemoryRouter initialEntries={['/projects/p1/boards/b1']}>
+            <Routes>
+              <Route path="/projects/:projectId/boards/:boardId" element={<><Board /><Where /></>} />
+            </Routes>
+          </MemoryRouter>
+        </ShortcutProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(document.querySelectorAll('.card[data-task-id]').length).toBe(2));
+    // A drag of T-1 ends with focus on its wrapper (dnd-kit's role=button).
+    const card1 = document.querySelector('.card[data-task-id="T-1"]')!.parentElement as HTMLElement;
+    card1.focus();
+    act(() => void fireEvent.keyDown(card1, { key: 'j' })); // selects T-1
+    act(() => void fireEvent.keyDown(document.activeElement!, { key: 'j' })); // selects T-2
+    await waitFor(() => expect(document.querySelector('.card.selected')?.getAttribute('data-task-id')).toBe('T-2'));
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
     await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('?task=T-2'));
   });
 });

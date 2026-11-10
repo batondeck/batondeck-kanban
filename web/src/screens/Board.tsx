@@ -369,6 +369,7 @@ function DraggableCard({ canMove, ...props }: Parameters<typeof TaskCard>[0] & {
       {...attributes}
       {...listeners}
       onKeyDown={onKeyDown}
+      data-card-for={props.t.id}
       style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.35 : 1 }}
       // A create's placeholder leaves at once: it is replaced by the server's card, which enters as it
       // goes, and a fade would show the task twice for its length.
@@ -1107,6 +1108,12 @@ export function Board() {
     const next = visibleOrder[Math.min(visibleOrder.length - 1, Math.max(0, idx + delta))] ?? visibleOrder[0]!;
     setSelectedId(next);
     document.querySelector(`[data-task-id="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+    // Focus left on a card (a mouse drag ends with it on the dragged card's wrapper) follows the
+    // selection: a focused card takes Enter for itself, so it would open that card, not this one.
+    const focusedCard = document.activeElement?.closest('[data-card-for]');
+    if (focusedCard && focusedCard.getAttribute('data-card-for') !== next) {
+      document.querySelector<HTMLElement>(`[data-card-for="${next}"]`)?.focus({ preventScroll: true });
+    }
   };
 
   // board-scope keys (inert while the drawer is open for j/k — the drawer registers its own)
