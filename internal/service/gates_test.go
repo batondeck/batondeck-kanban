@@ -1,12 +1,14 @@
 package service
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // A dependency on a blocker that is already DONE is recorded (get_task_context's upstream reads the
@@ -208,6 +210,42 @@ func TestAnExpiredLeaseDoesNotHoldAWIPSlot(t *testing.T) {
 		}
 		if _, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: other}); err != nil {
 			t.Fatalf("claim_task %s with the one WIP slot held by an expired lease: %v", other, err)
+		}
+	})
+}
+
+// A dependent that was already TODO when its last blocker cleared becomes claimable: it rings as one
+// that became TODO does, broadcast when unassigned and assigned to its assignee, rather than only a
+// changed row that rings masters alone. (complete_task to DONE; every unblock goes through
+// unblockDependent.)
+func TestATodoDependentThatBecomesClaimableRingsItsWorker(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		bob := e.member(t, e.project, "bob", domain.RoleWorker)
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		c, err := e.st.CreateTask(e.ctx, store.CreateTaskInput{ProjectID: e.project, BoardID: e.board.ID, ColumnID: e.column(t, domain.Todo), Title: "c",
+			Status: domain.Todo, Assignee: &bob.Identity, OrderKey: "a1", CreatedBy: "alice", CreatedAt: time.Now().UnixMilli()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.dependOn(t, a.ID, b.ID)
+		e.dependOn(t, a.ID, c.ID)
+		from := e.changeCount(t)
+		e.complete(t, a.ID)
+		ch, err := e.st.ReadChanges(e.ctx, 0, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rung := map[string]string{}
+		for _, row := range ch[from:] {
+			var p changePayload
+			_ = json.Unmarshal(row.Payload, &p)
+			if p.TaskID == b.ID || p.TaskID == c.ID {
+				rung[p.TaskID] = p.Kind + "@" + row.Scope
+			}
+		}
+		t.Logf("complete_task %s: dependents rung %v", a.ID, rung)
+		if rung[b.ID] != DoorbellBroadcast+"@"+BroadcastScope(e.project) || rung[c.ID] != DoorbellAssigned+"@bob" {
+			t.Fatalf("rows %v, want %s broadcast and %s assigned to bob", rung, b.ID, c.ID)
 		}
 	})
 }

@@ -179,7 +179,8 @@ func (t *txn) bumpOther(taskID string) error {
 // blockedBy when dep's cache still names clearedID (Dependencies.SetCaches), then on d.AutoReady
 // moves dep to TODO in its board's TODO column (the column it is in when the board has none),
 // else bumps it; appends task.dependency_cleared {clearedBy, autoReady} on dep; and records the
-// task and its doorbell (RingFor, unblocked: an assignee is rung assigned, no assignee broadcast).
+// task and its doorbell (RingFor, unblocked: an assignee is rung assigned, no assignee broadcast),
+// also for a dependent that was already TODO and is claimable now.
 // It returns dep after. A caller holding the project lock (mutation.LockProject) took it first.
 func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.UnblockDecision) (store.Task, error) {
 	if !d.Cleared {
@@ -215,6 +216,16 @@ func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.Unbloc
 	}
 	t.Event(store.EventInput{TaskID: dep.ID, BoardID: dep.BoardID, Type: domain.EventTaskDependencyCleared, Data: data})
 	bells := doorbellsFor(&dep, after, true)
+	if len(bells) == 0 && !domain.IsClaimable(claimView(dep), t.Now) && domain.IsClaimable(claimView(after), t.Now) {
+		// A dependent already TODO (add_dependency never moves one) that this clearing made
+		// claimable is new work as much as one that became TODO: its assignee is rung assigned, an
+		// unassigned one broadcast.
+		if after.Assignee != nil && *after.Assignee != "" {
+			bells = []Doorbell{{Kind: DoorbellAssigned, Agent: *after.Assignee, TaskID: after.ID, BoardID: after.BoardID}}
+		} else {
+			bells = []Doorbell{{Kind: DoorbellBroadcast, TaskID: after.ID, BoardID: after.BoardID}}
+		}
+	}
 	if len(bells) == 0 {
 		bells = []Doorbell{{Kind: ChangeKindChanged, TaskID: after.ID, BoardID: after.BoardID}}
 	}
