@@ -202,7 +202,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_task", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (CreateTaskResp, error) {
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, req.BoardID)
 		if err != nil {

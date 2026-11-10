@@ -316,7 +316,7 @@ func (s oncallSvc) CreateIntegration(ctx context.Context, caller domain.Caller, 
 	var shown string
 	out, err := mutate(ctx, s.c, caller, mutation{
 		Tool: "create_integration", Args: map[string]any{"projectId": req.ProjectID, "name": req.Name, "source": string(req.Source), "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (Integration, error) {
 		if err := checkTarget(ctx, t.Tx, req.ProjectID, req.BoardID, column); err != nil {
 			return Integration{}, err

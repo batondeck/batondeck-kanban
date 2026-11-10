@@ -274,7 +274,7 @@ func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req O
 	// of a call that succeeded presents the lease the fan-out dropped (conductor's note).
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "orchestrate_subtasks", Args: map[string]any{"projectId": req.ProjectID, "parentTaskId": req.ParentTaskID},
-		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
+		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, LockProject: true,
 	}, func(t *txn) (OrchestrateSubtasksResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()

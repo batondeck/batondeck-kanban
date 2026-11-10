@@ -249,3 +249,38 @@ func TestATodoDependentThatBecomesClaimableRingsItsWorker(t *testing.T) {
 		}
 	})
 }
+
+// An idempotency key is bound to the call's arguments: the same key on another task is another
+// call, not a replay of the first one's answer. Before, complete_task(T-2, key "done") within the
+// window answered T-1's DONE body and left T-2 IN_PROGRESS with its deliverable dropped. The same
+// key with the same arguments still replays.
+func TestAnIdempotencyKeyReusedOnAnotherTaskIsAnotherCall(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		e.settings(t, map[string]any{"reviewEnabled": false})
+		lc := e.c.Lifecycle()
+		a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		la, lb := e.claim(t, e.alice, a.ID, 0), e.claim(t, e.alice, b.ID, 0)
+		if _, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: a.ID, LeaseID: la.LeaseID, IdempotencyKey: "done"}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := lc.Complete(e.ctx, e.alice, CompleteTaskReq{ProjectID: e.project, TaskID: b.ID, LeaseID: lb.LeaseID, Deliverable: "b's", IdempotencyKey: "done"})
+		got := e.get(t, b.ID)
+		t.Logf("complete_task %s then %s under one key: answered %s %s (err %v); %s in the store %s", a.ID, b.ID, r.Task.ID, r.Task.Status, err, b.ID, got.Status)
+		if err != nil || r.Task.ID != b.ID || got.Status != domain.Done || got.Deliverable == nil || *got.Deliverable != "b's" {
+			t.Fatalf("the second complete_task answered %s (err %v) and left %s %s, want %s completed", r.Task.ID, err, b.ID, got.Status, b.ID)
+		}
+		c, d := e.task(t, domain.Todo), e.task(t, domain.Todo)
+		first, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: c.ID, IdempotencyKey: "claim"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		other, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: d.ID, IdempotencyKey: "claim"})
+		if err != nil || other.Task.ID != d.ID || e.get(t, d.ID).Status != domain.InProgress {
+			t.Fatalf("claim_task %s under %s's key answered %s (err %v), want %s claimed", d.ID, c.ID, other.Task.ID, err, d.ID)
+		}
+		again, err := lc.Claim(e.ctx, e.alice, ClaimTaskReq{ProjectID: e.project, TaskID: c.ID, IdempotencyKey: "claim"})
+		if err != nil || again.LeaseID != first.LeaseID {
+			t.Fatalf("the same claim_task again answered lease %s (err %v), want the replay of %s", again.LeaseID, err, first.LeaseID)
+		}
+	})
+}

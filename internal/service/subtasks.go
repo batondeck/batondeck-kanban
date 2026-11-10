@@ -48,7 +48,7 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 	a.pending = false
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_subtask", Args: map[string]any{"projectId": req.ProjectID, "parentTaskId": req.ParentTaskID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (AddSubtaskResp, error) {
 		parent, err := t.Tx.GetTask(ctx, req.ProjectID, req.ParentTaskID)
 		if err != nil {

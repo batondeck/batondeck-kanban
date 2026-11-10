@@ -82,7 +82,7 @@ func (s contextSvc) AddItem(ctx context.Context, caller domain.Caller, req AddCo
 	// TODO(spec): conductor's enforceTokenBudget warnings (the per-task chars budget) are not ported.
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_context_item", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (AddContextItemResp, error) {
 		item, err := t.Tx.AddContextItem(ctx, store.AddContextItemInput{ProjectID: req.ProjectID, TaskID: req.TaskID, Kind: store.ContextKind(req.Kind), Body: req.Body, Author: caller.Identity})
 		if err != nil {

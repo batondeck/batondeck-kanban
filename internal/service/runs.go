@@ -180,7 +180,7 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 	version := req.Version
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "start_runs", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), Access: a,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, Version: &version, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), Request: req, Access: a,
 	}, func(t *txn) (StartRunsResp, error) {
 		cur := *t.Task
 		if cur.Racing {
@@ -278,7 +278,7 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "open_run", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID),
+		ProjectID: req.ProjectID, IdempotencyKey: raceKey(req.IdempotencyKey, req.TaskID), Request: req,
 	}, func(t *txn) (OpenRunResp, error) {
 		parent, err := t.Tx.GetTask(ctx, req.ProjectID, req.TaskID)
 		if err != nil {

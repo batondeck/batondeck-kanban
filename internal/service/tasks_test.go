@@ -364,14 +364,17 @@ func cmpOr(a, b string) string {
 func TestCreateTask(t *testing.T) {
 	onEngines(t, func(t *testing.T, e *env) {
 		tk := e.c.Tasks()
-		a, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "first", Labels: []string{"l"}, CustomFields: map[string]FieldValue{"n": 1.0, "s": "v", "b": true}, IdempotencyKey: "k"})
+		first := CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "first", Labels: []string{"l"}, CustomFields: map[string]FieldValue{"n": 1.0, "s": "v", "b": true}, IdempotencyKey: "k"}
+		a, err := tk.Create(e.ctx, e.alice, first)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if a.Task.Status != domain.Todo || a.Task.ColumnID != e.column(t, domain.Todo) || a.Task.Priority != domain.PriorityNormal || a.Task.CustomFields["n"] != 1.0 {
 			t.Fatalf("create landed %+v, want TODO in the To do column, normal, its fields", a.Task)
 		}
-		again, err := tk.Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "first", IdempotencyKey: "k"})
+		// The same call again replays (a key is bound to the call's arguments: other arguments under
+		// the same key are another call).
+		again, err := tk.Create(e.ctx, e.alice, first)
 		if err != nil || again.Task.ID != a.Task.ID {
 			t.Fatalf("replay %v %s, want %s", err, again.Task.ID, a.Task.ID)
 		}

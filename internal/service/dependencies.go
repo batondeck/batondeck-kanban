@@ -41,7 +41,7 @@ func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_dependency", Args: map[string]any{"projectId": req.ProjectID, "fromTaskId": req.FromTaskID, "toTaskId": req.ToTaskID},
-		ProjectID: req.ProjectID, TaskID: req.ToTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
+		ProjectID: req.ProjectID, TaskID: req.ToTaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, LockProject: true,
 	}, func(t *txn) (AddDependencyResp, error) {
 		// The blocker as it is before the edge: whether its blocks cache gains the dependent (a new
 		// edge) and whether the dependent's blockedBy gains it (an open blocker not gating yet, which

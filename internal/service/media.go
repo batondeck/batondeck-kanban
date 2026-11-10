@@ -122,7 +122,7 @@ func (m media) AttachFile(ctx context.Context, caller domain.Caller, req AttachF
 	}
 	return mutate(ctx, c, caller, mutation{
 		Tool: "attach_file", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (AttachFileResp, error) {
 		att, err := t.Tx.CreateAttachment(ctx, store.CreateAttachmentInput{
 			ProjectID: req.ProjectID, TaskID: req.TaskID, MimeType: req.MimeType, Bytes: req.Bytes,

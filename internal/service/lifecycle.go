@@ -342,7 +342,7 @@ func isCode(err error, code domain.Code) bool {
 func (l lifecycle) claimOnce(ctx context.Context, caller domain.Caller, a access, req ClaimTaskReq, leaseID string, secs int64, boardID *string) (ClaimTaskResp, error) {
 	return mutate(ctx, l.c, caller, mutation{
 		Tool: "claim_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, KeepVersion: true,
 	}, func(t *txn) (ClaimTaskResp, error) {
 		cur := *t.Task
 		*boardID = cur.BoardID
@@ -496,7 +496,7 @@ func (l lifecycle) claimNext(ctx context.Context, caller domain.Caller, a access
 	leaseID := newLeaseID()
 	resp, err := mutate(ctx, l.c, caller, mutation{
 		Tool: "claim_next", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (ClaimNextResp, error) {
 		if err := t.checkWIP(board, domain.Todo); err != nil {
 			return ClaimNextResp{}, err
@@ -792,7 +792,7 @@ func (l lifecycle) Release(ctx context.Context, caller domain.Caller, req Releas
 	return retryStale(func() (ReleaseTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "release_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 		}, func(t *txn) (ReleaseTaskResp, error) {
 			cur := *t.Task
 			if err := leaseHeld(cur, req.LeaseID, caller, t.Now.UnixMilli()); err != nil {
@@ -1049,7 +1049,7 @@ func (l lifecycle) Complete(ctx context.Context, caller domain.Caller, req Compl
 	return retryStale(func() (CompleteTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "complete_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 			LockProject: target == domain.Done,
 		}, func(t *txn) (CompleteTaskResp, error) {
 			cur := *t.Task
@@ -1271,7 +1271,7 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 	return retryStale(func() (BlockTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "block_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 			LockProject: len(blockers) > 0,
 		}, func(t *txn) (BlockTaskResp, error) {
 			cur := *t.Task
@@ -1355,7 +1355,7 @@ func (l lifecycle) Fail(ctx context.Context, caller domain.Caller, req FailTaskR
 	return retryStale(func() (FailTaskResp, error) {
 		return mutate(ctx, l.c, caller, mutation{
 			Tool: "fail_task", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a,
+			ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 		}, func(t *txn) (FailTaskResp, error) {
 			cur := *t.Task
 			if err := leaseHeld(cur, req.LeaseID, caller, t.Now.UnixMilli()); err != nil {
