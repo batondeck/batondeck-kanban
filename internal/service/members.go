@@ -10,7 +10,10 @@ import (
 )
 
 // AddMember is add_member: add or change a member's role. Demoting the project's last admin is
-// VALIDATION (the store leaves that policy to its caller). When the identity is an account, a row
+// VALIDATION (the store leaves that policy to its caller); the guard reads the member list and
+// writes one row, so add_member and remove_member hold the project lock (mutation.LockProject):
+// under Postgres READ COMMITTED two admins demoting or removing each other at once would each count
+// two admins and leave none. When the identity is an account, a row
 // keyed by its login (added by that login before the account existed, and kept as given) is folded
 // into the account's row in the same mutation: the row goes, and its grant follows when the account
 // was no member. After the commit the identity's cached access is dropped, so a new role or
@@ -29,7 +32,7 @@ func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMe
 	}
 	resp, err := mutate(ctx, p.c, caller, mutation{
 		Tool: "add_member", Args: map[string]any{"projectId": req.ProjectID, "identityId": id, "role": string(req.Role)},
-		ProjectID: req.ProjectID, Access: a,
+		ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (AddMemberResp, error) {
 		members, err := t.Tx.ListMembers(ctx, req.ProjectID)
 		if err != nil {
@@ -100,7 +103,7 @@ func (p projects) RemoveMember(ctx context.Context, caller domain.Caller, req Re
 	}
 	resp, err := mutate(ctx, p.c, caller, mutation{
 		Tool: "remove_member", Args: map[string]any{"projectId": req.ProjectID, "identityId": id},
-		ProjectID: req.ProjectID, Access: a,
+		ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (RemoveMemberResp, error) {
 		members, err := t.Tx.ListMembers(ctx, req.ProjectID)
 		if err != nil {
