@@ -52,7 +52,7 @@ func TestMeAgentsAuditRoutesOnTheStack(t *testing.T) {
 			}
 		}
 		minted := decode(h.do("POST", "/api/me/cli-tokens", `{"label":"ci","ttlSeconds":3600}`, nil))
-		if minted["shownOnce"] != true || minted["lastUsedAt"] != nil || !strings.HasPrefix(str(minted["token"]), "bd_"+str(minted["id"])+"_") {
+		if _, lastUse := minted["lastUsedAt"]; minted["shownOnce"] != true || lastUse || !strings.HasPrefix(str(minted["token"]), "bd_"+str(minted["id"])+"_") {
 			t.Fatalf("mint: %v", minted)
 		}
 		if code, body := h.do("POST", "/api/me/cli-tokens/"+str(minted["id"])+"/revoke", `{}`, nil); code != http.StatusOK || !strings.Contains(body, `"status":"revoked"`) {

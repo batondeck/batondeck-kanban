@@ -458,7 +458,9 @@ function CliTokens() {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ whiteSpace: 'nowrap' }}>
               <thead>
-                <tr><th>Label</th><th>Status</th><th>Expires</th><th>Last used</th><th /></tr>
+                {/* No "Last used" column: the server records no token use (the stamp was
+                    dropped), and "never" beside a token in constant use misleads. */}
+                <tr><th>Label</th><th>Status</th><th>Expires</th><th /></tr>
               </thead>
               <tbody>
                 {tokens.map((t) => (
@@ -475,7 +477,6 @@ function CliTokens() {
                         how they drift. */}
                     <td>{t.status}</td>
                     <td>{new Date(t.expiresAt).toLocaleString()}</td>
-                    <td>{t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : 'never'}</td>
                     <td>
                       {t.status === 'live' && (
                         <button

@@ -53,7 +53,7 @@ async function mount(path: string, admin: boolean, routes: Record<string, (init?
 
 describe('Settings: CLI tokens and your MCP sessions', () => {
   it('counts the live token and the logged session, shows a minted token once, and calls no marketplace route', async () => {
-    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live' }];
+    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live' }];
     await mount('/settings', false, {
       'GET /api/me/cli-tokens': () => ({ tokens }),
       'POST /api/me/cli-tokens': () => ({ ...tokens[0], id: 'fedcba9876543210', label: 'laptop', token: MINTED, shownOnce: true }),
@@ -71,12 +71,21 @@ describe('Settings: CLI tokens and your MCP sessions', () => {
     expect(fetched.filter((f) => f.includes('marketplace'))).toEqual([]);
     expect(fetched).toContain('POST /api/me/cli-tokens');
   });
+
+  it('claims no last use for a token: the server records none, so there is no Last used column', async () => {
+    const tokens = [{ id: '0123456789abcdef', label: 'cli', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live' }];
+    await mount('/settings', false, { 'GET /api/me/cli-tokens': () => ({ tokens }) });
+    const row = (await screen.findByText('cli', { selector: 'td' })).closest('tr')!;
+    const table = row.closest('table')!;
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Label', 'Status', 'Expires', '']);
+    expect(within(row).queryByText('never')).toBeNull();
+  });
 });
 
 describe('Settings: the minted plaintext leaves memory', () => {
   it('is in no mutation once Done is pressed, nor after the screen unmounts', async () => {
     const qc = await mount('/settings', false, {
-      'POST /api/me/cli-tokens': () => ({ id: 'fedcba9876543210', label: 'laptop', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', lastUsedAt: null, revokedAt: null, status: 'live', token: MINTED, shownOnce: true }),
+      'POST /api/me/cli-tokens': () => ({ id: 'fedcba9876543210', label: 'laptop', createdAt: '2026-10-24T08:00:00Z', expiresAt: '2026-11-23T08:00:00Z', revokedAt: null, status: 'live', token: MINTED, shownOnce: true }),
     });
     const held = () => qc.getMutationCache().getAll().filter((m) => JSON.stringify(m.state.data ?? null).includes(MINTED)).length;
     fireEvent.change(await screen.findByLabelText('Token label'), { target: { value: 'laptop' } });

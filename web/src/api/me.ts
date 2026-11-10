@@ -28,7 +28,6 @@ export interface CliTokenRow {
   label: string;
   createdAt: string;
   expiresAt: string;
-  lastUsedAt: string | null;
   revokedAt: string | null;
   status: 'live' | 'expired' | 'revoked';
 }

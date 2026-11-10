@@ -34,15 +34,15 @@ const cliTokenVia = "settings"
 const maxLiveCLITokens = 10
 
 // cliTokenRow is one token as the page lists it (web/src/api/me.ts CliTokenRow): metadata only;
-// the secret is not on this shape. lastUsedAt is always null: no use is recorded.
+// the secret is not on this shape. It has no last use: none is recorded, and a field that was
+// always null read as "never used".
 type cliTokenRow struct {
-	ID         string  `json:"id"`
-	Label      string  `json:"label"`
-	CreatedAt  string  `json:"createdAt"`
-	ExpiresAt  string  `json:"expiresAt"`
-	LastUsedAt *string `json:"lastUsedAt"`
-	RevokedAt  *string `json:"revokedAt"`
-	Status     string  `json:"status"`
+	ID        string  `json:"id"`
+	Label     string  `json:"label"`
+	CreatedAt string  `json:"createdAt"`
+	ExpiresAt string  `json:"expiresAt"`
+	RevokedAt *string `json:"revokedAt"`
+	Status    string  `json:"status"`
 }
 
 func tokenRow(i auth.TokenInfo) cliTokenRow {
