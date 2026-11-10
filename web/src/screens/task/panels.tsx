@@ -144,7 +144,7 @@ export function DigestPanel({ d }: P) {
 
 /** Who holds the ticket and for how much longer. Renders only while a claim is live. */
 export function LeasePanel({ d }: P) {
-  const { task, countdown } = d;
+  const { task, countdown, names } = d;
   if (!task.claim) return null;
   return (
     <Panel title="Lease" right={<span className="mono">held · {countdown.expired ? 'expired' : `${countdown.label} left`}</span>}>
@@ -155,7 +155,8 @@ export function LeasePanel({ d }: P) {
         <Cluster gap={4}>
           <Avatar id={task.claim.agent || task.claim.owner} active />
           <span>{task.claim.agent || task.claim.owner}</span>
-          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted">· for {task.claim.owner}</span>}
+          {/* The account behind the agent, by name, never its raw id (P-314, P-457). */}
+          {task.claim.agent && task.claim.agent !== task.claim.owner && <span className="muted" title={task.claim.owner}>· for {personName(task.claim.owner, names)}</span>}
         </Cluster>
       </KV>
       <KV k="leaseId"><span className="mono">{task.claim.leaseId}</span></KV>
@@ -169,7 +170,8 @@ export function LeasePanel({ d }: P) {
  *
  *  `completedBy` is the account id the core stored (`U-<hex>`), so it is named the way the header's
  *  "created by" and the comments name a person (P-431): the member's name, else their login, else the
- *  shortened id when nothing names the account. */
+ *  shortened id when nothing names the account. When an agent completed it, the agent's name leads
+ *  and the account follows in brackets (P-457): on this board "who finished it" is usually an agent. */
 export function ReviewPanel({ d }: P) {
   const { task, names } = d;
   if (task.status !== 'REVIEW' || !task.review) return null;
@@ -185,7 +187,10 @@ export function ReviewPanel({ d }: P) {
           <span style={{ fontSize: 14, color: 'var(--progress)' }}>Nobody owns this review — assign a reviewer.</span>
         )}
         <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }} title={task.review.requestedAt}>
-          waiting {timeAgo(task.review.requestedAt)} · completed by {personName(task.review.completedBy, names)}
+          requested {timeAgo(task.review.requestedAt)} · completed by{' '}
+          {task.review.completedByAgent
+            ? `${task.review.completedByAgent} (${personName(task.review.completedBy, names)})`
+            : personName(task.review.completedBy, names)}
         </span>
       </Cluster>
     </Panel>

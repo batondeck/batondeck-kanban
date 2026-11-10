@@ -8,6 +8,7 @@ import * as boardsApi from '../api/boards.js';
 import * as feedApi from '../api/feed.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar, EmptyState, PageHeader, StatusPill, eventActor, eventVerb, timeAgo } from '../components.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { useAuth } from '../auth.js';
@@ -255,7 +256,7 @@ export function Analytics() {
       <>
         <PageHeader title="Analytics" />
         <div className="page">
-          <div className="callout">No projects yet. Create a project and board to see workspace telemetry.</div>
+          <PickProject what="Analytics" none="Create a project and a board to see workspace telemetry." />
         </div>
       </>
     );

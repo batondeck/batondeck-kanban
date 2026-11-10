@@ -307,7 +307,7 @@ describe('TaskDrawer — Review ownership (T-52 Part B)', () => {
     vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: inReview } } }));
     renderDrawer();
     expect(await screen.findByText(/owns this review/)).toBeInTheDocument();
-    expect(screen.getByText(/waiting .* · completed by alice/)).toBeInTheDocument();
+    expect(screen.getByText(/requested .* · completed by alice/)).toBeInTheDocument();
   });
 
   it('calls out an UNOWNED review rather than rendering nothing', async () => {
@@ -362,7 +362,16 @@ describe('TaskDrawer — Review ownership (T-52 Part B)', () => {
     it('shows the shortened id only when nothing names the account', async () => {
       vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: completedBy(WES) } }, '/projects/p1$': projectWith({}) }));
       renderDrawer();
-      expect(await screen.findByText(`waiting 1m ago · completed by ${WES.slice(0, 10)}…`, { exact: false })).toBeInTheDocument();
+      expect(await screen.findByText(`requested 1m ago · completed by ${WES.slice(0, 10)}…`, { exact: false })).toBeInTheDocument();
+    });
+
+    // P-457: on this board the one who finished is usually an agent working with a person's token.
+    // The payload names it (review.completedByAgent); the panel showed only the account.
+    it('leads with the agent that completed it, then the account in brackets', async () => {
+      const byAgent: Task = { ...completedBy(WES), review: { ...completedBy(WES).review!, completedByAgent: 'codex-cli' } };
+      vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: byAgent } }, '/projects/p1$': projectWith({ [WES]: 'Wes Worker' }) }));
+      renderDrawer();
+      expect(await screen.findByText(/completed by codex-cli \(Wes Worker\)$/)).toBeInTheDocument();
       expect(screen.queryByText(new RegExp(WES))).not.toBeInTheDocument();
     });
   });

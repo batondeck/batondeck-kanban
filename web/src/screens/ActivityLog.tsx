@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useDisplayNames } from '../displayNames.js';
+import { useDisplayNames, useWorkspaceNames } from '../displayNames.js';
 import { Link } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
@@ -12,6 +12,7 @@ import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { SUPERADMIN, can } from '../permissions.js';
 import { Avatar, PageHeader, PriorityDot, StatusPill, eventActor, eventVerb, timeAgo } from '../components.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { toolByAgent } from '../agentStatus.js';
 import { composeResults, descriptionSnippet, looksLikeTaskId, parseTicketQuery } from '../ticketSearch.js';
@@ -274,7 +275,9 @@ export function ActivityLog() {
           <>
         {isError && <p className="error" style={{ fontSize: 12 }}>Couldn’t load the activity feed.</p>}
         {loading && !feedQ.data && <WaitLoader />}
-        {!loading && !isError && events.length === 0 && (
+        {/* On "All projects" there is no feed to be empty: ask for a project (P-457). */}
+        {!projectId && !projectsLoading && <PickProject what="Activity feeds" none="Create a project and a board; what happens on it will appear here." />}
+        {!!projectId && !loading && !isError && events.length === 0 && (
           <p className="muted" style={{ fontSize: 14 }}>No activity yet. Actions on the board will appear here.</p>
         )}
 
@@ -399,6 +402,17 @@ export function AuditLog() {
     queryFn: () => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100 }),
   });
   const entries = q.data?.entries ?? [];
+  // A name beside each account id the caller's projects can name (P-457). The id stays: this is the
+  // forensic record, and two accounts may share a name. Subjects are stored lower-cased (P-441), so
+  // the lookup ignores case.
+  const names = useWorkspaceNames();
+  const byLower = useMemo(() => Object.fromEntries(Object.entries(names).map(([id, n]) => [id.toLowerCase(), n])), [names]);
+  const account = (id: string, suffix = '') => {
+    const name = byLower[id.toLowerCase()];
+    return name
+      ? <><span>{name}</span> <span className="mono muted" style={{ fontSize: 11 }}>{id}{suffix}</span></>
+      : <span className="mono">{id}{suffix}</span>;
+  };
   return (
     <section id="audit-log" style={{ marginTop: 24 }}>
       <Panel
@@ -430,8 +444,8 @@ export function AuditLog() {
                   <tr key={`${e.ts}-${i}`} data-testid="audit-row">
                     <td className="muted" title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</td>
                     <td className="mono">{e.action}</td>
-                    <td className="mono">{e.actor}{e.agent ? ` (${e.agent})` : ''}</td>
-                    <td className="mono">{e.subject || '—'}</td>
+                    <td>{account(e.actor, e.agent ? ` (${e.agent})` : '')}</td>
+                    <td>{e.subject ? account(e.subject) : '—'}</td>
                     <td>{e.result}{e.errorCode ? ` ${e.errorCode}` : ''}</td>
                     <td className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{e.data === '{}' ? '' : e.data}</td>
                   </tr>

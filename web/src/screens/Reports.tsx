@@ -23,6 +23,7 @@ import * as analyticsApi from '../api/analytics.js';
 import * as boardsApi from '../api/boards.js';
 import { PageHeader } from '../components.js';
 import { AreaLine, ChartFrame, Donut, RankedBars, StackedBars, describeQueryError, type Slice } from '../charts.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { Cols, Note, Tabs, Tile, Tiles } from '../ui.js';
 import {
@@ -159,7 +160,7 @@ export function Reports() {
     return (
       <div className="page">
         <PageHeader title="Reports" subtitle="work-item reporting" />
-        <div className="callout">No projects yet — create one to see reports.</div>
+        <PickProject what="Reports" none="Create a project and a board to see reports." />
       </div>
     );
   }

@@ -10,6 +10,7 @@ import * as streamApi from '../api/stream.js';
 import { WaitLoader } from '../brand.js';
 import { useAuth } from '../auth.js';
 import { Avatar, EmptyState, PageHeader, eventActor, leaseLeft, personName, timeAgo } from '../components.js';
+import { PickProject } from '../PickProject.js';
 import { useProject } from '../projectContext.js';
 import { displayAgentName, isSessionOnline } from '../agentStatus.js';
 import { ToolLogo, toolKey, toolLabel } from '../ToolLogo.js';
@@ -108,13 +109,18 @@ export function Agents() {
   // a person. Absent = no better label than the id, which is what this table showed before.
   const memberDisplay = data.data?.memberDisplay ?? {};
   const activeClaims = tasks.filter((t: Task) => t.claim && leaseLeft(t.claim.expiresAt));
-  const claimByOwner = new Map<string, Task>();
-  for (const t of activeClaims) if (t.claim) claimByOwner.set(t.claim.owner, t);
+  // Every live lease of an account, not just the last one seen: one person's tokens may run several
+  // agents at once, and each lease names its agent (P-457).
+  const claimsByOwner = new Map<string, Task[]>();
+  for (const t of activeClaims) if (t.claim) claimsByOwner.set(t.claim.owner, [...(claimsByOwner.get(t.claim.owner) ?? []), t]);
+  // The agents holding a lease right now, by the name each claim carries (else its account).
+  const claimingAgents = new Set(activeClaims.map((t: Task) => t.claim!.agent || t.claim!.owner)).size;
 
-  // Capabilities surfaced per identity: union of requiredCapabilities on tasks they touch.
+  // Capabilities surfaced per identity: the union of requiredCapabilities on tasks assigned to or
+  // claimed by it. Not the tasks it CREATED: writing a task that needs "go" is not having "go".
   const capsByOwner = new Map<string, Set<string>>();
   for (const t of tasks) {
-    const owners = [t.assignee, t.claim?.owner, t.createdBy].filter(Boolean) as string[];
+    const owners = [t.assignee, t.claim?.owner].filter(Boolean) as string[];
     for (const o of owners) {
       const set = capsByOwner.get(o) ?? new Set<string>();
       for (const c of t.requiredCapabilities ?? []) set.add(c);
@@ -127,8 +133,6 @@ export function Agents() {
   for (const e of events) {
     if (!lastActivityByOwner.has(e.actor)) lastActivityByOwner.set(e.actor, e.ts);
   }
-  const agentCount = members.filter(([id]) => isAgent(id)).length;
-
   const idTag = (id: string) => {
     const norm = id.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
     return `${norm.slice(0, 1)}-${norm.slice(-2)}`;
@@ -155,7 +159,7 @@ export function Agents() {
             {/* Stat cards — driven by live MCP session telemetry (+ task claims) */}
             <Tiles>
               <Tile label="Agents online" value={onlineSessions.length} />
-              <Tile label="Tasks claimed" value={activeClaims.length} note={`${agentCount} agents`} />
+              <Tile label="Tasks claimed" value={projectId ? activeClaims.length : '—'} note={projectId ? `by ${claimingAgents} ${claimingAgents === 1 ? 'agent' : 'agents'}` : 'pick a project'} />
               <Tile label="Sessions" value={sessions.length} />
               <Tile label="Operations" value={totalOps} />
             </Tiles>
@@ -166,12 +170,8 @@ export function Agents() {
               right={
                 <Cluster gap={12}>
                   <span>{sessions.length} logged · <span style={{ color: 'var(--done)' }}>{onlineSessions.length} online</span></span>
-                  {/* YOUR sessions, not the admin console. This linked to /admin, which is the
-                      workspace-wide view and is admin-only — so the one person who could click it was
-                      sent somewhere that manages EVERYONE's sessions, and everyone else got no way to
-                      stop their own at all. `list_agent_sessions` is caller-scoped, so this table is
-                      already the caller's own; Settings is where they can end them. Admin keeps the
-                      workspace-wide view, reached from the admin nav. */}
+                  {/* YOUR sessions: `list_agent_sessions` is caller-scoped, so this table is the caller's
+                      own, and Settings is where they end them. */}
                   <Link to="/settings#sessions">Manage your sessions →</Link>
                 </Cluster>
               }
@@ -256,8 +256,8 @@ export function Agents() {
                   </thead>
                   <tbody>
                     {members.map(([id, role]) => {
-                      const t = claimByOwner.get(id);
-                      const active = !!t;
+                      const held = claimsByOwner.get(id) ?? [];
+                      const active = held.length > 0;
                       const caps = Array.from(capsByOwner.get(id) ?? []).slice(0, 4);
                       const last = lastActivityByOwner.get(id);
                       // A human member resolves to their name/email; an agent has no account and keeps
@@ -283,10 +283,16 @@ export function Agents() {
                             )}
                           </td>
                           <td>
-                            {t && t.claim ? (
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
-                                <span className="mono" style={{ fontSize: 11, color: 'var(--text)', background: 'var(--surface-highest)', border: '1px solid var(--outline-variant)', borderRadius: 'var(--r-2)', padding: '2px 6px' }}>{t.id}</span>
-                                <span className="mono" style={{ fontSize: 11, color: 'var(--progress)', letterSpacing: '0.05em' }}><Icon name="lock" size={11} /> {leaseLeft(t.claim.expiresAt)}</span>
+                            {held.length > 0 ? (
+                              <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+                                {held.map((t) => (
+                                  <span key={t.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                                    <span className="mono" style={{ fontSize: 11, color: 'var(--text)', background: 'var(--surface-highest)', border: '1px solid var(--outline-variant)', borderRadius: 'var(--r-2)', padding: '2px 6px' }}>{t.id}</span>
+                                    {/* The agent that holds it, when the claim names one: the account alone hides which of its agents is working. */}
+                                    {t.claim!.agent && t.claim!.agent !== id && <span style={{ fontSize: 12 }}>{displayAgentName(t.claim!.agent)}</span>}
+                                    <span className="mono" style={{ fontSize: 11, color: 'var(--progress)', letterSpacing: '0.05em' }}><Icon name="lock" size={11} /> {leaseLeft(t.claim!.expiresAt)}</span>
+                                  </span>
+                                ))}
                               </span>
                             ) : (
                               <span className="muted" style={{ fontSize: 12, fontStyle: 'italic' }}>{isAgent(id) ? 'Idle' : 'Observing'}</span>
@@ -296,7 +302,10 @@ export function Agents() {
                         </tr>
                       );
                     })}
-                    {members.length === 0 && !data.isLoading && (
+                    {!projectId && (
+                      <tr><td colSpan={4}><PickProject what="Members and their leases" none="Create a project; its members and the leases they hold will appear here." /></td></tr>
+                    )}
+                    {!!projectId && members.length === 0 && !data.isLoading && (
                       <tr><td colSpan={4} className="muted" style={{ fontSize: 12 }}>No identities in this project yet.</td></tr>
                     )}
                   </tbody>
