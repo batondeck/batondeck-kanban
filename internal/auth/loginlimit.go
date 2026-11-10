@@ -12,7 +12,8 @@ import (
 
 // LoginLimits bounds password checks, each of which allocates argon2id's 64 MiB: at most Verifies of
 // them run at once, a caller waits up to Wait for a slot, and every attempt debits a token bucket of
-// its client address (an IPv6 address by its /64) before it runs; a success refunds it. There is no
+// its client address (an IPv6 address by its /64) before it runs; a success refunds it, and so does a
+// refusal that checked no password (no verification slot within Wait, a store error). There is no
 // bucket per login: one would let a few addresses lock anyone out of an account.
 type LoginLimits struct {
 	// Verifies is the most password checks at once; 0 means 2 (128 MiB), whatever the core count.

@@ -351,6 +351,14 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	if err != nil {
 		return store.User{}, err
 	}
+	// Only a checked password that failed keeps the debit: a refusal for want of a verification
+	// slot, a store error and a success are refunded.
+	charged := false
+	defer func() {
+		if !charged {
+			refund()
+		}
+	}()
 	release, err := lim.acquire(ctx)
 	if err != nil {
 		return store.User{}, err
@@ -359,15 +367,16 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	u, err := a.Store.GetUserByEmail(ctx, l)
 	if errors.Is(err, store.ErrNotFound) {
 		_ = verify(password, dummyHash())
+		charged = true
 		return store.User{}, errUnauthenticated()
 	}
 	if err != nil {
 		return store.User{}, err
 	}
 	if !verify(password, u.PasswordHash) || u.DisabledAt != 0 {
+		charged = true
 		return store.User{}, errUnauthenticated()
 	}
-	refund()
 	return u, nil
 }
 

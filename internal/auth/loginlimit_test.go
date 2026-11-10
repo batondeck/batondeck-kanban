@@ -178,3 +178,31 @@ func TestSuccessfulLoginsAreNotCounted(t *testing.T) {
 		}
 	}
 }
+
+// A sign-in refused for lack of a verification slot checked no password, so it costs its address
+// nothing: once a slot is free, the right password signs in although every earlier try was refused.
+func TestLoginRefusedForASlotSpendsNoBudget(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "right")
+	lim := &LoginLimits{Verifies: 1, Wait: 10 * time.Millisecond, PerAddr: 3}
+	f.svc.Accounts.Limits = lim
+	lim.init()
+	lim.sem <- struct{}{} // every slot busy
+	for i := range 4 {
+		_, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.1", "alice", "right")
+		if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeRateLimited {
+			t.Fatalf("try %d with every slot busy: %v, want RATE_LIMITED", i+1, err)
+		}
+	}
+	<-lim.sem
+	if _, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.1", "alice", "right"); err != nil {
+		t.Fatalf("the right password once a slot is free: %v", err)
+	}
+	// Control: a checked, wrong password still costs a token.
+	for range 3 {
+		_, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.1", "alice", "wrong")
+		wantCode(t, err, domain.CodeUnauthenticated)
+	}
+	_, err := f.svc.Accounts.Authenticate(context.Background(), "192.0.2.1", "alice", "right")
+	wantCode(t, err, domain.CodeRateLimited)
+}
