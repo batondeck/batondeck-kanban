@@ -1,4 +1,4 @@
-// The live area: /api/stream (internal/api/stream.go), one EventSource per tab shared by every screen.
+// The live area: /api/stream (internal/api/stream.go), one EventSource per visible tab shared by every screen.
 import type { AgentSession } from '../types.js';
 
 /**
@@ -19,6 +19,8 @@ function sseConnect(
   onLive: ((live: boolean) => void) | undefined,
   listeners: Record<string, (data: unknown) => void>,
   onReconnect?: () => void,
+  /** This socket replaces one closed while the tab was hidden: its first open is a reconnect too. */
+  resumed = false,
 ): () => void {
   const STALL_MS = 60_000; // server pings every 20s; tolerate two dropped ones before reconnecting
   let es: EventSource | undefined;
@@ -26,7 +28,7 @@ function sseConnect(
   let stall: ReturnType<typeof setTimeout> | undefined;
   let delay = 1000;
   let stopped = false;
-  let reconnected = false;
+  let reconnected = resumed;
   // *** A CLOSED STREAM MAY BE A SIGNED-OUT ONE (P-282). *** Once the session ends the server closes the
   // stream and the browser's reconnect meets 401 (internal/api/stream.go, P-219), but EventSource hides
   // the status: CLOSED looks exactly like a 5xx blip, so the backoff below would retry every 30s forever
@@ -152,6 +154,48 @@ const subs = new Set<Sub>();
 let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
 
+/**
+ * *** A HIDDEN TAB GIVES ITS SOCKET BACK. *** On plain HTTP (the Quickstart's http://localhost:8080)
+ * the server speaks HTTP/1.1, and a browser holds at most six connections per host, EventSource
+ * included. One always-open stream per tab meant the sixth tab took the last connection and every
+ * fetch in every tab then waited for good. So a tab hidden for longer than this closes its stream, a
+ * tab opened in the background opens none, and either opens it when shown, its first `open` counting
+ * as a reconnect (onReconnect: refetch what the tab may have missed).
+ */
+export const HIDDEN_STREAM_GRACE_MS = 10_000;
+let suspended = false;
+let hideTimer: ReturnType<typeof setTimeout> | undefined;
+let watching = false;
+/** The stream was wanted while suspended: the socket opened next is a resumption. */
+let missed = false;
+
+const tabHidden = (): boolean => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
+function onVisibility(): void {
+  if (tabHidden()) {
+    if (!suspended && hideTimer === undefined) {
+      hideTimer = setTimeout(() => {
+        hideTimer = undefined;
+        suspended = true;
+        reconcile();
+      }, HIDDEN_STREAM_GRACE_MS);
+    }
+    return;
+  }
+  clearTimeout(hideTimer);
+  hideTimer = undefined;
+  if (suspended) {
+    suspended = false;
+    reconcile();
+  }
+}
+
+function watchVisibility(): void {
+  if (watching || typeof document === 'undefined') return;
+  watching = true;
+  document.addEventListener('visibilitychange', onVisibility);
+}
+
 /** The board the shared socket should be scoped to: whichever subscriber named one. */
 function desiredUrl(): string {
   for (const s of subs) {
@@ -174,12 +218,19 @@ function fanout<K extends keyof StreamHandlers>(name: K, apply: (h: StreamHandle
 }
 
 function reconcile(): void {
-  const want = subs.size === 0 ? '' : desiredUrl();
+  watchVisibility();
+  // No socket to keep and nothing on screen (a tab opened in the background): no grace.
+  if (subs.size > 0 && !currentUrl && tabHidden()) suspended = true;
+  if (subs.size === 0) missed = false;
+  else if (suspended) missed = true;
+  const want = subs.size === 0 || suspended ? '' : desiredUrl();
   if (want === currentUrl) return;
   closeCurrent?.();
   closeCurrent = undefined;
   currentUrl = want;
   if (!want) return;
+  const resumed = missed;
+  missed = false;
   closeCurrent = sseConnect(
     want,
     (live) => fanout('onLive', (h) => h.onLive?.(live)),
@@ -195,6 +246,7 @@ function reconcile(): void {
       fanout('onUpdate', (h) => h.onUpdate?.());
       fanout('onResync', (h) => h.onResync?.());
     },
+    resumed,
   );
 }
 

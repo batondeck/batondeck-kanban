@@ -132,7 +132,9 @@ uploads and shows attachments at whatever address it was opened at, `public_url`
 The web UI's live board is a server-sent event stream, `/api/stream`, with a `ping` every 20 s. The
 server asks nginx not to buffer it (`X-Accel-Buffering: no`); behind another proxy, turn response
 buffering off for `/api/stream` and keep its read timeout above 20 s, or the board stops updating
-live and keeps reconnecting.
+live and keeps reconnecting. Each tab on screen holds one such stream; a tab hidden for 10 s gives
+its stream back until it is shown again, since over plain HTTP a browser holds at most six
+connections to one server.
 
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
