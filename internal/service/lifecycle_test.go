@@ -570,6 +570,7 @@ func TestLifecycleDoorbells(t *testing.T) {
 		if _, p = e.lastChange(t); p.Kind != ChangeKindChanged {
 			t.Fatalf("fail into a backoff rang %+v", p)
 		}
+		e.clock.advance(time.Minute) // past the backoff: claim_task honours it
 		c = e.claim(t, bob, task.ID, 0)
 		h, err := lc.Handoff(e.ctx, bob, HandoffTaskReq{ProjectID: e.project, TaskID: task.ID, LeaseID: c.LeaseID, ToAgent: "reviewer-bot", MemoryNote: "over to you"})
 		if err != nil {
