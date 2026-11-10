@@ -95,6 +95,11 @@ func memory(t *testing.T, newStore Factory) {
 			if got := read(store.ReadMemoryQuery{Key: "old", Limit: 1}); !slices.Equal(got, []string{"old"}) {
 				t.Fatalf("key old with limit 1 reads %v, want [old]: newer entries of other keys took the slot", got)
 			}
+			// The on-call auto-close's question (service incidentKeeps): does the task hold a live
+			// task-scope entry? Newer entries of other scopes, private or expired, do not hide it.
+			if got := read(store.ReadMemoryQuery{Scope: store.MemoryTask, Limit: 1}); !slices.Equal(got, []string{"old"}) {
+				t.Fatalf("scope task with limit 1 reads %v, want [old]: newer entries of other scopes took the slot", got)
+			}
 			if got := read(store.ReadMemoryQuery{Limit: 1}); !slices.Equal(got, []string{"n1"}) {
 				t.Fatalf("alice with limit 1 reads %v, want [n1]: an expired entry or bob's private one took the slot", got)
 			}
