@@ -641,7 +641,7 @@ func tasks(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeValidation, "")
 		_, err = f.s.CountTasks(ctx, f.project, store.TaskFilter{BoardID: f.board, Assignee: ptr("bob"), Unassigned: true})
 		wantCode(t, err, domain.CodeValidation, "")
-		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("a", "T-1")[:5]} {
+		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("a", "T-1")[:5], store.EncodeCursor("a0", "T-\x001"), store.EncodeCursor("a\x000", "T-1")} {
 			_, err = f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board}, bad, 10)
 			wantCode(t, err, domain.CodeValidation, "")
 		}

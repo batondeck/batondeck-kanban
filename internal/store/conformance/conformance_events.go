@@ -208,7 +208,7 @@ func events(t *testing.T, newStore Factory) {
 		wantCode(t, err, domain.CodeNotFound, "Task")
 		_, err = f.s.ListBoardFeed(ctx, f.project, "B-missing", "", 10)
 		wantCode(t, err, domain.CodeNotFound, "Board")
-		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("not-a-number", "E-1")} {
+		for _, bad := range []string{"%%%", "bnVsbA", store.EncodeCursor("not-a-number", "E-1"), store.EncodeCursor("5", "E-\x001")} {
 			_, err = f.s.ListTaskEvents(ctx, f.project, task.ID, bad, 10)
 			wantCode(t, err, domain.CodeValidation, "")
 			_, err = f.s.ListBoardFeed(ctx, f.project, f.board, bad, 10)

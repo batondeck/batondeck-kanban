@@ -124,6 +124,10 @@ func notifications(t *testing.T, newStore Factory) {
 			wantErr(t, err, domain.CodeNotFound, "Project")
 			_, err = s.ListNotifications(ctx, "U-bob", store.NotificationsQuery{Cursor: "%%%"})
 			wantErr(t, err, domain.CodeValidation, "")
+			// A cursor no engine minted, holding U+0000 (Postgres cannot bind it as text), is refused
+			// alike everywhere, never an engine's error.
+			_, err = s.ListNotifications(ctx, "U-bob", store.NotificationsQuery{Cursor: store.EncodeCursor("5", "a\x00b")})
+			wantErr(t, err, domain.CodeValidation, "")
 			n, err := s.AddNotification(ctx, ok)
 			noErr(t, err)
 			if string(n.Data) != "{}" {
