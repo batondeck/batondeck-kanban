@@ -63,6 +63,13 @@ func TestAuditCuratesThePayload(t *testing.T) {
 	if !reflect.DeepEqual(d.Data, map[string]any{"role": "admin"}) {
 		t.Fatalf("only named arguments are copied: %v", d.Data)
 	}
+	// add_member names the login rows it folded into the account's row.
+	d, _ = DescribeAudit("add_member", map[string]any{
+		"projectId": "P-1", "identityId": "U-dave", "role": "worker", "folded": []string{"dave@example.test"},
+	})
+	if !reflect.DeepEqual(d.Data, map[string]any{"role": "worker", "folded": []string{"dave@example.test"}}) {
+		t.Fatalf("add_member records the folded rows: %v", d.Data)
+	}
 	d, _ = DescribeAudit("update_settings", map[string]any{
 		"projectId": "P-1", "reviewEnabled": false, "retryPolicy": map[string]any{"poisonAfterAttempts": 3},
 		"transitionTable": map[string]any{"TODO": []string{"DONE"}}, "color": "#fff",

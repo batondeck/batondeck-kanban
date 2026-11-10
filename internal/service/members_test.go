@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -192,6 +193,19 @@ func TestAMemberAddedByLoginBeforeItsAccountOverTheEngines(t *testing.T) {
 			}
 			if _, err := st.GetGrant(ctx, id, "U-dave"); err != nil {
 				t.Fatalf("the login row's grant did not follow it: %v", err)
+			}
+			// The fold leaves a trace: the account's member.added row names the login row it folded.
+			audit, err := st.ListAuditLog(ctx, store.AuditFilter{Action: "member.added"}, "", 50)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var datas []string
+			for _, r := range audit.Rows {
+				datas = append(datas, r.Subject+" "+string(r.Data))
+			}
+			t.Logf("member.added rows: %q", datas)
+			if !slices.Contains(datas, `u-dave {"folded":["Dave@Example.test"],"role":"worker"}`) {
+				t.Fatalf("member.added rows %q, want U-dave's naming the folded login row", datas)
 			}
 			// A second login row, removed by its key with the account a member.
 			if _, err := c.Projects().AddMember(ctx, carol, AddMemberReq{ProjectID: id, IdentityID: "erin@example.test", Role: domain.RoleMember}); err != nil {

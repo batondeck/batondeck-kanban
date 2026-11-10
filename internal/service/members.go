@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -15,9 +16,10 @@ import (
 // under Postgres READ COMMITTED two admins demoting or removing each other at once would each count
 // two admins and leave none. When the identity is an account, a row keyed by its login (added by
 // that login before the account existed, and kept as given) is folded into the account's row in the
-// same mutation: the row goes, and its grant follows when the account was no member. After the
-// commit the identity's cached access is dropped (InvalidateAccess here, ObserveChange in every
-// other process once the bus delivers the row), so a new role or membership holds on its next call.
+// same mutation: the row goes, its grant follows when the account was no member, and the audit row
+// names it (folded). After the commit the identity's cached access is dropped (InvalidateAccess
+// here, ObserveChange in every other process once the bus delivers the row), so a new role or
+// membership holds on its next call.
 func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMemberReq) (AddMemberResp, error) {
 	a, err := p.c.authorize(ctx, caller, req.ProjectID, "add_member", domain.GrantSubject{}, false)
 	if err != nil {
@@ -30,10 +32,11 @@ func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMe
 	if err != nil {
 		return AddMemberResp{}, err
 	}
+	args := map[string]any{"projectId": req.ProjectID, "identityId": id, "role": string(req.Role)}
 	resp, err := mutate(ctx, p.c, caller, mutation{
-		Tool: "add_member", Args: map[string]any{"projectId": req.ProjectID, "identityId": id, "role": string(req.Role)},
-		ProjectID: req.ProjectID, Access: a, LockProject: true,
+		Tool: "add_member", Args: args, ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (AddMemberResp, error) {
+		delete(args, "folded") // a retried transaction folds afresh
 		members, err := t.Tx.ListMembers(ctx, req.ProjectID)
 		if err != nil {
 			return AddMemberResp{}, err
@@ -50,6 +53,7 @@ func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMe
 		if _, err := t.Tx.AddMember(ctx, req.ProjectID, id, req.Role, caller.Identity); err != nil {
 			return AddMemberResp{}, err
 		}
+		var folded []string
 		for k := range roles {
 			if login == "" || k == id || !strings.EqualFold(strings.TrimSpace(k), login) {
 				continue
@@ -58,6 +62,11 @@ func (p projects) AddMember(ctx context.Context, caller domain.Caller, req AddMe
 				return AddMemberResp{}, err
 			}
 			delete(roles, k)
+			folded = append(folded, k)
+		}
+		if len(folded) > 0 {
+			slices.Sort(folded)
+			args["folded"] = folded // the audit row names the rows the fold removed
 		}
 		roles[id] = req.Role
 		return AddMemberResp{Members: roles}, nil

@@ -25,7 +25,8 @@ type AuditDescriptor struct {
 var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	// Project membership and privilege.
 	"add_member": func(a map[string]any) AuditDescriptor {
-		return AuditDescriptor{Action: "member.added", Subject: canonID(a, "identityId"), Data: pick(a, "role")}
+		// folded: the rows kept for the account's login that the add folded into its row.
+		return AuditDescriptor{Action: "member.added", Subject: canonID(a, "identityId"), Data: pick(a, "role", "folded")}
 	},
 	"remove_member": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "member.removed", Subject: canonID(a, "identityId"), Data: map[string]any{}}
