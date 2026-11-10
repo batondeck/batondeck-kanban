@@ -686,7 +686,7 @@ this section's headings in CHANGELOG.md, are all part of it.
   contexts no caller holds). The auth areas (users, tokens, sessions, OAuth) are now counted too, by
   both counters; no pin moved.
 - The Chronicle (R2.6): `create_chronicle_page`, `ingest_chronicle_page`, `edit_chronicle_page` and
-  `delete_chronicle_page` (tier write, grant-governed), and the six chronicle resource templates
+  `delete_chronicle_page` (tier master since the pre-public review, grant-governed), and the six chronicle resource templates
   (`chronicle`, `chronicle-cursor`, `chronicle-page`, `chronicle-history`, `chronicle-history-cursor`,
   `chronicle-version`), all leaving `contract/pending.json`. `store.Chronicle` is conductor's eleven
   chronicle Store methods on SQLite, Postgres and memstore, judged by `conformance_chronicle.go`.
@@ -1423,7 +1423,7 @@ this section's headings in CHANGELOG.md, are all part of it.
 - A role below an action's tier is shown that action closed, with its reason, as Status and Claim
   already were: the board's "+ New task" and its `c` shortcut below master, a task's Comment and
   Reply for a viewer, and in Settings "+ Add Member" and Remove below project admin, the column
-  edits below member (adding one below worker) and the review-step switch below project admin.
+  edits below member (adding one below master, since the pre-public review) and the review-step switch below project admin.
   Before, a viewer was offered them and learnt of the refusal only from the server's error. The
   server's checks are unchanged (P-432).
 - Every Settings control has an accessible name: the top bar's project select (captioned

@@ -40,7 +40,8 @@ var sensitiveActions = map[string]func(args map[string]any) AuditDescriptor{
 	"delete_task": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "task.deleted", Subject: str(a, "taskId"), Data: map[string]any{}}
 	},
-	// A deleted Chronicle page keeps no version, so this row is the trace; the row carries the project.
+	// A deleted Chronicle page keeps no version; its project's event feed has a chronicle.page_deleted
+	// event, and this row puts the delete in the workspace admin's audit log too (with the project).
 	"delete_chronicle_page": func(a map[string]any) AuditDescriptor {
 		return AuditDescriptor{Action: "chronicle.page_deleted", Subject: str(a, "pageId"), Data: map[string]any{}}
 	},
