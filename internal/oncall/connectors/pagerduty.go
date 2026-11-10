@@ -2,14 +2,17 @@ package connectors
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/oncall"
 )
 
 // pagerduty is a PagerDuty v3 webhook subscription (conductor pagerduty.ts): {event: {id,
-// event_type, occurred_at, data: {id, title, status, urgency, html_url, assignees, priority,
+// event_type, occurred_at, data: {id, type, title, status, urgency, html_url, assignees, priority,
 // service}}}. The first assignee's PagerDuty user id is the event's upstream assignee, the
-// integration's pdUserMap input.
+// integration's pdUserMap input. A subscription may carry every event type, and only an incident.*
+// event whose data is the incident is an alert: any other (a note, a status update, a responder,
+// a service event, the subscription's pagey.ping test) is no event, accepted and filed as nothing.
 type pagerduty struct{}
 
 func (pagerduty) Events(p any, c Context) ([]oncall.Event, error) {
@@ -22,13 +25,17 @@ func (pagerduty) Events(p any, c Context) ([]oncall.Event, error) {
 	if !ok {
 		return nil, errors.New("unrecognizable pagerduty payload: event.data missing")
 	}
-	fingerprint := str(data["id"])
-	if fingerprint == "" {
-		return nil, errors.New("unrecognizable pagerduty payload: event.data.id missing")
-	}
 	eventType := str(event["event_type"])
 	if eventType == "" {
 		eventType = "incident.triggered"
+	}
+	// data.type absent is an older payload whose data is the incident.
+	if !strings.HasPrefix(eventType, "incident.") || data["type"] != nil && str(data["type"]) != "incident" {
+		return nil, nil
+	}
+	fingerprint := str(data["id"])
+	if fingerprint == "" {
+		return nil, errors.New("unrecognizable pagerduty payload: event.data.id missing")
 	}
 	urgency := str(data["urgency"])
 	priority := ""

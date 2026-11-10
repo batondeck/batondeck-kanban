@@ -163,6 +163,33 @@ func TestPagerDuty(t *testing.T) {
 	want(t, "upstream assignee", e.UpstreamAssignee, "PTUXL6G")
 	want(t, "labels", e.Labels, map[string]string{"urgency": "high", "pagerduty_service": "API Service", "pagerduty_priority": "P1"})
 	want(t, "links", e.Links, []string{"https://acme.pagerduty.com/incidents/PGR0VU2"})
+
+	// A subscription may carry every event type: only an incident event whose data is the incident
+	// is an alert. A note (its own id, the incident's in a reference), a service event and the
+	// subscription's test ping are accepted as no event, never filed as a new incident nor refused.
+	c, _ := connectors.For("pagerduty")
+	for _, name := range []string{"pagerduty_annotated", "pagerduty_ping", "service.updated"} {
+		body := []byte(`{"event":{"id":"01DEN1HNLBC1VITYLBI7MKHB03","event_type":"service.updated","resource_type":"service","data":{"id":"PF9KMXH","type":"service","name":"API Service"}}}`)
+		if name != "service.updated" {
+			var err error
+			if body, err = os.ReadFile(filepath.Join("testdata", name+".json")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		p, err := connectors.Decode(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs, err := c.Events(p, connectors.Context{Now: now})
+		if err != nil || len(evs) != 0 {
+			t.Errorf("%s: %d events, %v; want none and no error", name, len(evs), err)
+		}
+	}
+	// control: an incident event with no data.type (an older payload) still maps by data.id.
+	p, _ := connectors.Decode([]byte(`{"event":{"id":"E2","event_type":"incident.acknowledged","data":{"id":"PGR0VU2","title":"t"}}}`))
+	if evs, err := c.Events(p, connectors.Context{Now: now}); err != nil || len(evs) != 1 || evs[0].Fingerprint != "PGR0VU2" || evs[0].Status != "firing" {
+		t.Errorf("an incident event without data.type: %+v, %v", evs, err)
+	}
 }
 
 // gcp: the fixture normalized, and the bearer it arrives with verified against a JWKS whose fetch is

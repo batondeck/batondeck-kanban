@@ -658,6 +658,38 @@ func TestHookRecordsUnparsableDeliveries(t *testing.T) {
 	}
 }
 
+// A PagerDuty subscription may carry every event type. A note added to an incident, a service
+// event and the subscription's test ping are accepted (202) as no event: no ticket filed for a note
+// as if it were a new incident, no 400 for the ping during setup, no rejected row.
+func TestHookPagerDutyFilesIncidentsOnly(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	const secret = "pd-secret-0123"
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "pagerduty", Lifecycle: "autoclose", Auth: IntegrationAuthInput{Mode: "hmac", ExternalSecret: secret}}).Integration.ID
+	send := func(body string) HookOutcome {
+		t.Helper()
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write([]byte(body))
+		h := http.Header{}
+		h.Set(HeaderPagerDuty, "v1="+hex.EncodeToString(m.Sum(nil)))
+		return f.hook(t, iid, HookRequest{Header: h.Get, Body: []byte(body)})
+	}
+	if out := send(`{"event":{"id":"E1","event_type":"incident.triggered","resource_type":"incident","data":{"id":"PGR0VU2","type":"incident","title":"API down"}}}`); out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+		t.Fatalf("incident.triggered: %+v", out)
+	}
+	for _, body := range []string{
+		`{"event":{"id":"E2","event_type":"incident.annotated","resource_type":"incident","data":{"id":"PWL7QXS","type":"incident_note","content":"looking","incident":{"id":"PGR0VU2","type":"incident_reference"}}}}`,
+		`{"event":{"id":"E3","event_type":"service.updated","resource_type":"service","data":{"id":"PF9KMXH","type":"service","name":"API"}}}`,
+		`{"event":{"id":"E4","event_type":"pagey.ping","resource_type":"pagey","data":{"message":"Hello from your friend Pagey!","type":"ping"}}}`,
+	} {
+		if out := send(body); out.Refusal != "" || len(out.Results) != 0 {
+			t.Fatalf("%s: %+v, want accepted with no event", body, out)
+		}
+	}
+	if n, ds := f.taskCount(t), f.deliveries(t, iid); n != 1 || len(ds) != 1 || ds[0].Kind == store.DeliveryRejected {
+		t.Fatalf("%d tickets and deliveries %+v, want the one incident", n, ds)
+	}
+}
+
 // alertmanagerBody is an Alertmanager webhook_config delivery of one group, groupKey g, holding one
 // alert (fingerprint fp) in status, started at startsAt and, resolved, ended at endsAt.
 func alertmanagerBody(g, fp, status, startsAt, endsAt string) []byte {
