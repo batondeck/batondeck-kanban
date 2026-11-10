@@ -306,6 +306,50 @@ func TestResourcesRead(t *testing.T) {
 		}
 		t.Logf("read %s -> JSON-RPC %d %s", uri, werr.Code, werr.Data)
 	}
+
+	// A NUL in an id or the cursor taken from the URI is VALIDATION (invalid params) before any
+	// service call, as domain.CheckText makes it for a tool's arguments: Postgres cannot store or
+	// compare NUL in text, so the engines would otherwise disagree (G3).
+	for _, uri := range []string{"batondeck://P-1/task/T%00", "batondeck://P-1/board/B-1/feed?cursor=c%00", "batondeck://P-1/chronicle/C-1/versions/V%00"} {
+		before := len(f.Calls())
+		_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: uri})
+		var werr *jsonrpc.Error
+		var data domain.BatonDeckError
+		if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInvalidParams || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeValidation {
+			t.Errorf("read %s = %v, want JSON-RPC invalid params with VALIDATION", uri, err)
+		}
+		if n := len(f.Calls()) - before; n != 0 {
+			t.Errorf("read %s made %d service calls; want none", uri, n)
+		}
+	}
+}
+
+// panickingTasks is a Tasks whose Get panics.
+type panickingTasks struct{ service.Tasks }
+
+func (panickingTasks) Get(context.Context, domain.Caller, service.GetTaskReq) (service.GetTaskResp, error) {
+	panic("planted read panic")
+}
+
+// A panic in a resource read is INTERNAL with its stack logged, as a tool's is (errorMiddleware),
+// and the server keeps serving: go-sdk recovers no handler panic.
+func TestResourceReadPanicIsContained(t *testing.T) {
+	svc := servicefake.New().Services()
+	svc.Tasks = panickingTasks{svc.Tasks}
+	h := bootHarness(t, svc, resolver())
+	cs := h.connect(t, tokenAda)
+	_, err := cs.ReadResource(ctx(t), &mcp.ReadResourceParams{URI: "batondeck://P-1/task/T-5"})
+	var werr *jsonrpc.Error
+	var data domain.BatonDeckError
+	if !errors.As(err, &werr) || werr.Code != jsonrpc.CodeInternalError || json.Unmarshal(werr.Data, &data) != nil || data.Code != domain.CodeInternal || !data.Retryable {
+		t.Errorf("read with a panicking service = %v, want JSON-RPC internal error with INTERNAL retryable", err)
+	}
+	if logs := h.log.String(); !strings.Contains(logs, "planted read panic") || !strings.Contains(logs, "runtime/debug.Stack") {
+		t.Errorf("the panic was not logged with its stack:\n%s", logs)
+	}
+	if _, err := cs.ListResourceTemplates(ctx(t), nil); err != nil {
+		t.Errorf("after the panic the server stopped answering: %v", err)
+	}
 }
 
 // flipResolver is a resolver whose callers a test may change while the server reads them.
