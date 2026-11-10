@@ -82,8 +82,8 @@ type mutation struct {
 	TaskID         string
 	Version        *int64
 	IdempotencyKey string
-	// Request is the call's whole input, which an idempotency key is bound to (idempotencyScope);
-	// nil binds it to Args.
+	// Request is the call's whole input, which an idempotency key is bound to (idempotencyScope),
+	// less any secret material it carries (create_integration's); nil binds it to Args.
 	Request any
 	Access  access
 	// LockProject serialises the mutation with every other that sets it in the project: the

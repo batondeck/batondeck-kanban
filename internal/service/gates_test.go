@@ -354,6 +354,34 @@ func TestAnIdempotencyKeyReusedOnAnotherTaskIsAnotherCall(t *testing.T) {
 	})
 }
 
+// The digest an idempotency entry is kept under leaves create_integration's secret material out:
+// an unsalted hash of a caller's webhook secret or API key would sit in idempotency_keys for the
+// key's window, beside the sealed (or hashed) copy, and let a weak one be guessed offline. So the
+// same key and arguments with another secret are the same call (a replay), while another name is
+// another call.
+func TestAnIdempotencyKeyIsNotBoundToCreateIntegrationsSecrets(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	for _, c := range []struct {
+		name string
+		a, b IntegrationAuthInput
+	}{
+		{"hmac", IntegrationAuthInput{Mode: "hmac", ExternalSecret: "first-secret-1"}, IntegrationAuthInput{Mode: "hmac", ExternalSecret: "second-secret-2"}},
+		{"api_key", IntegrationAuthInput{Mode: "api_key", APIKey: "first-key-1"}, IntegrationAuthInput{Mode: "api_key", APIKey: "second-key-2"}},
+	} {
+		key := "k-" + c.name
+		first := f.integration(t, root, CreateIntegrationReq{Name: c.name, IdempotencyKey: key, Auth: c.a})
+		again := f.integration(t, root, CreateIntegrationReq{Name: c.name, IdempotencyKey: key, Auth: c.b})
+		t.Logf("%s: create_integration under %q with another secret answered %s (first %s)", c.name, key, again.Integration.ID, first.Integration.ID)
+		if again.Integration.ID != first.Integration.ID {
+			t.Fatalf("%s: the same key and arguments with another secret made %s (first %s), want the replay: the secret is not in the key's digest", c.name, again.Integration.ID, first.Integration.ID)
+		}
+		other := f.integration(t, root, CreateIntegrationReq{Name: c.name + "-2", IdempotencyKey: key, Auth: c.a})
+		if other.Integration.ID == first.Integration.ID {
+			t.Fatalf("%s: another name under the same key replayed %s, want another call", c.name, first.Integration.ID)
+		}
+	}
+}
+
 // A created task lands at the END of its column, so column order is creation order and claim_next
 // and next_task's "fifo" serve the oldest first. Before, every create landed at the column's head
 // (no last-key read), and the frontier's order key put the newest first: old tasks starved.
