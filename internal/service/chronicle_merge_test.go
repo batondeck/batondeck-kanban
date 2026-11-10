@@ -46,7 +46,7 @@ func TestChronicleResolvedConflictStaysSettled(t *testing.T) {
 			if r := ingest("the generator's text"); len(r.Conflicts) != 1 || !r.Unchanged {
 				t.Fatalf("the both-changed ingest = %+v, want one conflict and no version", r)
 			}
-			head = edit(first.PageID, head, c.landed)
+			edit(first.PageID, head, c.landed)
 			for i := range 2 {
 				r := ingest("the generator's text")
 				if len(r.Conflicts) != 0 {

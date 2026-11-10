@@ -67,7 +67,7 @@ func TestAMembershipChangeDropsAnotherProcesssCachedAccess(t *testing.T) {
 				t.Fatal(err)
 			}
 			deliver()
-			_, err = b.Boards().List(ctx, bob, ListBoardsReq{ProjectID: p.ProjectID})
+			_, err = b.Boards().List(ctx, bob, ListBoardsReq(p))
 			t.Logf("bob, removed through a, lists boards through b (clock unmoved): %v", err)
 			wantCode(t, err, domain.CodeForbidden)
 		})
