@@ -43,7 +43,8 @@ func parseTTL(ttl string) (int64, error) {
 
 // WriteMemory is write_memory. A task scope (task, agent, shared) lives under taskId and bumps that
 // task's version once; a durable scope (project, agent_global) moves no task, its taskId only
-// provenance, checked to exist. Event memory.written {scope, key} on the task when one is named.
+// provenance, checked to exist. Event memory.written {scope, key} on the task when one is named; a
+// private scope's (agent, agent_global) carries no key.
 // DEVIATION: a durable entry with no taskId appends no event (the store has no project-level event,
 // P-98); conductor appends one with no task.
 func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req WriteMemoryReq) (WriteMemoryResp, error) {
@@ -128,7 +129,14 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 			return WriteMemoryResp{}, err
 		}
 		if on != nil {
-			data, err := json.Marshal(map[string]any{"scope": req.Scope, "key": req.Key})
+			// The task's history and the board feed are every member's: a private scope's key (agent,
+			// its author's; agent_global, private to it) is left out, so the event says only that one
+			// was written.
+			ev := map[string]any{"scope": req.Scope}
+			if req.Scope != domain.MemoryScopeAgent && req.Scope != domain.MemoryScopeAgentGlobal {
+				ev["key"] = req.Key
+			}
+			data, err := json.Marshal(ev)
 			if err != nil {
 				return WriteMemoryResp{}, err
 			}
