@@ -120,6 +120,27 @@ func TestAMemberAddedByLoginBeforeItsAccount(t *testing.T) {
 			t.Fatalf("grant_capabilities: %+v (err %v), want the login row", got, err)
 		}
 	})
+
+	// Both rows, as a database written before add_member folded them may hold: a grant by the login
+	// narrows the account, the member that acts. The login row's grant would be dropped on the fold
+	// (the account is a member already), so writing it there would narrow no one.
+	t.Run("grant_capabilities by the login narrows the account when both are members", func(t *testing.T) {
+		f := setup(t, domain.RoleWorker, false)
+		if err := f.st.Atomically(f.ctx, func(tx store.Store) error {
+			_, err := tx.AddMember(f.ctx, f.project.ID, "U-dave", domain.RoleWorker, "alice")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := f.c.Grants().Grant(f.ctx, f.alice, GrantCapabilitiesReq{ProjectID: f.project.ID, IdentityID: login})
+		t.Logf("grant_capabilities %q with both rows: %+v (err %v)", login, got, err)
+		if err != nil || got.IdentityID != "U-dave" {
+			t.Fatalf("grant_capabilities: %+v (err %v), want U-dave", got, err)
+		}
+		if _, err := f.st.GetGrant(f.ctx, f.project.ID, "U-dave"); err != nil {
+			t.Fatalf("U-dave's grant: %v", err)
+		}
+	})
 }
 
 // engines are the two store engines the engine-level member tests run on; the Postgres leg skips

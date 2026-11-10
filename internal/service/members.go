@@ -98,7 +98,7 @@ func (p projects) RemoveMember(ctx context.Context, caller domain.Caller, req Re
 	if err != nil {
 		return RemoveMemberResp{}, err
 	}
-	id, err := p.c.memberKey(ctx, req.ProjectID, req.IdentityID)
+	id, err := p.c.memberKey(ctx, req.ProjectID, req.IdentityID, false)
 	if err != nil {
 		return RemoveMemberResp{}, err
 	}
@@ -177,19 +177,41 @@ func isAccount(ctx context.Context, tx store.Store, k string) (bool, error) {
 // (remove_member, grant_capabilities): the reference itself, trimmed, when a member row has exactly
 // that key, else resolveIdentity's. A row added by a login before its account existed keeps that
 // key, and the login resolves to the account's id once the account exists: without this the row
-// could not be named, and Remove on it would remove the account's own membership instead.
-func (c *Core) memberKey(ctx context.Context, projectID, ref string) (string, error) {
-	if k := strings.TrimSpace(ref); k != "" {
+// could not be named, and Remove on it would remove the account's own membership instead. With
+// preferAccount (grant_capabilities), a login whose account is a member too names the account: a
+// database written before add_member folded the two rows may hold both, and a grant on the login's
+// row would narrow no one (the fold drops it, the account being a member already).
+func (c *Core) memberKey(ctx context.Context, projectID, ref string, preferAccount bool) (string, error) {
+	isMember := func(k string) (bool, error) {
 		_, err := c.store.GetMember(ctx, projectID, k)
 		if err == nil {
-			return k, nil
+			return true, nil
 		}
 		if be, ok := domain.AsBatonDeckError(err); !ok || be.Code != domain.CodeNotFound {
-			return "", c.mapErr("resolve identity", err)
+			return false, c.mapErr("resolve identity", err)
 		}
+		return false, nil
+	}
+	k := strings.TrimSpace(ref)
+	literal := false
+	if k != "" {
+		ok, err := isMember(k)
+		if err != nil {
+			return "", err
+		}
+		if ok && !preferAccount {
+			return k, nil
+		}
+		literal = ok
 	}
 	id, _, err := c.resolveIdentity(ctx, ref)
-	return id, err
+	if err != nil || !literal || id == k {
+		return id, err
+	}
+	if ok, err := isMember(id); err != nil || ok {
+		return id, err
+	}
+	return k, nil
 }
 
 // resolveIdentity is the member key an identityId names: the user id itself, or the id of the user
