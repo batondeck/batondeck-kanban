@@ -129,9 +129,18 @@ export function useTaskDetail(projectId: string, taskId: string) {
       { queryKey: ['att', projectId, taskId], queryFn: () => mediaApi.listAttachments(projectId, taskId) },
     ],
   });
+  // The board's newest events: the agents seen on this board (the Assignee list, @mentions).
   const histQ = useQuery({
     queryKey: ['hist', projectId, task?.boardId, taskId],
     queryFn: () => feedApi.feed(projectId, task!.boardId),
+    enabled: !!task,
+  });
+  // The ticket's own events, for its Activity: the board's newest page holds the board's newest
+  // events whatever task they are on, so filtering it by task read an older ticket as "No activity".
+  // Under the same ['hist', projectId] prefix every refresh and the board's nudge invalidate.
+  const ownHistQ = useQuery({
+    queryKey: ['hist', projectId, task?.boardId, taskId, 'own'],
+    queryFn: () => feedApi.taskFeed(projectId, task!.boardId, taskId),
     enabled: !!task,
   });
   // Board (for column-aware "Move to" labels) + board tasks (to derive which agents are "busy" = hold a
@@ -222,7 +231,9 @@ export function useTaskDetail(projectId: string, taskId: string) {
     if (staleLease && identity) { forgetLease(identity, projectId, taskId); leaseChanged(); }
   }, [staleLease, identity, projectId, taskId]);
 
-  const history = (histQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
+  const history = (ownHistQ.data?.events ?? []).filter((e: ActivityEvent) => e.taskId === taskId);
+  /** The ticket's events loaded so far; `truncated` when the read stopped before its first event. */
+  const historyState = { loading: ownHistQ.isLoading || !task, failed: ownHistQ.isError, truncated: !!ownHistQ.data?.truncated };
   const subs = subQ.data?.tasks ?? [];
   // A cancelled subtask is DONE but not delivered: it counts in the total and not in done (P-208).
   const subsDone = subs.filter((s) => s.status === 'DONE' && !isCancelled(s)).length;
@@ -319,7 +330,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, memQ, attQ,
     err, setErr, run, uploadFile, move, countdown, myLease, claimIsMine, heldByOther, setLease,
     editing, setEditing, draft, setDraft, startEdit, editConflict, keepMyEdit, saveEdit,
-    agentList, mentionCandidates, history,
+    agentList, mentionCandidates, history, historyState,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
     colFor, moveTargets, nextOf, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
     canEdit, canSummarise, canLink, canAddSubtask, canAnnotate, canWriteMemory, canAttach, canFollowUp, canAck, canRace, why,

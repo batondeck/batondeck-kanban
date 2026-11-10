@@ -18,10 +18,13 @@ type Feed interface {
 	BoardSnapshot(ctx context.Context, caller domain.Caller, req BoardSnapshotReq) (BoardSnapshotResp, error)
 }
 
-// BoardFeedReq is a page of a board's feed.
+// BoardFeedReq is a page of a board's feed. TaskID narrows it to one task of that board: the task's
+// own events, newest first and paged the same way (a ticket's history, which the board's newest page
+// stops holding once the board moves on).
 type BoardFeedReq struct {
 	ProjectID string `json:"projectId"`
 	BoardID   string `json:"boardId"`
+	TaskID    string `json:"taskId,omitzero"`
 	Cursor    string `json:"cursor,omitzero"`
 	Limit     int64  `json:"limit,omitzero"`
 }

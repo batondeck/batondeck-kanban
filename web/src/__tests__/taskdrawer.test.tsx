@@ -390,7 +390,7 @@ describe('TaskDrawer — Marquee sites (T-51)', () => {
     const child: Task = { ...task, parentTaskId: 'T-9' };
     vi.stubGlobal('fetch', routeFetch({
       '/tasks/T-1$': { json: { task: child } },
-      '\\/boards\\/b1\\/feed$': {
+      '\\/boards\\/b1\\/feed(\\?|$)': {
         json: {
           events: [{
             id: 'ev1', projectId: 'p1', boardId: 'b1', taskId: 'T-1',
@@ -752,5 +752,28 @@ describe('the digest editor keeps the version it started from', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Keep my edit' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save summary' }));
     await waitFor(() => expect(summaries()).toEqual([expect.objectContaining({ version: 4, summary: 'my digest' })]));
+  });
+});
+
+/**
+ * The Activity panel reads the ticket's own events. It filtered the board feed's newest page (50
+ * events of the whole board) by task, so on a busy board an older ticket read "0 events on this
+ * ticket" and "No activity yet" though it was created, claimed and moved.
+ */
+describe("the Activity panel reads the ticket's own events", () => {
+  const ev = (id: string, taskId: string, type: string, ago: number) =>
+    ({ id, projectId: 'p1', boardId: 'b1', taskId, type, actor: 'alice@example.com', data: {}, ts: new Date(now - ago).toISOString() });
+  it('an older ticket on a busy board still shows its history', async () => {
+    const busy = Array.from({ length: 50 }, (_, i) => ev(`E-b${i}`, 'T-9', 'comment.added', i * 1000));
+    const fetchMock = routeFetch({
+      '/boards/b1/feed\\?(.*&)?taskId=T-1': { json: { events: [ev('E-2', 'T-1', 'task.claimed', 86_400_000), ev('E-1', 'T-1', 'task.created', 90_000_000)], nextCursor: '' } },
+      '/boards/b1/feed': { json: { events: busy, nextCursor: 'more' } },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    await screen.findByText('Ship the parser');
+    expect(await screen.findByText('2 events on this ticket.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Recent Activity/ }));
+    expect(screen.queryByText('No activity yet.')).not.toBeInTheDocument();
   });
 });

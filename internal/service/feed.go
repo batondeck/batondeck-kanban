@@ -32,7 +32,22 @@ func (f feed) BoardFeed(ctx context.Context, caller domain.Caller, req BoardFeed
 		return BoardFeedResp{}, domain.Validation("boardId is required", map[string]any{"field": "boardId"})
 	}
 	// The page is newest first, the store's order and conductor's, and the cursor pages older.
-	page, err := f.c.store.ListBoardFeed(ctx, req.ProjectID, req.BoardID, req.Cursor, int(req.Limit))
+	var page store.EventPage
+	var err error
+	if req.TaskID != "" {
+		// One task's events: only a task on this board, so the read is never more than the board's own
+		// feed (a grant scoped to this board reads no other board's task through it).
+		task, terr := f.c.store.GetTask(ctx, req.ProjectID, req.TaskID)
+		if terr != nil {
+			return BoardFeedResp{}, f.c.mapErr("board_feed", terr)
+		}
+		if task.BoardID != req.BoardID {
+			return BoardFeedResp{}, domain.NotFound("Task", req.TaskID)
+		}
+		page, err = f.c.store.ListTaskEvents(ctx, req.ProjectID, req.TaskID, req.Cursor, int(req.Limit))
+	} else {
+		page, err = f.c.store.ListBoardFeed(ctx, req.ProjectID, req.BoardID, req.Cursor, int(req.Limit))
+	}
 	if err != nil {
 		return BoardFeedResp{}, f.c.mapErr("board_feed", err)
 	}

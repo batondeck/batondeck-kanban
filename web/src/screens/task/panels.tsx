@@ -921,7 +921,13 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
 
 /** One compact line per event. Collapsed by default — it can grow long and dominate the surface. */
 export function ActivityPanel({ d }: P) {
-  const { history, taskId } = d;
+  const { history, historyState, taskId } = d;
+  // Say what was read: still loading, unreadable, or cut at the read's bound, never "No activity".
+  const count = historyState.loading
+    ? 'Loading activity…'
+    : historyState.failed
+      ? 'Activity could not be read.'
+      : `${historyState.truncated ? 'The latest ' : ''}${history.length} event${history.length === 1 ? '' : 's'} on this ticket.`;
   const displayNames = useDisplayNames(d.projectId);
   const [open, setOpen] = useState(false);
   return (
@@ -950,10 +956,11 @@ export function ActivityPanel({ d }: P) {
               <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
             </div>
           ))}
-          {history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No activity yet.</p>}
+          {history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{historyState.loading || historyState.failed ? count : 'No activity yet.'}</p>}
+          {historyState.truncated && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{count} Older ones are not loaded.</p>}
         </Stack>
       ) : (
-        <p className="muted" style={{ fontSize: 12, margin: 0 }}>{history.length} event{history.length === 1 ? '' : 's'} on this ticket.</p>
+        <p className="muted" style={{ fontSize: 12, margin: 0 }}>{count}</p>
       )}
     </Panel>
   );
