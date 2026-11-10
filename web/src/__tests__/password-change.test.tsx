@@ -59,6 +59,13 @@ describe('Settings: your password', () => {
     expect(screen.getByLabelText('New password')).toHaveValue('');
   });
 
+  it('says the change leaves CLI tokens and connected agents, and where to check them', async () => {
+    await mount(() => json({ otherSessionsEnded: 0 }));
+    expect(await screen.findByText(/CLI tokens and agents keep working/)).toHaveTextContent(
+      'CLI tokens and agents keep working: check CLI tokens and Your MCP sessions on this page for any you did not set up.',
+    );
+  });
+
   it('sends nothing when the two new passwords differ', async () => {
     await mount(() => json({ otherSessionsEnded: 0 }));
     await fill('handed-out-pw', 'a-password-of-my-own', 'a-password-of-my-owN');

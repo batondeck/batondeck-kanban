@@ -191,8 +191,10 @@ function MyTokenBudget() {
  * Your password: replace the one you were handed. Settings → Users shows a new account's first
  * password to the admin who added it, so until its holder changes it here, that admin (and anyone
  * who saw the message that carried it) can sign in as them. The server checks the current password
- * and the length; the change signs out every other session of yours, and this one carries on.
- * Personal, like the token budget: it renders whichever project is picked.
+ * and the length; the change signs out every other session of yours, and this one carries on. It
+ * leaves CLI tokens and OAuth grants, as the host's `user passwd` does, so the panel says where to
+ * look for ones the password's earlier holder made. Personal, like the token budget: it renders
+ * whichever project is picked.
  */
 function MyPassword() {
   const [current, setCurrent] = useState('');
@@ -229,7 +231,8 @@ function MyPassword() {
           <Stack gap={12}>
             <p className="muted" style={{ fontSize: 14, margin: 0 }}>
               Replace the password you were given with one only you know: at least 12 characters. Your
-              other signed-in sessions are signed out; this one stays.
+              other signed-in sessions are signed out; this one stays. CLI tokens and agents keep working:
+              check CLI tokens and Your MCP sessions on this page for any you did not set up.
             </p>
             <Cluster gap={8}>
               <input
