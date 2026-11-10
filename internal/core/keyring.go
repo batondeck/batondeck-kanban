@@ -49,23 +49,15 @@ func (k *Keyring) DeriveKey(label string) ([]byte, error) {
 // run) and returns a ready keyring. lookup is injectable for tests; production passes
 // os.LookupEnv.
 func OpenKeyring(path string, lookup func(string) (string, bool)) (*Keyring, error) {
-	var key []byte
+	key, fromEnv, err := envKey(lookup)
+	if err != nil {
+		return nil, err
+	}
 	var created bool
-	if v, ok := lookup(MasterKeyEnv); ok {
-		k, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return nil, fmt.Errorf("keyring: %s is not base64: %w", MasterKeyEnv, err)
-		}
-		if len(k) != 32 {
-			return nil, fmt.Errorf("keyring: %s must decode to 32 bytes, got %d", MasterKeyEnv, len(k))
-		}
-		key = k
-	} else {
-		k, made, err := loadOrCreateKeyFile(path)
-		if err != nil {
+	if !fromEnv {
+		if key, created, err = loadOrCreateKeyFile(path); err != nil {
 			return nil, err
 		}
-		key, created = k, made
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -76,6 +68,36 @@ func OpenKeyring(path string, lookup func(string) (string, bool)) (*Keyring, err
 		return nil, fmt.Errorf("keyring: %w", err)
 	}
 	return &Keyring{aead: aead, key: key, created: created}, nil
+}
+
+// envKey is BATONDECK_MASTER_KEY's key, when it is set (ok): base64 of 32 bytes, or an error.
+func envKey(lookup func(string) (string, bool)) (key []byte, ok bool, err error) {
+	v, ok := lookup(MasterKeyEnv)
+	if !ok {
+		return nil, false, nil
+	}
+	k, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		return nil, true, fmt.Errorf("keyring: %s is not base64: %w", MasterKeyEnv, err)
+	}
+	if len(k) != 32 {
+		return nil, true, fmt.Errorf("keyring: %s must decode to 32 bytes, got %d", MasterKeyEnv, len(k))
+	}
+	return k, true, nil
+}
+
+// CheckMasterKey reports, creating nothing, whether OpenKeyring(path, lookup) would open: the
+// environment's key decodes to 32 bytes, or else the key file at path is private and holds 32
+// bytes. fromEnv says the key is the environment's; missing, that neither holds one, so
+// OpenKeyring would create the file. doctor asks it.
+func CheckMasterKey(path string, lookup func(string) (string, bool)) (fromEnv, missing bool, err error) {
+	if _, fromEnv, err = envKey(lookup); fromEnv || err != nil {
+		return fromEnv, false, err
+	}
+	if _, err = readKeyFile(path); errors.Is(err, fs.ErrNotExist) {
+		return false, true, nil
+	}
+	return false, false, err
 }
 
 // loadOrCreateKeyFile reads the key file at path, or makes it when it is not there; created says it

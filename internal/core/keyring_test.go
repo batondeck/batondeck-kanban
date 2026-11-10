@@ -226,3 +226,45 @@ func TestKeyringNamesAnEmptyFileAndWhoCreated(t *testing.T) {
 		t.Fatalf("an environment key: %v", err)
 	}
 }
+
+// CheckMasterKey answers what OpenKeyring would, creating nothing: a missing file is missing (not an
+// error, and still missing after), a bad environment key or a loose or short file is the error
+// OpenKeyring would return, and a good one of each passes.
+func TestCheckMasterKeyCreatesNothing(t *testing.T) {
+	noEnv := func(string) (string, bool) { return "", false }
+	path := filepath.Join(t.TempDir(), "master.key")
+	if fromEnv, missing, err := CheckMasterKey(path, noEnv); err != nil || fromEnv || !missing {
+		t.Fatalf("a missing file: %v %v %v", fromEnv, missing, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("CheckMasterKey created the file: %v", err)
+	}
+	if _, _, err := CheckMasterKey(path, func(string) (string, bool) { return "notbase64", true }); err == nil || !strings.Contains(err.Error(), "not base64") {
+		t.Fatalf("a bad environment key: %v", err)
+	}
+	env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	if fromEnv, _, err := CheckMasterKey(path, func(string) (string, bool) { return env, true }); err != nil || !fromEnv {
+		t.Fatalf("a good environment key: %v %v", fromEnv, err)
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte{1}, 31), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := CheckMasterKey(path, noEnv); err == nil || !strings.Contains(err.Error(), "holds 31 bytes") {
+		t.Fatalf("a short file: %v", err)
+	}
+	if err := os.WriteFile(path, bytes.Repeat([]byte{1}, 32), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := CheckMasterKey(path, noEnv); err == nil || !strings.Contains(err.Error(), "group/world accessible") {
+		t.Fatalf("a 0644 file: %v", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fromEnv, missing, err := CheckMasterKey(path, noEnv); err != nil || fromEnv || missing {
+		t.Fatalf("a good file: %v %v %v", fromEnv, missing, err)
+	}
+}

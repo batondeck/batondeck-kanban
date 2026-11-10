@@ -179,10 +179,14 @@ func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 		t.Fatalf("doctor on an unreachable Postgres: %d %q", code, out)
 	}
 
-	if dsn := os.Getenv("BATONDECK_TEST_POSTGRES_DSN"); dsn != "" {
+	if os.Getenv("BATONDECK_TEST_POSTGRES_DSN") != "" {
+		// A database of its own, migrated: doctor also judges the schema, and the server's default
+		// database is not this binary's.
+		_, dsn := storetest.PostgresDSN(t)
 		t.Setenv("BATONDECK_DATABASE_URL", dsn)
 		code, out, _ := run("doctor")
-		if code != 0 || !regexp.MustCompile(`ok   store        postgres on host .+, database .+, blobs in .+, the connection reports: PostgreSQL `).MatchString(out) {
+		if code != 0 || !regexp.MustCompile(`ok   store        postgres on host .+, database .+, blobs in .+, the connection reports: PostgreSQL `).MatchString(out) ||
+			!strings.Contains(out, "ok   schema       migrated to this binary's version\n") {
 			t.Fatalf("doctor on Postgres: %d %q", code, out)
 		}
 	}
@@ -501,5 +505,73 @@ func TestCommandsRefuseAPositionalArgument(t *testing.T) {
 	}
 	if code, out, _ := run("version", "-h"); code != 0 || !strings.Contains(out, "usage: batondeck-kanban version") {
 		t.Errorf("version -h: %d %q", code, out)
+	}
+}
+
+// doctor checks what serve refuses to start on, each on a line of its own and each failing the exit
+// code: the master key (BATONDECK_MASTER_KEY's, or master.key's mode and length), the blob dir, and
+// the schema (newer than the binary's fails; not migrated yet is a WARN, since serve migrates it).
+// It creates nothing it checks: no master.key, no blob dir, no goose table in an empty file.
+func TestDoctorChecksWhatServeChecks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run("doctor")
+	if code != 0 || !regexp.MustCompile(`WARN schema       at version 0, this binary's is \d+: serve migrates it as it starts; user and token need it migrated first \(batondeck-kanban migrate\)\n`).MatchString(out) ||
+		!strings.Contains(out, "ok   keyring      master.key at "+filepath.Join(dir, "master.key")+": not created yet; serve creates it\n") ||
+		!strings.Contains(out, "ok   blobs        "+filepath.Join(dir, "blobs")+": not created yet; serve creates it\n") {
+		t.Fatalf("doctor on an empty file: %d %q", code, out)
+	}
+	db, err := sql.Open("sqlite", "file://"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("doctor wrote to the file it checks: %d tables, %v", tables, err)
+	}
+	db.Close()
+	for _, p := range []string{filepath.Join(dir, "master.key"), filepath.Join(dir, "blobs")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("doctor created %s: %v", p, err)
+		}
+	}
+
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	if _, err := core.OpenKeyring(filepath.Join(dir, "master.key"), func(string) (string, bool) { return "", false }); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = run("doctor")
+	if code != 0 || !regexp.MustCompile(`ok   schema       migrated to this binary's version\n`).MatchString(out) ||
+		!strings.Contains(out, "ok   keyring      master.key at "+filepath.Join(dir, "master.key")+"\n") {
+		t.Fatalf("doctor on a migrated store with its key: %d %q", code, out)
+	}
+
+	t.Setenv("BATONDECK_MASTER_KEY", "notbase64")
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL keyring      keyring: BATONDECK_MASTER_KEY is not base64") {
+		t.Fatalf("doctor with a bad BATONDECK_MASTER_KEY: %d %q", code, out)
+	}
+	os.Unsetenv("BATONDECK_MASTER_KEY")
+	if err := os.Chmod(filepath.Join(dir, "master.key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL keyring      keyring: "+filepath.Join(dir, "master.key")+" mode 644 is group/world accessible") {
+		t.Fatalf("doctor with a 0644 master.key: %d %q", code, out)
+	}
+	if err := os.Chmod(filepath.Join(dir, "master.key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notDir := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BATONDECK_BLOB_DIR", filepath.Join(notDir, "blobs"))
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL blobs        ") {
+		t.Fatalf("doctor with a blob dir under a file: %d %q", code, out)
 	}
 }

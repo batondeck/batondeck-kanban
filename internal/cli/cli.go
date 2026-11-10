@@ -83,7 +83,7 @@ commands:
   token        create, list and revoke API tokens (a token is printed once, at create)
   user         add, disable, list users and set their passwords (no sign-up page: users are made here)
   session      register or unregister this client session for the server's wake doorbell (hooks run it)
-  doctor       check the config and report the store engine the connection answers as
+  doctor       check the config, the store and its schema, the master key and the blob dir
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
   licenses     print the licence, the NOTICE and the third-party notices this binary carries
   version      print the version

@@ -155,28 +155,40 @@ func (m migrator) downToZero(ctx context.Context) error {
 
 func (m migrator) schemaCurrent(ctx context.Context) error {
 	p, err := m.provider()
-	var current, target int64
+	var target int64
 	switch {
 	case errors.Is(err, goose.ErrNoMigrations):
-		current, err = m.storedVersion(ctx)
-		if err != nil {
-			return err
-		}
 	case err != nil:
 		return err
 	default:
-		current, target, err = p.GetVersions(ctx)
-		if err != nil {
-			return fmt.Errorf("store: schema version: %w", err)
+		if src := p.ListSources(); len(src) > 0 {
+			target = src[len(src)-1].Version
 		}
 	}
-	switch {
-	case current < target:
-		return fmt.Errorf("store: the schema is at version %d and this binary needs %d: it has not been migrated", current, target)
-	case current > target:
-		return fmt.Errorf("store: the schema is at version %d, newer than this binary's %d: a newer batondeck-kanban migrated it", current, target)
+	// Read only: goose's GetVersions makes its version table in a database that has none, and doctor
+	// asks this of a database it must not write.
+	current, err := m.storedVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if current != target {
+		return &SchemaVersionError{Current: current, Target: target}
 	}
 	return nil
+}
+
+// SchemaVersionError is SchemaCurrent's answer when the schema is not the one this binary migrates
+// to: Current is the version the database is at, Target this binary's. Behind (Current < Target), a
+// migration has not run; ahead, a newer binary migrated it.
+type SchemaVersionError struct {
+	Current, Target int64
+}
+
+func (e *SchemaVersionError) Error() string {
+	if e.Current < e.Target {
+		return fmt.Sprintf("store: the schema is at version %d and this binary needs %d: it has not been migrated", e.Current, e.Target)
+	}
+	return fmt.Sprintf("store: the schema is at version %d, newer than this binary's %d: a newer batondeck-kanban migrated it", e.Current, e.Target)
 }
 
 // versionTable is goose's own version-table store for the dialect: its DDL, its existence check

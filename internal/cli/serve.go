@@ -209,15 +209,8 @@ var requestReadTimeout = 30 * time.Second
 // (fresh), and a WARN beside one made before, whose sealed values, if it ran under another key,
 // no longer open.
 func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, bool), logger *log.Logger, fresh bool) (*core.Keyring, error) {
-	var path string
-	_, fromEnv := lookup(core.MasterKeyEnv)
-	switch {
-	case fromEnv:
-	case cfg.Engine() == core.EngineSQLite:
-		path = filepath.Join(filepath.Dir(cfg.SQLitePath()), "master.key")
-	case cfgPath != "":
-		path = filepath.Join(filepath.Dir(cfgPath), "master.key")
-	default:
+	path, none := keyFilePath(cfg, cfgPath, lookup)
+	if none {
 		logger.Printf("serve: WARN no keyring: set %s (or run with -config) to register a wake session with an inbox token", core.MasterKeyEnv)
 		return nil, nil
 	}
@@ -230,6 +223,23 @@ func openKeyring(cfg *core.Config, cfgPath string, lookup func(string) (string, 
 		logger.Printf("serve: WARN created a new master key %s for a database that was not new: if the database ran under an earlier key (a master.key not restored with it, or %s no longer set), the secrets sealed under that key (on-call integration secrets, wake-session inbox tokens) do not open, so every delivery to an HMAC-signed integration is refused 401, and the attachment links it signed are refused; stop serve and put the earlier key back, or rotate each integration's secret", path, core.MasterKeyEnv)
 	}
 	return keys, err
+}
+
+// keyFilePath is where serve's master key file is: beside the SQLite file, or on Postgres beside the
+// config file; "" when BATONDECK_MASTER_KEY is set, which the file never overrides. none says there
+// is neither: Postgres with no config file and no BATONDECK_MASTER_KEY, where serve runs without a
+// keyring.
+func keyFilePath(cfg *core.Config, cfgPath string, lookup func(string) (string, bool)) (path string, none bool) {
+	_, fromEnv := lookup(core.MasterKeyEnv)
+	switch {
+	case fromEnv:
+		return "", false
+	case cfg.Engine() == core.EngineSQLite:
+		return filepath.Join(filepath.Dir(cfg.SQLitePath()), "master.key"), false
+	case cfgPath != "":
+		return filepath.Join(filepath.Dir(cfgPath), "master.key"), false
+	}
+	return "", true
 }
 
 // mediaOptions is the blob store at cfg.BlobDir() and, with a keyring, the URL signer keyed by its

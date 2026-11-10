@@ -175,8 +175,11 @@ batondeck-kanban doctor
 ```
 
 checks the config and names the engine the connection itself reports (`the connection reports:
-SQLite 3.x`, or the Postgres server version), the store's location and the blob dir, and exits non-zero
-on a failure.
+SQLite 3.x`, or the Postgres server version), the store's location and the blob dir. Then it checks
+what `serve` refuses to start on: the schema (newer than the binary's fails; not migrated yet is a
+warning, since `serve` migrates it), the master key (`BATONDECK_MASTER_KEY`, or `master.key`'s mode
+and length) and whether the blob dir can be written. It creates none of them, and exits non-zero on
+a failure.
 
 ## Backup and restore
 
