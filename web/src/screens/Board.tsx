@@ -971,11 +971,11 @@ export function Board() {
       tasksApi.updateTask(projectId, v.taskId, v.version, { assignee: v.assignee }),
     onMutate: async (v) => {
       // THE SAME DEFECT `moveCard` HAD, still here twenty lines below the fix for it — found in review,
-      // not by me. And worse than moveCard's, because `['tasks', projectId, boardId]` is not merely an
-      // entry nobody reads: `Analytics.tsx` DECLARES a query at exactly that key. Board's `boardId`
-      // comes from `useParams()`, Analytics' from `boards[0].id` — identical on a single-board project
-      // — so this patched ANOTHER SCREEN'S cache and, on error, restored a pre-assign snapshot into it,
-      // while the board saw neither.
+      // not by me. And worse than moveCard's, because `['tasks', projectId, boardId]` was not merely an
+      // entry nobody reads: `Analytics.tsx` then declared a query at exactly that key (its census has
+      // its own `task-census` key now). Board's `boardId` comes from `useParams()`, Analytics' from
+      // `boards[0].id` — identical on a single-board project — so this patched ANOTHER SCREEN'S cache
+      // and, on error, restored a pre-assign snapshot into it, while the board saw neither.
       await qc.cancelQueries({ queryKey: ['tasks', projectId] });
       return { snapshot: patchTaskCaches(qc, projectId, v.taskId, (t) => ({ ...t, assignee: v.assignee })) };
     },
