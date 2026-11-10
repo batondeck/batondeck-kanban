@@ -605,7 +605,7 @@ export function IntegrationForm({
                 value={form.extract.dedupKey}
                 onChange={(dedupKey) => setExtract({ dedupKey })}
                 placeholder="notification.id"
-                hint="Your tool's own per-notification id, if it has one. Blank → the body hash: an identical body within 10 minutes, with nothing else from that alert in between, is treated as a retry."
+                hint="Your tool's own per-notification id, if it has one. Blank → the body hash: an identical body within 10 minutes is treated as a retry; under Correlate or Auto-close, only while nothing else from that alert came in between."
               />
             </FieldGroup>
             <Cluster gap={8} wrap>
