@@ -569,6 +569,8 @@ describe('subtask checkbox follows the transition table', () => {
       expect(moves(fetchMock)).toHaveLength(0);
       expect(box).toBeDisabled();
       expect(box).toHaveAttribute('title', expect.stringMatching(/Review/));
+      // A screen reader hears the reason too: a title on a disabled box is often not announced.
+      expect(box).toHaveAccessibleDescription(/reaches Done from Review only/);
     });
   }
 
