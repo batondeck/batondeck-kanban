@@ -460,6 +460,67 @@ func TestHookBodyHashIDIsARetryOnlyWhileItIsOne(t *testing.T) {
 	}
 }
 
+// Under correlate (the default lifecycle) an alert's resolve is its latest delivery even when its
+// ticket is already done or gone, so the same body-hash firing after it is a second outage, not a
+// retry of the first: down, the ticket DONE (or deleted), up, then down again within the retry
+// window files a new ticket, and a retry of that is replayed.
+func TestHookBodyHashIDAfterADoneOrGoneTicket(t *testing.T) {
+	for _, end := range []string{"done", "gone"} {
+		t.Run(end, func(t *testing.T) {
+			f, _, root := oncallFixture(t)
+			key := map[string]string{HeaderAPIKey: "key-0123456789"}
+			hdr := func(name string) string { return key[name] }
+			iid := f.integration(t, root, CreateIntegrationReq{Source: "webhook", Lifecycle: "correlate",
+				Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "key-0123456789"},
+				Mapping: IntegrationMapping{Extract: MappingExtract{Fingerprint: []string{"monitor"}, Title: []string{"monitor"}, Status: []string{"status"}},
+					StatusMap: map[string]AlertStatus{"down": "firing", "up": "resolved"}}}).Integration.ID
+			send := func(body string) HookResult {
+				t.Helper()
+				out := f.hook(t, iid, HookRequest{Header: hdr, Body: []byte(body)})
+				if out.Refusal != "" || len(out.Results) != 1 {
+					t.Fatalf("%s: %+v", body, out)
+				}
+				f.clock.advance(time.Second)
+				return out.Results[0]
+			}
+			const down, up = `{"monitor":"api","status":"down"}`, `{"monitor":"api","status":"up"}`
+			first := send(down)
+			if first.Result != "created" || first.Replayed {
+				t.Fatalf("the first outage: %+v", first)
+			}
+			if end == "done" {
+				for _, to := range []domain.Status{domain.InProgress, domain.Review, domain.Done} {
+					task, err := f.st.GetTask(f.ctx, f.project.ID, *first.TaskID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := f.c.Tasks().Move(f.ctx, f.alice, MoveTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version, ToStatus: to}); err != nil {
+						t.Fatalf("move to %s: %v", to, err)
+					}
+				}
+			} else {
+				task, err := f.st.GetTask(f.ctx, f.project.ID, *first.TaskID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.c.Tasks().Delete(f.ctx, f.alice, DeleteTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version}); err != nil {
+					t.Fatalf("delete the ticket: %v", err)
+				}
+			}
+			if r := send(up); r.Result != "recorded" || r.Replayed {
+				t.Fatalf("the recovery after the ticket was %s: %+v, want recorded", end, r)
+			}
+			second := send(down)
+			if second.Result != "created" || second.Replayed || second.TaskID == nil || *second.TaskID == *first.TaskID || second.DeliveryID == first.DeliveryID {
+				t.Fatalf("the second outage, the ticket %s and a recovery between: %+v, want a new ticket", end, second)
+			}
+			if r := send(down); !r.Replayed || r.DeliveryID != second.DeliveryID || *r.TaskID != *second.TaskID {
+				t.Fatalf("the second outage's retry: %+v, want it replayed", r)
+			}
+		})
+	}
+}
+
 // AC4: under autoclose a repeat firing appends to the open ticket, and the resolve deletes it while
 // it is untouched (get_task NOT_FOUND; the delivery row keeps its taskId); a ticket someone wrote is
 // annotated instead — also when an ingest append followed the write.
