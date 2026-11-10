@@ -48,16 +48,17 @@ func orDefault(v, def int) int {
 // the token back.
 func (l *LoginLimits) admit(addr string, now time.Time) (refund func(), err error) {
 	l.init()
-	key := addrKey(addr)
+	key := AddrKey(addr)
 	if wait, ok := l.addrs.take(key, now); !ok {
 		return nil, rateLimited(wait)
 	}
 	return func() { l.addrs.refund(key) }, nil
 }
 
-// addrKey is the bucket an address counts against: an IPv4 address itself, an IPv6 address its /64
-// (one host commonly holds a whole /64). Anything unparsable is its own key.
-func addrKey(addr string) string {
+// AddrKey is what a client address counts against, in the sign-in limits and in OAuth
+// registration's: an IPv4 address itself, an IPv6 address its /64 (one host commonly holds a whole
+// /64). Anything unparsable is its own key.
+func AddrKey(addr string) string {
 	a, err := netip.ParseAddr(addr)
 	if err != nil {
 		return addr

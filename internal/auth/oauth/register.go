@@ -37,7 +37,8 @@ type registration struct {
 }
 
 // register is RFC 7591 dynamic registration of a public client. It is unauthenticated, so it is
-// bounded where it enters: a per-address rate limit (429 past it), a 64 KiB body, at most 10
+// bounded where it enters: a rate limit per address and one for every address together (429 past
+// either), a 64 KiB body, at most 10
 // redirect URIs; and each call first deletes the registrations no authorization used within
 // UnusedClientTTL. The client authenticates at /token by PKCE alone: whatever
 // token_endpoint_auth_method it asks for, it is registered "none", and the answer says so.
@@ -46,7 +47,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if ok, retry := s.limiter.allow(s.o.Auth.Proxies.ClientAddr(r), now); !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
 		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable",
-			fmt.Sprintf("too many registrations from this address; retry after %d s", int(math.Ceil(retry.Seconds()))))
+			fmt.Sprintf("too many registrations; retry after %d s", int(math.Ceil(retry.Seconds()))))
 		return
 	}
 	var req registration
@@ -174,13 +175,17 @@ func clientID() (string, error) {
 	return "bdc_" + hex.EncodeToString(b), nil
 }
 
-// limiter is a fixed window per address: max calls per window. It holds at most maxTracked
-// addresses; past that, the windows that have ended are dropped first.
+// limiter is a fixed window per address: max calls per window, an address counted by auth.AddrKey
+// (an IPv6 address by its /64, as the sign-in limits count it), and at most total calls per window
+// from every address together (0: no such bound). It holds at most maxTracked addresses; past that,
+// the windows that have ended are dropped, and while every window is live a new address is refused.
 type limiter struct {
 	mu     sync.Mutex
 	max    int
+	total  int
 	window time.Duration
 	hits   map[string]*hitWindow
+	all    hitWindow
 }
 
 type hitWindow struct {
@@ -190,37 +195,52 @@ type hitWindow struct {
 
 const maxTracked = 10000
 
-func newLimiter(max int, window time.Duration) *limiter {
-	return &limiter{max: max, window: window, hits: map[string]*hitWindow{}}
+func newLimiter(max, total int, window time.Duration) *limiter {
+	return &limiter{max: max, total: total, window: window, hits: map[string]*hitWindow{}}
 }
 
-// allow counts a call from addr at now: false, and the time until its window ends, past the limit.
+// allow counts a call from addr at now: false, and the time until a window ends, past a limit.
 func (l *limiter) allow(addr string, now time.Time) (bool, time.Duration) {
+	key := auth.AddrKey(addr)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	h, ok := l.hits[addr]
+	if l.total > 0 {
+		if now.Sub(l.all.start) >= l.window {
+			l.all = hitWindow{start: now}
+		}
+		if l.all.n >= l.total {
+			return false, l.all.start.Add(l.window).Sub(now)
+		}
+	}
+	h, ok := l.hits[key]
 	if !ok || now.Sub(h.start) >= l.window {
 		if !ok && len(l.hits) >= maxTracked {
-			l.prune(now)
+			// Forgetting live windows would hand the address that spent its budget a fresh one.
+			if wait := l.prune(now); len(l.hits) >= maxTracked {
+				return false, wait
+			}
 		}
 		h = &hitWindow{start: now}
-		l.hits[addr] = h
+		l.hits[key] = h
 	}
 	if h.n >= l.max {
 		return false, h.start.Add(l.window).Sub(now)
 	}
 	h.n++
+	l.all.n++
 	return true, 0
 }
 
-func (l *limiter) prune(now time.Time) {
+// prune drops the windows that have ended and returns the time until the soonest live one ends.
+func (l *limiter) prune(now time.Time) time.Duration {
+	soonest := l.window
 	for a, h := range l.hits {
-		if now.Sub(h.start) >= l.window {
+		left := h.start.Add(l.window).Sub(now)
+		if left <= 0 {
 			delete(l.hits, a)
+		} else if left < soonest {
+			soonest = left
 		}
 	}
-	if len(l.hits) >= maxTracked {
-		// Every window is live: forget them all rather than grow without bound.
-		clear(l.hits)
-	}
+	return soonest
 }

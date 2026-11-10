@@ -42,11 +42,14 @@ const (
 	DefaultCodeTTL    = 10 * time.Minute
 )
 
-// Registration bounds: DefaultRegisterLimit registrations per client address per
-// DefaultRegisterWindow, and a registration no authorization used within UnusedClientTTL is
-// deleted at the next registration.
+// Registration bounds: DefaultRegisterLimit registrations per client address (an IPv6 address by
+// its /64) and DefaultRegisterTotal from every address together per DefaultRegisterWindow, and a
+// registration no authorization used within UnusedClientTTL is deleted at the next registration.
+// The total bounds what many addresses can store: each registration keeps up to 20 KB of redirect
+// URIs for a day and an audit row for good.
 const (
 	DefaultRegisterLimit  = 20
+	DefaultRegisterTotal  = 500
 	DefaultRegisterWindow = time.Hour
 	UnusedClientTTL       = 24 * time.Hour
 )
@@ -73,8 +76,10 @@ type Options struct {
 	Now func() time.Time
 	// AccessTTL, RefreshTTL, CodeTTL: 0 means the Default.
 	AccessTTL, RefreshTTL, CodeTTL time.Duration
-	// RegisterLimit per RegisterWindow per client address: 0 means the Default.
+	// RegisterLimit per RegisterWindow per client address, and RegisterTotal from every address
+	// together: 0 means the Default.
 	RegisterLimit  int
+	RegisterTotal  int
 	RegisterWindow time.Duration
 }
 
@@ -120,10 +125,13 @@ func New(o Options) (*Server, error) {
 	if o.RegisterLimit == 0 {
 		o.RegisterLimit = DefaultRegisterLimit
 	}
+	if o.RegisterTotal == 0 {
+		o.RegisterTotal = DefaultRegisterTotal
+	}
 	if o.RegisterWindow == 0 {
 		o.RegisterWindow = DefaultRegisterWindow
 	}
-	return &Server{o: o, issuer: issuer, limiter: newLimiter(o.RegisterLimit, o.RegisterWindow)}, nil
+	return &Server{o: o, issuer: issuer, limiter: newLimiter(o.RegisterLimit, o.RegisterTotal, o.RegisterWindow)}, nil
 }
 
 // issuerOf normalises public_url: an http(s) URL with a host and no path, query or fragment, without

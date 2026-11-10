@@ -138,7 +138,8 @@ request would carry the session in clear.
 
 Behind a proxy every request arrives from the proxy's address, so the sign-in limit (a burst of 10
 failed attempts per address, then one more every 6 s) and the registration limit (20 an hour per
-address) would count all your users as one: ten mistyped passwords lock everyone out until the
+address, 500 an hour in all; an IPv6 address counts by its /64 in both) would count all your users
+as one: ten mistyped passwords lock everyone out until the
 budget refills, and a steady trickle of wrong ones keeps them out. Name the proxy and the server
 counts each client by the address the proxy appends to `X-Forwarded-For` instead:
 

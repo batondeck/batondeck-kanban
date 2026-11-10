@@ -87,7 +87,7 @@ func TestRefusalRegisterOverTheRateLimit(t *testing.T) {
 
 // The limiter counts per address: another address is not held by the first's budget.
 func TestRegisterLimitIsPerAddress(t *testing.T) {
-	l := newLimiter(1, time.Hour)
+	l := newLimiter(1, 0, time.Hour)
 	now := time.Unix(0, 0)
 	if ok, _ := l.allow("10.0.0.1", now); !ok {
 		t.Fatal("first call refused")
@@ -97,6 +97,63 @@ func TestRegisterLimitIsPerAddress(t *testing.T) {
 	}
 	if ok, _ := l.allow("10.0.0.2", now); !ok {
 		t.Fatal("another address refused")
+	}
+}
+
+// An IPv6 client counts by its /64, as the sign-in limit counts it: another address inside the same
+// /64 gets no fresh budget, another /64 does.
+func TestRegisterLimitCountsAnIPv6ClientByItsSlash64(t *testing.T) {
+	l := newLimiter(2, 0, time.Hour)
+	now := time.Unix(0, 0)
+	for _, a := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2"} {
+		if ok, _ := l.allow(a, now); !ok {
+			t.Fatalf("%s refused within the budget", a)
+		}
+	}
+	if ok, _ := l.allow("2001:db8:1:2:ffff:ffff:ffff:3", now); ok {
+		t.Fatal("a third address of the same /64 allowed past its budget")
+	}
+	if ok, _ := l.allow("2001:db8:1:3::1", now); !ok {
+		t.Fatal("another /64 refused")
+	}
+}
+
+// A table full of live windows refuses a new address rather than forgetting every count, so
+// flooding it with addresses does not reset an address that spent its budget.
+func TestRegisterLimitKeepsCountsWhenFull(t *testing.T) {
+	l := newLimiter(1, 0, time.Hour)
+	now := time.Unix(0, 0)
+	for i := 0; i < maxTracked; i++ {
+		if ok, _ := l.allow(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), now); !ok {
+			t.Fatalf("address %d refused", i)
+		}
+	}
+	if ok, _ := l.allow("10.0.0.0", now); ok {
+		t.Fatal("the first address allowed again: the counts were forgotten")
+	}
+	if ok, wait := l.allow("192.0.2.1", now); ok || wait <= 0 || wait > time.Hour {
+		t.Fatalf("a new address while the table is full: %t, retry after %s", ok, wait)
+	}
+	if ok, _ := l.allow("192.0.2.1", now.Add(time.Hour)); !ok {
+		t.Fatal("a new address once the windows ended: refused")
+	}
+}
+
+// Every address together is bounded per window too, so many addresses cannot store registrations
+// without limit; the window's end lifts it.
+func TestRegisterLimitBoundsEveryAddressTogether(t *testing.T) {
+	l := newLimiter(5, 3, time.Hour)
+	now := time.Unix(0, 0)
+	for _, a := range []string{"10.0.0.1", "10.0.0.2", "2001:db8::1"} {
+		if ok, _ := l.allow(a, now); !ok {
+			t.Fatalf("%s refused within the total", a)
+		}
+	}
+	if ok, wait := l.allow("10.0.0.4", now.Add(time.Minute)); ok || wait != 59*time.Minute {
+		t.Fatalf("a fourth address past the total: %t, retry after %s", ok, wait)
+	}
+	if ok, _ := l.allow("10.0.0.4", now.Add(time.Hour)); !ok {
+		t.Fatal("refused once the window ended")
 	}
 }
 
