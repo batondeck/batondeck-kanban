@@ -152,13 +152,17 @@ const subs = new Set<Sub>();
 let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
 /**
- * The last `presence` and `notifications` payloads the CURRENT socket carried, for a subscriber that
- * joins it later. The server sends both once on open and then only on a change, and the nav badge
- * opens the socket at app mount, so a screen joining on the same URL (Agents with no board, the full
- * task page) would otherwise see neither until the next change. Cleared whenever the socket is
- * replaced or goes down: a rebuilt or reconnected socket sends its own on open.
+ * The last `presence` payload the CURRENT socket carried, for a subscriber that joins it later. The
+ * server sends presence once on open and then only on a change, and the nav badge opens the socket at
+ * app mount, so a screen joining on the same URL (Agents with no board, the full task page) would
+ * otherwise not see it until the next change. Cleared whenever the socket is replaced or goes down:
+ * a rebuilt or reconnected socket sends its own on open.
+ *
+ * NOT `notifications`: the server sends those on open and per new row, but not when one is marked
+ * read, so the last frame can be older than the reader's own mark-read, and every notifications
+ * subscriber reads the list over REST first anyway.
  */
-let lastFrames: { presence?: unknown; notifications?: unknown } = {};
+let lastPresence: unknown;
 
 /** The board the shared socket should be scoped to: whichever subscriber named one. */
 function desiredUrl(): string {
@@ -187,26 +191,23 @@ function reconcile(): void {
   closeCurrent?.();
   closeCurrent = undefined;
   currentUrl = want;
-  lastFrames = {};
+  lastPresence = undefined;
   if (!want) return;
   closeCurrent = sseConnect(
     want,
     (live) => {
-      if (!live) lastFrames = {};
+      if (!live) lastPresence = undefined;
       fanout('onLive', (h) => h.onLive?.(live));
     },
     {
       updated: () => fanout('onUpdate', (h) => h.onUpdate?.()),
       board: (d) => fanout('onBoard', (h) => h.onBoard?.(d)),
       presence: (d) => {
-        lastFrames.presence = d;
+        lastPresence = d;
         fanout('onPresence', (h) => h.onPresence?.(presenceSessions(d, new Date().toISOString())));
       },
       // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
-      notifications: (d) => {
-        lastFrames.notifications = d;
-        fanout('onNotifications', (h) => h.onNotifications?.(d));
-      },
+      notifications: (d) => fanout('onNotifications', (h) => h.onNotifications?.(d)),
       resync: () => fanout('onResync', (h) => h.onResync?.()),
     },
     () => {
@@ -257,20 +258,16 @@ export function joinStream(key: { projectId?: string; boardId?: string }, h: Str
   subs.add(sub);
   const before = currentUrl;
   reconcile();
-  // Joined a socket that was already open: hand over what it carried on open (see `lastFrames`).
+  // Joined a socket that was already open: hand over the presence it carried (see `lastPresence`).
   // Next microtask, so the frame lands after the caller's effect has returned; and only while this
-  // subscriber is still here and the frame is still the socket's last.
-  if (currentUrl === before) {
-    const replay = lastFrames;
+  // subscriber is still here and the frame is still the socket's last (a newer one was fanned out).
+  if (currentUrl === before && lastPresence !== undefined && h.onPresence) {
+    const replay = lastPresence;
+    const onPresence = h.onPresence;
     queueMicrotask(() => {
-      if (!subs.has(sub)) return;
+      if (!subs.has(sub) || replay !== lastPresence) return;
       try {
-        if (replay.presence !== undefined && replay.presence === lastFrames.presence) {
-          h.onPresence?.(presenceSessions(replay.presence, new Date().toISOString()));
-        }
-        if (replay.notifications !== undefined && replay.notifications === lastFrames.notifications) {
-          h.onNotifications?.(replay.notifications);
-        }
+        onPresence(presenceSessions(replay, new Date().toISOString()));
       } catch {
         /* a bad subscriber must not break the join */
       }

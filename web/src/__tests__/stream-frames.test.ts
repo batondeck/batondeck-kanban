@@ -100,8 +100,8 @@ describe('presence frames from the device directory', () => {
 });
 
 /**
- * THE LATE SUBSCRIBER. The server sends presence (and notifications) once on open and afterwards only
- * on a change, and the nav badge opens the shared socket at app mount. A screen that joins later on
+ * THE LATE SUBSCRIBER. The server sends presence once on open and afterwards only on a change, and
+ * the nav badge opens the shared socket at app mount. A screen that joins later on
  * the same URL (Agents with no board, the full task page) must still get the frame the socket already
  * carried, or a live plugin session is missing from it until the directory next changes.
  */
@@ -129,17 +129,20 @@ describe('a late subscriber on an unchanged socket', () => {
     expect((onPresence.mock.calls[0]![0] as AgentSession[])[0]!.sessionKey).toBe('device:9');
   });
 
-  it('receives the last notifications frame too', async () => {
+  it('does NOT replay a notifications frame: marking one read sends no new frame', async () => {
+    // The server sends notifications on open and per new row, not on mark-read, so the socket's last
+    // frame can say "unread" about a row the reader has since read. Every notifications subscriber
+    // reads the list over REST first; a replay could only put that stale state back.
     vi.stubGlobal('EventSource', FakeES);
     keep(streamApi.userStream({ onPresence: vi.fn() }));
     const es = FakeES.instances[0]!;
     es.readyState = 1;
     es.emit('open');
-    es.emit('notifications', { notifications: [{ id: 'N-1' }] });
+    es.emit('notifications', { notifications: [{ id: 'N-1', read: false }], unread: 1 });
     const onNotifications = vi.fn();
     keep(streamApi.userStream({ onNotifications }));
     await tick();
-    expect(onNotifications).toHaveBeenCalledWith({ notifications: [{ id: 'N-1' }] });
+    expect(onNotifications, 'a late subscriber got a notifications frame older than its own read').not.toHaveBeenCalled();
   });
 
   it('a rebuilt socket does not replay the old socket’s frame', async () => {
