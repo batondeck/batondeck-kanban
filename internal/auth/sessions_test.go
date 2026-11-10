@@ -256,3 +256,33 @@ func TestPublicURLMakesTheCookiesSecure(t *testing.T) {
 		t.Fatal("an http public_url made the cookies Secure")
 	}
 }
+
+// An Authorization header of another scheme (a reverse proxy's HTTP Basic auth, which the browser
+// then sends with every request) is no bearer and does not shadow the session cookie; a Bearer one
+// still wins over the cookie, so a bad bearer is 401 whatever cookie rides along.
+func TestAnotherAuthorizationSchemeLeavesTheSession(t *testing.T) {
+	f := newFixture(t)
+	u := f.addUser(t, "alice", "pw")
+	sess, csrf := f.session(t, "alice")
+	get := func(authz string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "http://board.test/api/x", nil)
+		r.AddCookie(&http.Cookie{Name: SessionCookie, Value: sess})
+		r.Header.Set("Authorization", authz)
+		w := httptest.NewRecorder()
+		f.protected().ServeHTTP(w, r)
+		return w
+	}
+	if w := get("Basic dXNlcjpwYXNz"); w.Code != http.StatusOK || w.Header().Get("X-Identity") != u.ID {
+		t.Fatalf("a session with a Basic header: %d %q", w.Code, w.Header().Get("X-Identity"))
+	}
+	if w := get("Bearer bk_not-a-token"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a session with a bad Bearer: %d, want 401", w.Code)
+	}
+	// The session it resolved to is a session: an unsafe request still needs the CSRF token.
+	if w := f.post(req{session: sess, hdr: map[string]string{"Authorization": "Basic dXNlcjpwYXNz", "Sec-Fetch-Site": "same-origin"}}); w.Code != http.StatusForbidden {
+		t.Fatalf("a Basic header and the cookie, no CSRF token: %d, want 403", w.Code)
+	}
+	if w := f.post(req{session: sess, csrf: csrf, hdr: map[string]string{"Authorization": "Basic dXNlcjpwYXNz", "Sec-Fetch-Site": "same-origin"}}); w.Code != http.StatusOK {
+		t.Fatalf("a Basic header, the cookie and its CSRF token: %d", w.Code)
+	}
+}

@@ -268,7 +268,8 @@ func SessionFrom(ctx context.Context) (store.Session, bool) {
 
 // Authenticate requires a principal: an `Authorization: Bearer` token, else the session cookie.
 // Neither, or one that does not resolve, is 401. The bearer wins when both are present, and such a
-// request is judged by CSRF as a non-browser one.
+// request is judged by CSRF as a non-browser one; an Authorization header of another scheme is no
+// bearer (bearerOf).
 func (s *Service) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, sess, err := s.resolveRequest(r)
@@ -289,6 +290,18 @@ func (s *Service) Authenticate(next http.Handler) http.Handler {
 	})
 }
 
+// bearerOf is the credential r's Authorization header carries: `Bearer <token>`, or a bare token
+// (one word, as ResolveCaller has always taken it). A header of another scheme, such as the HTTP
+// Basic credentials a reverse proxy asks the browser for and the browser then sends with every
+// request, carries none, so it leaves the session cookie to decide.
+func bearerOf(r *http.Request) (string, bool) {
+	h := strings.TrimSpace(r.Header.Get("Authorization"))
+	if token, ok := BearerToken(r); ok {
+		return token, true
+	}
+	return h, h != "" && !strings.ContainsAny(h, " \t")
+}
+
 // Reauthenticate resolves r's credential again, as Authenticate did: a long-lived response
 // (/api/stream) learns from its UNAUTHENTICATED that the session was ended, the user disabled (as
 // of the account cache) or the token revoked.
@@ -301,8 +314,8 @@ func (s *Service) Reauthenticate(r *http.Request) (domain.Caller, error) {
 // session); neither is UNAUTHENTICATED.
 func (s *Service) resolveRequest(r *http.Request) (domain.Caller, *store.Session, error) {
 	ctx := r.Context()
-	if h := r.Header.Get("Authorization"); h != "" {
-		c, err := s.ResolveCaller(ctx, h)
+	if bearer, ok := bearerOf(r); ok {
+		c, err := s.ResolveCaller(ctx, bearer)
 		return c, nil, err
 	}
 	ck, err := r.Cookie(SessionCookie)
