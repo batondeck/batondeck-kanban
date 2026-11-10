@@ -11,7 +11,7 @@ func init() { register("followups", RegisterFollowUps) }
 func RegisterFollowUps(s *mcp.Server, svc service.Services) {
 	f := svc.FollowUps
 	mcp.Tool(s, "followups", "add_follow_up",
-		"Direct a follow-up at a task's lease holder, else its assignee, and wake them (another agent of your own account is rung, not notified). reopen:true sends a REVIEW or DONE task back to TODO; from other statuses it is recorded only.",
+		"Direct a follow-up at a task's lease holder, else its assignee, and wake them (an agent of yours: rung, not notified). reopen:true sends a REVIEW or DONE task to TODO; other statuses just record it.",
 		f.AddFollowUp)
 	mcp.Tool(s, "followups", "ack_follow_up",
 		"Acknowledge a follow-up once acted on; it leaves the open list. Only its target or a project admin may ack a targeted one.",

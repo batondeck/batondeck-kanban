@@ -20,7 +20,7 @@ func RegisterContext(s *mcp.Server, svc service.Services) {
 		"Replace a task's rolling summary. Version-checked: a stale version is STALE. Returns the task with its new version.",
 		c.SetSummary)
 	mcp.Tool(s, "context", "write_memory",
-		"Write a memory entry. task, agent and shared need a taskId and die with the task; project and agent_global outlive it (read them with recall_memory). Optional ttl. A value is at most 32768 characters of JSON; largeArtifact is not available yet (attach a file instead).",
+		"Write a memory entry: task, agent and shared need a taskId and die with the task; project and agent_global outlive it (recall_memory). Optional ttl. Value at most 32768 chars; no largeArtifact yet.",
 		c.WriteMemory)
 	mcp.Tool(s, "context", "read_memory",
 		"Read a task's memory entries, by scope (task, agent, shared) or key; agent scope is private to you. For project or agent_global memory use recall_memory.",
