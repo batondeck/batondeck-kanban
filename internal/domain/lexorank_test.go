@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func mustOrder(t *testing.T, a, b string) string {
 	t.Helper()
@@ -93,11 +96,16 @@ func TestLexorankMatchesReference(t *testing.T) {
 		t.Errorf("50 squeezes: lo=%q hi=%q, want a0 and a000000000G", lo, hi)
 	}
 	for key, want := range map[string]bool{
-		"a0": true, "a0V": true, "Zz": true, "b00": true, "zzzzzzzzzzzzzzzzzzzzzzzzzzz": true, "a0!": true,
+		"a0": true, "a0V": true, "Zz": true, "b00": true, "zzzzzzzzzzzzzzzzzzzzzzzzzzz": true,
 		"a00": false, "a": false, "b0": false, "A00000000000000000000000000": false,
+		// A caller's key holds only the alphabet (OrderBetween reads "a0!" as the library does, but
+		// a stored "a0~" sorts on the wrong side of the keys computed against it) and is bounded.
+		"a0!": false, "a0 ": false, "a0~": false, "a0é": false, "a!": false, "a0\x00": false, "a0<script>": false,
+		"a0\n<b>": false, "a" + strings.Repeat("0", 254) + "V": true, "a" + strings.Repeat("0", 255) + "V": false,
+		"a" + strings.Repeat("0", 200_000) + "V": false,
 	} {
 		if got := IsValidOrder(key); got != want {
-			t.Errorf("IsValidOrder(%q) = %v, want %v", key, got, want)
+			t.Errorf("IsValidOrder(%.40q, %d bytes) = %v, want %v", key, len(key), got, want)
 		}
 	}
 }

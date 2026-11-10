@@ -807,3 +807,21 @@ func TestMoveIntoInProgressClearsTheBackoff(t *testing.T) {
 		}
 	})
 }
+
+// move_task refuses an order key holding a byte outside the key alphabet, or longer than
+// domain.MaxOrderKeyLen, with VALIDATION on every engine (a NUL used to be Postgres's INTERNAL), and
+// stores nothing.
+func TestMoveRefusesAMalformedOrderKey(t *testing.T) {
+	onEngines(t, func(t *testing.T, e *env) {
+		task := e.tkSeed(t, domain.Todo, "", 0, nil)
+		for _, order := range []string{"a0~", "a0\x00", "a0\n<b>", "a" + strings.Repeat("1", domain.MaxOrderKeyLen)} {
+			_, err := e.c.Tasks().Move(e.ctx, e.alice, MoveTaskReq{ProjectID: e.project, TaskID: task.ID, Version: task.Version, Order: order})
+			if tkCode(err) != domain.CodeValidation {
+				t.Fatalf("move_task order %.20q: %v, want VALIDATION", order, err)
+			}
+		}
+		if got := e.get(t, task.ID); got.Version != task.Version || got.OrderKey != task.OrderKey {
+			t.Fatalf("a refused move wrote: %+v", got)
+		}
+	})
+}
