@@ -186,7 +186,10 @@ func (s *Store) ClaimTask(ctx context.Context, projectID, taskID string, expecte
 			return store.Task{}, domain.ConflictLocked(taskID, "race")
 		}
 		if len(t.BlockedBy) > 0 {
-			return store.Task{}, domain.InvalidTransition(t.Status, domain.InProgress, nil, nil)
+			return store.Task{}, domain.GatedClaim(taskID, t.Status, t.BlockedBy)
+		}
+		if t.Status == domain.Todo && t.NextEligibleAt != nil && *t.NextEligibleAt > in.Now {
+			return store.Task{}, domain.InBackoff(taskID, time.UnixMilli(*t.NextEligibleAt))
 		}
 		mine := t.Claim != nil && t.Claim.Owner == in.Owner && sameAgent(t.Claim.AgentID, in.AgentID)
 		if live(t.Claim, in.Now) && !mine {
@@ -271,6 +274,7 @@ func (s *Store) PreviewFrontier(ctx context.Context, q store.FrontierQuery, limi
 	limit = clamp(limit, 50, 200)
 	return get(ctx, s, func(st *state) ([]store.Task, error) {
 		f := st.frontier(q)
+		f = f[min(max(q.Offset, 0), len(f)):]
 		if len(f) > limit {
 			f = f[:limit]
 		}

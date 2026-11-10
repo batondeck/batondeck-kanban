@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Code is a stable error code. Codes are public API: a client branches on them.
@@ -103,6 +104,24 @@ func InvalidTransition(from, to Status, allowed, path []Status) *BatonDeckError 
 		}
 	}
 	return NewError(CodeInvalidTransition, message, details)
+}
+
+// GatedClaim is the INVALID_TRANSITION of a claim of a task that still has open blockers: its move
+// to IN_PROGRESS waits on them, and the message and details name them (blockedBy), so the caller
+// walks the chain rather than reading the one legal move out of TODO as illegal.
+func GatedClaim(taskID string, from Status, blockedBy []string) *BatonDeckError {
+	return NewError(CodeInvalidTransition,
+		fmt.Sprintf("Task %s is blocked by %s: it can be claimed once they are DONE.", taskID, strings.Join(blockedBy, ", ")),
+		map[string]any{"from": from, "to": InProgress, "taskId": taskID, "blockedBy": blockedBy})
+}
+
+// InBackoff is the INVALID_TRANSITION of a claim of a TODO task still inside its retry backoff
+// (IsClaimable: past nextEligibleAt), which fail_task and the reaper set: the message and details
+// name when it can be claimed (nextEligibleAt, RFC 3339 in UTC with milliseconds).
+func InBackoff(taskID string, nextEligibleAt time.Time) *BatonDeckError {
+	at := nextEligibleAt.UTC().Format("2006-01-02T15:04:05.000Z")
+	return NewError(CodeInvalidTransition, fmt.Sprintf("Task %s is in its retry backoff until %s: it can be claimed then.", taskID, at),
+		map[string]any{"from": Todo, "to": InProgress, "taskId": taskID, "nextEligibleAt": at})
 }
 
 func WIPExceeded(columnID string, limit int) *BatonDeckError {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store/pgdb"
@@ -189,7 +190,10 @@ func claimTask(ctx context.Context, e engine, projectID, taskID string, expected
 			return Task{}, domain.ConflictLocked(taskID, "race")
 		}
 		if len(t.BlockedBy) > 0 {
-			return Task{}, domain.InvalidTransition(t.Status, domain.InProgress, nil, nil)
+			return Task{}, domain.GatedClaim(taskID, t.Status, t.BlockedBy)
+		}
+		if t.Status == domain.Todo && t.NextEligibleAt != nil && *t.NextEligibleAt > in.Now {
+			return Task{}, domain.InBackoff(taskID, time.UnixMilli(*t.NextEligibleAt))
 		}
 		mine := t.Claim != nil && t.Claim.Owner == in.Owner && sameAgent(t.Claim.AgentID, in.AgentID)
 		if live(t.Claim, in.Now) && !mine {
@@ -284,6 +288,7 @@ func previewFrontier(ctx context.Context, e engine, fq FrontierQuery, limit int)
 	rows, err := e.queries(false).PreviewFrontier(ctx, sqlitedb.PreviewFrontierParams{
 		ProjectID: fq.ProjectID, BoardID: fq.BoardID, Now: fq.Now, Assignee: nullStr(fq.Assignee), Caller: fq.Caller,
 		Caps: capsParam(fq.Capabilities), SprintID: fq.SprintID, OnlyIds: idsParam(fq.TaskIDs), PageLimit: int64(clamp(limit, 50, 200)),
+		PageOffset: int64(max(fq.Offset, 0)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: frontier: %w", err)

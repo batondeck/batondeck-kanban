@@ -649,6 +649,28 @@ func tasks(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// LastOrderKey is the column's last key in ListTasks' (bytes) order: what an appended task goes
+	// after. Another column's keys, and an empty column, do not count.
+	t.Run("LastOrderKeyIsTheColumnsLastKeyAsBytes", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		last, err := f.s.LastOrderKey(ctx, f.project, f.board, f.col[domain.Todo])
+		mustOK(t, err)
+		if last != "" {
+			t.Fatalf("an empty column's last key %q, want \"\"", last)
+		}
+		f.add(t, "a0", nil)
+		f.add(t, "Zz", func(in *store.CreateTaskInput) { in.OrderKey = "Zz" }) // 'Z' < 'a' as bytes
+		f.add(t, "a1", func(in *store.CreateTaskInput) { in.OrderKey = "a1" })
+		f.add(t, "elsewhere", func(in *store.CreateTaskInput) {
+			in.OrderKey, in.ColumnID, in.Status = "b0", f.col[domain.InProgress], domain.InProgress
+		})
+		last, err = f.s.LastOrderKey(ctx, f.project, f.board, f.col[domain.Todo])
+		mustOK(t, err)
+		if last != "a1" {
+			t.Fatalf("the TODO column's last key %q, want a1", last)
+		}
+	})
+
 	t.Run("ListTasksAndCountTasksRefusals", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		_, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: "B-missing"}, "", 10)

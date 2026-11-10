@@ -72,7 +72,7 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key, f.id
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- The lease moved on, in one statement while it is the caller's and live; no row is a refusal the
 -- caller reads the task to name. keep_longer <> 0 keeps an expiry already later than expires_at.

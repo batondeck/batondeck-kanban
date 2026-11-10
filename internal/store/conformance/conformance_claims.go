@@ -301,6 +301,18 @@ func claims(t *testing.T, newStore Factory) {
 		if ids := taskIDs(top); !reflect.DeepEqual(ids, want[:2]) {
 			t.Fatalf("frontier limit 2: %v", ids)
 		}
+		// Offset: the page after the first two; past the end, none.
+		paged := f.frontier()
+		paged.Offset = 2
+		next, err := f.s.PreviewFrontier(ctx, paged, 2)
+		mustOK(t, err)
+		if ids := taskIDs(next); !reflect.DeepEqual(ids, want[2:4]) {
+			t.Fatalf("frontier offset 2 limit 2: %v, want %v", ids, want[2:4])
+		}
+		paged.Offset = len(want)
+		if none, err := f.s.PreviewFrontier(ctx, paged, 50); err != nil || len(none) != 0 {
+			t.Fatalf("frontier past its end: %v %v", taskIDs(none), err)
+		}
 		// Later, the backoff has passed too.
 		later := f.frontier()
 		later.Now = taskClock + 1

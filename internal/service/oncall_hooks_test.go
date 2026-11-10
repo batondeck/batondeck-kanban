@@ -342,7 +342,7 @@ func TestHookIncidentLandsInATodoColumn(t *testing.T) {
 	if e := wantCode(t, err, domain.CodeValidation); !strings.Contains(e.Message, cols[domain.Done]) {
 		t.Fatalf("update_integration to a DONE column: %v", e)
 	}
-	landsIn := func(fp, want string) {
+	landsIn := func(fp, want string) store.Task {
 		t.Helper()
 		out := f.hook(t, iid, signedHook(created.Secret, f.clock.now(), genericBody(fp, "firing", "t")))
 		if out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
@@ -352,12 +352,17 @@ func TestHookIncidentLandsInATodoColumn(t *testing.T) {
 		if err != nil || task.ColumnID != want || task.Status != domain.Todo {
 			t.Fatalf("%s: the ticket = %+v, %v; want TODO in column %s", fp, task, err, want)
 		}
+		return task
 	}
-	landsIn("a", target)
+	first := landsIn("a", target)
+	// A column that holds tasks keeps its status (update_column refuses), so the ticket goes first.
+	if _, err := f.c.Tasks().Delete(f.ctx, f.alice, DeleteTaskReq{ProjectID: f.project.ID, TaskID: first.ID, Version: first.Version}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: target, Status: domain.InProgress}); err != nil {
 		t.Fatal(err)
 	}
-	landsIn("b", cols[domain.Todo])
+	second := landsIn("b", cols[domain.Todo])
 	// An edit that sends the stored target back unchanged (the web form sends boardId and columnId
 	// on every save) is not refused for it: the ingest already files past the re-statused column.
 	row, _ := f.st.GetIntegration(f.ctx, f.project.ID, iid)
@@ -378,9 +383,15 @@ func TestHookIncidentLandsInATodoColumn(t *testing.T) {
 	if _, err := f.c.Boards().RemoveColumn(f.ctx, f.alice, RemoveColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: pager}); err != nil {
 		t.Fatal(err)
 	}
-	landsIn("c", cols[domain.Todo])
+	third := landsIn("c", cols[domain.Todo])
 
-	// No TODO column left: the refusal is a rejected row naming why.
+	// No TODO column left: the refusal is a rejected row naming why. The column is emptied first,
+	// since one that holds tasks keeps its status.
+	for _, task := range []store.Task{second, third} {
+		if _, err := f.c.Tasks().Delete(f.ctx, f.alice, DeleteTaskReq{ProjectID: f.project.ID, TaskID: task.ID, Version: task.Version}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := f.c.Boards().UpdateColumn(f.ctx, f.alice, UpdateColumnReq{ProjectID: f.project.ID, BoardID: f.board.ID, ColumnID: cols[domain.Todo], Status: domain.Blocked}); err != nil {
 		t.Fatal(err)
 	}

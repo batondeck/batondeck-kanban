@@ -45,6 +45,14 @@ WHERE t.project_id = sqlc.arg(project_id) AND t.board_id = sqlc.arg(board_id)
 ORDER BY t.order_key, t.id
 LIMIT sqlc.arg(page_limit);
 
+-- The column's last order key, bytes order (SQLite's BINARY collation): what a task appended to the
+-- column goes after. No row is an empty column.
+-- name: LastOrderKey :one
+SELECT order_key FROM tasks
+WHERE project_id = sqlc.arg(project_id) AND board_id = sqlc.arg(board_id) AND column_id = sqlc.arg(column_id)
+ORDER BY order_key DESC, id DESC
+LIMIT 1;
+
 -- How many of the board's tasks match, and whether the board is the project's, in one statement.
 -- name: CountTasks :one
 SELECT

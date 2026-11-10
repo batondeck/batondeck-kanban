@@ -96,7 +96,7 @@ func (s followUpsSvc) AddFollowUp(ctx context.Context, caller domain.Caller, req
 	// TODO(spec): conductor's enforceTokenBudget warnings (the per-task chars budget) are not ported.
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_follow_up", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Access: a, KeepVersion: true,
+		ProjectID: req.ProjectID, TaskID: req.TaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, KeepVersion: true,
 	}, func(t *txn) (AddFollowUpResp, error) {
 		pre := *t.Task
 		// A reopen hands the rework back to its completer (review.completedBy); with none on record it

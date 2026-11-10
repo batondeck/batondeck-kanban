@@ -18,7 +18,7 @@ import (
 
 type dependencyQueries interface {
 	FindEdge(ctx context.Context, arg sqlitedb.FindEdgeParams) (sqlitedb.Dependency, error)
-	ListBlocksEdges(ctx context.Context, projectID string) ([]sqlitedb.ListBlocksEdgesRow, error)
+	ListGatingEdges(ctx context.Context, projectID string) ([]sqlitedb.ListGatingEdgesRow, error)
 	InsertEdge(ctx context.Context, arg sqlitedb.InsertEdgeParams) (sqlitedb.Dependency, error)
 	DeleteEdge(ctx context.Context, arg sqlitedb.DeleteEdgeParams) (sqlitedb.Dependency, error)
 	ListProjectEdges(ctx context.Context, id string) ([]sqlitedb.ListProjectEdgesRow, error)
@@ -35,11 +35,11 @@ func (s *Postgres) AddEdge(ctx context.Context, in AddEdgeInput) (DependencyEdge
 	return addEdge(ctx, s, in)
 }
 
-func (s *SQLite) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, error) {
+func (s *SQLite) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, bool, error) {
 	return removeEdge(ctx, s, projectID, edgeID)
 }
 
-func (s *Postgres) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, error) {
+func (s *Postgres) RemoveEdge(ctx context.Context, projectID, edgeID string) (DependencyEdge, bool, error) {
 	return removeEdge(ctx, s, projectID, edgeID)
 }
 
@@ -135,15 +135,20 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 			return err
 		}
 		same, err := q.FindEdge(ctx, sqlitedb.FindEdgeParams{ProjectID: in.ProjectID, BlockerID: in.FromTaskID, DependentID: in.ToTaskID, Type: string(in.Type)})
-		switch {
-		case err == nil:
-			out = edgeFrom(same)
-			return nil
-		case !isNoRows(err):
+		exists := err == nil
+		if err != nil && !isNoRows(err) {
 			return fmt.Errorf("store: dependency: %w", err)
 		}
 		if in.Type == DependencyBlocks {
-			rows, err := q.ListBlocksEdges(ctx, in.ProjectID)
+			// blockedBy holds open blockers only: a DONE blocker's edge is recorded (upstream context
+			// reads it) but gates nothing, since nothing would ever clear it again. An edge whose gate
+			// cleared (its blocker reached DONE) and whose blocker is open again gates again.
+			gates := from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID)
+			if exists && !gates {
+				out = edgeFrom(same)
+				return nil
+			}
+			rows, err := q.ListGatingEdges(ctx, in.ProjectID)
 			if err != nil {
 				return fmt.Errorf("store: dependencies: %w", err)
 			}
@@ -154,7 +159,7 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 			if err := domain.CheckCycle(edges, in.FromTaskID, in.ToTaskID); err != nil {
 				return err
 			}
-			if !slices.Contains(to.BlockedBy, from.ID) {
+			if gates {
 				to.BlockedBy = append(to.BlockedBy, from.ID)
 			}
 			if !slices.Contains(from.Blocks, to.ID) {
@@ -166,6 +171,10 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 			if err := writeCaches(ctx, q, from); err != nil {
 				return err
 			}
+		}
+		if exists {
+			out = edgeFrom(same)
+			return nil
 		}
 		r, err := q.InsertEdge(ctx, sqlitedb.InsertEdgeParams{
 			ProjectID: in.ProjectID, ID: newID("D-", 16), BlockerID: in.FromTaskID, DependentID: in.ToTaskID,
@@ -180,8 +189,9 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 	return out, err
 }
 
-func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (DependencyEdge, error) {
+func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (DependencyEdge, bool, error) {
 	var out DependencyEdge
+	var gated bool
 	err := e.Atomically(ctx, func(tx Store) error {
 		q := on(tx).queries(true)
 		r, err := q.DeleteEdge(ctx, sqlitedb.DeleteEdgeParams{ProjectID: projectID, ID: edgeID})
@@ -197,6 +207,7 @@ func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (Depend
 		if err != nil {
 			return err
 		}
+		gated = slices.Contains(to.BlockedBy, out.FromTaskID)
 		to.BlockedBy = slices.DeleteFunc(to.BlockedBy, func(id string) bool { return id == out.FromTaskID })
 		from.Blocks = slices.DeleteFunc(from.Blocks, func(id string) bool { return id == out.ToTaskID })
 		if err := writeCaches(ctx, q, to); err != nil {
@@ -204,7 +215,10 @@ func removeEdge(ctx context.Context, e engine, projectID, edgeID string) (Depend
 		}
 		return writeCaches(ctx, q, from)
 	})
-	return out, err
+	if err != nil {
+		return DependencyEdge{}, false, err
+	}
+	return out, gated, nil
 }
 
 // edgeRow is the shape of the three list statements' rows: the starting row's id, then an edge
@@ -285,9 +299,9 @@ func (p pgQueries) FindEdge(ctx context.Context, arg sqlitedb.FindEdgeParams) (s
 	return sqlitedb.Dependency(r), err
 }
 
-func (p pgQueries) ListBlocksEdges(ctx context.Context, projectID string) ([]sqlitedb.ListBlocksEdgesRow, error) {
-	rows, err := p.q.ListBlocksEdges(ctx, projectID)
-	return convert(rows, func(r pgdb.ListBlocksEdgesRow) sqlitedb.ListBlocksEdgesRow { return sqlitedb.ListBlocksEdgesRow(r) }), err
+func (p pgQueries) ListGatingEdges(ctx context.Context, projectID string) ([]sqlitedb.ListGatingEdgesRow, error) {
+	rows, err := p.q.ListGatingEdges(ctx, projectID)
+	return convert(rows, func(r pgdb.ListGatingEdgesRow) sqlitedb.ListGatingEdgesRow { return sqlitedb.ListGatingEdgesRow(r) }), err
 }
 
 func (p pgQueries) InsertEdge(ctx context.Context, arg sqlitedb.InsertEdgeParams) (sqlitedb.Dependency, error) {

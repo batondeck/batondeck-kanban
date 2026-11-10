@@ -27,21 +27,28 @@ func (s *Store) AddEdge(ctx context.Context, in store.AddEdgeInput) (store.Depen
 		if err != nil {
 			return store.DependencyEdge{}, err
 		}
-		edges := st.projectEdges(in.ProjectID)
-		var blocking []domain.Edge
-		for _, e := range edges {
+		var same *store.DependencyEdge
+		var gating []domain.Edge
+		for _, e := range st.projectEdges(in.ProjectID) {
 			if e.FromTaskID == in.FromTaskID && e.ToTaskID == in.ToTaskID && e.Type == in.Type {
-				return e, nil
+				same = &e
 			}
+			// The live gates: blocks edges whose blocker is still in the dependent's blockedBy.
 			if e.Type == store.DependencyBlocks {
-				blocking = append(blocking, domain.Edge{FromTaskID: e.FromTaskID, ToTaskID: e.ToTaskID})
+				if dep, err := st.task(in.ProjectID, e.ToTaskID); err == nil && slices.Contains(dep.BlockedBy, e.FromTaskID) {
+					gating = append(gating, domain.Edge{FromTaskID: e.FromTaskID, ToTaskID: e.ToTaskID})
+				}
 			}
 		}
 		if in.Type == store.DependencyBlocks {
-			if err := domain.CheckCycle(blocking, in.FromTaskID, in.ToTaskID); err != nil {
+			gates := from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID)
+			if same != nil && !gates {
+				return *same, nil
+			}
+			if err := domain.CheckCycle(gating, in.FromTaskID, in.ToTaskID); err != nil {
 				return store.DependencyEdge{}, err
 			}
-			if !slices.Contains(to.BlockedBy, from.ID) {
+			if gates {
 				to.BlockedBy = append(list(to.BlockedBy), from.ID)
 			}
 			st.put(to)
@@ -50,14 +57,19 @@ func (s *Store) AddEdge(ctx context.Context, in store.AddEdgeInput) (store.Depen
 			}
 			st.put(from)
 		}
+		if same != nil {
+			return *same, nil
+		}
 		e := store.DependencyEdge{ProjectID: in.ProjectID, ID: newID("D-", 16), FromTaskID: in.FromTaskID, ToTaskID: in.ToTaskID, Type: in.Type, CreatedBy: in.CreatedBy, TS: nowMillis()}
 		st.edges[[2]string{e.ProjectID, e.ID}] = e
 		return e, nil
 	})
 }
 
-func (s *Store) RemoveEdge(ctx context.Context, projectID, edgeID string) (store.DependencyEdge, error) {
-	return get(ctx, s, func(st *state) (store.DependencyEdge, error) {
+func (s *Store) RemoveEdge(ctx context.Context, projectID, edgeID string) (store.DependencyEdge, bool, error) {
+	var gated bool
+	e, err := get(ctx, s, func(st *state) (store.DependencyEdge, error) {
+		gated = false
 		k := [2]string{projectID, edgeID}
 		e, ok := st.edges[k]
 		if !ok {
@@ -66,6 +78,7 @@ func (s *Store) RemoveEdge(ctx context.Context, projectID, edgeID string) (store
 		delete(st.edges, k)
 		if e.Type == store.DependencyBlocks {
 			if to, err := st.task(projectID, e.ToTaskID); err == nil {
+				gated = slices.Contains(to.BlockedBy, e.FromTaskID)
 				to.BlockedBy = slices.DeleteFunc(to.BlockedBy, func(id string) bool { return id == e.FromTaskID })
 				st.put(to)
 			}
@@ -76,6 +89,10 @@ func (s *Store) RemoveEdge(ctx context.Context, projectID, edgeID string) (store
 		}
 		return e, nil
 	})
+	if err != nil {
+		return store.DependencyEdge{}, false, err
+	}
+	return e, gated, nil
 }
 
 // projectEdges is the project's edges in (ts, id) order.

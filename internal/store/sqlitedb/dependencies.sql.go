@@ -164,39 +164,6 @@ func (q *Queries) ListBlockerEdges(ctx context.Context, arg ListBlockerEdgesPara
 	return items, nil
 }
 
-const listBlocksEdges = `-- name: ListBlocksEdges :many
-SELECT blocker_id, dependent_id FROM dependencies WHERE project_id = ? AND type = 'blocks'
-`
-
-type ListBlocksEdgesRow struct {
-	BlockerID   string
-	DependentID string
-}
-
-// What domain.CheckCycle reads: every blocks edge of the project.
-func (q *Queries) ListBlocksEdges(ctx context.Context, projectID string) ([]ListBlocksEdgesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listBlocksEdges, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListBlocksEdgesRow
-	for rows.Next() {
-		var i ListBlocksEdgesRow
-		if err := rows.Scan(&i.BlockerID, &i.DependentID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listDependentEdges = `-- name: ListDependentEdges :many
 SELECT t.id AS task_id, d.id, d.blocker_id, d.dependent_id, d.type, d.created_by, d.ts
 FROM tasks t LEFT JOIN dependencies d ON d.project_id = t.project_id AND d.blocker_id = t.id
@@ -238,6 +205,44 @@ func (q *Queries) ListDependentEdges(ctx context.Context, arg ListDependentEdges
 			&i.CreatedBy,
 			&i.Ts,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGatingEdges = `-- name: ListGatingEdges :many
+SELECT d.blocker_id, d.dependent_id FROM dependencies d
+JOIN tasks t ON t.project_id = d.project_id AND t.id = d.dependent_id
+WHERE d.project_id = ? AND d.type = 'blocks'
+  AND EXISTS (SELECT 1 FROM json_each(t.blocked_by) j WHERE j.value = d.blocker_id)
+`
+
+type ListGatingEdgesRow struct {
+	BlockerID   string
+	DependentID string
+}
+
+// What domain.CheckCycle reads: the project's live gates, the blocks edges whose blocker is still in
+// the dependent's blockedBy. An edge whose blocker reached DONE stays (upstream context) but gates
+// nothing, so it closes no cycle.
+func (q *Queries) ListGatingEdges(ctx context.Context, projectID string) ([]ListGatingEdgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listGatingEdges, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGatingEdgesRow
+	for rows.Next() {
+		var i ListGatingEdgesRow
+		if err := rows.Scan(&i.BlockerID, &i.DependentID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -11,7 +11,7 @@ import (
 
 // The Chronicle sweep's cursor (plugin/skills/batondeck-chronicle/SKILL.md, steps 1, 2 and 6) over
 // list_tasks as it pages: in board order, updatedSince applied after paging, and a task that
-// reaches DONE lands at the head of the DONE column, so it can land on a page the sweep has already
+// reaches DONE takes a new place in the DONE column, which can be on a page the sweep has already
 // read. A task that finishes while a sweep runs is listed by that sweep or by the next one, never by
 // neither.
 func TestChronicleSweepCursorPassesOverNoTaskThatFinishesMidSweep(t *testing.T) {
@@ -28,7 +28,7 @@ func TestChronicleSweepCursorPassesOverNoTaskThatFinishesMidSweep(t *testing.T) 
 			}
 			return task
 		}
-		// complete_task's write: DONE at the server's clock, into the DONE column (at its head).
+		// The move to DONE at the server's clock, into the DONE column (the store places it).
 		finish := func(task store.Task) {
 			t.Helper()
 			time.Sleep(3 * time.Millisecond) // each write its own millisecond

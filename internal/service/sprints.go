@@ -69,7 +69,7 @@ func (s sprintsSvc) Create(ctx context.Context, caller domain.Caller, req Create
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_sprint", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (CreateSprintResp, error) {
 		sp, err := t.Tx.CreateSprint(ctx, store.CreateSprintInput{ProjectID: req.ProjectID, BoardID: req.BoardID, Name: req.Name,
 			Goal: req.Goal, Acceptance: req.Acceptance, CreatedBy: caller.Identity, CreatedAt: t.Now.UnixMilli()})

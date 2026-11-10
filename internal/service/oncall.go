@@ -353,9 +353,13 @@ func (s oncallSvc) CreateIntegration(ctx context.Context, caller domain.Caller, 
 	// The secret is minted inside the transaction, so a replay (fn not run) mints nothing and
 	// shows nothing: it was shown once, by the call that created the row.
 	var shown string
+	// The idempotency key is bound to the call less its secret material: a digest of the caller's
+	// webhook secret or API key would sit unsalted in idempotency_keys for the key's window.
+	keyed := req
+	keyed.Auth.APIKey, keyed.Auth.ExternalSecret = "", ""
 	out, err := mutate(ctx, s.c, caller, mutation{
 		Tool: "create_integration", Args: map[string]any{"projectId": req.ProjectID, "name": req.Name, "source": string(req.Source), "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: keyed, Access: a,
 	}, func(t *txn) (Integration, error) {
 		if err := checkTarget(ctx, t.Tx, req.ProjectID, req.BoardID, column); err != nil {
 			return Integration{}, err
@@ -1300,7 +1304,7 @@ func (c *Core) fileIncident(ctx context.Context, t *txn, integration store.Integ
 	if integration.ColumnID != nil && col.ID != *integration.ColumnID {
 		c.log.Printf("ingest: integration %s: its column %s is gone or no longer TODO; the incident is filed in column %s", integration.ID, *integration.ColumnID, col.ID)
 	}
-	order, err := headOfColumn(ctx, t.Tx, integration.ProjectID, board.ID, col.ID)
+	order, err := endOfColumn(ctx, t.Tx, integration.ProjectID, board.ID, col.ID)
 	if err != nil {
 		return store.Task{}, err
 	}

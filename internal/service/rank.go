@@ -326,7 +326,7 @@ func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req O
 	// of a call that succeeded presents the lease the fan-out dropped (conductor's note).
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "orchestrate_subtasks", Args: map[string]any{"projectId": req.ProjectID, "parentTaskId": req.ParentTaskID},
-		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
+		ProjectID: req.ProjectID, TaskID: req.ParentTaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, LockProject: true,
 	}, func(t *txn) (OrchestrateSubtasksResp, error) {
 		cur := *t.Task
 		now := t.Now.UnixMilli()
@@ -341,25 +341,20 @@ func (s rankingSvc) Orchestrate(ctx context.Context, caller domain.Caller, req O
 		if todoCol == "" {
 			return OrchestrateSubtasksResp{}, domain.Validation("Board has no TODO column", nil)
 		}
-		// One bounded read for the column's head, then the keys chained in memory toward it, in the
-		// children's order (a key per child from one base, never the same key twice).
-		// ponytail: the children land at the column's head, as add_subtask's (P-69: no last-key read).
-		page, err := t.Tx.ListTasks(ctx, req.ProjectID, store.TaskFilter{BoardID: board.ID, ColumnID: todoCol}, "", 1)
+		// One read of the column's last key (store.LastOrderKey), then the keys chained in memory after
+		// it, in the children's order: the children land at the column's end, as add_subtask's.
+		order, err := t.Tx.LastOrderKey(ctx, req.ProjectID, board.ID, todoCol)
 		if err != nil {
 			return OrchestrateSubtasksResp{}, err
-		}
-		upper := ""
-		if len(page.Tasks) > 0 {
-			upper = page.Tasks[0].OrderKey
 		}
 		parentID := cur.ID
 		resp := OrchestrateSubtasksResp{Children: []Task{}}
 		var children []store.Task
 		var childIDs []string
-		order := ""
 		for _, c := range req.Children {
-			if order, err = domain.OrderBetween(order, upper); err != nil {
-				return OrchestrateSubtasksResp{}, internalf("order key before %q: %v", upper, err)
+			prev := order
+			if order, err = domain.OrderBetween(prev, ""); err != nil {
+				return OrchestrateSubtasksResp{}, internalf("order key after %q: %v", prev, err)
 			}
 			priority := c.Priority
 			if priority == "" {

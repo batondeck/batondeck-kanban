@@ -92,7 +92,7 @@ func (b boards) Create(ctx context.Context, caller domain.Caller, req CreateBoar
 	}
 	resp, err := mutate(ctx, b.c, caller, mutation{
 		Tool: "create_board", Args: map[string]any{"projectId": req.ProjectID, "name": req.Name},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (CreateBoardResp, error) {
 		board, err := t.Tx.CreateBoard(ctx, store.CreateBoardInput{ProjectID: req.ProjectID, Name: req.Name, CreatedBy: caller.Identity, Columns: cols}, store.WriteOptions{Identity: caller.Identity})
 		if err != nil {
@@ -166,7 +166,7 @@ func (b boards) AddColumn(ctx context.Context, caller domain.Caller, req AddColu
 	}
 	resp, err := mutate(ctx, b.c, caller, mutation{
 		Tool: "add_column", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}, func(t *txn) (AddColumnResp, error) {
 		col, err := t.Tx.AddColumn(ctx, req.ProjectID, req.BoardID, store.ColumnInput{Name: req.Name, Status: req.Status, WIPLimit: req.WIPLimit, Order: order}, store.WriteOptions{Identity: caller.Identity})
 		if err != nil {

@@ -210,6 +210,10 @@ type Tasks interface {
 	// CountTasks is how many of the board's tasks match f, in one statement. An unknown board is
 	// NOT_FOUND.
 	CountTasks(ctx context.Context, projectID string, f TaskFilter) (int64, error)
+	// LastOrderKey is the last order key of the board's column, compared as bytes (the order
+	// ListTasks pages in), in one statement: what a task appended to the column goes after. A column
+	// with no task is "".
+	LastOrderKey(ctx context.Context, projectID, boardID, columnID string) (string, error)
 	// ListTasksByIDs is the project's tasks among ids, in the order of ids; an id with no task is
 	// left out, never an error. More than 200 ids is VALIDATION.
 	ListTasksByIDs(ctx context.Context, projectID string, ids []string) ([]Task, error)

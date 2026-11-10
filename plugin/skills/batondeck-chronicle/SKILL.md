@@ -48,9 +48,9 @@ so a page can come back short or even empty while `nextCursor` is still set, and
 finished task can sit on any page. Keep calling with `cursor: "<nextCursor>"` until a response carries
 no `nextCursor`, taking steps 3 to 5 for the tasks of each page as it comes.
 
-Workers keep finishing tasks while you page, and a finished task lands at the head of the DONE
-column, on a page you may already have read. One that does is not listed this time: that is
-expected, and step 6's cursor leaves it in the next window. The
+Workers keep finishing tasks while you page, and a task that reaches DONE takes a new place in the
+DONE column, which can be on a page you have already read. One that does is not listed this time:
+that is expected, and step 6's cursor leaves it in the next window. The
 window overlaps the previous one by a minute, and the filter is inclusive at the boundary, so a task
 listed by both ingests as unchanged. Only when the whole window listed no task at all: stop and say
 so, leaving the cursor where it is.

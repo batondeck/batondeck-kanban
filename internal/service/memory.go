@@ -95,7 +95,7 @@ func (s contextSvc) WriteMemory(ctx context.Context, caller domain.Caller, req W
 	}
 	m := mutation{
 		Tool: "write_memory", Args: map[string]any{"projectId": req.ProjectID, "scope": req.Scope, "key": req.Key},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 	}
 	// A durable entry's provenance task is loaded in fn, not by mutate (it is not bumped), so a grant
 	// check pending on it is finished there.

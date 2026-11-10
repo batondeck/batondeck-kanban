@@ -478,19 +478,20 @@ WHERE f.project_id = ?4 AND f.board_id = ?5 AND f.status = 'TODO'
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
   f.order_key, f.id
-LIMIT ?9
+LIMIT ?10 OFFSET ?9
 `
 
 type PreviewFrontierParams struct {
-	Caps      string
-	SprintID  string
-	OnlyIds   string
-	ProjectID string
-	BoardID   string
-	Now       int64
-	Assignee  sql.NullString
-	Caller    string
-	PageLimit int64
+	Caps       string
+	SprintID   string
+	OnlyIds    string
+	ProjectID  string
+	BoardID    string
+	Now        int64
+	Assignee   sql.NullString
+	Caller     string
+	PageOffset int64
+	PageLimit  int64
 }
 
 type PreviewFrontierRow struct {
@@ -549,6 +550,7 @@ func (q *Queries) PreviewFrontier(ctx context.Context, arg PreviewFrontierParams
 		arg.Now,
 		arg.Assignee,
 		arg.Caller,
+		arg.PageOffset,
 		arg.PageLimit,
 	)
 	if err != nil {

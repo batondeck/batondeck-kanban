@@ -141,8 +141,8 @@ func callerAgent(c domain.Caller) *string {
 }
 
 // Create is create_task (conductor tasks.ts:102-160): the task lands TODO (ADR-0005), in columnId,
-// which must be a TODO column, or the board's first TODO column; its T-n is the project's next (the
-// store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
+// which must be a TODO column, or the board's first TODO column, after the column's last task
+// (endOfColumn); its T-n is the project's next (the store's counter, never reused). Event task.created {title}; the landing rings broadcast (it has no
 // assignee). With sprintId the task is created a member of that sprint in the same transaction, as
 // set_sprint add makes one (P-239): the sprint must exist (NOT_FOUND), be on the task's board
 // (VALIDATION) and pass domain.CheckSprintMembership; its memberCount moves by one and the task gets
@@ -205,7 +205,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "create_task", Args: map[string]any{"projectId": req.ProjectID, "boardId": req.BoardID},
-		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Access: a,
+		ProjectID: req.ProjectID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a,
 		// With sprintId, the project lock orders the sprint's read before update_sprint's close
 		// (Sprints.Set's reason); without it no statement is added.
 		LockProject: req.SprintID != "",
@@ -249,7 +249,7 @@ func (s tasksSvc) Create(ctx context.Context, caller domain.Caller, req CreateTa
 			}
 			sprintIDs = []string{sprint.ID}
 		}
-		order, err := headOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
+		order, err := endOfColumn(ctx, t.Tx, req.ProjectID, board.ID, col.ID)
 		if err != nil {
 			return CreateTaskResp{}, err
 		}
@@ -560,7 +560,7 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 		}
 		order := d.Order
 		if order == "" && d.NeedsEndOfColumnOrder {
-			if order, err = headOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
+			if order, err = endOfColumn(ctx, t.Tx, req.ProjectID, cur.BoardID, d.ColumnID); err != nil {
 				return MoveTaskResp{}, err
 			}
 		}
@@ -646,9 +646,13 @@ func (t *txn) unblockDependentsOf(clearedID string, skip map[string]bool) error 
 	return nil
 }
 
-// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent).
+// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent). The
+// dependent is read locked (LockTask; the caller holds the project lock, so the order stays project
+// then tasks): unblockDependent writes it at the version read, and a writer that takes no project
+// lock (update_task, add_context_item) must not move it in between, or a versioned move_task,
+// cancel_task or delete_task would fail STALE quoting the dependent's versions, not its own.
 func (t *txn) unblockOne(depID, clearedID string) error {
-	dep, err := t.Tx.GetTask(t.ctx, t.ProjectID, depID)
+	dep, err := t.Tx.LockTask(t.ctx, t.ProjectID, depID)
 	if err != nil {
 		return err
 	}

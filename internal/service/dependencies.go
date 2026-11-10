@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -11,9 +12,12 @@ import (
 
 // AddDependency is add_dependency. The edge and both caches are written by store.AddEdge after
 // domain.CheckCycle (CYCLE_DETECTED: mutate rolls the whole call back, so nothing is written);
-// status never changes (plan §Ticket states: add_dependency only writes blockedBy). The dependent
+// status never changes (plan §Ticket states: add_dependency only writes blockedBy). A blocker already
+// DONE gets its edge (get_task_context's upstream reads it) but gates nothing. The dependent
 // (toTaskId, where the event hangs) is mutate's task and is bumped once; the blocker is bumped once
-// when its blocks cache gained the dependent, as conductor's bumpArray does. Serialised per project
+// when its blocks cache gained the dependent, as conductor's bumpArray does. Re-adding an edge whose
+// gate cleared (its blocker reached DONE and was reopened) gates the dependent again; re-adding an
+// edge that changes nothing appends no dependency.added. Serialised per project
 // (mutation.LockProject).
 func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req AddDependencyReq) (AddDependencyResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "add_dependency", domain.GrantSubject{}, true)
@@ -38,23 +42,41 @@ func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "add_dependency", Args: map[string]any{"projectId": req.ProjectID, "fromTaskId": req.FromTaskID, "toTaskId": req.ToTaskID},
-		ProjectID: req.ProjectID, TaskID: req.ToTaskID, IdempotencyKey: req.IdempotencyKey, Access: a, LockProject: true,
+		ProjectID: req.ProjectID, TaskID: req.ToTaskID, IdempotencyKey: req.IdempotencyKey, Request: req, Access: a, LockProject: true,
 	}, func(t *txn) (AddDependencyResp, error) {
-		gains := typ == "blocks" && req.FromTaskID != req.ToTaskID && !slices.Contains(t.Task.BlockedBy, req.FromTaskID)
+		// The blocker as it is before the edge: whether its blocks cache gains the dependent (a new
+		// edge) and whether the dependent's blockedBy gains it (an open blocker not gating yet, which
+		// a re-added edge whose gate cleared also is) is what store.AddEdge will write.
+		blocksEdge := typ == "blocks" && req.FromTaskID != req.ToTaskID
+		var blocker store.Task
+		var err error
+		if blocksEdge {
+			if blocker, err = t.Tx.GetTask(ctx, req.ProjectID, req.FromTaskID); err != nil {
+				return AddDependencyResp{}, err
+			}
+		}
 		edge, err := t.Tx.AddEdge(ctx, store.AddEdgeInput{ProjectID: req.ProjectID, FromTaskID: req.FromTaskID, ToTaskID: req.ToTaskID, Type: store.DependencyType(typ), CreatedBy: caller.Identity})
 		if err != nil {
 			return AddDependencyResp{}, err
 		}
-		if gains {
-			if err := t.bumpOther(req.FromTaskID); err != nil {
+		changed := true
+		if blocksEdge {
+			gainsBlocks := !slices.Contains(blocker.Blocks, req.ToTaskID)
+			gainsGate := blocker.Status != domain.Done && !slices.Contains(t.Task.BlockedBy, req.FromTaskID)
+			if gainsBlocks {
+				if _, err := t.bump(blocker); err != nil {
+					return AddDependencyResp{}, err
+				}
+			}
+			changed = gainsBlocks || gainsGate
+		}
+		if changed {
+			data, err := json.Marshal(map[string]any{"fromTaskId": req.FromTaskID, "type": typ})
+			if err != nil {
 				return AddDependencyResp{}, err
 			}
+			t.Event(store.EventInput{Type: domain.EventDependencyAdded, Data: data})
 		}
-		data, err := json.Marshal(map[string]any{"fromTaskId": req.FromTaskID, "type": typ})
-		if err != nil {
-			return AddDependencyResp{}, err
-		}
-		t.Event(store.EventInput{Type: domain.EventDependencyAdded, Data: data})
 		return AddDependencyResp{Edge: edgeOut(edge)}, nil
 	})
 }
@@ -64,7 +86,9 @@ func (s contextSvc) AddDependency(ctx context.Context, caller domain.Caller, req
 // two tasks is then bumped once. The edge's removal clears its blocker, so the dependent goes
 // through domain.DecideUnblock: when that is AutoReady (blockedBy now empty, BLOCKED, not poison) it
 // is moved to TODO by unblockDependent, with its task.dependency_cleared event and doorbell; a
-// poisoned dependent stays BLOCKED. Event dependency.removed {edgeId} on the dependent. Serialised
+// poisoned dependent stays BLOCKED. A dependent already TODO that the removal made claimable rings
+// its worker (claimableBells); an edge whose gate had cleared frees nothing. Event
+// dependency.removed {edgeId} on the dependent. Serialised
 // per project (mutation.LockProject). The dependent is unknown until the edge is read, so mutate
 // loads no task and its pending grant check is finished here, against the dependent.
 func (s contextSvc) RemoveDependency(ctx context.Context, caller domain.Caller, req RemoveDependencyReq) (RemoveDependencyResp, error) {
@@ -81,7 +105,7 @@ func (s contextSvc) RemoveDependency(ctx context.Context, caller domain.Caller, 
 		Tool: "remove_dependency", Args: map[string]any{"projectId": req.ProjectID, "edgeId": req.EdgeID},
 		ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (RemoveDependencyResp, error) {
-		edge, err := t.Tx.RemoveEdge(ctx, req.ProjectID, req.EdgeID)
+		edge, gated, err := t.Tx.RemoveEdge(ctx, req.ProjectID, req.EdgeID)
 		if err != nil {
 			return RemoveDependencyResp{}, err
 		}
@@ -107,9 +131,10 @@ func (s contextSvc) RemoveDependency(ctx context.Context, caller domain.Caller, 
 			}
 		}
 		// RemoveEdge has already dropped the blocker from the cache: the decision is over the
-		// dependent as it was, with the blocker restored.
+		// dependent as it was, with the blocker restored when the edge gated it. An edge whose gate
+		// had cleared frees nothing.
 		before := dep
-		if !slices.Contains(before.BlockedBy, edge.FromTaskID) {
+		if gated && !slices.Contains(before.BlockedBy, edge.FromTaskID) {
 			before.BlockedBy = append(slices.Clone(dep.BlockedBy), edge.FromTaskID)
 		}
 		if d := domain.DecideUnblock(before.BlockedBy, dep.Status, reasonOf(dep), edge.FromTaskID); d.AutoReady {
@@ -122,7 +147,15 @@ func (s contextSvc) RemoveDependency(ctx context.Context, caller domain.Caller, 
 		if err != nil {
 			return RemoveDependencyResp{}, err
 		}
-		t.Ring(Doorbell{Kind: ChangeKindChanged, TaskID: after.ID, BoardID: after.BoardID})
+		// A dependent already TODO that this removal made claimable rings as one freed by a blocker
+		// reaching DONE does (unblockDependent).
+		bells := claimableBells(before, after, t.Now)
+		if len(bells) == 0 {
+			bells = []Doorbell{{Kind: ChangeKindChanged, TaskID: after.ID, BoardID: after.BoardID}}
+		}
+		for _, b := range bells {
+			t.Ring(b)
+		}
 		return RemoveDependencyResp{Ok: true}, nil
 	})
 }
@@ -158,7 +191,8 @@ func (t *txn) bumpOther(taskID string) error {
 // blockedBy when dep's cache still names clearedID (Dependencies.SetCaches), then on d.AutoReady
 // moves dep to TODO in its board's TODO column (the column it is in when the board has none),
 // else bumps it; appends task.dependency_cleared {clearedBy, autoReady} on dep; and records the
-// task and its doorbell (RingFor, unblocked: an assignee is rung assigned, no assignee broadcast).
+// task and its doorbell (RingFor, unblocked: an assignee is rung assigned, no assignee broadcast),
+// also for a dependent that was already TODO and is claimable now.
 // It returns dep after. A caller holding the project lock (mutation.LockProject) took it first.
 func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.UnblockDecision) (store.Task, error) {
 	if !d.Cleared {
@@ -195,12 +229,31 @@ func (t *txn) unblockDependent(dep store.Task, clearedID string, d domain.Unbloc
 	t.Event(store.EventInput{TaskID: dep.ID, BoardID: dep.BoardID, Type: domain.EventTaskDependencyCleared, Data: data})
 	bells := doorbellsFor(&dep, after, true)
 	if len(bells) == 0 {
+		bells = claimableBells(dep, after, t.Now)
+	}
+	if len(bells) == 0 {
 		bells = []Doorbell{{Kind: ChangeKindChanged, TaskID: after.ID, BoardID: after.BoardID}}
 	}
 	for _, b := range bells {
 		t.Ring(b)
 	}
 	return after, nil
+}
+
+// claimableBells is the doorbell of a dependent already TODO (add_dependency never moves one) that
+// a clearing of its gates made claimable: new work as much as one that became TODO, so its assignee
+// is rung assigned and an unassigned one broadcast. before is the dependent with the cleared blocker
+// still in its blockedBy, after the dependent written; nil when after was claimable already or is
+// not claimable now. unblockDependent (a blocker reached DONE, was cancelled or deleted) and
+// remove_dependency (the edge itself went) both ring through it.
+func claimableBells(before, after store.Task, now time.Time) []Doorbell {
+	if domain.IsClaimable(claimView(before), now) || !domain.IsClaimable(claimView(after), now) {
+		return nil
+	}
+	if after.Assignee != nil && *after.Assignee != "" {
+		return []Doorbell{{Kind: DoorbellAssigned, Agent: *after.Assignee, TaskID: after.ID, BoardID: after.BoardID}}
+	}
+	return []Doorbell{{Kind: DoorbellBroadcast, TaskID: after.ID, BoardID: after.BoardID}}
 }
 
 // todoColumn is the board's first TODO column, or "" (the task keeps its column), conductor's
