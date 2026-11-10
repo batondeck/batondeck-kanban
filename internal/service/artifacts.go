@@ -224,11 +224,13 @@ func (s artifactsSvc) RetractArtifact(ctx context.Context, caller domain.Caller,
 	if err := required("taskId", req.TaskID); err != nil {
 		return RetractArtifactResp{}, err
 	}
+	// Trimmed once, as add_artifact stored the fields (trimmedPtr), for the check and the match alike.
 	sel := req.Artifact
+	sel.URL, sel.Ref, sel.Repo = strings.TrimSpace(sel.URL), strings.TrimSpace(sel.Ref), strings.TrimSpace(sel.Repo)
 	if !store.ArtifactKinds[store.ArtifactKind(sel.Kind)] {
 		return RetractArtifactResp{}, domain.Validation("unknown artifact kind: "+string(sel.Kind), map[string]any{"field": "artifact.kind"})
 	}
-	if strings.TrimSpace(sel.URL) == "" && strings.TrimSpace(sel.Ref) == "" {
+	if sel.URL == "" && sel.Ref == "" {
 		return RetractArtifactResp{}, domain.Validation("artifact selector needs a url or a ref to identify what to retract", nil)
 	}
 	for f, v := range map[string]string{"url": sel.URL, "ref": sel.Ref, "repo": sel.Repo} {
