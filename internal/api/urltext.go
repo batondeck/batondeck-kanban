@@ -10,10 +10,11 @@ import (
 
 // urlText refuses, as VALIDATION, a request whose path values or query values carry a NUL or a
 // byte that is not UTF-8 (domain.CheckText), before next runs. They are percent-decoded, so
-// unlike a JSON body they can carry either, and Postgres refuses both in text: without this a
-// route that reads its URL itself (fromURL, the on-call raw body, a token revoke, the stream)
-// answered INTERNAL on Postgres where SQLite answered NOT_FOUND or an empty page. call checks its
-// arguments again, path values included.
+// unlike a JSON body they can carry either, and Postgres refuses both in text: without this the
+// chronicle reads (fromURL), which skip call's check, answered INTERNAL on Postgres where SQLite
+// answered an empty page, and the other routes that read their URL themselves (the on-call raw
+// body, a token revoke, the stream) hand the same values on. call checks its arguments again,
+// path values included.
 func urlText(pattern string, next http.Handler, logger *log.Logger) http.Handler {
 	var names []string
 	for _, seg := range strings.Split(pattern, "/") {
