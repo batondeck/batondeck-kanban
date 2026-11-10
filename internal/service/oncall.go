@@ -15,6 +15,7 @@ import (
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/oncall"
+	"github.com/batondeck/batondeck-kanban/internal/oncall/auth"
 	"github.com/batondeck/batondeck-kanban/internal/oncall/connectors"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
@@ -112,6 +113,9 @@ func (s oncallSvc) buildAuth(in IntegrationAuthInput, integrationID string, now 
 		j := in.JWT
 		if j.Issuer == "" || j.Audience == "" || j.JWKSURL == "" {
 			return builtAuth{}, domain.Validation("auth mode 'jwt' requires jwt {issuer, audience, jwksUrl}", map[string]any{"field": "auth.jwt"})
+		}
+		if why := auth.CheckJWKSURL(j.JWKSURL); why != "" {
+			return builtAuth{}, domain.Validation("auth.jwt.jwksUrl "+why, map[string]any{"field": "auth.jwt.jwksUrl"})
 		}
 		return builtAuth{auth: oncall.Auth{Mode: oncall.AuthJWT, JWT: &oncall.JWTAuth{Issuer: j.Issuer, Audience: j.Audience, JWKSURL: j.JWKSURL}}}, nil
 	}

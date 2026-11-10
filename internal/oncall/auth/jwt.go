@@ -332,6 +332,29 @@ func ForbiddenAddress(a netip.Addr) bool {
 
 var forbiddenHosts = map[string]bool{"metadata.google.internal": true, "metadata.google.internal.": true, "localhost": true}
 
+// CheckJWKSURL is why raw can never be fetched as an integration's jwksUrl, "" when it can be
+// tried: not an absolute https URL with a host, credentials in it, a forbidden host name, or an IP
+// literal in a forbidden range. It resolves nothing (SafeFetch vets every address a name resolves
+// to on each fetch), so create_integration and update_integration refuse on save what every
+// delivery would otherwise be refused for.
+func CheckJWKSURL(raw string) string {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil || u.Scheme == "" || u.Hostname() == "":
+		return "must be an absolute https URL with a host"
+	case u.Scheme != "https":
+		return "must be https"
+	case u.User != nil:
+		return "must not carry credentials"
+	case forbiddenHosts[strings.ToLower(u.Hostname())]:
+		return "names a host the fetch refuses"
+	}
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil && ForbiddenAddress(a) {
+		return "is a private, loopback, link-local or reserved address, which the fetch refuses"
+	}
+	return ""
+}
+
 // resolver is the DNS lookup SafeFetch vets; a variable only so a test can answer it.
 var resolver = func(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
