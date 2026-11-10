@@ -83,11 +83,12 @@ Sessions off this device (claude.ai, ChatGPT, Cursor) are never rung: they pull 
 
 ## When the session ends
 
-On `/exit` the SessionEnd hook runs `session unregister`, which may not find the session: on Claude
-Code 2.1.309 the hook's environment no longer carries `CLAUDE_CODE_MESSAGING_SOCKET`, so the command
-cannot name the session's process and the server answers 404 (one stderr line). **The server removes
-the entry anyway**: it watches every registered process and drops its entry the moment the process
-exits (measured: within 1 s of `/exit`).
+On `/exit` the SessionEnd hook runs `session unregister`. On Claude Code 2.1.309 the hook's
+environment no longer carries `CLAUDE_CODE_MESSAGING_SOCKET`, so the command takes the session's
+process to be the hook's nearest ancestor that is not a shell, which should be the Claude Code
+process that SessionStart registered; when it names another process, the server answers 404 (one
+stderr line). **The server removes the entry anyway**: it watches every registered process and drops
+its entry the moment the process exits (measured: within 1 s of `/exit`).
 
 ## What the hooks can do
 

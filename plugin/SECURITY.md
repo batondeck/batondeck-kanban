@@ -33,7 +33,9 @@ model's context and never stops a session from starting.
 
 - **Where:** the server's Unix socket only (the first `unix://` entry of `BATONDECK_LISTEN` or of the
   config file `BATONDECK_CONFIG` names). The socket is mode 0600, so only your uid can connect; the
-  client has no TCP path at all, and the server serves the directory only on the socket.
+  client has no TCP path at all, and the server serves the directory only on the socket. The client
+  reads the uid of the process serving the socket from the kernel and sends the bearer only to one
+  running as your uid: a socket another local user bound first gets one stderr line and no request.
 - **What:** the session's pid, its role and agent label, and from Claude Code's own session registry
   (`~/.claude/sessions/<pid>.json`) its messaging socket path, session id and start time.
 - **Credential:** `BATONDECK_TOKEN` as the bearer. It is not the session's `CLAUDE_CODE_MESSAGING_TOKEN`,
