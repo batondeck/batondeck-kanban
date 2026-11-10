@@ -59,6 +59,10 @@ func toolCalls(t *testing.T, newStore Factory) {
 				{TS: 1, Tool: "t", Identity: "alice", Outcome: "maybe", Code: "OK"},
 				{TS: 1, Tool: "t", Identity: "alice", Outcome: store.ToolCallOK},
 				{TS: 1, Tool: "t", Identity: "alice", Outcome: store.ToolCallOK, Code: "OK", LatencyMs: -1},
+				// A NUL in any text field: Postgres cannot store it, so every engine refuses it alike.
+				{TS: 1, Tool: "t\x00", Identity: "alice", Outcome: store.ToolCallOK, Code: "OK"},
+				{TS: 1, Tool: "t", Identity: "alice", Agent: "a\x00", Outcome: store.ToolCallOK, Code: "OK"},
+				{TS: 1, Tool: "t", Identity: "alice", Outcome: store.ToolCallOK, Code: "OK", ProjectID: "P\x00"},
 			} {
 				wantErr(t, s.InsertToolCalls(ctx, []store.ToolCall{good, bad}), domain.CodeValidation, "")
 			}

@@ -188,7 +188,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return s.initialize(ctx, ss, caller, method, req, next)
 		case method == "tools/call":
 			touch := service.TouchAgentSessionReq{SessionKey: service.SessionKey(caller.Identity, service.AgentID(caller)), AgentName: agentName(caller, ss.InitializeParams()),
-				Kind: sessionKind(caller), Tool: toolName(req)}
+				Kind: sessionKind(caller), Tool: s.registeredName(req)}
 			if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
 				s.log.Printf("mcp: touch agent session %s failed: %+v", touch.SessionKey, err)
 			}
@@ -218,7 +218,9 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 	key := service.SessionKey(caller.Identity, service.AgentID(caller))
 	touch := service.TouchAgentSessionReq{SessionKey: key, AgentName: agentName(caller, params), Kind: sessionKind(caller), OAuthClientID: caller.OAuthClientID}
 	if params != nil && params.ClientInfo != nil {
-		touch.ClientName, touch.ClientVersion = params.ClientInfo.Name, params.ClientInfo.Version
+		// The client's own words, cleaned and bounded as an agent name is: up to the 4 MiB body
+		// otherwise, a NUL included (which Postgres refuses, leaving a live session with no row).
+		touch.ClientName, touch.ClientVersion = domain.AgentLabel(params.ClientInfo.Name), domain.AgentLabel(params.ClientInfo.Version)
 	}
 	if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
 		s.log.Printf("mcp: create agent session %s failed: %+v", key, err)
@@ -235,13 +237,16 @@ func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller d
 	return res, nil
 }
 
-// agentName is the session's display label: the caller's agent, else the client's name.
+// agentName is the session's display label: the caller's agent, else the client's name as an agent
+// name (domain.AgentLabel), else "mcp".
 func agentName(c domain.Caller, p *mcp.InitializeParams) string {
 	if c.Agent != "" {
 		return c.Agent
 	}
-	if p != nil && p.ClientInfo != nil && p.ClientInfo.Name != "" {
-		return p.ClientInfo.Name
+	if p != nil && p.ClientInfo != nil {
+		if name := domain.AgentLabel(p.ClientInfo.Name); name != "" {
+			return name
+		}
 	}
 	return "mcp"
 }

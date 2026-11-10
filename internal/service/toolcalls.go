@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,7 +56,7 @@ func (tc *toolCalls) Record(_ context.Context, caller domain.Caller, req RecordT
 		Outcome: store.ToolCallOutcome(req.Outcome), Code: req.Code, LatencyMs: req.LatencyMs, ProjectID: req.ProjectID,
 	}
 	if reason := invalidToolCall(row); reason != "" {
-		tc.c.log.Printf("service: tool_calls: dropped a row (%s): tool=%q identity=%q outcome=%q code=%q", reason, row.Tool, row.Identity, row.Outcome, row.Code)
+		tc.c.log.Printf("service: tool_calls: dropped a row (%s): tool=%q identity=%q outcome=%q code=%q", reason, clip(row.Tool), clip(row.Identity), clip(string(row.Outcome)), clip(row.Code))
 		return RecordToolCallResp{}, nil
 	}
 	tc.mu.Lock()
@@ -89,7 +91,35 @@ func invalidToolCall(r store.ToolCall) string {
 	case r.LatencyMs < 0:
 		return "negative latency"
 	}
+	return badText("tool", r.Tool, "identity", r.Identity, "agent", r.Agent, "code", r.Code, "project", r.ProjectID)
+}
+
+// maxBookkeepingText bounds each text field of a tool_calls or agent_sessions row in bytes. Every
+// name the transport writes there (a registered tool, an id, an agent label of domain.MaxAgentChars)
+// is far shorter, so a longer one is a caller's free text that reached the bookkeeping.
+const maxBookkeepingText = 256
+
+// badText is why the first of fields, given as name, value pairs, cannot be bookkept: it carries a
+// NUL (U+0000), which Postgres cannot store in text, or is longer than maxBookkeepingText; "" when
+// none is.
+func badText(fields ...string) string {
+	for i := 0; i+1 < len(fields); i += 2 {
+		switch v := fields[i+1]; {
+		case strings.ContainsRune(v, 0):
+			return fields[i] + " carries a NUL character"
+		case len(v) > maxBookkeepingText:
+			return fmt.Sprintf("%s is longer than %d bytes", fields[i], maxBookkeepingText)
+		}
+	}
 	return ""
+}
+
+// clip is s cut for a log line, so a refused field is never logged whole.
+func clip(s string) string {
+	if len(s) <= 64 {
+		return s
+	}
+	return s[:64] + "..."
 }
 
 // flush writes the buffer, one batch at a time; a batch the store refuses is logged and dropped.

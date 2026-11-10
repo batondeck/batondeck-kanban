@@ -426,7 +426,8 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A name nobody registered: go-sdk refuses it, and the caller's free text names no project.
+	// A name nobody registered: go-sdk refuses it, and the row carries neither the caller's free text
+	// nor a project, only unknownTool.
 	_, _ = cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "BUY-CHEAP-PILLS-example.com", Arguments: map[string]any{"projectId": "P-1"}})
 	var got []string
 	for _, c := range calls(f, "ToolCalls.Record") {
@@ -434,7 +435,7 @@ func TestEveryToolCallRecordedOnce(t *testing.T) {
 		got = append(got, c.Caller.Identity+" "+r.Tool+" "+r.Outcome+" "+r.Code+" "+r.ProjectID)
 	}
 	want := []string{"u-ada whoami ok OK P-1", "u-ada stale error STALE P-1", "u-ada boom error INTERNAL P-1", "u-ada plain error INTERNAL P-1",
-		"u-ada denied error FORBIDDEN ", "u-ada BUY-CHEAP-PILLS-example.com error INTERNAL "}
+		"u-ada denied error FORBIDDEN ", "u-ada " + unknownTool + " error INTERNAL "}
 	if !slices.Equal(got, want) {
 		t.Errorf("tool_calls rows = %q, want %q", got, want)
 	}
@@ -624,7 +625,11 @@ func TestProtocolErrorsLeaveTheServerServing(t *testing.T) {
 				r := c.Req.(service.RecordToolCallReq)
 				rows = append(rows, r.Tool+" "+r.Outcome+" "+r.Code)
 			}
-			if want := []string{name + " error INTERNAL"}; !slices.Equal(rows, want) {
+			recorded := name
+			if name == "nosuch" {
+				recorded = unknownTool // the caller's free text is never stored
+			}
+			if want := []string{recorded + " error INTERNAL"}; !slices.Equal(rows, want) {
 				t.Errorf("tool_calls rows = %q, want %q", rows, want)
 			}
 		})
