@@ -302,7 +302,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         <div className="card-badges">
           {t.status !== col.status && <StatusPill status={t.status} />}
           {isPoisoned(t) ? <PoisonBadge task={t} /> : (t.status === 'BLOCKED' || t.blockedBy.length > 0) && <span className="badge blocked">Blocked</span>}
-          {t.racing && <span className="badge racing" title="racing — N runs open"><Icon name="finish" size={11} /> Racing</span>}
+          {t.racing && <span className="badge racing" title="Racing: runs of this task are open until one is picked"><Icon name="finish" size={11} /> Racing</span>}
           {(t.sprintIds?.length ?? 0) > 0 && (
             <span className="badge sprint" title={`Sprint: ${sprintName ?? t.sprintIds![0]!}`}>
               <Icon name="flag" size={11} /> {sprintName ?? t.sprintIds![0]!}
@@ -1345,7 +1345,7 @@ export function Board() {
         <div style={{ flex: 1 }} />
         <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ position: 'absolute', left: 9, pointerEvents: 'none' }}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
-          <input className="input" style={{ paddingLeft: 30, width: 200 }} placeholder="Search the project…  ( / )" aria-label="Search tasks" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+          <input className="input" style={{ paddingLeft: 30, width: 200 }} placeholder="Search the project…" aria-label="Search tasks" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
         </div>
         {(filters.status || filters.assignee || filters.label || filters.sprint || filters.unblocked || filters.q) && (
           <button className="btn secondary" onClick={() => setFilters({ status: '', assignee: '', label: '', sprint: '', unblocked: false, q: '' })}>Clear</button>
@@ -1538,7 +1538,8 @@ export function Board() {
                       </AnimatePresence>
                       {colTasks.length === 0 && tasksLoaded && (
                         <div className="muted" style={{ fontSize: 12, padding: '8px 4px' }}>
-                          {canCreate ? (
+                          {/* A created task always lands in a TODO column (create_task, ADR-0005). */}
+                          {canCreate && col.status === 'TODO' ? (
                             <>No tasks — press <span className="kbd">c</span></>
                           ) : (
                             'No tasks'
