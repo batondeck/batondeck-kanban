@@ -1711,6 +1711,13 @@
       "schema": {
         "type": "string"
       }
+    },
+    {
+      "pointer": "/tools/get_task_context/output/properties/attachments/items/properties/fileName",
+      "required": true,
+      "schema": {
+        "type": "string"
+      }
     }
   ],
   "errorDeltas": [

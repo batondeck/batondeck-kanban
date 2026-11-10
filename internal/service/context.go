@@ -426,12 +426,13 @@ func taskOut(t store.Task, summary string) (Task, error) {
 }
 
 // attachmentBriefOut is an attachment as get_task_context carries it: list_attachments' row
-// (media.go) without a download URL, so the briefing signs nothing. gcsUri is "blob:" and the
-// upload ref; sha256 is set once the attachment is ready; thumbUri and extractedText are null (no
-// media function).
+// (media.go) without a download URL, so the briefing signs nothing. fileName is the name attach_file
+// was given ("" for an attachment from before it was kept); gcsUri is "blob:" and the upload ref;
+// sha256 is set once the attachment is ready; thumbUri and extractedText are null (no media
+// function).
 func attachmentBriefOut(a store.Attachment) AttachmentBrief {
 	out := AttachmentBrief{
-		Bytes: float64(a.Bytes), CreatedBy: a.CreatedBy, GCSURI: "blob:" + blob.Ref{ProjectID: a.ProjectID, TaskID: a.TaskID, AttachmentID: a.ID}.String(),
+		Bytes: float64(a.Bytes), CreatedBy: a.CreatedBy, FileName: a.FileName, GCSURI: "blob:" + blob.Ref{ProjectID: a.ProjectID, TaskID: a.TaskID, AttachmentID: a.ID}.String(),
 		ID: a.ID, Kind: MediaKind(a.Kind), MimeType: a.MimeType, Status: AttachmentStatus(a.Status), TaskID: a.TaskID, Ts: isoMs(a.TS),
 	}
 	if a.Status == store.AttachmentReady {

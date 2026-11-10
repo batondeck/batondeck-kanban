@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/url"
@@ -665,6 +666,21 @@ func TestListAttachmentsAnswersTheFileNameOverTheEngines(t *testing.T) {
 		}
 		if list := m.list(t, task.ID); len(list) != 1 || list[0].FileName != "spec v2.pdf" || list[0].Status != "ready" {
 			t.Fatalf("ready: %+v", list)
+		}
+		// get_task_context's attachments section (an agent's one-call briefing) names it too.
+		cx, err := m.c.Context().GetTaskContext(m.ctx, m.alice, GetTaskContextReq{ProjectID: m.project, TaskID: task.ID, Include: []ContextSection{"attachments"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cx.Attachments) != 1 {
+			t.Fatalf("get_task_context attachments: %+v", cx.Attachments)
+		}
+		raw, err := json.Marshal(cx.Attachments[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"fileName":"spec v2.pdf"`) {
+			t.Fatalf("get_task_context attachment does not name the file: %s", raw)
 		}
 	})
 }
