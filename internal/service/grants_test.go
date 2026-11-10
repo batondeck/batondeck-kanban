@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
+	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
 // A maxPriority and labels grant judges what a call writes as well as the task it loads: a capped
@@ -56,5 +57,46 @@ func TestAWriteStaysWithinItsGrant(t *testing.T) {
 	}
 	if _, err := f.c.Context().AddSubtask(f.ctx, mona, AddSubtaskReq{ProjectID: f.project.ID, ParentTaskID: task.ID, Title: "c"}); err != nil {
 		t.Fatalf("add_subtask at the default priority: %v", err)
+	}
+}
+
+// detect_anomalies under a boards grant is judged on the board it scans: the boardId it names, or
+// the board of the task it names. It was refused "board:*" on every board, the granted one too.
+func TestDetectAnomaliesUnderABoardsGrant(t *testing.T) {
+	f := newFixture(t, Options{})
+	other, err := f.st.CreateBoard(f.ctx, store.CreateBoardInput{ProjectID: f.project.ID, Name: "B2", CreatedBy: "alice"}, store.WriteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := domain.CapabilityGrant{Boards: []string{f.board.ID}}
+	old := f.c // newFixture's cleanup closes the Core f.c names then
+	f.c = New(f.st, Options{Grants: func(_ context.Context, _, identity string) (domain.CapabilityGrant, bool, error) {
+		return grant, identity == "mona", nil
+	}, ToolCallFlush: -1})
+	if err := old.Close(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	mona := f.addMember(t, "mona", domain.RoleMaster)
+	onGranted := f.task(t, domain.Todo, nil)
+	onOther, err := f.st.CreateTask(f.ctx, store.CreateTaskInput{ProjectID: f.project.ID, BoardID: other.ID, ColumnID: other.Columns[0].ID,
+		Title: "t", Status: other.Columns[0].Status, OrderKey: "a0", CreatedBy: "alice", CreatedAt: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.c.Anomalies().Detect(f.ctx, mona, DetectAnomaliesReq{ProjectID: f.project.ID, BoardID: f.board.ID})
+	t.Logf("detect_anomalies on the granted board: %v", err)
+	if err != nil {
+		t.Fatalf("detect_anomalies on the granted board is refused: %v", err)
+	}
+	if _, err := f.c.Anomalies().Detect(f.ctx, mona, DetectAnomaliesReq{ProjectID: f.project.ID, TaskID: onGranted.ID}); err != nil {
+		t.Fatalf("detect_anomalies on a task of the granted board is refused: %v", err)
+	}
+	_, err = f.c.Anomalies().Detect(f.ctx, mona, DetectAnomaliesReq{ProjectID: f.project.ID, BoardID: other.ID})
+	if e := wantCode(t, err, domain.CodeForbidden); e.Details["requiredCapability"] != "board:"+other.ID {
+		t.Fatalf("details %+v, want board:%s", e.Details, other.ID)
+	}
+	_, err = f.c.Anomalies().Detect(f.ctx, mona, DetectAnomaliesReq{ProjectID: f.project.ID, TaskID: onOther.ID})
+	if e := wantCode(t, err, domain.CodeForbidden); e.Details["requiredCapability"] != "board:"+other.ID {
+		t.Fatalf("details %+v, want board:%s", e.Details, other.ID)
 	}
 }
