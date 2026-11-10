@@ -555,4 +555,5 @@ type WakeSession struct {
 	ClientSessionID   sql.NullString
 	ProcStart         sql.NullString
 	BearerSealed      []byte
+	DeviceID          string
 }

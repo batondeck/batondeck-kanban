@@ -62,15 +62,16 @@ func compose(st store.Store, version, publicURL string, logger *log.Logger, seal
 	return composeWith(st, version, publicURL, logger, sealer, media, ret, wakeTuning{registry: wakeRegistry(), sweep: wakeSweep})
 }
 
-// wakeTuning is the device session directory's registry, sweep interval and coalescing windows.
-// compose's, and so serve's, is wakeRegistry(), wakeSweep and the zero windows (ADR-0004's
-// numbers); a test passes its own to composeWith, so that tests running in parallel share no
-// package variable.
+// wakeTuning is the device session directory's registry, sweep interval and coalescing windows,
+// and the device id its rows name (P-167). compose's, and so serve's, is wakeRegistry(), wakeSweep
+// and the zero windows (ADR-0004's numbers), with serve's device id (runServer); a test passes its
+// own to composeWith, so that tests running in parallel share no package variable.
 type wakeTuning struct {
 	registry  string
 	sweep     time.Duration
 	windows   wake.Windows
 	tapBuffer int
+	device    string
 }
 
 // composeWith is compose with the directory's tuning given.
@@ -92,7 +93,7 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 		DeliveriesDays: cmp.Or(ret.DeliveriesDays, def.DeliveriesDays), RawBodiesDays: cmp.Or(ret.RawBodiesDays, def.RawBodiesDays),
 		SweepIntervalSeconds: cmp.Or(ret.SweepIntervalSeconds, def.SweepIntervalSeconds)}
 	day := 24 * time.Hour
-	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media,
+	sc := service.New(st, service.Options{Logger: logger, Sealer: sealer, Media: media, Device: wt.device,
 		DeliveryRetention: time.Duration(ret.DeliveriesDays) * day, RawBodyRetention: time.Duration(ret.RawBodiesDays) * day,
 		ToolCallRetentionDays: int64(ret.ToolCallsDays)})
 	sweep := &retention.Sweeper{Store: st, Windows: retention.WindowsOf(ret), Report: func(step string, err error) { logger.Printf("retention: %s: %+v", step, err) }}
@@ -318,9 +319,9 @@ func feedSnapshots(tap *bus.Subscription, sc *service.Core, logger *log.Logger) 
 
 // runServer serves the app over st on every listener until ctx ends or one fails. proxies are the
 // trusted reverse proxies (trusted_proxies), whose X-Forwarded-For names the client the sign-in and
-// registration limits count.
-func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies) error {
-	a, err := compose(st, version, publicURL, logger, sealer, media, ret)
+// registration limits count; device is the id the session directory's rows name (core.DeviceID).
+func runServer(ctx context.Context, lns []net.Listener, st store.Store, version, publicURL string, logger *log.Logger, sealer service.Sealer, media service.MediaOptions, ret core.Retention, proxies auth.TrustedProxies, device string) error {
+	a, err := composeWith(st, version, publicURL, logger, sealer, media, ret, wakeTuning{registry: wakeRegistry(), sweep: wakeSweep, device: device})
 	if err != nil {
 		return err
 	}

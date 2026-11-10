@@ -187,7 +187,7 @@ func TestRunServerStopsWithAnAttachedSession(t *testing.T) {
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}, nil)
+		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}, nil, "")
 	}()
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "attached", Version: "1"}, nil)
@@ -237,7 +237,7 @@ func TestRunServerStopsWithAnUnusedConnection(t *testing.T) {
 	serveCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}, nil)
+		done <- runServer(serveCtx, []net.Listener{ln}, st, "x", "", log.New(io.Discard, "", 0), nil, service.MediaOptions{}, core.Retention{}, nil, "")
 	}()
 	// A served request first, so the server is accepting; then a connection that sends nothing.
 	r, err := http.Get("http://" + ln.Addr().String() + "/healthz")

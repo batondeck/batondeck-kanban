@@ -10,7 +10,8 @@ import "context"
 // 1). PID is the client process (0 for a row written before 0005); Role is "master" or "worker"
 // ("" before 0005); ClientSessionID and ProcStart are what the client's registry entry
 // (~/.claude/sessions/<pid>.json) said at register; BearerSealed is the bearer it registered
-// with, sealed with the keyring, never the bearer.
+// with, sealed with the keyring, never the bearer. DeviceID is the device whose serve registered it
+// ("" before 0019), where its PID names a process (P-167).
 type WakeSession struct {
 	ID                string
 	IdentityID        string
@@ -26,13 +27,14 @@ type WakeSession struct {
 	ClientSessionID   string
 	ProcStart         string
 	BearerSealed      []byte
+	DeviceID          string
 }
 
 // WakeSessions is the wake-session area. Key: ID, unique on its own; PID, when not 0, is unique
-// too. A session whose ExpiresAt is at or before the read's time is expired and reads as missing
+// too among the sessions of its DeviceID. A session whose ExpiresAt is at or before the read's time is expired and reads as missing
 // from GetWakeSession, before any sweep; ListWakeSessions lists it. Errors: an empty id, identity
 // or agent, an ExpiresAt of 0, a negative PID, a Role other than "", master and worker, and a PID
-// another id holds, are domain.Validation; a missing or expired session is
+// another id of the same DeviceID holds, are domain.Validation; a missing or expired session is
 // domain.NotFound("WakeSession", id).
 type WakeSessions interface {
 	// PutWakeSession inserts the session or, when the id exists, replaces every field but CreatedAt,
