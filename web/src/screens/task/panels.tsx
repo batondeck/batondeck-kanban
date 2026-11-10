@@ -13,7 +13,7 @@ import * as contextApi from '../../api/context.js';
 import * as tasksApi from '../../api/tasks.js';
 import { Avatar, Marquee, StatusPill, eventActor, eventVerb, mdComponents, mdPlugins, personName, timeAgo } from '../../components.js';
 import { AppLinkCard, normalizeLink } from '../../AppLink.js';
-import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
+import { Bar, Button, Cluster, KV, Note, Panel, ReadFailed, Stack } from '../../ui.js';
 import { Comments } from '../Comments.js';
 import { FollowUps } from '../FollowUps.js';
 import { LIMITS, type Artifact, type Task } from '../../types.js';
@@ -211,18 +211,20 @@ export function DeliveredPanel({ d }: P) {
 /* ---- graph ----------------------------------------------------------------------------------- */
 
 export function DependenciesPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, blockedByEdges, blocksEdges, relatesEdges, taskById, canLink, why } = d;
+  const { projectId, taskId, ctx, ctxQ, run, blockedByEdges, blocksEdges, relatesEdges, taskById, canLink, why } = d;
   const [depId, setDepId] = useState('');
   // `add_dependency` and `remove_dependency` are tier master (P-440).
   const linkWhy = why('add_dependency', 'add or remove dependencies');
   const linkAttrs = closedAttrs(canLink, linkWhy, 'deps-closed');
   return (
-    <Panel title="Dependencies" right={<span className="mono">blocks {blocksEdges.length} · blocked by {blockedByEdges.length}</span>} pad>
+    <Panel title="Dependencies" right={ctx ? <span className="mono">blocks {blocksEdges.length} · blocked by {blockedByEdges.length}</span> : undefined} pad>
       <Stack gap={12}>
+        {/* The edges come from the context read: until it answers, "None" would be a guess. */}
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         <div>
           <h3 style={{ ...label, margin: '0 0 8px' }}>Blocked by</h3>
           {blockedByEdges.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
+            ctx && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
           ) : (
             <Cluster gap={8} wrap>
               {blockedByEdges.map((e) => (
@@ -247,7 +249,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
         <div>
           <h3 style={{ ...label, margin: '0 0 8px' }}>Blocks</h3>
           {blocksEdges.length === 0 ? (
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
+            ctx && <p style={{ margin: 0, fontSize: 12, color: 'var(--text-2)', fontStyle: 'italic' }}>None</p>
           ) : (
             <Cluster gap={8} wrap>
               {blocksEdges.map((e) => (
@@ -270,7 +272,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
 }
 
 export function SubtasksPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, subs, subsDone, subsPct, canMove, canAddSubtask, why } = d;
+  const { projectId, taskId, run, subs, subQ, subsDone, subsPct, canMove, canAddSubtask, why } = d;
   const [subTitle, setSubTitle] = useState('');
   // A subtask's checkbox is `move_task`, Add is `add_subtask`; both tier master (P-440).
   const subWhy = why('add_subtask', 'add subtasks or mark them done');
@@ -284,6 +286,7 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
         </div>
       )}
       <Stack gap={8}>
+        {subQ.isError && <ReadFailed what="the subtasks" error={subQ.error} stale={!!subQ.data} onRetry={() => void subQ.refetch()} />}
         {subs.map((s: Task) => {
           const done = s.status === 'DONE';
           // NOT a row-wide <label>: the row mixes two actions (checkbox = toggle done, title =
@@ -333,7 +336,7 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
 
 /** Notes / decisions / fields. Link-kind items render in LinksPanel. */
 export function ContextPanel({ d }: P) {
-  const { projectId, taskId, task, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, task, ctx, ctxQ, run, canAnnotate, why } = d;
   const [note, setNote] = useState('');
   // A note is `add_context_item`, tier write (P-440).
   const noteWhy = why('add_context_item', 'add notes');
@@ -351,11 +354,12 @@ export function ContextPanel({ d }: P) {
   return (
     <Panel
       title="Context items"
-      right={<span className="mono">{items.length} · note / decision / field</span>}
+      right={<span className="mono">{ctx ? `${items.length} · ` : ''}note / decision / field</span>}
       pad
       {...(briefId ? { footnote: 'The telemetry snapshot is shown in Incident, above.' } : {})}
     >
       <Stack gap={4}>
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         {items.map((i) => (
           <div key={i.id} className="card" style={{ padding: 10 }}>
             <Cluster gap={4}>
@@ -376,15 +380,16 @@ export function ContextPanel({ d }: P) {
 
 /** External artifacts (Lucid, Google Docs, Figma, …) as smart link cards. */
 export function LinksPanel({ d }: P) {
-  const { projectId, taskId, ctx, run, canAnnotate, why } = d;
+  const { projectId, taskId, ctx, ctxQ, run, canAnnotate, why } = d;
   const [link, setLink] = useState('');
   // A link is a context item too: `add_context_item`, tier write (P-440).
   const linkWhy = why('add_context_item', 'attach links');
   const linkAttrs = closedAttrs(canAnnotate, linkWhy, 'links-closed');
   const links = (ctx?.items ?? []).filter((i) => i.kind === 'link');
   return (
-    <Panel title="Links" right={<span className="mono">{links.length}</span>} pad>
+    <Panel title="Links" right={ctx ? <span className="mono">{links.length}</span> : undefined} pad>
       <Stack gap={4}>
+        {ctxQ.isError && <ReadFailed what="the context" error={ctxQ.error} stale={!!ctx} onRetry={() => void ctxQ.refetch()} />}
         {links.map((i) => (
           <AppLinkCard key={i.id} url={i.body} meta={`${i.author.split('@')[0]} · ${timeAgo(i.ts)}`} />
         ))}
@@ -419,8 +424,9 @@ export function MemoryPanel({ d }: P) {
   const [memVal, setMemVal] = useState('');
   const entries = memQ.data?.entries ?? [];
   return (
-    <Panel title="Agent memory" right={<span className="mono">{entries.length}</span>} pad>
+    <Panel title="Agent memory" right={memQ.data ? <span className="mono">{entries.length}</span> : undefined} pad>
       <Stack gap={2}>
+        {memQ.isError && <ReadFailed what="the memory" error={memQ.error} stale={!!memQ.data} onRetry={() => void memQ.refetch()} />}
         {entries.map((m) => (
           <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px dashed var(--border)' }}>
             <Cluster gap={8}>
@@ -430,7 +436,7 @@ export function MemoryPanel({ d }: P) {
             <span className="mono" style={{ fontSize: 12, color: 'var(--accent-tint)' }}>{JSON.stringify(m.value)}</span>
           </div>
         ))}
-        {entries.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No memory entries.</p>}
+        {memQ.isSuccess && entries.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No memory entries.</p>}
       </Stack>
       <Cluster gap={4} style={{ marginTop: 10 }}>
         <input className="input" style={{ width: 90 }} placeholder="key" value={memKey} disabled={!canWriteMemory} {...memAttrs} onChange={(e) => setMemKey(e.target.value)} />
@@ -509,7 +515,8 @@ export function FilesPanel({ d }: P) {
           {artifacts.map((a, i) => <ArtifactRow key={`${a.kind}-${a.url ?? a.ref ?? i}`} artifact={a} />)}
         </Stack>
       )}
-      {artifacts.length === 0 && attachments.length === 0 && <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>None.</p>}
+      {attQ.isError && <div style={{ marginBottom: 8 }}><ReadFailed what="the attachments" error={attQ.error} stale={!!attQ.data} onRetry={() => void attQ.refetch()} /></div>}
+      {artifacts.length === 0 && attQ.isSuccess && attachments.length === 0 && <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>None.</p>}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {attachments.map((a) => {
           const tile = (
@@ -877,7 +884,7 @@ export function PropertiesPanel({ d, defaultOpen = true }: P & { defaultOpen?: b
 
 /** One compact line per event. Collapsed by default — it can grow long and dominate the surface. */
 export function ActivityPanel({ d }: P) {
-  const { history, taskId } = d;
+  const { history, histQ, taskId } = d;
   const displayNames = useDisplayNames(d.projectId);
   const [open, setOpen] = useState(false);
   return (
@@ -891,9 +898,11 @@ export function ActivityPanel({ d }: P) {
           Recent Activity
         </button>
       }
-      right={<span className="mono">{history.length}</span>}
+      right={histQ.data ? <span className="mono">{history.length}</span> : undefined}
       pad
     >
+      {/* The ticket's events come from the board feed read; a failed read says so, open or shut. */}
+      {histQ.isError && <div style={{ marginBottom: 6 }}><ReadFailed what="the activity" error={histQ.error} stale={!!histQ.data} onRetry={() => void histQ.refetch()} /></div>}
       {open ? (
         <Stack gap={2}>
           {history.map((e) => (
@@ -906,10 +915,10 @@ export function ActivityPanel({ d }: P) {
               <span className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap' }} title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</span>
             </div>
           ))}
-          {history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No activity yet.</p>}
+          {histQ.isSuccess && history.length === 0 && <p className="muted" style={{ fontSize: 12, margin: 0 }}>No activity yet.</p>}
         </Stack>
       ) : (
-        <p className="muted" style={{ fontSize: 12, margin: 0 }}>{history.length} event{history.length === 1 ? '' : 's'} on this ticket.</p>
+        histQ.data && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{history.length} event{history.length === 1 ? '' : 's'} on this ticket.</p>
       )}
     </Panel>
   );

@@ -257,7 +257,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
   };
 
   return {
-    projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, memQ, attQ,
+    projectId, taskId, identity, task, taskQ, ctx: ctxQ.data, ctxQ, subQ, memQ, attQ,
     err, setErr, run, uploadFile, move, countdown, myLease, heldByOther, setLease,
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,

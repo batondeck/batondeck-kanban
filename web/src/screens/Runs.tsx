@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as runsApi from '../api/runs.js';
 import { Avatar, timeAgo } from '../components.js';
 import type { RunView, Task } from '../types.js';
+import { ReadFailed } from '../ui.js';
 
 // A run is "submitted" (pickable) when it carries a deliverable in REVIEW/DONE and was not cancelled —
 // the core's own rule for pick_run, so a run cancel_task closed (DONE with the cancelled label, even one
@@ -203,6 +204,12 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
       </div>
       {closedWhy && !canRace && (racing || runs.length === 0) && (
         <p id="runs-closed" className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>{closedWhy}</p>
+      )}
+      {/* A failed read says so, rather than showing a race with no runs. */}
+      {runsQ.isError && (
+        <div style={{ marginBottom: 8 }}>
+          <ReadFailed what="the runs" error={runsQ.error} stale={!!runsQ.data} onRetry={() => void runsQ.refetch()} />
+        </div>
       )}
 
       {/* Start-race affordance — only when this task is NOT racing and has no runs yet. A human lead
