@@ -26,6 +26,7 @@ type sessionTable struct {
 	agents   map[string]int                // agent-session key -> its live MCP sessions
 	keys     map[string]string             // MCP session id -> its agent-session key
 	ending   map[string]string             // sessions to close once a request is answered: id -> that request's mark
+	closing  map[string]struct{}           // sessions EndAgentSessions is ending: their calls touch no row
 	inflight map[string]struct{}           // marks of the HTTP requests closeEnding has not seen return
 	ends     sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
@@ -63,6 +64,27 @@ func (t *sessionTable) release(id string) {
 	delete(t.live, id)
 	delete(t.keys, id)
 	delete(t.ending, id)
+	delete(t.closing, id)
+}
+
+// markClosing records sessions EndAgentSessions is ending, until each is released.
+func (t *sessionTable) markClosing(ss []*mcp.ServerSession) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closing == nil {
+		t.closing = map[string]struct{}{}
+	}
+	for _, s := range ss {
+		t.closing[s.ID()] = struct{}{}
+	}
+}
+
+// isClosing is whether EndAgentSessions is ending session id.
+func (t *sessionTable) isClosing(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.closing[id]
+	return ok
 }
 
 // endAfter marks session id to be closed once the HTTP request whose mark is mark has its answer
@@ -162,7 +184,7 @@ func sessionKind(c domain.Caller) service.SessionKind {
 
 // sessionMiddleware keeps the agent_sessions row of each MCP session: written at initialize (a
 // session over the bound is refused there, and go-sdk drops a session whose initialize failed) and
-// touched by every tool call. The end of a session (idle collection, DELETE, Close, a restart)
+// touched by every tool call once it has its outcome (touchCall). The end of a session (idle collection, DELETE, Close, a restart)
 // leaves the row: plan Clarification 7 GCs it 30 min after its last request, which the retention
 // sweep does (AgentSessionIdle), skipping an agent LiveAgentSessions still names (P-279);
 // disconnect_agent deletes it at once. A bookkeeping failure is logged and never fails the request.
@@ -187,13 +209,37 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		case method == "initialize":
 			return s.initialize(ctx, ss, caller, method, req, next)
 		case method == "tools/call":
-			touch := service.TouchAgentSessionReq{SessionKey: service.SessionKey(caller.Identity, service.AgentID(caller)), AgentName: agentName(caller, ss.InitializeParams()),
-				Kind: sessionKind(caller), Tool: s.registeredName(req)}
-			if _, err := s.services.Sessions.TouchAgentSession(ctx, caller, touch); err != nil {
-				s.log.Printf("mcp: touch agent session %s failed: %+v", touch.SessionKey, err)
-			}
+			res, err := next(ctx, method, req)
+			s.touchCall(ctx, ss, caller, req, res, err)
+			return res, err
 		}
 		return next(ctx, method, req)
+	}
+}
+
+// touchWait bounds a tools/call's session touch, which runs on the call's values without its
+// cancellation: a call its client abandoned is still a request.
+const touchWait = 5 * time.Second
+
+// touchCall records a finished tools/call on its agent session. It runs after the handler so it
+// knows the outcome: a call that succeeded names a project that is the caller's (every tool naming
+// one authorizes on it), which becomes the agent's lastProjectId; a refused or failed call's
+// projectId may be any project's, a non-member's included, so it names none. A session
+// EndAgentSessions is ending is not touched: disconnect_agent deletes the row once the sessions
+// are ended, and a touch after that would write the row back.
+func (s *Server) touchCall(ctx context.Context, ss *mcp.ServerSession, caller domain.Caller, req mcp.Request, res mcp.Result, err error) {
+	if s.sessions.isClosing(ss.ID()) {
+		return
+	}
+	touch := service.TouchAgentSessionReq{SessionKey: service.SessionKey(caller.Identity, service.AgentID(caller)), AgentName: agentName(caller, ss.InitializeParams()),
+		Kind: sessionKind(caller), Tool: s.registeredName(req)}
+	if r, _ := res.(*mcp.CallToolResult); err == nil && r != nil && !r.IsError && touch.Tool != unknownTool {
+		touch.ProjectID = projectOf(req)
+	}
+	tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), touchWait)
+	defer cancel()
+	if _, err := s.services.Sessions.TouchAgentSession(tctx, caller, touch); err != nil {
+		s.log.Printf("mcp: touch agent session %s failed: %+v", touch.SessionKey, err)
 	}
 }
 
@@ -279,6 +325,7 @@ func (s *Server) EndAgentSessions(ctx context.Context, identityID, agentID strin
 	self, _ := ctx.Value(sessionIDKey{}).(string)
 	mark, _ := ctx.Value(requestMarkKey{}).(string)
 	live := s.sessions.of(service.SessionKey(identityID, agentID))
+	s.sessions.markClosing(live) // a call still in hand on any of them must not touch the row back after the delete
 	var others sync.WaitGroup
 	for _, ss := range live {
 		if ss.ID() == self {

@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/service/servicefake"
 )
@@ -47,6 +49,33 @@ func TestCallBookkeepingStoresNoCallerText(t *testing.T) {
 	}
 	if want := []string{unknownTool + " []", unknownTool + " []", "whoami []", "whoami []"}; strings.Join(tools, "|") != strings.Join(want, "|") {
 		t.Errorf("agent session touches = %q, want %q", tools, want)
+	}
+}
+
+// A tools/call's touch carries its project when the call succeeded (so the project is the caller's:
+// every tool naming one authorizes on it), and no project for a refused or failed call, whose
+// projectId may be any project's, a non-member's included.
+func TestToolCallTouchCarriesItsProject(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver())
+	plant(h)
+	AddTool(h.srv, &mcp.Tool{Name: "denied"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		return nil, plantOut{}, domain.NewError(domain.CodeForbidden, "not a member", nil)
+	})
+	cs := h.connect(t, tokenAda)
+	for _, c := range []struct{ tool, project string }{{"whoami", "P-1"}, {"denied", "P-2"}, {"stale", "P-3"}, {"whoami", "P-4"}} {
+		if _, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: c.tool, Arguments: map[string]any{"projectId": c.project}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, c := range calls(f, "Sessions.TouchAgentSession") {
+		if r := c.Req.(service.TouchAgentSessionReq); r.Tool != "" {
+			got = append(got, r.Tool+" ["+r.ProjectID+"]")
+		}
+	}
+	if want := []string{"whoami [P-1]", "denied []", "stale []", "whoami [P-4]"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("touches = %q, want %q", got, want)
 	}
 }
 
