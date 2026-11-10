@@ -194,6 +194,10 @@ func (s commentsSvc) AddComment(ctx context.Context, caller domain.Caller, req A
 	if err := maxChars("body", req.Body, maxCommentChars); err != nil {
 		return AddCommentResp{}, err
 	}
+	// The parent is a comment of this task (the store answers NOT_FOUND otherwise), so bounded as one.
+	if err := maxChars("parentCommentId", req.ParentCommentID, maxKeyChars); err != nil {
+		return AddCommentResp{}, err
+	}
 	if err := checkIdempotencyKey(req.IdempotencyKey); err != nil {
 		return AddCommentResp{}, err
 	}
