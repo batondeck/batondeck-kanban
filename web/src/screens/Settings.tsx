@@ -330,6 +330,18 @@ export function UsersSection() {
  */
 const display = (token: string): string => `${token.split('_').slice(0, 2).join('_')}…`;
 
+/**
+ * A WIP limit field: blank is no limit (null), a whole number of 1 or more is that limit, anything
+ * else is undefined and is refused before sending. `Number('five')` is NaN, which JSON writes as
+ * null, and the server reads null as "no limit": a typo used to clear the column's limit silently.
+ */
+const parseWip = (raw: string): number | null | undefined => {
+  const t = raw.trim();
+  if (!t) return null;
+  return /^[1-9]\d*$/.test(t) && Number.isSafeInteger(Number(t)) ? Number(t) : undefined;
+};
+const WIP_INVALID = 'A WIP limit is a whole number of 1 or more, or blank for no limit.';
+
 
 function CliTokens() {
   const qc = useQueryClient();
@@ -637,7 +649,7 @@ export function Settings() {
   const addMember = useMutation({ mutationFn: () => projectsApi.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
   const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
-    mutationFn: () => boardsApi.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
+    mutationFn: (wipLimit: number | null) => boardsApi.addColumn(projectId, board!.id, col.name, col.status, wipLimit),
     onSuccess: () => { setCol({ name: '', status: 'TODO', wip: '' }); refresh(); },
     onError: (e) => setErr(String(e)),
   });
@@ -759,10 +771,14 @@ export function Settings() {
                         disabled={!dirty || !canEditColumns}
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
-                        onClick={() => void guard(
-                          boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: d.wip ? Number(d.wip) : null })
-                            .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
-                        )}
+                        onClick={() => {
+                          const wip = parseWip(d.wip);
+                          if (wip === undefined) { setErr(WIP_INVALID); return; }
+                          void guard(
+                            boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: wip })
+                              .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
+                          );
+                        }}
                       >
                         Save
                       </button>
@@ -809,7 +825,12 @@ export function Settings() {
                   disabled={!canAddColumn || !col.name || addColumn.isPending}
                   title={!canAddColumn && columnsWhy ? columnsWhy : undefined}
                   aria-describedby={!canAddColumn && columnsWhy ? 'columns-closed' : undefined}
-                  onClick={() => addColumn.mutate()}
+                  onClick={() => {
+                    const wip = parseWip(col.wip);
+                    if (wip === undefined) { setErr(WIP_INVALID); return; }
+                    setErr(null);
+                    addColumn.mutate(wip);
+                  }}
                 >
                   + Add Column
                 </button>
