@@ -49,7 +49,7 @@ func validEvent(in store.EventInput) (json.RawMessage, error) {
 
 func (st *state) appendEvent(in store.EventInput, boardID string, taskID *string, data json.RawMessage) store.Event {
 	e := store.Event{
-		ProjectID: in.ProjectID, ID: newID("E-", 24), BoardID: &boardID, TaskID: clonePtr(taskID), Actor: in.Actor,
+		ProjectID: in.ProjectID, ID: store.NewEventID(), BoardID: &boardID, TaskID: clonePtr(taskID), Actor: in.Actor,
 		Agent: clonePtr(in.Agent), Type: in.Type, Data: data, Ts: in.Ts,
 	}
 	st.events[[2]string{e.ProjectID, e.ID}] = cloneEvent(e)

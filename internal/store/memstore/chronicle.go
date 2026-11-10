@@ -43,7 +43,7 @@ func (st *state) chronicleEvent(projectID, actor string, agent *string, typ doma
 	if err != nil {
 		panic(fmt.Sprintf("memstore: marshal chronicle event: %v", err))
 	}
-	e := store.Event{ProjectID: projectID, ID: newID("E-", 24), Actor: actor, Agent: clonePtr(agent), Type: typ, Data: raw, Ts: nowMillis()}
+	e := store.Event{ProjectID: projectID, ID: store.NewEventID(), Actor: actor, Agent: clonePtr(agent), Type: typ, Data: raw, Ts: nowMillis()}
 	st.events[[2]string{projectID, e.ID}] = e
 }
 
