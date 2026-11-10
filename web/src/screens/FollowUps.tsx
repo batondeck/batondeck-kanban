@@ -114,12 +114,13 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
   const taskId = task.id;
   const qc = useQueryClient();
   const names = useDisplayNames(projectId);
-  // Live updates arrive via the board's SSE stream, which invalidates ['followups', projectId, …] on
-  // every board change (the ui-backend keeps a stateful MCP session even under STATELESS_MCP=true, so
-  // resource subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
+  // Live updates arrive via the board's stream: every board change invalidates ['followups', projectId, …]
+  // (Board.tsx's nudge, and the ticket's own subscription in useTaskDetail) — this 30s poll is just a
+  // backstop for a dropped stream. Only mounts while a ticket is open.
   const followUpsQ = useQuery({
     queryKey: ['followups', projectId, taskId],
-    queryFn: () => followupsApi.listFollowUps(projectId, taskId),
+    // Every page: the route answers 100 at a time, oldest first, so the first page alone hid the newest.
+    queryFn: () => followupsApi.listAllFollowUps(projectId, taskId),
     refetchInterval: 30000,
   });
   const [body, setBody] = useState('');
@@ -205,6 +206,11 @@ export function FollowUps({ projectId, task, identity, canFollowUp, closedWhy, c
             ackPending={!canAck && !ackClosedWhy}
           />
         ))}
+        {followUpsQ.data?.truncated && (
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            Showing the first {followUps.length} follow-ups: the newer ones are not loaded.
+          </p>
+        )}
       </Stack>
 
       {/* Composer */}

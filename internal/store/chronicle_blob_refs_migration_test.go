@@ -12,7 +12,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// Migration 0014 on a database that already holds Chronicle bodies: the backfill names every blob a
+// Migration 0009 on a database that already holds Chronicle bodies: the backfill names every blob a
 // stored body embeds a download URL of (each once per body, a foreign or malformed id never), a
 // body's delete takes its rows with it, and down and up again leave the same rows.
 func runChronicleBlobRefsMigration(t *testing.T, db *sql.DB, p *goose.Provider) {
@@ -52,24 +52,24 @@ func runChronicleBlobRefsMigration(t *testing.T, db *sql.DB, p *goose.Provider) 
 		return sqliteStrings(t, db, `SELECT object_key || ' ' || substr(blob_sha256, 1, 1) FROM chronicle_blob_refs ORDER BY object_key, blob_sha256`)
 	}
 	want := []string{"CP-1/one a", "CP-1/one b", "CP-2/b b"}
-	if _, err := p.UpTo(ctx, 14); err != nil {
-		t.Fatalf("0014 up: %v", err)
+	if _, err := p.UpTo(ctx, 9); err != nil {
+		t.Fatalf("0009 up: %v", err)
 	}
 	if got := refs(); !slices.Equal(got, want) {
-		t.Fatalf("0014 up: refs %v, want %v", got, want)
+		t.Fatalf("0009 up: refs %v, want %v", got, want)
 	}
 	exec(`DELETE FROM chronicle_blobs WHERE object_key = 'CP-2/b'`)
 	if got := refs(); !slices.Equal(got, want[:2]) {
 		t.Fatalf("a body's delete left refs %v, want %v", got, want[:2])
 	}
 	if _, err := p.DownTo(ctx, 6); err != nil {
-		t.Fatalf("0014 down: %v", err)
+		t.Fatalf("0009 down: %v", err)
 	}
-	if _, err := p.UpTo(ctx, 14); err != nil {
-		t.Fatalf("0014 up again: %v", err)
+	if _, err := p.UpTo(ctx, 9); err != nil {
+		t.Fatalf("0009 up again: %v", err)
 	}
 	if got := refs(); !slices.Equal(got, want[:2]) {
-		t.Fatalf("0014 up again: refs %v, want %v", got, want[:2])
+		t.Fatalf("0009 up again: refs %v, want %v", got, want[:2])
 	}
 }
 
@@ -97,7 +97,7 @@ func TestChronicleBlobRefsMigrationSQLite(t *testing.T) {
 
 func TestChronicleBlobRefsMigrationPostgres(t *testing.T) {
 	if os.Getenv("BATONDECK_TEST_POSTGRES_DSN") == "" {
-		t.Skip("BATONDECK_TEST_POSTGRES_DSN is not set: migration 0014 is not judged on Postgres")
+		t.Skip("BATONDECK_TEST_POSTGRES_DSN is not set: migration 0009 is not judged on Postgres")
 	}
 	ctx := context.Background()
 	s, err := OpenPostgres(ctx, postgresDB(t))

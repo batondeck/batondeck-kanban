@@ -97,7 +97,8 @@ export function TaskPage() {
   useTopbarOffset();
   const { projectId = '', boardId = '', taskId = '' } = useParams();
   const navigate = useNavigate();
-  const d = useTaskDetail(projectId, taskId);
+  // No Board is mounted here, so the hook refreshes the board's reads on each frame as well.
+  const d = useTaskDetail(projectId, taskId, { refreshBoard: true });
   const { task, taskQ, err, editing, setEditing, startEdit, canEdit, why } = d;
   // Edit is `update_task`, tier master (P-440): below it the button is closed and says why.
   const editWhy = why('update_task', 'edit tasks');

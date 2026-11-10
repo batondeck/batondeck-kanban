@@ -5,10 +5,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup, within, waitFor } from '@testing-library/react';
 import { TaskDrawer } from '../screens/TaskDrawer.js';
 import { AuthProvider } from '../auth.js';
 import { routeFetch, task } from './taskFixtures.js';
+import { leaseStorageKey, resetLeaseMemory } from '../screens/task/leases.js';
 import type { Task } from '../types.js';
 
 const now = Date.now();
@@ -389,7 +390,7 @@ describe('TaskDrawer — Marquee sites (T-51)', () => {
     const child: Task = { ...task, parentTaskId: 'T-9' };
     vi.stubGlobal('fetch', routeFetch({
       '/tasks/T-1$': { json: { task: child } },
-      '\\/boards\\/b1\\/feed$': {
+      '\\/boards\\/b1\\/feed(\\?|$)': {
         json: {
           events: [{
             id: 'ev1', projectId: 'p1', boardId: 'b1', taskId: 'T-1',
@@ -439,7 +440,7 @@ describe('markdown on a ticket is GFM', () => {
     vi.stubGlobal(
       'fetch',
       routeFetch({
-        '/tasks/T-1/comments$': {
+        '/tasks/T-1/comments(\\?|$)': {
           json: { comments: [{ id: 'C-1', taskId: 'T-1', author: 'a@x.test', body: TABLE, parentCommentId: null, mentions: [], ts: new Date().toISOString() }] },
         },
       }),
@@ -510,5 +511,396 @@ describe('TaskDrawer — a cancelled task is not done (P-208)', () => {
     expect(await screen.findByText('wrong approach')).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText(/^\s*Pick\s*$/)).toHaveLength(1));
     expect(screen.getAllByText('Submitted')).toHaveLength(1);
+  });
+});
+
+/**
+ * Escape in a chip field cancels the half-typed value. The drawer's Escape handler blurs the focused
+ * field, and the chip input commits its draft on blur, so Escape used to SAVE "wip" as a label (a
+ * real update_task write) from the key that means cancel.
+ */
+describe('Escape in a chip field cancels the draft', () => {
+  for (const name of ['Labels', 'Capabilities']) {
+    it(`${name}: Escape drops the typed value and writes nothing`, async () => {
+      const fetchMock = routeFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      const { onClose } = renderDrawer();
+      await screen.findByText('Ship the parser');
+      const input = screen.getByRole('textbox', { name });
+      await waitFor(() => expect(input).toBeEnabled());
+      input.focus();
+      fireEvent.change(input, { target: { value: 'wip' } });
+      fireEvent.keyDown(input, { key: 'Escape' });
+      expect(document.activeElement).not.toBe(input); // the drawer's Escape blurred it
+      await new Promise((r) => setTimeout(r, 20));
+      const patches = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH');
+      expect(patches).toHaveLength(0);
+      expect(input).toHaveValue('');
+      expect(onClose).not.toHaveBeenCalled();
+      // A value committed the ordinary way still saves.
+      input.focus();
+      fireEvent.change(input, { target: { value: 'wip' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect((fetchMock as ReturnType<typeof vi.fn>).mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    });
+  }
+});
+
+/**
+ * The subtask checkbox moves only where the fixed table goes. DONE is reached from REVIEW alone, so
+ * ticking a TODO, IN_PROGRESS or BLOCKED subtask sent a move the server always refused
+ * (INVALID_TRANSITION). The box is open only for a legal move, and says why otherwise.
+ */
+describe('subtask checkbox follows the transition table', () => {
+  const sub = (status: Task['status']): Task => ({ ...task, id: 'T-2', title: 'Write tests', status, parentTaskId: 'T-1', blockedBy: [], dueAt: null, version: 5 });
+  const moves = (fm: typeof fetch) =>
+    (fm as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]) => String(u).endsWith('/tasks/T-2/move'));
+
+  for (const status of ['TODO', 'IN_PROGRESS', 'BLOCKED'] as const) {
+    it(`a ${status} subtask cannot be ticked done, and the box says why`, async () => {
+      const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub(status)] } } });
+      vi.stubGlobal('fetch', fetchMock);
+      renderDrawer();
+      const box = await screen.findByRole('checkbox', { name: 'Mark T-2 done' });
+      // alice is the project's admin (her role opens the panel's Add): the role is not what closes it.
+      await waitFor(() => expect(screen.getByPlaceholderText('New subtask')).toBeEnabled());
+      fireEvent.click(box);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(moves(fetchMock)).toHaveLength(0);
+      expect(box).toBeDisabled();
+      expect(box).toHaveAttribute('title', expect.stringMatching(/Review/));
+      // A screen reader hears the reason too: a title on a disabled box is often not announced.
+      expect(box).toHaveAccessibleDescription(/reaches Done from Review only/);
+    });
+  }
+
+  it('a REVIEW subtask is ticked done with one legal move', async () => {
+    const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub('REVIEW')] } } });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    const box = await screen.findByRole('checkbox', { name: 'Mark T-2 done' });
+    await waitFor(() => expect(box).toBeEnabled());
+    fireEvent.click(box);
+    await waitFor(() => expect(moves(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String((moves(fetchMock)[0]![1] as RequestInit).body))).toMatchObject({ version: 5, toStatus: 'DONE' });
+  });
+
+  it('a DONE subtask is unticked back to IN_PROGRESS', async () => {
+    const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub('DONE')] } } });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    const box = await screen.findByRole('checkbox', { name: 'Mark T-2 not done' });
+    await waitFor(() => expect(box).toBeEnabled());
+    fireEvent.click(box);
+    await waitFor(() => expect(moves(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String((moves(fetchMock)[0]![1] as RequestInit).body))).toMatchObject({ toStatus: 'IN_PROGRESS' });
+  });
+});
+
+/**
+ * A claim made in the web outlives the drawer. The server never sends a lease id on `task.claim`
+ * (only the claim's own answer carries it), and the drawer kept it in component state, so after
+ * closing and reopening the ticket (or j/k, or a reload) its holder had no Mark complete, Block,
+ * Hand off or Release: the task sat until the lease lapsed and the reap counted a failed attempt.
+ */
+describe('a web claim survives the drawer remounting', () => {
+  const future = (): string => new Date(Date.now() + 3_600_000).toISOString();
+  function claimingFetch() {
+    let claimed = false;
+    const base = routeFetch();
+    const claimedTask = (): Task => ({ ...task, status: 'IN_PROGRESS', version: 4, claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] });
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (url.endsWith('/tasks/T-1/claim')) { claimed = true; return json({ leaseId: 'L-abc', task: claimedTask() }); }
+      if (url.endsWith('/tasks/T-1/complete')) { claimed = false; return json({ task: { ...task, status: 'REVIEW', version: 5 } }); }
+      if (claimed && /\/tasks\/T-1$/.test(url)) return json({ task: claimedTask() });
+      return base(input, init);
+    });
+    return fm;
+  }
+  const bodyOf = (fm: ReturnType<typeof vi.fn>, suffix: string) => {
+    const call = fm.mock.calls.find(([u]) => String(u).endsWith(suffix));
+    return call ? JSON.parse(String((call[1] as RequestInit).body)) : undefined;
+  };
+  beforeEach(() => { resetLeaseMemory(); try { localStorage.clear(); } catch { /* none */ } });
+  afterEach(() => { try { localStorage.clear(); } catch { /* none */ } });
+
+  it('reopened, the holder can still complete with the lease the claim returned', async () => {
+    const fm = claimingFetch();
+    vi.stubGlobal('fetch', fm);
+    const first = renderDrawer();
+    fireEvent.click(await screen.findByRole('button', { name: /Claim to work/ }));
+    await screen.findByRole('button', { name: /Mark complete/ });
+    // A browser claim holds an hour: the REST surface cannot heartbeat it.
+    expect(bodyOf(fm, '/tasks/T-1/claim')).toEqual({ leaseSeconds: 3600 });
+    first.unmount();
+    resetLeaseMemory(); // as a reload would: the lease comes back from storage
+
+    // A fresh mount (the drawer is keyed per task; a reload is a fresh cache as well).
+    renderDrawer();
+    const complete = await screen.findByRole('button', { name: /Mark complete/ });
+    expect(screen.getByRole('button', { name: /Release claim/ })).toBeInTheDocument();
+    fireEvent.click(complete);
+    await waitFor(() => expect(bodyOf(fm, '/tasks/T-1/complete')).toEqual({ leaseId: 'L-abc' }));
+  });
+
+  it('a claim of mine with no lease in this browser says so instead of showing nothing', async () => {
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    expect(await screen.findByText(/You hold this claim from another browser or session/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Mark complete/ })).not.toBeInTheDocument();
+    // The Lease panel prints no empty lease-id row: the server never sends one.
+    expect(screen.queryByText('leaseId')).not.toBeInTheDocument();
+  });
+
+  it('a claim made in another tab of this browser is offered here once that tab stores its lease', async () => {
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    // This tab read the ticket before the other tab's claim answered: no lease here yet.
+    expect(await screen.findByText(/You hold this claim from another browser or session/)).toBeInTheDocument();
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    const value = JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 1000, version: 3 });
+    act(() => {
+      localStorage.setItem(key, value);
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }));
+    });
+    // At once: the storage event re-renders this tab. (Waiting would let the lease countdown's
+    // one-second tick re-read storage and hide a missing listener.)
+    expect(screen.getByRole('button', { name: /Mark complete/ })).toBeInTheDocument();
+  });
+
+  it("a read sent before another tab's claim answered does not drop that tab's lease", async () => {
+    // This tab's read of T-1 left before the other tab's claim committed and answers after that tab
+    // stored its lease: it shows the task as it was before the claim, which says nothing about it.
+    const claimed: Task = { ...task, status: 'IN_PROGRESS', version: 4, claim: { owner: 'alice@example.com', agent: null, expiresAt: future() } as Task['claim'] };
+    const base = routeFetch();
+    let answer: (() => void) | null = null;
+    let afterClaim = false;
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(String(input)) && (init?.method ?? 'GET') === 'GET') {
+        if (afterClaim) return json({ task: claimed });
+        await new Promise<void>((r) => { answer = r; });
+        return json({ task: { ...task, claim: null } }); // version 3, TODO
+      }
+      return base(input, init);
+    });
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    await waitFor(() => expect(answer).not.toBeNull());
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    localStorage.setItem(key, JSON.stringify({ leaseId: 'L-other-tab', at: Date.now() - 5, version: 4 }));
+    answer!();
+    expect(await screen.findByRole('button', { name: /Claim to work/ })).toBeInTheDocument();
+    expect(localStorage.getItem(key)).not.toBeNull();
+    // The next read shows the claim: this tab offers its outcomes with the other tab's lease.
+    afterClaim = true;
+    await act(() => qc.invalidateQueries({ queryKey: ['task', 'p1', 'T-1'] }));
+    fireEvent.click(await screen.findByRole('button', { name: /Mark complete/ }));
+    await waitFor(() => expect(bodyOf(fm, '/tasks/T-1/complete')).toEqual({ leaseId: 'L-other-tab' }));
+  });
+
+  it.each([
+    ["at the claim's own version", 4],
+    ['moved on since (released, completed, reaped)', 5],
+  ])('a read showing the claim gone drops the stored lease: the task %s', async (_why, version) => {
+    const key = leaseStorageKey('alice@example.com', 'p1', 'T-1');
+    localStorage.setItem(key, JSON.stringify({ leaseId: 'L-abc', at: Date.now() - 60_000, version: 4 }));
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: { ...task, status: 'TODO', version, claim: null } } } }));
+    renderDrawer();
+    expect(await screen.findByRole('button', { name: /Claim to work/ })).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(key)).toBeNull());
+  });
+
+  it("the lease bar measures this browser's claim against its own length, not five minutes", async () => {
+    const half = 30 * 60_000;
+    const mine: Task = { ...task, status: 'IN_PROGRESS', claim: { owner: 'alice@example.com', agent: null, expiresAt: new Date(Date.now() + half).toISOString() } as Task['claim'] };
+    localStorage.setItem(leaseStorageKey('alice@example.com', 'p1', 'T-1'), JSON.stringify({ leaseId: 'L-abc', at: Date.now() - half, version: 3 }));
+    vi.stubGlobal('fetch', routeFetch({ '/tasks/T-1$': { json: { task: mine } } }));
+    renderDrawer();
+    const label = await screen.findByText(/remaining$/);
+    const fill = label.closest('.bar-h')!.querySelector('.bar i') as HTMLElement;
+    const pct = parseFloat(fill.style.width);
+    expect(pct).toBeGreaterThan(45);
+    expect(pct).toBeLessThan(55);
+  });
+});
+
+/**
+ * The Edit draft carries the version it was taken from. Save read `task.version` at click time, and
+ * the task keeps refreshing under an open editor (the stream's nudge, the 30 s poll), so a draft
+ * based on v3 was saved as v4 with the v3 title: the agent's concurrent edit was overwritten and the
+ * version check the API exists for never fired.
+ */
+describe('the description editor keeps the version it started from', () => {
+  const patches = (fm: typeof fetch) =>
+    (fm as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as { version: number; patch: Record<string, unknown> });
+  function editingFetch() {
+    let current: Task = task;
+    const base = routeFetch();
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown, status = 200) => ({ ok: status < 400, status, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(url) && init?.method === 'PATCH') {
+        const b = JSON.parse(String(init.body)) as { version: number; patch: Partial<Task> };
+        if (b.version !== current.version) return json({ code: 'STALE', message: `Version mismatch: expected ${b.version}, found ${current.version}` }, 409);
+        current = { ...current, ...b.patch, version: current.version + 1 };
+        return json({ task: current });
+      }
+      if (/\/tasks\/T-1$/.test(url)) return json({ task: current });
+      return base(input, init);
+    });
+    return { fm, agentEdits: () => { current = { ...current, title: 'Ship the parser v2', description: 'AGENT REWRITE', version: current.version + 1 }; } };
+  }
+  const saveButton = () => within((document.querySelector('textarea.input') as HTMLElement).parentElement!).getByRole('button', { name: 'Save' });
+  const startEditing = async () => {
+    await screen.findByText('Ship the parser');
+    const edit = screen.getByRole('button', { name: 'Edit' });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    const ta = document.querySelector('textarea.input') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'HUMAN DRAFT based on v3' } });
+    return ta;
+  };
+
+  it('a concurrent edit is not overwritten: Save holds, shows theirs, and sends only my field on my say-so', async () => {
+    const { fm, agentEdits } = editingFetch();
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    await startEditing();
+    agentEdits(); // v3 -> v4 under the open editor
+    await qc.invalidateQueries({ queryKey: ['task', 'p1'] });
+    await screen.findByText('T-1 · v4'); // the refreshed task has landed
+    fireEvent.click(saveButton());
+    await new Promise((r) => setTimeout(r, 30));
+    // Never the v3-based text under the v4 version.
+    expect(patches(fm).filter((p) => p.version === 4)).toEqual([]);
+    expect(document.querySelector('textarea.input')).toHaveValue('HUMAN DRAFT based on v3');
+    expect(screen.getByText('AGENT REWRITE')).toBeInTheDocument(); // the server's current text, beside the draft
+    // Choosing to keep my edit sends only what I changed, on the version I have now seen.
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my edit' }));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patches(fm).filter((p) => p.version === 4)).toEqual([{ version: 4, patch: { description: 'HUMAN DRAFT based on v3' } }]));
+  });
+
+  it('with no concurrent edit, Save sends the version it started from and only the changed field', async () => {
+    const { fm } = editingFetch();
+    vi.stubGlobal('fetch', fm);
+    renderDrawer();
+    await startEditing();
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(patches(fm)).toEqual([{ version: 3, patch: { description: 'HUMAN DRAFT based on v3' } }]));
+  });
+});
+
+/** The digest editor has the same shape: its draft keeps the version and the text it started from. */
+describe('the digest editor keeps the version it started from', () => {
+  it('holds Save when the digest changed under it, and saves mine over theirs only on my say-so', async () => {
+    let current: Task = { ...task, contextSummary: 'old digest' };
+    const base = routeFetch();
+    const fm = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const json = (j: unknown) => ({ ok: true, status: 200, json: async () => j }) as Response;
+      if (/\/tasks\/T-1$/.test(url)) return json({ task: current });
+      return base(input, init);
+    });
+    vi.stubGlobal('fetch', fm);
+    const { qc } = renderDrawer();
+    const digest = await screen.findByText('old digest');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()); // the role has loaded
+    fireEvent.doubleClick(digest);
+    const ta = await screen.findByDisplayValue('old digest');
+    fireEvent.change(ta, { target: { value: 'my digest' } });
+    current = { ...current, contextSummary: 'AGENT DIGEST', version: 4 };
+    await qc.invalidateQueries({ queryKey: ['task', 'p1'] });
+    await screen.findByText('T-1 · v4');
+    const summaries = () => fm.mock.calls.filter(([u]) => /\/summary$/.test(String(u))).map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    fireEvent.click(screen.getByRole('button', { name: 'Save summary' }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(summaries()).toEqual([]);
+    expect(screen.getByText('AGENT DIGEST')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save summary' }));
+    await waitFor(() => expect(summaries()).toEqual([expect.objectContaining({ version: 4, summary: 'my digest' })]));
+  });
+});
+
+/**
+ * The Activity panel reads the ticket's own events. It filtered the board feed's newest page (50
+ * events of the whole board) by task, so on a busy board an older ticket read "0 events on this
+ * ticket" and "No activity yet" though it was created, claimed and moved.
+ */
+describe("the Activity panel reads the ticket's own events", () => {
+  const ev = (id: string, taskId: string, type: string, ago: number) =>
+    ({ id, projectId: 'p1', boardId: 'b1', taskId, type, actor: 'alice@example.com', data: {}, ts: new Date(now - ago).toISOString() });
+  it('an older ticket on a busy board still shows its history', async () => {
+    const busy = Array.from({ length: 50 }, (_, i) => ev(`E-b${i}`, 'T-9', 'comment.added', i * 1000));
+    const fetchMock = routeFetch({
+      '/boards/b1/feed\\?(.*&)?taskId=T-1': { json: { events: [ev('E-2', 'T-1', 'task.claimed', 86_400_000), ev('E-1', 'T-1', 'task.created', 90_000_000)], nextCursor: '' } },
+      '/boards/b1/feed': { json: { events: busy, nextCursor: 'more' } },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    await screen.findByText('Ship the parser');
+    expect(await screen.findByText('2 events on this ticket.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Recent Activity/ }));
+    expect(screen.queryByText('No activity yet.')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The drawer behaves as the modal it declares (aria-modal). A drag that starts inside it and is
+ * released over the overlay is a click on the overlay to the browser, which closed the drawer and
+ * lost the draft; Tab walked out of it into the board hidden under the overlay; and closing it left
+ * focus on <body> instead of where it was.
+ */
+describe('the drawer is a modal', () => {
+  it('a press that starts inside the drawer and is released over the overlay does not close it', async () => {
+    const { onClose } = renderDrawer();
+    await screen.findByText('Ship the parser');
+    const overlay = document.querySelector('.drawer-overlay') as HTMLElement;
+    const note = screen.getByPlaceholderText('Add a note…');
+    fireEvent.mouseDown(note);
+    fireEvent.mouseUp(overlay);
+    fireEvent.click(overlay); // what the browser dispatches on the common ancestor
+    expect(onClose).not.toHaveBeenCalled();
+    // A press and release both on the overlay still closes it.
+    fireEvent.mouseDown(overlay);
+    fireEvent.mouseUp(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Tab and Shift+Tab stay inside the dialog', async () => {
+    renderDrawer();
+    const dialog = await screen.findByRole('dialog', { name: 'Task T-1' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled());
+    const focusable = [...dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')]
+      .filter((el) => el.getAttribute('type') !== 'file' && el.style.display !== 'none');
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('closing it returns focus to what had it before', async () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'opener';
+    document.body.appendChild(opener);
+    opener.focus();
+    const { unmount } = renderDrawer();
+    const dialog = await screen.findByRole('dialog', { name: 'Task T-1' });
+    await waitFor(() => expect(document.activeElement).toBe(dialog));
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 });

@@ -116,7 +116,7 @@ describe('matchesFilters', () => {
   });
 
   it('matches the lease-holding agent when there is no assignee', () => {
-    const t = task({ assignee: null, claim: { owner: 'sa@x', agent: 'worthy-gayal', leaseId: 'l', expiresAt: '2099-01-01T00:00:00Z' } });
+    const t = task({ assignee: null, claim: { owner: 'sa@x', agent: 'worthy-gayal', expiresAt: '2099-01-01T00:00:00Z' } });
     expect(matchesFilters(t, parseTicketQuery('assignee:worthy'))).toBe(true);
   });
 });

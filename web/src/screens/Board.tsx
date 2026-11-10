@@ -27,7 +27,7 @@ import * as sprintsApi from '../api/sprints.js';
 import * as streamApi from '../api/stream.js';
 import * as tasksApi from '../api/tasks.js';
 import { ApiError, isLocalEdit } from '../api/http.js';
-import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, timeAgo } from '../components.js';
+import { Avatar, Marquee, PageHeader, PoisonBadge, PriorityDot, StatusPill, eventActor, eventVerb, isPoisoned, leaseLeft, personName, timeAgo, type DisplayNames } from '../components.js';
 import { useShortcuts } from '../shortcuts.js';
 import { publishPalette, clearPalette, openPalette } from '../palette.js';
 import { TEMP_TASK_ID, boardTasksKey, isTempTaskId, mergeFirstPage, mergeSnapshotPreservingLocalEdits, patchTaskCaches, readBoardTasks, recordBoardFrame, restore, useTaskAction, useTaskCreate } from '../mutations.js';
@@ -231,7 +231,7 @@ export function AssigneePicker({ task, agents, onAssign, tabbable = true, canAss
  *  ABANDONED sprint keeps that sprint first, for history, and only one sprint is open at a time. */
 export const currentSprintId = (t: Task): string | undefined => t.sprintIds?.at(-1);
 
-export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy }: {
+export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, ripple, onOpen, agents, onAssign, canAssign, assignClosedWhy, names }: {
   t: Task;
   col: { status: Status };
   sub?: { done: number; total: number };
@@ -253,6 +253,8 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
   /** Passed to the assign chip (P-440). */
   canAssign: boolean;
   assignClosedWhy?: { id: string; text: string } | null;
+  /** Account id → name, so a human's claim shows the person, never the raw id (P-314). */
+  names?: DisplayNames;
 }) {
   const lease = t.claim ? leaseLeft(t.claim.expiresAt) : null;
   // The hover-reveal state that used to gate the "+ assign" chip is GONE, along with its two mouse
@@ -318,7 +320,7 @@ export function TaskCard({ t, col, sub, sprintName, selected, changed, pending, 
         </div>
         <div className="card-who">
           {t.claim ? (
-            <Avatar id={t.claim.agent || t.claim.owner} active={!!lease} />
+            <Avatar id={t.claim.agent || t.claim.owner} label={t.claim.agent || personName(t.claim.owner, names)} nameOnly active={!!lease} />
           ) : (
             <>
               {/* Unclaimed + unassigned: at least show who authored the ticket (usually the planning agent). */}
@@ -737,10 +739,9 @@ export function Board() {
     },
   });
 
-  // Live updates arrive via the SSE stream below, and since T-191 that stream is fed by the
-  // `board-events` Pub/Sub carrier fanned out in-process by the gateway — NOT by `wait_for_updates`
-  // long-polls, which this comment described until the long-poll was deleted. Each 'updated' nudge
-  // triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
+  // Live updates arrive via the SSE stream below (`/api/stream`, internal/api/stream.go), which the
+  // server feeds from its change log through the in-process bus (internal/bus) — on Postgres a second
+  // server's writes reach it the same way. Each 'updated' nudge triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
   // framer-motion card glide animates moves.
   //
   // *** WHILE THE STREAM IS LIVE THERE IS NO POLL AT ALL. *** It used to run at 30s even in the healthy
@@ -1134,7 +1135,9 @@ export function Board() {
     { keys: 'ArrowDown', label: '', run: () => (openTask ? false : moveSelection(1)) },
     { keys: 'ArrowUp', label: '', run: () => (openTask ? false : moveSelection(-1)) },
     { keys: 'Enter', label: 'Open selected task', run: () => (selectedId && !openTask ? setOpenTask(selectedId) : false) },
-    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
+    // Inert behind the drawer, as j/k are: it would open the new-task row under the modal and move
+    // focus into it, where typing goes unseen.
+    ...(canCreate ? [{ keys: 'c', label: 'New task', run: () => { if (openTask) return false; setCreating(true); setTimeout(() => newTaskRef.current?.focus(), 0); } }] : []),
     { keys: 's', label: 'Set status (selection)', run: () => (selectedId ? openPalette('status') : false) },
     { keys: 'p', label: 'Set priority (selection)', run: () => (selectedId ? openPalette('priority') : false) },
     { keys: 'Escape', label: '', run: () => (openTask ? false : selectedId ? setSelectedId(null) : false) },
@@ -1543,6 +1546,7 @@ export function Board() {
                             col={col}
                             sub={childStats.get(t.id)}
                             sprintName={sprintNameOf(t)}
+                            names={displayNames}
                             selected={t.id === selectedId}
                             changed={changedTasks.has(t.id)}
                             pending={movingIds.has(t.id)}
@@ -1590,7 +1594,7 @@ export function Board() {
               * (`.card` keyframe, --t-3 "travel"), which is the motion the board already speaks.
               */}
             <DragOverlay className="drag-overlay" dropAnimation={null}>
-              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} canAssign={canAssign} assignClosedWhy={assignClosedWhy} />}
+              {dragTask && <TaskCard t={dragTask} col={{ status: dragTask.status }} sprintName={sprintNameOf(dragTask)} names={displayNames} selected={false} onOpen={() => {}} agents={agentList} onAssign={onAssign} canAssign={canAssign} assignClosedWhy={assignClosedWhy} />}
             </DragOverlay>
           </DndContext>
         )}

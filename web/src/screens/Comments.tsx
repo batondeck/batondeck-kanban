@@ -201,7 +201,8 @@ export function Comments({
   const names = useDisplayNames(projectId);
   const commentsQ = useQuery({
     queryKey: ['comments', projectId, taskId],
-    queryFn: () => commentsApi.listComments(projectId, taskId),
+    // Every page: the route answers 100 at a time, oldest first, so the first page alone hid the newest.
+    queryFn: () => commentsApi.listAllComments(projectId, taskId),
   });
   const [body, setBody] = useState('');
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
@@ -294,6 +295,11 @@ export function Comments({
         {threads.map((t) => (
           <CommentNode key={t.comment.id} node={t} depth={0} onReply={canComment ? setReplyTo : undefined} names={names} />
         ))}
+        {commentsQ.data?.truncated && (
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            Showing the first {commentsQ.data.comments.length} comments: the newer ones are not loaded.
+          </p>
+        )}
       </Stack>
 
       <div style={{ marginTop: 8, position: 'relative' }}>

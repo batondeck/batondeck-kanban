@@ -27,13 +27,12 @@ export async function logout(): Promise<void> {
   await req<void>('POST', '/api/logout');
 }
 
-// `tenantId`, `tenantName` and `pullBase` are OPTIONAL and this server never sends them:
-// internal/api/session.go leaves the hosted-only keys out of its answer.
-export async function session(): Promise<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin: boolean; permissions?: string[]; subscriptionsEnabled: boolean; uiSettings: Record<string, number | boolean>; tenantId?: string | null; tenantName?: string | null; pullBase?: string | null }> {
-  // `permissions` is OPTIONAL on the wire and stays optional (T-378): it is absent until the BFF
-  // lands it, and optional-here forces every reader through `can()`'s `?? []` rather than letting a
-  // non-null assertion invent an empty array somewhere less careful.
-  const s = await req<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin?: boolean; permissions?: string[]; subscriptionsEnabled?: boolean; uiSettings?: Record<string, number | boolean>; tenantId?: string | null; tenantName?: string | null; pullBase?: string | null }>('GET', '/api/session');
+// The answer of internal/api/session.go's sessionResp.
+export async function session(): Promise<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin: boolean; permissions?: string[]; subscriptionsEnabled: boolean; uiSettings: Record<string, number | boolean> }> {
+  // `permissions` stays OPTIONAL here (T-378) although the server always sends it: optional forces
+  // every reader through `can()`'s `?? []` rather than letting a non-null assertion invent an empty
+  // array somewhere less careful.
+  const s = await req<{ identity: string; displayName?: string | null; csrfToken: string | null; isAdmin?: boolean; permissions?: string[]; subscriptionsEnabled?: boolean; uiSettings?: Record<string, number | boolean> }>('GET', '/api/session');
   return { ...s, isAdmin: s.isAdmin ?? false, subscriptionsEnabled: s.subscriptionsEnabled ?? false, uiSettings: s.uiSettings ?? {} };
 }
 

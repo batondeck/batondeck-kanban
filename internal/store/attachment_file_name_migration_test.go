@@ -11,7 +11,7 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-// Migration 0012 (api-http#4), up, down and up again on a database seeded at 0006 with a pending and
+// Migration 0008 (api-http#4), up, down and up again on a database seeded at 0006 with a pending and
 // a ready attachment: both rows survive every step, an old row reads the empty name, a new row keeps
 // its name, and down drops only the column.
 func runAttachmentFileNameMigration(t *testing.T, db *sql.DB, p *goose.Provider) {
@@ -37,7 +37,7 @@ func runAttachmentFileNameMigration(t *testing.T, db *sql.DB, p *goose.Provider)
 	want := []string{"A-pending", "A-ready"}
 	up := func(step string) {
 		t.Helper()
-		if _, err := p.UpTo(ctx, 12); err != nil {
+		if _, err := p.UpTo(ctx, 8); err != nil {
 			t.Fatalf("%s: %v", step, err)
 		}
 		if got := sqliteStrings(t, db, `SELECT id || '=' || file_name FROM attachments WHERE id IN ('A-pending', 'A-ready') ORDER BY id`); !slices.Equal(got, []string{"A-pending=", "A-ready="}) {
@@ -53,17 +53,17 @@ func runAttachmentFileNameMigration(t *testing.T, db *sql.DB, p *goose.Provider)
 			t.Fatal(err)
 		}
 	}
-	up("0012 up")
+	up("0008 up")
 	if _, err := p.DownTo(ctx, 6); err != nil {
-		t.Fatalf("0012 down: %v", err)
+		t.Fatalf("0008 down: %v", err)
 	}
 	if got := ids(); !slices.Equal(got, want) {
-		t.Fatalf("0012 down: rows %v, want %v", got, want)
+		t.Fatalf("0008 down: rows %v, want %v", got, want)
 	}
 	if err := exec(`SELECT file_name FROM attachments`); err == nil {
-		t.Fatal("0012 down: file_name is still there")
+		t.Fatal("0008 down: file_name is still there")
 	}
-	up("0012 up again")
+	up("0008 up again")
 }
 
 const sha64 = "abababababababababababababababababababababababababababababababab"
@@ -87,7 +87,7 @@ func TestAttachmentFileNameMigrationSQLite(t *testing.T) {
 
 func TestAttachmentFileNameMigrationPostgres(t *testing.T) {
 	if os.Getenv("BATONDECK_TEST_POSTGRES_DSN") == "" {
-		t.Skip("BATONDECK_TEST_POSTGRES_DSN is not set: migration 0012 is not judged on Postgres")
+		t.Skip("BATONDECK_TEST_POSTGRES_DSN is not set: migration 0008 is not judged on Postgres")
 	}
 	ctx := context.Background()
 	s, err := OpenPostgres(ctx, postgresDB(t))

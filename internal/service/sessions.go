@@ -251,7 +251,7 @@ func (s sessions) CheckWakeAgent(ctx context.Context, caller domain.Caller, agen
 }
 
 // ListWakeSessions is this device's rows and the rows that name no device (written before
-// 0019), each with its bearer and socket token opened under the row's own AAD. Another device's
+// 0010), each with its bearer and socket token opened under the row's own AAD. Another device's
 // row is not listed: its pid names a process on that device, not here (P-167).
 func (s sessions) ListWakeSessions(ctx context.Context) (out []WakeSessionRow, err error) {
 	defer s.c.recovered("list_wake_sessions", &err)

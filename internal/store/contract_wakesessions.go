@@ -11,7 +11,7 @@ import "context"
 // ("" before 0005); ClientSessionID and ProcStart are what the client's registry entry
 // (~/.claude/sessions/<pid>.json) said at register; BearerSealed is the bearer it registered
 // with, sealed with the keyring, never the bearer. DeviceID is the device whose serve registered it
-// ("" before 0019), where its PID names a process (P-167).
+// ("" before 0010), where its PID names a process (P-167).
 type WakeSession struct {
 	ID                string
 	IdentityID        string

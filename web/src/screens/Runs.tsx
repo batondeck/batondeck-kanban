@@ -130,9 +130,9 @@ export function Runs({ projectId, task, cancelled, canRace, closedWhy }: {
   const racing = !!task.racing;
   // Only fetch runs when this task is (or was) a parent of a race — a never-raced task has none, and the
   // query is cheap to keep mounted so it refreshes live once a race opens.
-  // Live updates arrive via the board's SSE stream, which invalidates ['runs', projectId, …] on every
-  // board change (the ui-backend keeps a stateful MCP session even under STATELESS_MCP=true, so resource
-  // subscriptions fire) — this 30s poll is just a backstop. Only mounts while the drawer is open.
+  // Live updates arrive via the board's stream: every board change invalidates ['runs', projectId, …]
+  // (Board.tsx's nudge, and the ticket's own subscription in useTaskDetail) — this 30s poll is just a
+  // backstop for a dropped stream. Only mounts while the drawer is open.
   const runsQ = useQuery({
     queryKey: ['runs', projectId, taskId],
     queryFn: () => runsApi.listRuns(projectId, taskId),

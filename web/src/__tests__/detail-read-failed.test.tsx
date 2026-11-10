@@ -31,13 +31,14 @@ function failingFetch() {
     '/tasks/T-1/subtasks$': fail,
     '/tasks/T-1/memory$': fail,
     '/tasks/T-1/attachments$': fail,
-    '/tasks/T-1/comments$': fail,
-    '/tasks/T-1/follow-ups$': fail,
+    // Comments, follow-ups and the ticket's feed are read in pages, with a query string.
+    '/tasks/T-1/comments(\\?|$)': fail,
+    '/tasks/T-1/follow-ups(\\?|$)': fail,
     '/tasks/T-1/runs$': fail,
-    '/boards/b1/feed$': fail,
+    '/boards/b1/feed(\\?|$)': fail,
   });
   const healthy = routeFetch({
-    '/tasks/T-1/comments$': { json: { comments: [{ id: 'CM-1', taskId: 'T-1', author: 'agent-ada', body: 'First pass is in', parentCommentId: null, mentions: [], ts: '2026-10-24T08:00:00.000Z' }] } },
+    '/tasks/T-1/comments(\\?|$)': { json: { comments: [{ id: 'CM-1', taskId: 'T-1', author: 'agent-ada', body: 'First pass is in', parentCommentId: null, mentions: [], ts: '2026-10-24T08:00:00.000Z' }] } },
   });
   const f = vi.fn((input: RequestInfo | URL, init?: RequestInit) => (healed ? healthy : broken)(input, init));
   return { fetch: f as unknown as typeof fetch, heal: () => { healed = true; } };
