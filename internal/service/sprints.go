@@ -477,7 +477,8 @@ func (t *txn) endedSprints(sprintIDs []string, except string) ([]string, error) 
 }
 
 // Get is get_sprint (conductor sprints.ts:239-408): the sprint, its members (one read of at most
-// sprintMemberPage+1, truncated the tripwire), the derived counts, frontier and attention, the board's
+// sprintMemberPage+1, truncated the tripwire), the derived counts, frontier (the claimable members
+// and the claimable runs of its racing members, which are not members) and attention, the board's
 // lanes and the fixed table, and the project policies. counts: ready is TODO, backlog is always 0
 // (no parking state, ADR-0005), blocked the BLOCKED members that are not poisoned and poisoned those
 // that are (plan §Fold 1), done the DONE members less the cancelled ones (ADR-0001: conductor's
@@ -547,6 +548,22 @@ func (s sprintsSvc) Get(ctx context.Context, caller domain.Caller, req GetSprint
 		}
 		if why != "" {
 			out.Attention = append(out.Attention, SprintAttention{TaskID: m.ID, Why: why})
+		}
+	}
+	// A racing member is not claimable; its runs carry its work, and claim_next {sprintId} offers
+	// them, so the frontier names its claimable runs (one read per racing member).
+	for _, m := range members {
+		if !m.Racing {
+			continue
+		}
+		runs, err := s.c.store.ListTasks(ctx, req.ProjectID, store.TaskFilter{BoardID: m.BoardID, RunOf: &m.ID}, "", listMaxLimit)
+		if err != nil {
+			return fail(err)
+		}
+		for _, r := range runs.Tasks {
+			if domain.IsClaimable(claimView(r), now) {
+				out.Frontier = append(out.Frontier, r.ID)
+			}
 		}
 	}
 	board, _, err := s.c.store.GetBoard(ctx, req.ProjectID, sp.BoardID)

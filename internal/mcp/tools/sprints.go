@@ -20,7 +20,7 @@ func RegisterSprints(s *mcp.Server, svc service.Services) {
 		"Add a task to or remove it from a PROPOSED or ACTIVE sprint on its board (version-checked on the task). A task is in one open sprint at a time; re-adding a member is a no-op. Master role.",
 		sp.Set)
 	mcp.Tool(s, "sprints", "get_sprint",
-		"Read a sprint to resume from it: the sprint, its member tasks, counts, the claimable frontier, what needs attention, the board's lanes and policies. `include` adds deliverables and memory.",
+		"Read a sprint to resume from it: the sprint, its members and counts, the claimable frontier (racing members' runs too), what needs attention, lanes and policies. `include` adds deliverables, memory.",
 		sp.Get)
 	mcp.Tool(s, "sprints", "list_sprints",
 		"List a project's sprints oldest first, by board and status, a page at a time (`limit` 1 to 200, then `nextCursor`). `status: ACTIVE` finds the sprint to resume.",

@@ -41,3 +41,70 @@ func TestARaceWaitsOnTheParentsBlockers(t *testing.T) {
 		}
 	})
 }
+
+// A sprint member raced with start_runs carries the sprint's work in its runs: get_sprint's
+// frontier, next_task (both strategies), rank_tasks and claim_next {sprintId} offer them as they
+// would the member, and the runs of a task outside the sprint stay out. Before, the runs were in no
+// sprint: the frontier was empty and a sprint-scoped worker found nothing while the work waited.
+func TestARacedSprintMembersRunsAreInItsFrontier(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		sp := e.sprint(t, e.board.ID)
+		member, err := e.c.Tasks().Create(e.ctx, e.alice, CreateTaskReq{ProjectID: e.project, BoardID: e.board.ID, Title: "member", SprintID: sp.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		started, err := e.c.Runs().Start(e.ctx, e.alice, StartRunsReq{ProjectID: e.project, TaskID: member.Task.ID, Version: int64(member.Task.Version), Count: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		outsider := e.task(t, domain.Todo)
+		if _, err := e.c.Runs().Start(e.ctx, e.alice, StartRunsReq{ProjectID: e.project, TaskID: outsider.ID, Version: outsider.Version, Count: 1}); err != nil {
+			t.Fatal(err)
+		}
+		runs := []string{started.Runs[0].ID, started.Runs[1].ID}
+		slices.Sort(runs)
+
+		got, err := e.c.Sprints().Get(e.ctx, e.alice, GetSprintReq{ProjectID: e.project, SprintID: sp.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		frontier := slices.Sorted(slices.Values(got.Frontier))
+		rk, err := e.c.Ranking().Rank(e.ctx, e.alice, RankTasksReq{ProjectID: e.project, BoardID: e.board.ID, SprintID: sp.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ranked []string
+		for _, r := range rk.Ranked {
+			ranked = append(ranked, r.Task.ID)
+		}
+		slices.Sort(ranked)
+		var next []string
+		for _, strategy := range []NextStrategy{"fifo", "score"} {
+			n, err := e.c.Lifecycle().Next(e.ctx, e.alice, NextTaskReq{ProjectID: e.project, BoardID: e.board.ID, SprintID: sp.ID, Strategy: strategy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := "<none>"
+			if n.Task != nil {
+				id = n.Task.ID
+			}
+			next = append(next, id)
+		}
+		t.Logf("member %s runs %v; get_sprint frontier %v (members %d); rank_tasks %v; next_task fifo/score %v", member.Task.ID, runs, frontier, len(got.Tasks), ranked, next)
+		if !slices.Equal(frontier, runs) || !slices.Equal(ranked, runs) || !slices.Contains(runs, next[0]) || !slices.Contains(runs, next[1]) {
+			t.Fatalf("the sprint does not offer its member's runs %v: frontier %v, rank_tasks %v, next_task %v", runs, frontier, ranked, next)
+		}
+		if len(got.Tasks) != 1 || got.Counts.Total != 1 {
+			t.Fatalf("the runs became members: tasks %d, total %v", len(got.Tasks), got.Counts.Total)
+		}
+		for range runs {
+			cn, err := e.c.Lifecycle().ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, SprintID: sp.ID})
+			if err != nil || cn.Task == nil || !slices.Contains(runs, cn.Task.ID) {
+				t.Fatalf("claim_next {sprintId}: %+v %v, want one of %v", cn.Task, err, runs)
+			}
+		}
+		if cn, err := e.c.Lifecycle().ClaimNext(e.ctx, e.alice, ClaimNextReq{ProjectID: e.project, BoardID: e.board.ID, SprintID: sp.ID}); err != nil || cn.Task != nil {
+			t.Fatalf("claim_next {sprintId} after both runs: %+v %v, want nothing (the outsider's run is not the sprint's)", cn.Task, err)
+		}
+	})
+}

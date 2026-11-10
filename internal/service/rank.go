@@ -44,8 +44,8 @@ func factorOut(f domain.ScoreFactor) AgingFactor {
 	return AgingFactor{Contribution: f.Contribution, Value: f.Value, Weight: f.Weight}
 }
 
-// Rank is rank_tasks: the pool (at most five pages), and on the profile path the profile and its
-// stats.
+// Rank is rank_tasks: the pool (at most five pages; with sprintId its members and the runs of its
+// members, as claim_next {sprintId} takes them), and on the profile path the profile and its stats.
 func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTasksReq) (RankTasksResp, error) {
 	if _, err := s.c.authorize(ctx, caller, req.ProjectID, "rank_tasks", domain.GrantSubject{}, false); err != nil {
 		return RankTasksResp{}, err
@@ -87,10 +87,25 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 		return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
 	}
 	now := s.c.now()
-	var pool []store.Task
+	var pool, runs []store.Task
 	for _, t := range tasks {
-		if domain.IsClaimable(claimView(t), now) && (req.SprintID == "" || slices.Contains(t.SprintIDs, req.SprintID)) {
+		switch {
+		case !domain.IsClaimable(claimView(t), now):
+		case req.SprintID == "" || slices.Contains(t.SprintIDs, req.SprintID):
 			pool = append(pool, t)
+		case t.RunOf != nil:
+			runs = append(runs, t)
+		}
+	}
+	if len(runs) > 0 {
+		in, err := membersInSprint(ctx, s.c.store, req.ProjectID, req.SprintID, tasks, runs)
+		if err != nil {
+			return RankTasksResp{}, s.c.mapErr("rank_tasks", err)
+		}
+		for _, r := range runs {
+			if in[*r.RunOf] {
+				pool = append(pool, r)
+			}
 		}
 	}
 	rk := newScorer(settings)
@@ -115,6 +130,38 @@ func (s rankingSvc) Rank(ctx context.Context, caller domain.Caller, req RankTask
 		resp.Ranked = append(resp.Ranked, rt)
 	}
 	return resp, nil
+}
+
+// membersInSprint is the set of runs' parents that are members of sprintID: a raced member's work is
+// in its runs, which the sprint's frontier (claim_next {sprintId}) offers with it. A parent among
+// known is judged from it; the rest are read, listByIDsMax at a time.
+func membersInSprint(ctx context.Context, st store.Store, projectID, sprintID string, known, runs []store.Task) (map[string]bool, error) {
+	byID := make(map[string]store.Task, len(known))
+	for _, t := range known {
+		byID[t.ID] = t
+	}
+	var missing []string
+	for _, r := range runs {
+		if _, ok := byID[*r.RunOf]; !ok && !slices.Contains(missing, *r.RunOf) {
+			missing = append(missing, *r.RunOf)
+		}
+	}
+	for chunk := range slices.Chunk(missing, listByIDsMax) {
+		got, err := st.ListTasksByIDs(ctx, projectID, chunk)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range got {
+			byID[t.ID] = t
+		}
+	}
+	in := map[string]bool{}
+	for _, r := range runs {
+		if p, ok := byID[*r.RunOf]; ok && slices.Contains(p.SprintIDs, sprintID) {
+			in[p.ID] = true
+		}
+	}
+	return in, nil
 }
 
 // scorer is the one ranking rank_tasks and next_task {strategy: "score"} share (P-258): the

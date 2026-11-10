@@ -447,6 +447,46 @@ func claims(t *testing.T, newStore Factory) {
 		}
 	})
 
+	// A raced member's work is in its runs, which are not members: SprintID takes the runs of the
+	// sprint's members (RunOf a task whose SprintIDs hold it) with them, on the preview and on the
+	// claim statement alike, and no run of a non-member or of another sprint's member.
+	t.Run("FrontierTakesTheRunsOfASprintsMembers", func(t *testing.T) {
+		f := newTaskBoard(t, newStore)
+		f.add(t, "member of S-a", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-a"}; in.OrderKey = "a1" })
+		f.add(t, "member of S-ab", func(in *store.CreateTaskInput) { in.SprintIDs = []string{"S-ab"}; in.OrderKey = "a2" })
+		f.add(t, "no sprint", func(in *store.CreateTaskInput) { in.OrderKey = "a3" })
+		for i, of := range []string{"T-1", "T-2", "T-3"} {
+			f.add(t, "run of "+of, func(in *store.CreateTaskInput) { in.RunOf = &of; in.OrderKey = fmt.Sprintf("a%d", 4+i) })
+		}
+		for sprint, want := range map[string][]string{
+			"":     {"T-1", "T-2", "T-3", "T-4", "T-5", "T-6"},
+			"S-a":  {"T-1", "T-4"},
+			"S-ab": {"T-2", "T-5"},
+			"S-no": {},
+		} {
+			q := f.frontier()
+			q.SprintID = sprint
+			got, err := f.s.PreviewFrontier(ctx, q, 50)
+			mustOK(t, err)
+			if ids := taskIDs(got); !reflect.DeepEqual(ids, want) {
+				t.Fatalf("sprint %q: %v, want %v", sprint, ids, want)
+			}
+		}
+		q := f.frontier()
+		q.SprintID = "S-a"
+		var won []string
+		for i := range 3 {
+			got, ok, err := f.s.ClaimNext(ctx, q, f.leaseFor("bob", "a", fmt.Sprintf("L-%d", i)))
+			mustOK(t, err)
+			if ok {
+				won = append(won, got.ID)
+			}
+		}
+		if !reflect.DeepEqual(won, []string{"T-1", "T-4"}) {
+			t.Fatalf("claimed %v in S-a, want [T-1 T-4]: the member and its run", won)
+		}
+	})
+
 	t.Run("FrontierNarrowsToTaskIDs", func(t *testing.T) {
 		f := newTaskBoard(t, newStore)
 		f.add(t, "urgent, not named", func(in *store.CreateTaskInput) { in.Priority = domain.PriorityUrgent; in.OrderKey = "a1" })

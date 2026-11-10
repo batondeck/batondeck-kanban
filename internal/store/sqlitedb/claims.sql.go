@@ -32,7 +32,9 @@ WHERE rid = (
     AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
       SELECT 1 FROM json_each(f.required_capabilities) r
       WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
-    AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint))
+    AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par, json_each(par.sprint_ids) ps
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND ps.value = p.sprint)))
     AND (p.only_ids = 'null' OR EXISTS (SELECT 1 FROM json_each(p.only_ids) o WHERE o.value = f.id))
     AND (CAST(?1 AS TEXT) = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = CAST(?1 AS TEXT)))
@@ -111,7 +113,8 @@ type ClaimNextRow struct {
 // with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 // the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 // tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
-// of that sprint (its id in sprint_ids), with only_ids (a JSON array; JSON null for no filter) only
+// of that sprint (its id in sprint_ids) and the runs of its members (run_of a task whose sprint_ids hold
+// it: a raced member's work is in its runs), with only_ids (a JSON array; JSON null for no filter) only
 // the tasks it names. caps, sprint_id and only_ids are read once, as the derived table p:
 // sqlc does not bind a parameter nested deeper than one subquery under json_each. Best first: score
 // descending, then priority (urgent, high, normal, low), then order key and id as bytes (SQLite's
@@ -464,7 +467,9 @@ WHERE f.project_id = ?4 AND f.board_id = ?5 AND f.status = 'TODO'
   AND CASE WHEN p.caps = 'null' THEN 1 ELSE NOT EXISTS (
     SELECT 1 FROM json_each(f.required_capabilities) r
     WHERE r.value NOT IN (SELECT c.value FROM json_each(p.caps) c)) END
-  AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint))
+  AND (p.sprint = '' OR EXISTS (SELECT 1 FROM json_each(f.sprint_ids) s WHERE s.value = p.sprint)
+    OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par, json_each(par.sprint_ids) ps
+      WHERE par.project_id = f.project_id AND par.id = f.run_of AND ps.value = p.sprint)))
   AND (p.only_ids = 'null' OR EXISTS (SELECT 1 FROM json_each(p.only_ids) o WHERE o.value = f.id))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,
