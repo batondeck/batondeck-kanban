@@ -30,6 +30,9 @@ type Store struct {
 	dir   string
 	mu    sync.Mutex
 	locks map[string]*hashLock
+
+	roomMu sync.Mutex
+	held   int64 // bytes the Stage calls in flight have claimed and not yet given back
 }
 
 // ErrFull is Stage's and Room's refusal: the store's volume would be left with less than Reserve
@@ -45,9 +48,16 @@ var statFree = func(dir string) (int64, error) {
 	return int64(min(st.Bavail*uint64(st.Bsize), math.MaxInt64)), nil
 }
 
-// Room is ErrFull when n more bytes would leave the store's volume with less than Reserve free. A
-// volume whose free space cannot be read is not refused.
+// Room is ErrFull when n more bytes would leave the store's volume with less than Reserve free,
+// counting the bytes the uploads in flight are about to write. A volume whose free space cannot be
+// read is not refused.
 func (s *Store) Room(n int64) error {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	return s.roomLocked(n)
+}
+
+func (s *Store) roomLocked(n int64) error {
 	if s.Reserve <= 0 {
 		return nil
 	}
@@ -55,32 +65,60 @@ func (s *Store) Room(n int64) error {
 	if err != nil {
 		return nil
 	}
-	if free-n < s.Reserve {
+	if free-s.held-n < s.Reserve {
 		return ErrFull
 	}
 	return nil
 }
 
-// roomEvery is how many bytes Stage writes between two looks at the volume's free space.
+// claim gives back done bytes an earlier claim held, which are written by now and so counted in the
+// volume's free space, then holds n bytes for the writes to come: ErrFull, holding nothing more,
+// when they do not fit above the reserve (Room). Statfs alone cannot see bytes another upload is
+// about to write, so every byte Stage writes is held first.
+func (s *Store) claim(done, n int64) error {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	s.held -= done
+	if err := s.roomLocked(n); err != nil {
+		return err
+	}
+	s.held += n
+	return nil
+}
+
+// release gives back n bytes a claim held.
+func (s *Store) release(n int64) {
+	s.roomMu.Lock()
+	s.held -= n
+	s.roomMu.Unlock()
+}
+
+// roomEvery is the bytes Stage holds at a time (claim): one look at the volume per roomEvery bytes
+// written. Within roomEvery of the reserve every upload is refused.
 const roomEvery = 1 << 20
 
-// roomWriter is w that looks at the store's volume every roomEvery bytes, before the write that
-// crosses the mark: ErrFull when that write, or roomEvery bytes if it is smaller, would leave the
-// volume under its reserve.
+// roomWriter is w that writes only bytes it holds: before a write past what it holds it gives that
+// back and claims the write's size, or roomEvery if that is larger; ErrFull when they do not fit.
 type roomWriter struct {
-	w       io.Writer
-	s       *Store
-	pending int64
+	w    io.Writer
+	s    *Store
+	held int64 // bytes claimed
+	used int64 // of them, bytes written
 }
 
 func (r *roomWriter) Write(p []byte) (int, error) {
-	if r.pending += int64(len(p)); r.pending >= roomEvery {
-		r.pending = 0
-		if err := r.s.Room(max(int64(len(p)), roomEvery)); err != nil {
+	if r.used+int64(len(p)) > r.held {
+		n := max(int64(len(p)), roomEvery)
+		done := r.held
+		r.held, r.used = 0, 0
+		if err := r.s.claim(done, n); err != nil {
 			return 0, err
 		}
+		r.held = n
 	}
-	return r.w.Write(p)
+	n, err := r.w.Write(p)
+	r.used += int64(n)
+	return n, err
 }
 
 type hashLock struct {
@@ -117,10 +155,16 @@ type Staged struct {
 }
 
 // Stage reads r whole to a temporary file, hashing it. On any error the file is removed. With a
-// Reserve it is ErrFull, the body cut off, once the volume is down to the reserve (Room).
+// Reserve it is ErrFull, before the first byte or with the body cut off, once the bytes would not
+// fit above the reserve, counting those the other uploads in flight hold (Room).
 func (s *Store) Stage(r io.Reader) (*Staged, error) {
-	if err := s.Room(0); err != nil {
-		return nil, err
+	var room *roomWriter
+	if s.Reserve > 0 {
+		if err := s.claim(0, roomEvery); err != nil {
+			return nil, err
+		}
+		room = &roomWriter{s: s, held: roomEvery}
+		defer func() { s.release(room.held) }()
 	}
 	f, err := os.CreateTemp(filepath.Join(s.dir, "tmp"), "upload-*")
 	if err != nil {
@@ -128,8 +172,9 @@ func (s *Store) Stage(r io.Reader) (*Staged, error) {
 	}
 	h := sha256.New()
 	var w io.Writer = io.MultiWriter(f, h)
-	if s.Reserve > 0 {
-		w = &roomWriter{w: w, s: s}
+	if room != nil {
+		room.w = w
+		w = room
 	}
 	n, err := io.Copy(w, r)
 	if cerr := f.Close(); err == nil {

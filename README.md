@@ -165,6 +165,12 @@ opts into `NORMAL` for write throughput: in WAL mode the file stays consistent, 
 transactions before a power loss may be lost. `batondeck-kanban serve -h` lists every
 `BATONDECK_*` variable with its default, and how the config file and the environment combine.
 
+Attachments are files in the blob dir (`BATONDECK_BLOB_DIR`, by default `blobs` beside the SQLite
+file), each at most `BATONDECK_BLOB_MAX_BYTES` (50 MiB). `serve` keeps 512 MiB free on the blob dir's
+disk, so attachments cannot fill the disk the database writes to: an attachment that would leave less
+is refused (`QUOTA_EXCEEDED` from `attach_file`, 507 from its upload), even though `df` still shows
+that space available. Put the blob dir on a disk with room to spare.
+
 ### doctor
 
 ```bash
