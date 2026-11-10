@@ -632,9 +632,13 @@ func (t *txn) unblockDependentsOf(clearedID string, skip map[string]bool) error 
 	return nil
 }
 
-// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent).
+// unblockOne reads depID and, when its blockedBy names clearedID, clears it (unblockDependent). The
+// dependent is read locked (LockTask; the caller holds the project lock, so the order stays project
+// then tasks): unblockDependent writes it at the version read, and a writer that takes no project
+// lock (update_task, add_context_item) must not move it in between, or a versioned move_task,
+// cancel_task or delete_task would fail STALE quoting the dependent's versions, not its own.
 func (t *txn) unblockOne(depID, clearedID string) error {
-	dep, err := t.Tx.GetTask(t.ctx, t.ProjectID, depID)
+	dep, err := t.Tx.LockTask(t.ctx, t.ProjectID, depID)
 	if err != nil {
 		return err
 	}

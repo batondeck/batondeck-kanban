@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -355,4 +358,81 @@ func TestClaimTaskHonoursTheRetryBackoff(t *testing.T) {
 			t.Fatalf("claim_task past the backoff: %v", err)
 		}
 	})
+}
+
+// depRaceStore lets a writer outside the transaction update task dep (a versioned UpdateTask, as
+// update_task makes, which takes no project lock) the first time a transaction reads it, and waits
+// for that write up to a moment before carrying on: a concurrent edit of a dependent between
+// unblockOne's read and its write.
+type depRaceStore struct {
+	store.Store
+	project, dep string
+	once         sync.Once
+	edited       chan error
+}
+
+func (s *depRaceStore) Atomically(ctx context.Context, fn func(tx store.Store) error) error {
+	return s.Store.Atomically(ctx, func(tx store.Store) error { return fn(&depRaceTx{Store: tx, s: s}) })
+}
+
+type depRaceTx struct {
+	store.Store
+	s *depRaceStore
+}
+
+func (x *depRaceTx) GetTask(ctx context.Context, projectID, taskID string) (store.Task, error) {
+	t, err := x.Store.GetTask(ctx, projectID, taskID)
+	x.s.interfere(ctx, taskID, t)
+	return t, err
+}
+
+func (x *depRaceTx) LockTask(ctx context.Context, projectID, taskID string) (store.Task, error) {
+	t, err := x.Store.LockTask(ctx, projectID, taskID)
+	x.s.interfere(ctx, taskID, t)
+	return t, err
+}
+
+func (s *depRaceStore) interfere(ctx context.Context, taskID string, t store.Task) {
+	if taskID != s.dep {
+		return
+	}
+	s.once.Do(func() {
+		go func() {
+			title := "edited meanwhile"
+			_, err := s.Store.UpdateTask(context.WithoutCancel(ctx), s.project, s.dep, t.Version, store.TaskPatch{Title: &title, UpdatedBy: "bob", UpdatedAt: time.Now().UnixMilli()})
+			s.edited <- err
+		}()
+		select {
+		case err := <-s.edited:
+			s.edited <- err
+		case <-time.After(300 * time.Millisecond):
+		}
+	})
+}
+
+// A versioned cancel_task of a blocker while its dependent is being edited answers for the blocker
+// alone: the dependent is read locked, so the edit waits, and the cancel does not fail STALE quoting
+// the dependent's versions (Postgres showed it; SQLite and memstore serialise writers anyway).
+func TestCancellingABlockerIsNotStaleOnItsDependent(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			e := newLC(t, ec.open(t))
+			a, b := e.task(t, domain.Todo), e.task(t, domain.Todo)
+			e.dependOn(t, a.ID, b.ID)
+			race := &depRaceStore{Store: e.st, project: e.project, dep: b.ID, edited: make(chan error, 1)}
+			c := New(race, Options{Logger: log.New(&logBuf{}, "", 0), Now: e.clock.now, ToolCallFlush: -1})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			cur := e.get(t, a.ID)
+			_, err := c.Lifecycle().Cancel(e.ctx, e.alice, CancelTaskReq{ProjectID: e.project, TaskID: a.ID, Version: cur.Version, Reason: "dropped"})
+			edit := <-race.edited
+			got := e.get(t, b.ID)
+			t.Logf("cancel_task %s v%d while %s is edited: %v; the edit: %v; %s blockedBy %v", a.ID, cur.Version, b.ID, err, edit, b.ID, got.BlockedBy)
+			if err != nil {
+				t.Fatalf("cancel_task: %v, want it done", err)
+			}
+			if len(got.BlockedBy) != 0 {
+				t.Fatalf("%s blockedBy %v after its blocker was cancelled", b.ID, got.BlockedBy)
+			}
+		})
+	}
 }
