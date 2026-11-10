@@ -116,7 +116,14 @@ func Sha256Hex(s []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// StripNUL is s without its NUL characters (U+0000). Postgres cannot store one in text (the
+// transports refuse it in arguments, domain.CheckText), and a sender's payload is not refused for
+// one: every string an event keeps loses them (Cap), as do the delivery id and a refusal's reason.
+func StripNUL(s string) string { return strings.ReplaceAll(s, "\x00", "") }
+
+// cut is s without NULs (StripNUL), at most n runes.
 func cut(s string, n int) string {
+	s = StripNUL(s)
 	if r := []rune(s); len(r) > n {
 		return string(r[:n])
 	}
@@ -124,11 +131,12 @@ func cut(s string, n int) string {
 }
 
 // capMap keeps at most MapEntriesMax members, in key order so the cut is the same every time, each
-// key and value truncated; an empty key is dropped (it names nothing a reader could show).
+// key and value truncated (and without NULs); an empty key is dropped (it names nothing a reader
+// could show).
 func capMap(m map[string]string) map[string]string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
-		if k != "" {
+		if StripNUL(k) != "" {
 			keys = append(keys, k)
 		}
 	}
@@ -143,8 +151,10 @@ func capMap(m map[string]string) map[string]string {
 	return out
 }
 
-// Cap applies the size caps to e, which every connector routes its events through.
+// Cap applies the size caps to e, which every connector routes its events through, and drops every
+// NUL from what it keeps (StripNUL).
 func Cap(e oncall.Event) oncall.Event {
+	e.Source, e.Status, e.OccurredAt, e.DeliveryKey = StripNUL(e.Source), StripNUL(e.Status), StripNUL(e.OccurredAt), StripNUL(e.DeliveryKey)
 	e.Title = cut(e.Title, TitleMax)
 	e.Description = cut(e.Description, DescriptionMax)
 	e.Severity = cut(e.Severity, SeverityMax)

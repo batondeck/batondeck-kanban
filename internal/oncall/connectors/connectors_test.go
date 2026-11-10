@@ -236,6 +236,17 @@ func TestWebhook(t *testing.T) {
 	want(t, "fingerprints", []string{got[0].Fingerprint, got[1].Fingerprint, got[2].Fingerprint}, []string{"x#0", "y", "x#1"})
 }
 
+// Cap drops every NUL (U+0000) from what an event keeps, which Postgres cannot store in text: a key
+// that was nothing but NULs names nothing and goes.
+func TestCapDropsNUL(t *testing.T) {
+	e := connectors.Cap(oncall.Event{Source: "s", Fingerprint: "f\x00p", Status: "firing", Severity: "hi\x00gh", Title: "a\x00b",
+		Description: "\x00d", Labels: map[string]string{"k\x00": "v\x00", "\x00": "gone"}, Annotations: map[string]string{"a": "\x00"},
+		Links: []string{"https://x.example/\x00"}, UpstreamAssignee: "P\x001", OccurredAt: "2026-10-24T13:00:00.000Z", DeliveryKey: "k\x00"})
+	want(t, "capped", e, oncall.Event{Source: "s", Fingerprint: "fp", Status: "firing", Severity: "high", Title: "ab", Description: "d",
+		Labels: map[string]string{"k": "v"}, Annotations: map[string]string{"a": ""}, Links: []string{"https://x.example/"}, UpstreamAssignee: "P1",
+		OccurredAt: "2026-10-24T13:00:00.000Z", DeliveryKey: "k"})
+}
+
 func TestValidateMapping(t *testing.T) {
 	ok := connectors.Mapping{Extract: &connectors.Extract{Fingerprint: []string{"a.b[0].c", "$body_hash"}, Events: "$.items"}}
 	if p := connectors.ValidateMapping(ok); len(p) != 0 {

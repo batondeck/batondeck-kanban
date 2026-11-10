@@ -676,6 +676,87 @@ func TestHookOverTheEngines(t *testing.T) {
 	}
 }
 
+// A NUL (U+0000) in a verified payload is no poison pill: Postgres cannot store one in text, so the
+// ingest drops it from everything it keeps (title, labels, the delivery id, a refusal's reason) and
+// both engines answer alike. An Alertmanager group whose second alert carries one lands all three
+// alerts (on Postgres it was 503 forever, the third never filed), and lands once; a generic body
+// with one in an unknown key is a 400 with one rejected row (on Postgres it was a 500).
+func TestHookDropsNULOverTheEngines(t *testing.T) {
+	for _, e := range []struct {
+		name string
+		open func(t *testing.T) store.Store
+	}{
+		{"sqlite", func(t *testing.T) store.Store { return storetest.SQLite(t) }},
+		{"postgres", func(t *testing.T) store.Store { return storetest.Postgres(t) }},
+	} {
+		t.Run(e.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := e.open(t)
+			c := New(st, Options{ToolCallFlush: -1, Sealer: oncallKeyring(t)})
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+			carol := domain.Caller{Identity: "carol", Agent: "claude", TokenScope: "carol", WorkspaceAdmin: true}
+			p, err := c.Projects().Create(ctx, carol, CreateProjectReq{Name: "Q"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := c.Boards().Create(ctx, carol, CreateBoardReq{ProjectID: p.ProjectID, Name: "B"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration := func(source string, a IntegrationAuthInput) CreateIntegrationResp {
+				t.Helper()
+				in, err := c.Oncall().CreateIntegration(ctx, carol, CreateIntegrationReq{ProjectID: p.ProjectID, BoardID: b.Board.ID, Name: source,
+					Source: IntegrationSource(source), Auth: a, Routing: IntegrationRouting{Mode: "broadcast"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return in
+			}
+			am := integration("alertmanager", IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"})
+			key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+			alert := func(fp, summary string) map[string]any {
+				return map[string]any{"status": "firing", "labels": map[string]string{"alertname": "A", "err\u0000": "binary \u0000 junk"},
+					"annotations": map[string]string{"summary": summary}, "startsAt": "2026-10-24T08:00:00Z", "fingerprint": fp}
+			}
+			group, _ := json.Marshal(map[string]any{"groupKey": "g", "alerts": []any{alert("f1", "one"), alert("f2\u0000", "binary junk \u0000 here"), alert("f3", "three")}})
+			for i, wantReplayed := range []bool{false, true} {
+				out, err := c.Hook(ctx, am.Integration.ID, HookRequest{Header: key, Body: group})
+				if err != nil || out.Refusal != "" || len(out.Results) != 3 {
+					t.Fatalf("post %d of the group: %+v, %v", i+1, out, err)
+				}
+				for _, r := range out.Results {
+					if r.Replayed != wantReplayed || r.Result != "created" || strings.ContainsRune(r.DeliveryID, 0) {
+						t.Fatalf("post %d of the group: result %+v, want created, replayed %t", i+1, r, wantReplayed)
+					}
+				}
+				if i == 0 {
+					task, err := st.GetTask(ctx, p.ProjectID, *out.Results[1].TaskID)
+					if err != nil || task.Title != "binary junk  here" || strings.ContainsRune(string(task.CustomFields), 0) {
+						t.Fatalf("the second alert's ticket: %q %s, %v", task.Title, task.CustomFields, err)
+					}
+				}
+			}
+
+			gen := integration("generic", IntegrationAuthInput{Mode: "hmac"})
+			body := []byte(`{"fingerprint":"f","status":"firing","severity":"s","title":"t","bad\u0000key":"x"}`)
+			out, err := c.Hook(ctx, gen.Integration.ID, signedHook(gen.Secret, time.Now(), body))
+			if err != nil || out.Refusal != HookBadRequest || strings.ContainsRune(out.Detail, 0) {
+				t.Fatalf("a NUL in an unknown key: %+v, %v", out, err)
+			}
+			page, err := st.ListDeliveries(ctx, p.ProjectID, gen.Integration.ID, store.DeliveryFilter{}, "", 10)
+			if err != nil || len(page.Deliveries) != 1 || page.Deliveries[0].Kind != store.DeliveryRejected ||
+				*page.Deliveries[0].Error != "unrecognized_payload: generic payload: unknown keys: badkey" {
+				t.Fatalf("the refusal's row: %+v, %v", page.Deliveries, err)
+			}
+			named := genericBody("f\u0000", "firing", "t\u0000", "deliveryId", "src\u0000-1")
+			if out, err := c.Hook(ctx, gen.Integration.ID, signedHook(gen.Secret, time.Now(), named)); err != nil || out.Refusal != "" ||
+				len(out.Results) != 1 || out.Results[0].DeliveryID != "src-1#f" || out.Results[0].Result != "created" {
+				t.Fatalf("a NUL in the delivery id, fingerprint and title: %+v, %v", out, err)
+			}
+		})
+	}
+}
+
 // P-109: the delivery and raw-body windows come from Options. A delivery, accepted or refused,
 // expires DeliveryRetention after it was written and a refused delivery's raw body RawBodyRetention
 // after, so the sweep's expiry-keyed deletes take them then and not a millisecond before.
