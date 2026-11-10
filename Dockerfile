@@ -4,7 +4,7 @@
 # image's (TARGETOS/TARGETARCH, which buildx sets per --platform): Go needs no emulation to build
 # for another architecture, so `make image` builds linux/arm64 on an amd64 host without QEMU. The
 # final stage only copies, so it runs nothing on the target platform either.
-FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

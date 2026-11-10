@@ -55,6 +55,15 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: govulncheck
+        # A vulnerability the code reaches, in the standard library of the Go go.mod pins or in a
+        # module, fails the gate (exit 3); one it does not call is listed and passes. Installed and
+        # then run, not `go run`: under `go run` it would scan the Go that runs it, which can be newer
+        # than the pinned one.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
       - name: make check, both engines
         # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.
         run: make check TEST_TIMEOUT=40m
