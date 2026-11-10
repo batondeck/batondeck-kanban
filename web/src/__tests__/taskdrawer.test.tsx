@@ -512,3 +512,35 @@ describe('TaskDrawer — a cancelled task is not done (P-208)', () => {
     expect(screen.getAllByText('Submitted')).toHaveLength(1);
   });
 });
+
+/**
+ * Escape in a chip field cancels the half-typed value. The drawer's Escape handler blurs the focused
+ * field, and the chip input commits its draft on blur, so Escape used to SAVE "wip" as a label (a
+ * real update_task write) from the key that means cancel.
+ */
+describe('Escape in a chip field cancels the draft', () => {
+  for (const name of ['Labels', 'Capabilities']) {
+    it(`${name}: Escape drops the typed value and writes nothing`, async () => {
+      const fetchMock = routeFetch();
+      vi.stubGlobal('fetch', fetchMock);
+      const { onClose } = renderDrawer();
+      await screen.findByText('Ship the parser');
+      const input = screen.getByRole('textbox', { name });
+      await waitFor(() => expect(input).toBeEnabled());
+      input.focus();
+      fireEvent.change(input, { target: { value: 'wip' } });
+      fireEvent.keyDown(input, { key: 'Escape' });
+      expect(document.activeElement).not.toBe(input); // the drawer's Escape blurred it
+      await new Promise((r) => setTimeout(r, 20));
+      const patches = (fetchMock as ReturnType<typeof vi.fn>).mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH');
+      expect(patches).toHaveLength(0);
+      expect(input).toHaveValue('');
+      expect(onClose).not.toHaveBeenCalled();
+      // A value committed the ordinary way still saves.
+      input.focus();
+      fireEvent.change(input, { target: { value: 'wip' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect((fetchMock as ReturnType<typeof vi.fn>).mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    });
+  }
+});

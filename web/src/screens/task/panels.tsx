@@ -714,6 +714,9 @@ function ChipField({
   closed?: { title?: string; 'aria-describedby'?: string } | null;
 }) {
   const [draft, setDraft] = useState('');
+  // Set by Escape so the blur that follows it (the drawer blurs the focused field) commits nothing:
+  // the cleared draft has not rendered yet when that blur runs. Typing again clears it.
+  const cancelled = useRef(false);
   const commit = (raw: string): void => {
     const parts = raw.split(',').map((x) => x.trim()).filter(Boolean);
     const next = [...values];
@@ -747,12 +750,18 @@ function ChipField({
         disabled={!!closed}
         {...(closed ?? {})}
         placeholder={values.length ? '' : placeholder}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => { cancelled.current = false; setDraft(e.target.value); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit(draft); }
           else if (e.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1));
+          // The drawer's Escape blurs the field and a blur commits, so without this the key that means
+          // cancel would SAVE the half-typed value (`escapeResets` below does the same for Details).
+          else if (e.key === 'Escape') { cancelled.current = true; setDraft(''); }
         }}
-        onBlur={() => draft && commit(draft)}
+        onBlur={() => {
+          if (cancelled.current) { cancelled.current = false; return; }
+          if (draft) commit(draft);
+        }}
         style={{ border: 'none', outline: 'none', background: 'none', font: 'inherit', color: 'inherit', flex: 1, minWidth: 80, padding: 0 }}
       />
     </div>
