@@ -958,11 +958,12 @@ func reads(m map[string]int) (r int, w int) {
 	return r, w
 }
 
-// AC8: claim_next costs at most six read statements and next_task at most five, with the
+// AC8: claim_next costs at most six read statements and next_task at most four, with the
 // membership cached; cold (no snapshot) and warm (the bus live) are both measured. claim_next's pin
 // rose from four by P-117 for resume's two reads after the commit, the artifacts and one items page;
-// next_task's from three for the same two, when it previews a task (its resume was always null);
-// both are asserted, so neither can go uncounted.
+// next_task's from two (three when an empty frontier reaped, which it no longer does) for the same
+// two, when it previews a task (its resume was always null); both are asserted, so neither can go
+// uncounted.
 func TestClaimNextAndNextStatementPins(t *testing.T) {
 	f := newFixture(t, Options{})
 	n := &calls{m: map[string]int{}}
@@ -992,7 +993,7 @@ func TestClaimNextAndNextStatementPins(t *testing.T) {
 			}
 			return err
 		}},
-		{"next_task", 5, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
+		{"next_task", 4, func() error { _, err := lc.Next(f.ctx, f.alice, nreq); return err }},
 		{"claim_next warm", 6, func() error {
 			f.c.ObserveChange(store.Change{ID: 1, Payload: json.RawMessage(`{}`)})
 			if _, err := f.c.boardSnapshot(f.ctx, f.project.ID, f.board.ID); err != nil {

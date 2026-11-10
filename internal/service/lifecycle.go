@@ -1468,11 +1468,13 @@ func (l lifecycle) Reap(ctx context.Context, caller domain.Caller, req ReapStale
 	return ReapStaleLeasesResp{Reaped: int64(sum.reaped())}, nil
 }
 
-// reap is the one reaper: reap_stale_leases, and the lazy recovery of claim_next when its frontier
-// is empty (no background sweeper; next_task is a read and never reaps). One ListExpiredLeases (at most 200 tasks,
-// oldest expiry first); the project's retry policy is read only when there is something to reap. A
-// task resolved since the read (heartbeat, completion, a new claim) is skipped. The access is the
-// calling tool's: a grant check left pending is finished against each reaped task.
+// reap is the one reaper (no background sweeper): reap_stale_leases, and the lazy recovery of
+// claim_next when its frontier is empty or the In progress lane's WIP limit refuses it, and of
+// claim_task when that limit refuses it (expired leases hold no slot). next_task is a read and never
+// reaps. One ListExpiredLeases (at most 200 tasks, oldest expiry first); the project's retry policy
+// is read only when there is something to reap. A task resolved since the read (heartbeat,
+// completion, a new claim) is skipped. The access is the calling tool's: a grant check left pending
+// (claim_task's) is finished against each reaped task, and a task it refuses is skipped.
 func (c *Core) reap(ctx context.Context, caller domain.Caller, a access, projectID, boardID string) (reapSummary, error) {
 	sum := reapSummary{Retried: []string{}, Poisoned: []string{}}
 	expired, err := c.store.ListExpiredLeases(ctx, projectID, boardID, c.nowMs(), 200)
