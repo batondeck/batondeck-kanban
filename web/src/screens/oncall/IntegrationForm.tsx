@@ -202,6 +202,12 @@ export function createBodyOf(f: FormState, source: OncallSource): CreateIntegrat
  * The edit body. `auth` is OMITTED unless the operator actually supplied new material: sending it
  * unchanged would re-run `buildAuth`, which MINTS a fresh hmac secret — silently rotating the
  * integration on every save and breaking the live sender.
+ *
+ * A CLEARED SETTING MUST BE SAID, because the core reads an absent field as "unchanged". It clears
+ * the target column only on an explicit `null`. It replaces the stored mapping with any mapping that
+ * is not `{}`, but an absent mapping or `{}` changes nothing — so when the operator has cleared the
+ * last mapping setting, `{ labels: [] }` stands for "no mapping": no stamped labels is exactly what
+ * an absent `labels` means.
  */
 export function patchBodyOf(f: FormState, source: OncallSource, current: Integration): IntegrationPatchBody {
   const modeChanged = f.authMode !== current.auth.mode;
@@ -210,8 +216,13 @@ export function patchBodyOf(f: FormState, source: OncallSource, current: Integra
   const suppliedJwt = f.authMode === 'jwt' && jwtTyped(f);
   const suppliedExternal = f.authMode === 'hmac' && f.externalSecret.trim().length > 0;
   const sendAuth = modeChanged || suppliedMaterial || suppliedJwt || suppliedExternal;
+  const body = commonBody(f, source.id === 'webhook');
+  const clearsColumn = !trimmed(f.columnId) && Boolean(current.target.columnId);
+  const clearsMapping = !body.mapping && Object.keys(current.mapping ?? {}).length > 0;
   return {
-    ...commonBody(f, source.id === 'webhook'),
+    ...body,
+    ...(clearsColumn ? { columnId: null } : {}),
+    ...(clearsMapping ? { mapping: { labels: [] } } : {}),
     ...(sendAuth ? { auth: authOf(f) } : {}),
   };
 }

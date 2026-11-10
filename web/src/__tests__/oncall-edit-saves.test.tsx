@@ -132,3 +132,61 @@ describe('a jwt integration', () => {
     expect(saveButton().disabled).toBe(true);
   });
 });
+
+describe('clearing a setting on edit', () => {
+  // The core replaces the stored mapping with any mapping that is not `{}`, reads an absent one (or
+  // `{}`) as "unchanged", and clears the target column only on an explicit null. A patch that just
+  // OMITS what was cleared is answered 200 and changes nothing.
+  const GRAFANA: Integration = {
+    ...BASE,
+    source: 'grafana',
+    auth: { mode: 'api_key' },
+    target: { boardId: 'B-9', columnId: 'C-triage' },
+    mapping: { labels: ['oncall'] },
+  };
+  const isEmpty = (v: unknown): boolean =>
+    v === null || (Array.isArray(v) ? v.length === 0 : typeof v === 'object' && Object.keys(v as object).length === 0);
+
+  it('clearing the only stamped label clears it, rather than saving nothing', async () => {
+    mount(GRAFANA);
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: /^Show$/ }));
+    fireEvent.change(await screen.findByLabelText(/labels stamped on every ticket/i), { target: { value: '' } });
+    fireEvent.click(saveButton());
+    const patch = await sentPatch();
+    const mapping = patch['mapping'] as Record<string, unknown> | undefined;
+    expect(mapping, 'an omitted mapping is "unchanged" to the core').toBeDefined();
+    expect(Object.keys(mapping!).length, '`{}` is "unchanged" to the core too').toBeGreaterThan(0);
+    for (const [k, v] of Object.entries(mapping!)) expect(isEmpty(v), `mapping.${k} is cleared`).toBe(true);
+  });
+
+  it('blanking the target column sends null, which is what clears it', async () => {
+    mount(GRAFANA);
+    await openEditor();
+    expect((screen.getByLabelText(/target column id/i) as HTMLInputElement).value).toBe('C-triage');
+    fireEvent.change(screen.getByLabelText(/target column id/i), { target: { value: '' } });
+    fireEvent.click(saveButton());
+    const patch = await sentPatch();
+    expect(patch).toHaveProperty('columnId', null);
+  });
+
+  it('POSITIVE CONTROL: an unrelated save keeps the column and the label', async () => {
+    mount(GRAFANA);
+    await openEditor();
+    fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'renamed' } });
+    fireEvent.click(saveButton());
+    const patch = await sentPatch();
+    expect(patch['columnId']).toBe('C-triage');
+    expect(patch['mapping']).toEqual({ labels: ['oncall'] });
+  });
+
+  it('an integration with no column and no mapping sends neither', async () => {
+    mount({ ...GRAFANA, target: { boardId: 'B-9' }, mapping: {} });
+    await openEditor();
+    fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'renamed' } });
+    fireEvent.click(saveButton());
+    const patch = await sentPatch();
+    expect(patch).not.toHaveProperty('columnId');
+    expect(patch).not.toHaveProperty('mapping');
+  });
+});

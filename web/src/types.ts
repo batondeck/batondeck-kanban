@@ -549,6 +549,8 @@ export interface CreateIntegrationBody {
   limits?: { ratePerMin?: number; payloadCapKb?: number };
 }
 
-export type IntegrationPatchBody = Partial<Omit<CreateIntegrationBody, 'source'>> & {
+export type IntegrationPatchBody = Partial<Omit<CreateIntegrationBody, 'source' | 'columnId'>> & {
+  /** null clears the target column; absent leaves it as it is. */
+  columnId?: string | null;
   enabled?: boolean;
 };
