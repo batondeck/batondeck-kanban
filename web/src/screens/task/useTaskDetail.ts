@@ -209,7 +209,9 @@ export function useTaskDetail(projectId: string, taskId: string) {
   // that have a column on THIS board once it loads (labels use the column's name).
   const cols = boardQ.data?.board.columns ?? [];
   const colFor = (s: string): { name: string } | undefined => cols.find((c) => c.status === s);
-  const transitions = (task && (boardQ.data?.board.transitions?.[task.status] ?? NEXT[task.status])) ?? [];
+  /** The statuses `s` may move to: the board's table once it has loaded, else the fixed one. */
+  const nextOf = (s: Status): Status[] => boardQ.data?.board.transitions?.[s] ?? NEXT[s];
+  const transitions = task ? nextOf(task.status) : [];
   const allMoves = transitions.map((to) => ({ to, col: colFor(to) }));
   const moveTargets = cols.length ? allMoves.filter((x) => x.col) : allMoves;
 
@@ -262,7 +264,7 @@ export function useTaskDetail(projectId: string, taskId: string) {
     editing, setEditing, draft, setDraft, startEdit,
     agentList, mentionCandidates, history,
     subs, subsDone, subsPct, blockedByEdges, blocksEdges, relatesEdges, taskById,
-    colFor, moveTargets, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
+    colFor, moveTargets, nextOf, agentsQ, histQ, myRole, canRequeue, canMove, canClaim, canComment, names,
     canEdit, canSummarise, canLink, canAddSubtask, canAnnotate, canWriteMemory, canAttach, canFollowUp, canAck, canRace, why,
   };
 }

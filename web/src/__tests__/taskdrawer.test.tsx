@@ -544,3 +544,52 @@ describe('Escape in a chip field cancels the draft', () => {
     });
   }
 });
+
+/**
+ * The subtask checkbox moves only where the fixed table goes. DONE is reached from REVIEW alone, so
+ * ticking a TODO, IN_PROGRESS or BLOCKED subtask sent a move the server always refused
+ * (INVALID_TRANSITION). The box is open only for a legal move, and says why otherwise.
+ */
+describe('subtask checkbox follows the transition table', () => {
+  const sub = (status: Task['status']): Task => ({ ...task, id: 'T-2', title: 'Write tests', status, parentTaskId: 'T-1', blockedBy: [], dueAt: null, version: 5 });
+  const moves = (fm: typeof fetch) =>
+    (fm as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]) => String(u).endsWith('/tasks/T-2/move'));
+
+  for (const status of ['TODO', 'IN_PROGRESS', 'BLOCKED'] as const) {
+    it(`a ${status} subtask cannot be ticked done, and the box says why`, async () => {
+      const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub(status)] } } });
+      vi.stubGlobal('fetch', fetchMock);
+      renderDrawer();
+      const box = await screen.findByRole('checkbox', { name: 'Mark T-2 done' });
+      // alice is the project's admin (her role opens the panel's Add): the role is not what closes it.
+      await waitFor(() => expect(screen.getByPlaceholderText('New subtask')).toBeEnabled());
+      fireEvent.click(box);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(moves(fetchMock)).toHaveLength(0);
+      expect(box).toBeDisabled();
+      expect(box).toHaveAttribute('title', expect.stringMatching(/Review/));
+    });
+  }
+
+  it('a REVIEW subtask is ticked done with one legal move', async () => {
+    const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub('REVIEW')] } } });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    const box = await screen.findByRole('checkbox', { name: 'Mark T-2 done' });
+    await waitFor(() => expect(box).toBeEnabled());
+    fireEvent.click(box);
+    await waitFor(() => expect(moves(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String((moves(fetchMock)[0]![1] as RequestInit).body))).toMatchObject({ version: 5, toStatus: 'DONE' });
+  });
+
+  it('a DONE subtask is unticked back to IN_PROGRESS', async () => {
+    const fetchMock = routeFetch({ '/tasks/T-1/subtasks$': { json: { tasks: [sub('DONE')] } } });
+    vi.stubGlobal('fetch', fetchMock);
+    renderDrawer();
+    const box = await screen.findByRole('checkbox', { name: 'Mark T-2 not done' });
+    await waitFor(() => expect(box).toBeEnabled());
+    fireEvent.click(box);
+    await waitFor(() => expect(moves(fetchMock)).toHaveLength(1));
+    expect(JSON.parse(String((moves(fetchMock)[0]![1] as RequestInit).body))).toMatchObject({ toStatus: 'IN_PROGRESS' });
+  });
+});

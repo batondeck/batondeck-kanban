@@ -16,7 +16,7 @@ import { AppLinkCard, normalizeLink } from '../../AppLink.js';
 import { Bar, Button, Cluster, KV, Note, Panel, Stack } from '../../ui.js';
 import { Comments } from '../Comments.js';
 import { FollowUps } from '../FollowUps.js';
-import { LIMITS, type Artifact, type Task } from '../../types.js';
+import { LIMITS, type Artifact, type Status, type Task } from '../../types.js';
 import type { LoadedTaskDetail } from './useTaskDetail.js';
 
 const SCOLOR_DOT: Record<string, string> = { TODO: '--ready', IN_PROGRESS: '--progress', BLOCKED: '--blocked', REVIEW: '--review', DONE: '--done' };
@@ -270,7 +270,7 @@ export function DependenciesPanel({ d, onOpenTask }: PNav) {
 }
 
 export function SubtasksPanel({ d, onOpenTask }: PNav) {
-  const { projectId, taskId, run, subs, subsDone, subsPct, canMove, canAddSubtask, why } = d;
+  const { projectId, taskId, run, subs, subsDone, subsPct, canMove, canAddSubtask, nextOf, why } = d;
   const [subTitle, setSubTitle] = useState('');
   // A subtask's checkbox is `move_task`, Add is `add_subtask`; both tier master (P-440).
   const subWhy = why('add_subtask', 'add subtasks or mark them done');
@@ -286,6 +286,13 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
       <Stack gap={8}>
         {subs.map((s: Task) => {
           const done = s.status === 'DONE';
+          // The box is one move, and only a move the fixed table allows (ADR-0005): DONE is reached
+          // from REVIEW alone, so ticking a TODO, IN_PROGRESS or BLOCKED subtask is closed and says
+          // so, rather than sending a move the server refuses (INVALID_TRANSITION).
+          const to: Status = done ? 'IN_PROGRESS' : 'DONE';
+          const legal = nextOf(s.status).includes(to);
+          const open = canMove && legal;
+          const illegalWhy = `${s.id} is ${s.status.replace('_', ' ')}: a task reaches Done from Review only. Open it to move it on.`;
           // NOT a row-wide <label>: the row mixes two actions (checkbox = toggle done, title =
           // navigate), and a wrapping label would forward clicks on the id/pill/gaps to the
           // checkbox — silently marking a subtask DONE when the user meant to open it.
@@ -295,10 +302,10 @@ export function SubtasksPanel({ d, onOpenTask }: PNav) {
                 type="checkbox"
                 checked={done}
                 aria-label={`Mark ${s.id} ${done ? 'not done' : 'done'}`}
-                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: canMove ? 'pointer' : 'default' }}
-                disabled={!canMove}
-                {...checkAttrs}
-                onChange={() => void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: done ? 'IN_PROGRESS' : 'DONE' }))}
+                style={{ marginTop: 3, width: 14, height: 14, accentColor: 'var(--accent)', cursor: open ? 'pointer' : 'default' }}
+                disabled={!open}
+                {...(canMove ? (legal ? {} : { title: illegalWhy }) : checkAttrs)}
+                onChange={() => { if (open) void run(tasksApi.moveTask(projectId, s.id, s.version, { toStatus: to })); }}
               />
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, minWidth: 0 }}>
                 <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.id}</span>
