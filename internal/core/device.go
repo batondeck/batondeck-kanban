@@ -17,8 +17,9 @@ const DeviceFile = "device-id"
 // DeviceID is this device's id, which every wake directory row a serve registers names (P-167):
 // serves on several devices may share one database (Postgres), and a row's pid names a process
 // only on the device that registered it. It is read from DeviceFile in dir, the per-user data dir
-// on this machine's disk, which is made with a random id the first time (0600, its directory 0700):
-// a restart, and every serve of the same data dir, keeps the id; another machine has its own.
+// on this machine's disk, which is made with a random id the first time (0600, its directory 0700,
+// linked into place whole, so serves starting at once read one id): a restart, and every serve of
+// the same data dir, keeps the id; another machine has its own.
 func DeviceID(dir string) (string, error) {
 	if dir == "" {
 		return "", errors.New("device id: no data dir")
@@ -37,28 +38,43 @@ func DeviceID(dir string) (string, error) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("device id: %w", err)
 		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		id, err := makeDeviceID(dir, path)
 		if errors.Is(err, fs.ErrExist) {
 			continue // another serve made it first: read its id
 		}
 		if err != nil {
 			return "", fmt.Errorf("device id: %w", err)
 		}
-		raw := make([]byte, 16)
-		if _, err := rand.Read(raw); err != nil {
-			f.Close()
-			return "", fmt.Errorf("device id: %w", err)
-		}
-		id := hex.EncodeToString(raw)
-		_, err = f.WriteString(id + "\n")
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			os.Remove(path)
-			return "", fmt.Errorf("device id: %w", err)
-		}
 		return id, nil
 	}
 	return "", fmt.Errorf("device id: %s was made and removed while being read", path)
+}
+
+// makeDeviceID writes a new random id to a temporary file in dir and links it to path, so path
+// never holds a partial id; fs.ErrExist when path exists.
+func makeDeviceID(dir, path string) (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	id := hex.EncodeToString(raw)
+	f, err := os.CreateTemp(dir, "."+DeviceFile+"-*") // 0600
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.WriteString(id + "\n")
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := os.Link(f.Name(), path); err != nil {
+		return "", err
+	}
+	return id, nil
 }

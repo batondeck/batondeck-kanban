@@ -3,6 +3,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -32,5 +33,35 @@ func TestDeviceID(t *testing.T) {
 	}
 	if got, err := DeviceID(""); err == nil {
 		t.Fatalf("DeviceID with no data dir = %q, want an error", got)
+	}
+}
+
+// Serves that start at the same moment on a fresh data dir get the same id (tested): the one that
+// lost the race read the file the winner had made and not yet written, and ran with no device.
+func TestDeviceIDMadeAtOnce(t *testing.T) {
+	for round := range 100 {
+		dir := filepath.Join(t.TempDir(), "data")
+		ids, errs := make([]string, 8), make([]error, 8)
+		var start, done sync.WaitGroup
+		start.Add(1)
+		for i := range ids {
+			done.Add(1)
+			go func() {
+				defer done.Done()
+				start.Wait()
+				ids[i], errs[i] = DeviceID(dir)
+			}()
+		}
+		start.Done()
+		done.Wait()
+		for i := range ids {
+			if errs[i] != nil || ids[i] != ids[0] || len(ids[i]) != 32 {
+				t.Fatalf("round %d: DeviceID at once = %q; errors %v; want one 32-character id", round, ids, errs)
+			}
+		}
+		left, err := os.ReadDir(dir)
+		if err != nil || len(left) != 1 {
+			t.Fatalf("round %d: the data dir holds %v (%v); want only %s", round, left, err, DeviceFile)
+		}
 	}
 }
