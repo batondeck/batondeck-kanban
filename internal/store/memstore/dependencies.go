@@ -41,7 +41,7 @@ func (s *Store) AddEdge(ctx context.Context, in store.AddEdgeInput) (store.Depen
 			if err := domain.CheckCycle(blocking, in.FromTaskID, in.ToTaskID); err != nil {
 				return store.DependencyEdge{}, err
 			}
-			if !slices.Contains(to.BlockedBy, from.ID) {
+			if from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID) {
 				to.BlockedBy = append(list(to.BlockedBy), from.ID)
 			}
 			st.put(to)

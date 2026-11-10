@@ -154,7 +154,9 @@ func addEdge(ctx context.Context, e engine, in AddEdgeInput) (DependencyEdge, er
 			if err := domain.CheckCycle(edges, in.FromTaskID, in.ToTaskID); err != nil {
 				return err
 			}
-			if !slices.Contains(to.BlockedBy, from.ID) {
+			// blockedBy holds open blockers only: a DONE blocker's edge is recorded (upstream context
+			// reads it) but gates nothing, since nothing would ever clear it again.
+			if from.Status != domain.Done && !slices.Contains(to.BlockedBy, from.ID) {
 				to.BlockedBy = append(to.BlockedBy, from.ID)
 			}
 			if !slices.Contains(from.Blocks, to.ID) {

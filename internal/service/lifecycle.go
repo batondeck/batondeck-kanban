@@ -1212,8 +1212,10 @@ func (t *txn) completeArtifacts(task store.Task, incoming []store.AddArtifactInp
 // Block is block_task: the caller's live lease dropped and the task BLOCKED with the reason. Each
 // blockedBy id becomes a blocks edge (store.AddEdge: the cycle check and both caches) in the SAME
 // transaction, under the project lock taken first, so a cycle or a missing blocker writes nothing at
-// all (conductor wrote the edges in their own transactions and could leave some behind). A reason of
-// "poison" is refused: only the retry policy poisons a task.
+// all (conductor wrote the edges in their own transactions and could leave some behind). A blocker
+// already DONE is refused (VALIDATION naming it): it would gate nothing, and the task would wait
+// BLOCKED for an unblock that never comes. A reason of "poison" is refused: only the retry policy
+// poisons a task.
 func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTaskReq) (BlockTaskResp, error) {
 	a, err := l.leaseArgs(ctx, caller, "block_task", req.ProjectID, req.TaskID, req.LeaseID, domain.GrantSubject{})
 	if err != nil {
@@ -1252,13 +1254,27 @@ func (l lifecycle) Block(ctx context.Context, caller domain.Caller, req BlockTas
 				return BlockTaskResp{}, err
 			}
 			for _, b := range blockers {
+				// A blocker already DONE would gate nothing (blockedBy holds open blockers only), so
+				// the task would sit BLOCKED with nothing ever to clear it: refused, and the caller
+				// keeps its lease.
+				var other store.Task
+				if !slices.Contains(cur.BlockedBy, b) {
+					var err error
+					if other, err = t.Tx.GetTask(ctx, req.ProjectID, b); err != nil {
+						return BlockTaskResp{}, err
+					}
+					if other.Status == domain.Done {
+						return BlockTaskResp{}, domain.Validation(fmt.Sprintf("Task %s is already DONE: it cannot block %s", b, cur.ID),
+							map[string]any{"field": "blockedBy", "blockedBy": b, "status": domain.Done})
+					}
+				}
 				if _, err := t.Tx.AddEdge(ctx, store.AddEdgeInput{ProjectID: req.ProjectID, FromTaskID: b, ToTaskID: cur.ID, Type: store.DependencyBlocks, CreatedBy: caller.Identity}); err != nil {
 					return BlockTaskResp{}, err
 				}
 				if slices.Contains(cur.BlockedBy, b) {
 					continue
 				}
-				if err := t.bumpOther(b); err != nil {
+				if _, err := t.bump(other); err != nil {
 					return BlockTaskResp{}, err
 				}
 				if err := t.event(cur, domain.EventDependencyAdded, map[string]any{"fromTaskId": b, "type": "blocks"}); err != nil {

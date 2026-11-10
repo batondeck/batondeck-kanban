@@ -11,7 +11,8 @@ import (
 
 // AddDependency is add_dependency. The edge and both caches are written by store.AddEdge after
 // domain.CheckCycle (CYCLE_DETECTED: mutate rolls the whole call back, so nothing is written);
-// status never changes (plan §Ticket states: add_dependency only writes blockedBy). The dependent
+// status never changes (plan §Ticket states: add_dependency only writes blockedBy). A blocker already
+// DONE gets its edge (get_task_context's upstream reads it) but gates nothing. The dependent
 // (toTaskId, where the event hangs) is mutate's task and is bumped once; the blocker is bumped once
 // when its blocks cache gained the dependent, as conductor's bumpArray does. Serialised per project
 // (mutation.LockProject).

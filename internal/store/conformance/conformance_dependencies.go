@@ -85,6 +85,23 @@ func dependencies(t *testing.T, newStore Factory) {
 			}
 		})
 
+		// blockedBy holds open blockers only: an edge from a blocker already DONE is recorded, and
+		// the blocker's blocks gains the dependent, but the dependent's blockedBy does not gain a
+		// blocker nothing would ever clear.
+		t.Run("AnEdgeFromADoneBlockerGatesNothing", func(t *testing.T) {
+			s, sd, p, b := seeded(t, newStore)
+			done, err := sd.seedTask(ctx, seedTaskInput{ProjectID: p, BoardID: b, Title: "done", Status: domain.Done})
+			noErr(t, err)
+			dep := seedTasks(t, sd, p, b, "dep")[0]
+			e, err := s.AddEdge(ctx, blocks(p, done, dep))
+			noErr(t, err)
+			if e.FromTaskID != done || e.ToTaskID != dep {
+				t.Fatalf("AddEdge = %+v", e)
+			}
+			wantCaches(t, sd, p, done, []string{}, []string{dep})
+			wantCaches(t, sd, p, dep, []string{}, []string{})
+		})
+
 		t.Run("ARefusedCycleLeavesNoPartialEdgeOrCacheEntry", func(t *testing.T) {
 			s, sd, p, b := seeded(t, newStore)
 			ts := seedTasks(t, sd, p, b, "a", "b", "c")
