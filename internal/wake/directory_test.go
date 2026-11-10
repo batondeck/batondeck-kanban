@@ -2,9 +2,11 @@ package wake
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -346,5 +348,45 @@ func TestAnExitDuringItsRegisterDropsTheEntry(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%d row(s) 5 s after the process exited; want none", left)
 		}
+	}
+}
+
+// A re-register without the socket (tested): a session registered with its messaging socket runs
+// its SessionStart hook again in an environment without CLAUDE_CODE_MESSAGING_SOCKET, so the client
+// registers its pid with no socket. While the pid's registry entry still names that socket for the
+// same process, the entry keeps it and is still rung (the socketless register replaced it, as
+// another process's, and the session was never rung again).
+func TestASocketlessReRegisterKeepsTheSessionsSocket(t *testing.T) {
+	alice := domain.Caller{Identity: "U-alice", TokenScope: "U-alice"}
+	res := &hookResolver{callers: map[string]domain.Caller{"bd": alice}}
+	rows := &memWakeStore{rows: map[string]service.WakeSessionRow{}}
+	d := testDirectory(t, res, rows)
+	pid := sleeper(t)
+	sock := filepath.Join(t.TempDir(), "s.sock")
+	reg := fmt.Sprintf(`{"pid":%d,"sessionId":"s1","procStart":"ps1","messagingSocketPath":%q,"peerProtocol":%d}`, pid, sock, peerProtocol)
+	if err := os.WriteFile(filepath.Join(d.o.Registry, fmt.Sprintf("%d.json", pid)), []byte(reg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	peer := core.Peer{UID: os.Getuid(), PID: os.Getpid()}
+	first, err := d.Register(context.Background(), peer, alice, "bd", RegisterReq{PID: pid, Role: service.RoleWorker, Socket: sock, Token: "peer"})
+	if err != nil || first.Adapter != AdapterClaudeCode {
+		t.Fatalf("the register with the socket: %+v, %v", first, err)
+	}
+	again, err := d.Register(context.Background(), peer, alice, "bd", RegisterReq{PID: pid, Role: service.RoleMaster})
+	if err != nil {
+		t.Fatalf("the register without the socket: %v", err)
+	}
+	got := d.Entries()
+	rows.mu.Lock()
+	dropped := slices.Clone(rows.dropped)
+	rows.mu.Unlock()
+	if again.Adapter != AdapterClaudeCode || again.ID != first.ID || len(got) != 1 || got[0].Adapter != AdapterClaudeCode || got[0].Role != service.RoleMaster || len(dropped) != 0 {
+		t.Fatalf("after the register without the socket: %+v, entries %+v, dropped %v; want entry %s kept with adapter %q, as a master", again, got, dropped, first.ID, AdapterClaudeCode)
+	}
+	d.mu.Lock()
+	e := *d.entries[pid]
+	d.mu.Unlock()
+	if e.socket != sock || e.socketToken != "peer" || e.procStart != "ps1" || e.clientSession != "s1" {
+		t.Fatalf("the entry's socket %q, token %q, procStart %q, session %q; want the registry's", e.socket, e.socketToken, e.procStart, e.clientSession)
 	}
 }

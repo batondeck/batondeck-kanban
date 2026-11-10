@@ -307,7 +307,7 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 	if err != nil {
 		return RegisterResp{}, err
 	}
-	d.o.Logger.Printf("wake: registered pid %d (%s, %s, agent %s, adapter %q) from peer pid %d", e.pid, e.role, e.identity, e.agent, adapter, peer.PID)
+	d.o.Logger.Printf("wake: registered pid %d (%s, %s, agent %s, adapter %q) from peer pid %d", e.pid, e.role, e.identity, e.agent, e.adapter, peer.PID)
 	if d.gen.Load() != gen {
 		select {
 		case d.rescope <- e.pid:
@@ -318,12 +318,15 @@ func (d *Directory) Register(ctx context.Context, peer core.Peer, caller domain.
 	if cursor > 0 {
 		d.catchUp(ctx, e)
 	}
-	return RegisterResp{ID: e.id, PID: req.PID, Role: req.Role, AgentID: e.agent, Adapter: adapter, ExpiresAt: expires}, nil
+	return RegisterResp{ID: e.id, PID: req.PID, Role: req.Role, AgentID: e.agent, Adapter: e.adapter, ExpiresAt: expires}, nil
 }
 
 // replace is Register's write under reg: it reads the pid's entry, watches the pid, writes the row
 // and puts the new entry, so no drop runs between the read and the put. cursor is the new entry's
-// last delivered cursor.
+// last delivered cursor. A re-register without a socket by the process that registered with one
+// keeps that socket while the pid's registry entry still names it: the hook's environment can lack
+// CLAUDE_CODE_MESSAGING_SOCKET (a SessionEnd's does on Claude Code 2.1.309), and the session's
+// push is not the register's to give up.
 func (d *Directory) replace(ctx context.Context, caller domain.Caller, bearer string, req RegisterReq, reg registryEntry, adapter string, scopes []string) (e *entry, cursor int64, expires string, err error) {
 	d.reg.Lock()
 	defer d.reg.Unlock()
@@ -340,6 +343,11 @@ func (d *Directory) replace(ctx context.Context, caller domain.Caller, bearer st
 	if found {
 		if old.identity != caller.Identity {
 			return nil, 0, "", domain.NewError(domain.CodeForbidden, fmt.Sprintf("pid %d is registered by another identity", req.PID), nil)
+		}
+		if req.Socket == "" && old.socket != "" {
+			if r, err := readRegistry(d.o.Registry, req.PID); err == nil && r.ProcStart == old.procStart && r.MessagingSocketPath == old.socket {
+				req.Socket, req.Token, reg, adapter = old.socket, old.socketToken, r, old.adapter
+			}
 		}
 		if old.procStart == reg.ProcStart {
 			id, cursor = old.id, max(cursor, old.lastCursor)
