@@ -266,3 +266,28 @@ func TestAnOAuthAccessTokenDoesNotOpenTheBFF(t *testing.T) {
 		t.Fatalf("an API token at the BFF: %d", w.Code)
 	}
 }
+
+// auth#13: past the sign-in limit, the OAuth sign-in page's form (a next) is sent back with
+// login=limited, not login=failed: the password was never checked, so the page must not say it
+// did not match.
+func TestLoginNextPastTheLimitSaysLimited(t *testing.T) {
+	f := newFixture(t)
+	f.addUser(t, "alice", "pw-alice-1")
+	post := func(password string) *http.Response {
+		form := url.Values{"login": {"alice"}, "password": {password}, "next": {"/authorize?client_id=c"}}
+		r := httptest.NewRequest(http.MethodPost, "http://board.test/login", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.svc.CSRF(f.svc.LoginHandler()).ServeHTTP(w, r)
+		return w.Result()
+	}
+	for i := range 10 {
+		if r := post("wrong"); r.Header.Get("Location") != "/authorize?client_id=c&login=failed" {
+			t.Fatalf("attempt %d: %d %q", i+1, r.StatusCode, r.Header.Get("Location"))
+		}
+	}
+	r := post("pw-alice-1")
+	if r.StatusCode != http.StatusSeeOther || r.Header.Get("Location") != "/authorize?client_id=c&login=limited" || cookie(r, SessionCookie) != nil {
+		t.Fatalf("past the limit: %d %q, want 303 to login=limited and no session", r.StatusCode, r.Header.Get("Location"))
+	}
+}

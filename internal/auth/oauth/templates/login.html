@@ -20,6 +20,7 @@
   <h1>Sign in to BatonDeck</h1>
   <p><strong>{{.Client}}</strong> wants to connect to your board. Sign in first; you choose what it may do next.</p>
   {{if .Failed}}<p class="error">That login and password did not match an account.</p>{{end}}
+  {{if .Limited}}<p class="error">Too many sign-in attempts from this address. Wait a minute, then try again.</p>{{end}}
   <form method="post" action="/login">
     <input type="hidden" name="next" value="{{.Next}}">
     <label for="login">Login</label>

@@ -94,7 +94,8 @@ func requestIsTLS(r *http.Request) bool {
 // on success, 401 {code, message} otherwise (the BFF's error body, which the SPA's form shows), or 429
 // RATE_LIMITED with Retry-After past the sign-in limits (LoginLimits). With a `next` field that is a path on this server (the OAuth
 // server's sign-in page sends one), success is instead 303 to next, and failure 303 to next with
-// `login=failed` added, so a plain HTML form lands back where it started. Any other next is 400.
+// `login=failed` added (`login=limited` past the limits), so a plain HTML form lands back where it
+// started. Any other next is 400.
 // Wrap it in CSRF, so a page of another site cannot sign a browser in.
 func (s *Service) LoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +120,9 @@ func (s *Service) LoginHandler() http.Handler {
 			if ok && e.Code == domain.CodeRateLimited {
 				w.Header().Set("Retry-After", fmt.Sprint(e.Details["retryAfterSeconds"]))
 				if next != "" {
-					http.Redirect(w, r, withQuery(next, "login", "failed"), http.StatusSeeOther)
+					// "limited", not "failed": no password was checked, so the page must not say
+					// it did not match.
+					http.Redirect(w, r, withQuery(next, "login", "limited"), http.StatusSeeOther)
 					return
 				}
 				WriteError(w, http.StatusTooManyRequests, domain.CodeRateLimited, e.Message)

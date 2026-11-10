@@ -705,3 +705,30 @@ func TestSignInAndConsentPagesCannotBeFramed(t *testing.T) {
 	f.signIn(t, b)
 	check("Allow test client?")
 }
+
+// auth#13: the sign-in page says why it is back. login=failed is a login and password that did not
+// match; login=limited is the sign-in limit, where no password was checked, so it says to wait
+// rather than that the password was wrong.
+func TestSignInPageSaysWhyItIsBack(t *testing.T) {
+	f := newFixture(t)
+	clientID := f.register(t, callbackURI)
+	_, challenge := pkce(t)
+	page := func(login string) string {
+		t.Helper()
+		resp, err := http.Get(f.srv.URL + "/authorize?" + authQuery(clientID, callbackURI, challenge, map[string]string{"login": login}).Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body(t, resp)
+	}
+	const mismatch, limited = "did not match an account", "Too many sign-in attempts"
+	if p := page("failed"); !strings.Contains(p, mismatch) || strings.Contains(p, limited) {
+		t.Fatalf("login=failed page: %s", p)
+	}
+	if p := page("limited"); !strings.Contains(p, limited) || strings.Contains(p, mismatch) {
+		t.Fatalf("login=limited page: %s", p)
+	}
+	if p := page(""); strings.Contains(p, limited) || strings.Contains(p, mismatch) {
+		t.Fatalf("a first visit: %s", p)
+	}
+}

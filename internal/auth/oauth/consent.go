@@ -30,7 +30,9 @@ var roleText = map[domain.Role]string{
 type loginPage struct {
 	Client string
 	Next   string
-	Failed bool
+	Failed bool // the login and password did not match (login=failed)
+	// Limited is the sign-in limit (login=limited): no password was checked.
+	Limited bool
 }
 
 type roleOption struct {

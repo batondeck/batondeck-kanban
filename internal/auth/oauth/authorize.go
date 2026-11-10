@@ -166,7 +166,8 @@ func (s *Server) authorizePage(w http.ResponseWriter, r *http.Request) {
 	caller, sess, ok := s.session(r)
 	if !ok {
 		s.render(w, http.StatusOK, "login.html", loginPage{
-			Client: clientLabel(req.client), Next: r.URL.RequestURI(), Failed: r.URL.Query().Get("login") == "failed"})
+			Client: clientLabel(req.client), Next: r.URL.RequestURI(),
+			Failed: r.URL.Query().Get("login") == "failed", Limited: r.URL.Query().Get("login") == "limited"})
 		return
 	}
 	login := caller.Identity
