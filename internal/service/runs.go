@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -57,6 +58,18 @@ func raceKey(key, parentID string) string {
 func isSubmitted(r store.Task) bool {
 	return (r.Status == domain.Review || r.Status == domain.Done) && r.Deliverable != nil && *r.Deliverable != "" &&
 		!slices.Contains(r.Labels, domain.LabelCancelled)
+}
+
+// blockedRace is INVALID_TRANSITION naming the parent's open blockers, nil when it has none. A run
+// is a TODO task with no blockedBy, claimable at once, so a race of a gated parent would carry its
+// work past the dependency gate, and pick_run land it DONE ahead of its blockers.
+func blockedRace(parent store.Task) error {
+	if len(parent.BlockedBy) == 0 {
+		return nil
+	}
+	return domain.NewError(domain.CodeInvalidTransition,
+		fmt.Sprintf("Task %s is blocked by %s: a race carries its work, so it waits until they are DONE", parent.ID, strings.Join(parent.BlockedBy, ", ")),
+		map[string]any{"taskId": parent.ID, "blockedBy": slices.Clone(parent.BlockedBy)})
 }
 
 // runCopyLabels is the parent's labels a run carries: the system labels stay with the parent
@@ -134,7 +147,8 @@ func runsOut(runs []store.Task) ([]Task, error) {
 // same transaction. A live lease that does not yield to the caller (leaseYields: another identity's,
 // or another agent's of the caller's identity, P-399) is CONFLICT_LOCKED, as move_task answers it. n is len(agents) when agents is sent, else count, else 1. Every status may
 // enter a race on the fixed table (each reaches IN_PROGRESS), but a poisoned parent may not: its
-// conductor counterpart, DEAD_LETTER, had no edge to IN_PROGRESS. A retried call with the same
+// conductor counterpart, DEAD_LETTER, had no edge to IN_PROGRESS; nor may a parent with an open
+// blocker (blockedRace). A retried call with the same
 // idempotencyKey replays the race it opened (the mutation's replay: no per-run keys).
 func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsReq) (StartRunsResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "start_runs", domain.GrantSubject{}, true)
@@ -188,6 +202,9 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 		}
 		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
 			return StartRunsResp{}, domain.InvalidTransition(cur.Status, domain.InProgress, domain.AllowedNext(cur.Status), nil)
+		}
+		if err := blockedRace(cur); err != nil {
+			return StartRunsResp{}, err
 		}
 		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
 			return StartRunsResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
@@ -252,7 +269,8 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 
 // Open is open_run (conductor runs.ts:325-383): one more run of a racing parent, ordinal one past
 // the highest recorded, ordered after the last run. The parent is read, not written: its version
-// does not move. Capped by maxRunsPerTask counted over the runs that exist. It runs under the project
+// does not move. Capped by maxRunsPerTask counted over the runs that exist; a parent that gained an
+// open blocker while racing takes no new run (blockedRace). It runs under the project
 // lock, as pick_run and cancel_runs do, so the racing flag it reads cannot be settled under it: under
 // Postgres READ COMMITTED a pick that committed after that read left a claimable run of a parent
 // whose race was over, which no race tool could reach.
@@ -292,6 +310,9 @@ func (s runsSvc) Open(ctx context.Context, caller domain.Caller, req OpenRunReq)
 		}
 		if !parent.Racing {
 			return OpenRunResp{}, domain.InvalidTransition(parent.Status, "racing", nil, nil)
+		}
+		if err := blockedRace(parent); err != nil {
+			return OpenRunResp{}, err
 		}
 		existing, err := t.runsOf(parent)
 		if err != nil {
