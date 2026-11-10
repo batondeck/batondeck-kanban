@@ -145,8 +145,10 @@ the containerd image store (Docker Desktop's default; no arm64 emulation is need
    ```
 
    `THIRD_PARTY_NOTICES` is the licence text of every Go module the binary links, taken for every
-   platform in the Makefile's `PLATFORMS`; `make notices-check`, in the gate, holds it to that list
-   and to `go.sum`.
+   platform in the Makefile's `PLATFORMS`, and of every npm package the embedded web UI is built
+   from; `make notices-check`, in the gate, holds it to that list, to `go.sum` and to
+   `web/package-lock.json`. The binary carries it too, with `LICENSE` and `NOTICE`
+   (`batondeck-kanban licenses` prints the three), and the image holds them under `/licenses/`.
 
 7. **Visibility is the organisation owner's, not this sequence's.** The owner sets the repository's
    visibility (the README's download URLs and `git clone` need it public) and the image package's,

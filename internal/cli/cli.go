@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	kanban "github.com/batondeck/batondeck-kanban"
 	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/service"
 	"github.com/batondeck/batondeck-kanban/internal/store"
@@ -29,7 +30,7 @@ import (
 // errors go to the stdout and stderr it is given, not to the process's.
 //
 // The first argument names the command: serve, migrate, token, user, session, doctor,
-// healthcheck or version; help, -h and --help print the usage to stdout and return 0. No arguments,
+// healthcheck, licenses or version; help, -h and --help print the usage to stdout and return 0. No arguments,
 // or a command it does not know, prints the usage to stderr and returns 2.
 // Help is asked for the same way at every level, and always answered on stdout with 0: `user`,
 // `token` and `session` take help, -h and --help in place of a subcommand, and every command and
@@ -65,6 +66,8 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 		return token(rest, stdout, stderr)
 	case "session":
 		return session(rest, stdout, stderr)
+	case "licenses", "licences":
+		return licenses(rest, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "batondeck-kanban: unknown command %q\n", cmd)
 		usage(stderr)
@@ -83,11 +86,38 @@ commands:
   session      register or unregister this client session for the server's wake doorbell (hooks run it)
   doctor       check the config and report the store engine the connection answers as
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
+  licenses     print the licence, the NOTICE and the third-party notices this binary carries
   version      print the version
   help         print this usage
 
 run batondeck-kanban serve -h for the configuration: every BATONDECK_* variable and its default.
 `)
+}
+
+// licenses prints the texts that go with every copy of the binary: LICENSE, NOTICE and
+// THIRD_PARTY_NOTICES, as the build embedded them (the repository root's package), each under its
+// file name. A release ships the bare binary, so this is where its recipient reads them.
+func licenses(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("licenses", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), "usage: batondeck-kanban licenses\n\nprints LICENSE, NOTICE and THIRD_PARTY_NOTICES, the texts this binary carries.\n")
+	}
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "licenses: unexpected argument %q\n", fs.Arg(0))
+		fs.Usage()
+		return 2
+	}
+	rule := strings.Repeat("=", 80)
+	for _, f := range []struct{ name, text string }{
+		{"LICENSE", kanban.License}, {"NOTICE", kanban.Notice}, {"THIRD_PARTY_NOTICES", kanban.ThirdPartyNotices},
+	} {
+		fmt.Fprintf(stdout, "%s\n%s\n%s\n\n%s\n\n", rule, f.name, rule, strings.TrimRight(f.text, "\n"))
+	}
+	return 0
 }
 
 // isHelp reports whether arg, in a command's or a subcommand's place, asks for the usage.

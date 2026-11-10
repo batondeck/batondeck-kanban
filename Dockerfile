@@ -29,6 +29,9 @@ LABEL org.opencontainers.image.source="https://github.com/batondeck/batondeck-ka
 # resolves; /batondeck-kanban is the entrypoint.
 COPY --from=build /batondeck-kanban /batondeck-kanban
 COPY --from=build /batondeck-kanban /usr/local/bin/batondeck-kanban
+# The licence the image is under and the notices of what it redistributes, as files beside the
+# binary that also prints them (`batondeck-kanban licenses`).
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES /licenses/
 # named volumes inherit the image's ownership of the mount point on first use;
 # distroless has no shell, so seed /data with the right owner at build time
 COPY --from=build --chown=nonroot:nonroot /data-skel /data

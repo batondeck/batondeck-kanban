@@ -318,4 +318,5 @@ The plan's target, claim race p95 < 25 ms on local SQLite: **missed** (32.4 ms).
 See [CONTRIBUTING.md](CONTRIBUTING.md) to build, test and send a change. Report a vulnerability
 privately, as [SECURITY.md](SECURITY.md) describes, not in a public issue.
 
-License: Apache-2.0 (`LICENSE`, `NOTICE`).
+License: Apache-2.0 (`LICENSE`, `NOTICE`). What the binary redistributes is in `THIRD_PARTY_NOTICES`;
+`batondeck-kanban licenses` prints all three from the binary itself.

@@ -97,7 +97,7 @@ image:
 		$(if $(filter 1,$(PUSH)),--push,--load) .
 
 # check is the gate the pre-push hook runs, and CI (.github/workflows/ci.yml). Its steps, in order:
-# gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum, the release fixtures, the generated
+# gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum and web/package-lock.json, the release fixtures, the generated
 # store code against its sources, web/dist against a fresh web build, the SPA's typecheck and tests
 # (web-check), the layering guard, the tests under the race detector, the store conformance suite
 # once per engine, the MCP contract (files and live server), the per-call statement pins, web/public
@@ -177,8 +177,11 @@ web-states-check:
 	echo "web-states-check: web/src names only the five states"
 
 # notices writes THIRD_PARTY_NOTICES: the licence texts of every Go module the shipped binary links
-# on any of PLATFORMS, as their own sources hold them (scripts/notices.mjs says how; it is handed
-# PLATFORMS, the one list). notices-check holds the file to PLATFORMS, to go.sum by hash and to the
+# on any of PLATFORMS and of every npm package the embedded web UI is built from, as their own
+# sources hold them (scripts/notices.mjs says how; it is handed PLATFORMS, the one list, and reads
+# web/node_modules, so `cd web && npm ci` comes first). The binary embeds the file (legal.go) and
+# prints it with `licenses`. notices-check holds the file to PLATFORMS, to go.sum and
+# web/package-lock.json by hash and to the
 # set of modules the binary links (`go list -deps` per platform, by count and hash): it is part of
 # `check`. A dependency change, an import that links a module go.sum already held, or a change to
 # PLATFORMS, that forgets `make notices` fails there.
