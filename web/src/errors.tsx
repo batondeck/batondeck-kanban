@@ -24,7 +24,9 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 /**
- * Ship the crash to the gateway, which logs it with a stack so Cloud Error Reporting groups it.
+ * Post the crash to `/api/client-error`. This server mounts no such route (internal/api/routes.json
+ * leaves it out), so the post answers 404 and the crash is only in the browser console; the call is
+ * kept so a server that adds the route receives reports with no SPA change.
  *
  * `keepalive` because a crash is frequently followed by the user closing the tab or hitting reload —
  * a plain fetch would be cancelled in flight and the one report we needed would never arrive.

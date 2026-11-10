@@ -719,10 +719,9 @@ export function Board() {
     },
   });
 
-  // Live updates arrive via the SSE stream below, and since T-191 that stream is fed by the
-  // `board-events` Pub/Sub carrier fanned out in-process by the gateway — NOT by `wait_for_updates`
-  // long-polls, which this comment described until the long-poll was deleted. Each 'updated' nudge
-  // triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
+  // Live updates arrive via the SSE stream below (`/api/stream`, internal/api/stream.go), which the
+  // server feeds from its change log through the in-process bus (internal/bus) — on Postgres a second
+  // server's writes reach it the same way. Each 'updated' nudge triggers a refetch of these queries; React Query swaps data in the background (no reload) and the
   // framer-motion card glide animates moves.
   //
   // *** WHILE THE STREAM IS LIVE THERE IS NO POLL AT ALL. *** It used to run at 30s even in the healthy

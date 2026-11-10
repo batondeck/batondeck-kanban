@@ -251,11 +251,12 @@ export function joinStream(key: { projectId?: string; boardId?: string }, h: Str
  * bad reconnect silently killed live push until the user reloaded the page (T-47). Reconnect with
  * backoff, and report liveness so callers can poll faster while the stream is down.
  *
- * The other half: a socket that stays OPEN but stops carrying data (a proxy or Cloud Run dropping a
- * half-open connection without an RST) never fires `error`, so it looked perfectly healthy and live
- * push was dead with only the 30s poll behind it. The gateway already emits a keep-alive every 20s —
- * now as a named `ping` event rather than an SSE comment, which EventSource does not surface — so
- * silence past three of them is a stall: force the same reconnect an error would have.
+ * The other half: a socket that stays OPEN but stops carrying data (a proxy or load balancer dropping
+ * a half-open connection without an RST) never fires `error`, so it looked perfectly healthy and live
+ * push was dead with only the 30s poll behind it. The server emits a keep-alive every 20s
+ * (`internal/api/stream.go`, StreamPing) as a named `ping` event rather than an SSE comment, which
+ * EventSource does not surface — so silence past three of them is a stall: force the same reconnect
+ * an error would have.
  */
 /**
  * Identity-keyed stream (Tier 2) — presence + notifications for screens with NO board open.

@@ -49,8 +49,7 @@ export function Projects() {
   // the same shape as the sessions fetch below.
   //
   // This used to be a `useQueries` fan-out of one `getProject` per project. With 19 projects that was
-  // 19 concurrent `/api/projects/P-*` requests fired inside 18ms; measured in prod they all landed on
-  // ONE core instance (containerConcurrency 80 >> 19, so Cloud Run never scales out) and every one took
+  // 19 concurrent `/api/projects/P-*` requests fired inside 18ms, all on one server, and every one took
   // 1.52-2.12s, against 0.086-0.233s for the same endpoints once the burst had drained. Self-inflicted
   // contention, on every mount of this screen.
 

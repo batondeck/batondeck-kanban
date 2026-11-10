@@ -564,7 +564,7 @@ export function FilesPanel({ d }: P) {
               </p>
             </>
           );
-          // Signed download URLs open in a new tab — same-tab navigation would dump the SPA onto GCS.
+          // Download URLs open in a new tab — same-tab navigation would leave the SPA for the file.
           return a.downloadUrl ? (
             <a key={a.id} href={a.downloadUrl} target="_blank" rel="noreferrer" style={{ display: 'block' }}>{tile}</a>
           ) : (
@@ -640,7 +640,7 @@ export function FilesPanel({ d }: P) {
  * next change to the rule would have moved only one of them.
  *
  * THE EARLIEST INGEST ITEM, NOT THE FIRST ONE IN THE ARRAY. Context items come back newest-first
- * (`orderBy('ts','desc')`), and the RESOLVE path writes its own ingest-authored note — so `find`
+ * (`ORDER BY c.ts DESC, c.id DESC` in queries/sqlite/context.sql and its Postgres twin), and the RESOLVE path writes its own ingest-authored note — so `find`
  * returned "Alert resolved upstream at …" the moment an alert cleared, replacing the labels,
  * annotations and links this exists to surface, exactly when someone is reading the ticket to
  * understand what happened. Only the CREATE path writes a telemetry snapshot, so the snapshot is the
@@ -669,7 +669,7 @@ export function IncidentPanel({ d }: P) {
   // own note added later must never be mistaken for the telemetry snapshot.
   //
   // THE EARLIEST INGEST ITEM, NOT THE FIRST ONE IN THE ARRAY. Context items come back newest-first
-  // (`orderBy('ts','desc')`), and the RESOLVE path writes its own ingest-authored note — so `find`
+  // (`ORDER BY c.ts DESC, c.id DESC`), and the RESOLVE path writes its own ingest-authored note — so `find`
   // returned "Alert resolved upstream at …" the moment an alert cleared, replacing the labels,
   // annotations and links this panel exists to show, exactly when someone is reading the ticket to
   // understand what happened. Only the CREATE path writes a telemetry snapshot, so the snapshot is
@@ -702,7 +702,7 @@ export function IncidentPanel({ d }: P) {
           </Note>
         )}
         {brief ? (
-          // MARKDOWN, because `ticketSnapshot` (src/domain/incident.ts) COMPOSES markdown: the status
+          // MARKDOWN, because `incidentSnapshot` (internal/service/oncall.go) COMPOSES markdown: the status
           // line is `**FIRING**`, and labels/annotations/links are `- ` bullet lists. A <pre> printed
           // the asterisks literally on every incident ticket.
           //
