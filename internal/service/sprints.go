@@ -105,7 +105,9 @@ func sprintText(name, goal, acceptance Optional[string]) error {
 }
 
 // Update is update_sprint (conductor sprints.ts:114-181, in-memory-store.ts:1645-1729), version
-// checked on the sprint: proposalTaskId is patchable only while PROPOSED (VALIDATION); a status
+// checked on the sprint: proposalTaskId is patchable only while PROPOSED, and name, goal and
+// acceptance only until the sprint is CLOSED or ABANDONED (VALIDATION; resending the value held
+// passes, and checkpoint and eventCursor stay patchable for a resume); a status
 // change follows the fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the
 // activation gates against the proposal task read in the transaction and stamps approvedBy and
 // startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
@@ -164,6 +166,18 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 		}
 		if cur.Version != req.Version {
 			return UpdateSprintResp{}, domain.Stale(req.Version, cur.Version)
+		}
+		if cur.Status == domain.SprintClosed || cur.Status == domain.SprintAbandoned {
+			for _, f := range []struct {
+				name     string
+				patch    Optional[string]
+				recorded string
+			}{{"name", p.Name, cur.Name}, {"goal", p.Goal, cur.Goal}, {"acceptance", p.Acceptance, cur.Acceptance}} {
+				if f.patch.Set && f.patch.V != f.recorded {
+					return UpdateSprintResp{}, domain.Validation(fmt.Sprintf("%s is patchable only while PROPOSED or ACTIVE — sprint %s is %s and keeps the record it ended with", f.name, cur.ID, cur.Status),
+						map[string]any{"sprintId": cur.ID, "sprintStatus": cur.Status, "field": f.name})
+				}
+			}
 		}
 		now := t.Now.UnixMilli()
 		sp := store.SprintPatch{UpdatedBy: caller.Identity, UpdatedAt: now}

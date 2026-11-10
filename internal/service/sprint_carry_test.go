@@ -94,3 +94,37 @@ func (e *lcEnv) getSprint(t *testing.T, id string) store.Sprint {
 	}
 	return sp
 }
+
+// A CLOSED or ABANDONED sprint's name, goal and acceptance are its record: a patch that changes one
+// is VALIDATION, as proposalTaskId outside PROPOSED is, and writes nothing; resending the value it
+// holds, and checkpoint and eventCursor, still pass. Before, any master rewrote what the closed
+// sprint had been approved against.
+func TestAnEndedSprintsRecordIsNotRewritten(t *testing.T) {
+	onLC(t, func(t *testing.T, e *lcEnv) {
+		for _, end := range []domain.SprintStatus{domain.SprintClosed, domain.SprintAbandoned} {
+			sp := e.setSprintStatus(t, e.sprint(t, e.board.ID), domain.SprintActive)
+			r, err := e.c.Sprints().Update(e.ctx, e.alice, UpdateSprintReq{ProjectID: e.project, SprintID: sp.ID, Version: sp.Version,
+				Patch: SprintPatchIn{Status: Some(SprintStatus(end))}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			v := int64(r.Sprint.Version)
+			for name, p := range map[string]SprintPatchIn{
+				"name": {Name: Some("renamed")}, "goal": {Goal: Some("rewritten after close")}, "acceptance": {Acceptance: Some("lower bar")},
+			} {
+				_, err := e.c.Sprints().Update(e.ctx, e.alice, UpdateSprintReq{ProjectID: e.project, SprintID: sp.ID, Version: v, Patch: p})
+				be := wantCode(t, err, domain.CodeValidation)
+				t.Logf("%s sprint, patch %s: %s %q", end, name, be.Code, be.Message)
+			}
+			got := e.getSprint(t, sp.ID)
+			if got.Name != "s" || got.Goal != "ship it" || got.Acceptance != "a" || got.Version != v {
+				t.Fatalf("%s sprint rewritten: %+v", end, got)
+			}
+			same, err := e.c.Sprints().Update(e.ctx, e.alice, UpdateSprintReq{ProjectID: e.project, SprintID: sp.ID, Version: v,
+				Patch: SprintPatchIn{Goal: Some("ship it"), Checkpoint: Value("where we stopped"), EventCursor: Value("c-1")}})
+			if err != nil || same.Sprint.Checkpoint == nil || *same.Sprint.Checkpoint != "where we stopped" {
+				t.Fatalf("%s sprint: the same goal with a checkpoint: %+v %v", end, same.Sprint, err)
+			}
+		}
+	})
+}
