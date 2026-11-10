@@ -97,7 +97,7 @@ export function DescriptionPanel({ d }: P) {
               <p style={{ margin: '0 0 6px' }}>Changed by someone else since you started editing (v{draft.version} → v{task.version}). Theirs now:</p>
               {task.title !== draft.base.title && <p style={{ margin: '0 0 6px' }}>Title: <strong>{task.title}</strong></p>}
               {task.description !== draft.base.description && (
-                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, margin: '0 0 6px' }}>{task.description}</div>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, margin: '0 0 6px' }}>{task.description}</div>
               )}
               <Cluster gap={4}>
                 <Button onClick={keepMyEdit}>Keep my edit</Button>
@@ -150,7 +150,7 @@ export function DigestPanel({ d }: P) {
             {conflict && (
               <Note>
                 <p style={{ margin: '0 0 6px' }}>The digest changed since you started editing. Theirs now:</p>
-                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 13, margin: '0 0 6px' }}>{task.contextSummary}</div>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 12, margin: '0 0 6px' }}>{task.contextSummary}</div>
                 <Cluster gap={4}>
                   <Button onClick={() => setSummaryDraft({ ...summaryDraft, base: task.contextSummary })}>Keep my edit</Button>
                   <Button onClick={() => setSummaryDraft(null)}>Discard my edit</Button>
