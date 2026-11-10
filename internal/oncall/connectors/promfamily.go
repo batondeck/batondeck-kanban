@@ -20,7 +20,10 @@ func promFamilyEvents(payload any, source, fallbackTitle string, linkKeys []stri
 	}
 	out := make([]oncall.Event, 0, len(alerts))
 	for _, entry := range alerts {
-		alert, _ := record(entry)
+		alert, ok := record(entry)
+		if !ok {
+			continue // not an alert: nothing to file
+		}
 		labels, annotations := stringMap(alert["labels"]), stringMap(alert["annotations"])
 		resolved := alert["status"] == "resolved"
 		// The correlation key; absent, a stable one from the label set (what Prometheus hashes).

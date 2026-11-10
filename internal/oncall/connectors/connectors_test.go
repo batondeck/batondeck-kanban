@@ -94,6 +94,13 @@ func TestAlertmanager(t *testing.T) {
 	want(t, "resolved status", r.Status, "resolved")
 	want(t, "resolved title falls back to alertname", r.Title, "DiskFull")
 	want(t, "resolved occurredAt is endsAt", r.OccurredAt, "2026-10-24T07:45:00.000Z")
+
+	// An entry that is not an object is no alert.
+	c, _ := connectors.For("alertmanager")
+	p, _ := connectors.Decode([]byte(`{"groupKey":"g","alerts":[1,"x",null,[]]}`))
+	if evs, err := c.Events(p, connectors.Context{Now: now}); err != nil || len(evs) != 0 {
+		t.Errorf("alerts that are not objects: %d events, %v; want none", len(evs), err)
+	}
 }
 
 func TestGrafana(t *testing.T) {

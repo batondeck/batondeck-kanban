@@ -29,6 +29,9 @@ const (
 	HeaderAuthorize   = "Authorization"
 	rawBodyKeptMax    = 64 << 10
 	rejectionIDSuffix = "#rejected"
+	// maxEventsPerDelivery is the most distinct events (alerts) one delivery is ingested with: each is
+	// its own transaction, so a larger delivery is refused (Alertmanager's max_alerts bounds a group).
+	maxEventsPerDelivery = 500
 )
 
 // HookRequest is one delivery as the route read it: its headers (Header is http.Header.Get) and
@@ -186,11 +189,15 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	if hashed {
 		base = bodyHash
 	}
-	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
-	// one token per new delivery id and none for a recorded one, so the charge is given back.
-	c.limiter.Refund(integration.ID, int(limits.RatePerMin))
-	caller := domain.Caller{Identity: IngestActor(integration.ID)}
-	out := HookOutcome{Results: []HookResult{}}
+	type pending struct {
+		ev         oncall.Event
+		deliveryID string
+		hashed     bool
+	}
+	// One verified delivery buys a bounded amount of work: an event whose delivery id repeats within
+	// it is ingested once (it is the same alert), and a delivery carrying more distinct events than
+	// maxEventsPerDelivery is refused whole, its charge kept.
+	todo, seen := make([]pending, 0, min(len(events), maxEventsPerDelivery+1)), map[string]bool{}
 	for i, ev := range events {
 		// The fingerprint qualifies the id, so a grouped delivery's alerts never collapse into one.
 		key := ev.Fingerprint
@@ -201,8 +208,22 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		if ev.DeliveryKey != "" {
 			id, idHashed = ev.DeliveryKey, false
 		}
-		deliveryID := id + "#" + key
-		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID, idHashed)
+		if deliveryID := id + "#" + key; !seen[deliveryID] {
+			seen[deliveryID] = true
+			todo = append(todo, pending{ev: ev, deliveryID: deliveryID, hashed: idHashed})
+		}
+	}
+	if len(todo) > maxEventsPerDelivery {
+		return badRequest(fmt.Sprintf("too_many_events: the delivery carries %d distinct alerts, over the %d one delivery may carry; have the sender split its groups (Alertmanager: max_alerts)", len(todo), maxEventsPerDelivery))
+	}
+	// The delivery parsed: its events pay as they did before the charge moved ahead of verification,
+	// one token per new delivery id and none for a recorded one, so the charge is given back.
+	c.limiter.Refund(integration.ID, int(limits.RatePerMin))
+	caller := domain.Caller{Identity: IngestActor(integration.ID)}
+	out := HookOutcome{Results: []HookResult{}}
+	for _, p := range todo {
+		ev, deliveryID := p.ev, p.deliveryID
+		got, err := c.ingest(ctx, caller, "ingest", access{}, integration, ev, deliveryID, p.hashed)
 		if e, ok := domain.AsBatonDeckError(err); ok {
 			if e.Code == domain.CodeRateLimited {
 				out.Refusal, out.RetryAfter = HookRateLimited, rateRetryAfter(int(limits.RatePerMin))

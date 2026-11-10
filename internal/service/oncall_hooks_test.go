@@ -658,6 +658,52 @@ func TestHookRecordsUnparsableDeliveries(t *testing.T) {
 	}
 }
 
+// One verified delivery buys a bounded amount of work. Events whose delivery id repeats within the
+// delivery are ingested once (600 copies of one alert: one ingest, not 600 transactions and change
+// rows on a single rate token), and a delivery carrying more distinct events than
+// maxEventsPerDelivery is refused, a rejected row naming the count, with nothing filed.
+func TestHookBoundsTheEventsOfOneDelivery(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "am-key-0123456789"}[name] }
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "alertmanager", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "am-key-0123456789"},
+		Limits: IntegrationLimitsIn{RatePerMin: 6000}}).Integration.ID
+	group := func(n int, alert func(i int) string) []byte {
+		entries := make([]string, n)
+		for i := range entries {
+			entries[i] = alert(i)
+		}
+		return []byte(`{"groupKey":"g","alerts":[` + strings.Join(entries, ",") + `]}`)
+	}
+	before := f.count(t)
+	out := f.hook(t, iid, HookRequest{Header: key, Body: group(600, func(int) string { return `{}` })})
+	if out.Refusal != "" || len(out.Results) != 1 || out.Results[0].Result != "created" {
+		t.Fatalf("600 copies of one alert: %d results, refusal %q; want one created", len(out.Results), out.Refusal)
+	}
+	if after := f.count(t); after.changes-before.changes > 2 {
+		t.Fatalf("600 copies of one alert wrote %d change rows", after.changes-before.changes)
+	}
+	tasks := f.taskCount(t)
+	over := maxEventsPerDelivery + 1
+	out = f.hook(t, iid, HookRequest{Header: key, Body: group(over, func(i int) string { return fmt.Sprintf(`{"fingerprint":"f%d"}`, i) })})
+	if out.Refusal != HookBadRequest || !strings.Contains(out.Detail, fmt.Sprint(over)) || f.taskCount(t) != tasks {
+		t.Fatalf("%d distinct alerts: %+v, %d tickets (was %d); want refused with nothing filed", over, out, f.taskCount(t), tasks)
+	}
+	var refused *store.Delivery
+	for _, d := range f.deliveries(t, iid) {
+		if d.Kind == store.DeliveryRejected {
+			refused = &d
+		}
+	}
+	if refused == nil || !strings.Contains(*refused.Error, fmt.Sprint(over)) {
+		t.Fatalf("the refusal's row: %+v", refused)
+	}
+	// control: exactly the bound lands.
+	out = f.hook(t, iid, HookRequest{Header: key, Body: group(maxEventsPerDelivery, func(i int) string { return fmt.Sprintf(`{"fingerprint":"g%d"}`, i) })})
+	if out.Refusal != "" || len(out.Results) != maxEventsPerDelivery {
+		t.Fatalf("%d distinct alerts: %d results, refusal %q", maxEventsPerDelivery, len(out.Results), out.Refusal)
+	}
+}
+
 // A PagerDuty subscription may carry every event type. A note added to an incident, a service
 // event and the subscription's test ping are accepted (202) as no event: no ticket filed for a note
 // as if it were a new incident, no 400 for the ping during setup, no rejected row.
