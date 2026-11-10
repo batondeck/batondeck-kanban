@@ -22,8 +22,9 @@ on:
         description: Full SHA the draft targets (must match, must be on main)
         required: true
 
+# Read-only by default; the one job holds contents: write itself (its action is named by commit SHA).
 permissions:
-  contents: write
+  contents: read
 
 defaults:
   run:
@@ -32,12 +33,14 @@ defaults:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       VERSION: ${{ inputs.version }}
       CANDIDATE: ${{ inputs.candidate }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 

@@ -183,10 +183,13 @@ reporting.
 
 **The image:** its binary prints the release (`docker run --rm ghcr.io/batondeck/batondeck-kanban:1.2.3 version`
 prints `batondeck-kanban 1.2.3`), and the release notes carry the manifest digest it was pushed
-under. The image is not reproducible byte for byte: of the `Dockerfile`'s two base images only the
-Go one is named by digest; `gcr.io/distroless/static-debian12:nonroot` is named by tag, so a rebuild
-later may start from other bytes. What ties it to the tag is that it was built by `make image` from
-the tag's commit, in a fresh clone or in the `release-draft` workflow's checkout of the candidate.
+under. Both of the `Dockerfile`'s base images, the Go builder and
+`gcr.io/distroless/static-debian12:nonroot`, are named by digest, so a rebuild of the tag starts from
+the same bases; the image itself is not promised to be reproducible byte for byte. What ties it to
+the tag is that it was built by `make image` from the tag's commit, in a fresh clone or in the
+`release-draft` workflow's checkout of the candidate. That workflow names every action it runs by
+commit SHA, and its build runs under a read-only token: only the job that pushes the image holds
+`packages: write`, and only the job that creates the draft holds `contents: write`.
 
 **SBOM:** `sbom.cdx.json` (CycloneDX 1.6) lists the Go modules `cmd/batondeck-kanban` links
 (`cyclonedx-gomod app`).
