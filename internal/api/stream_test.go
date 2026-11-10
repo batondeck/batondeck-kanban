@@ -203,6 +203,8 @@ func decodeBoard(t *testing.T, f frame) boardData {
 
 // AC2: a change-log row written by a real mutation, delivered by the real bus on each engine, is one
 // board frame within 200 ms of the mutation's return, after ready and before the next ping, followed by its updated frame.
+// The 200 ms is held on the build that ships, run alone (make stream-latency); under the race
+// detector (raceDetector) the frame must still come within the second c.next waits.
 func TestStreamBoardFrameOnAChange(t *testing.T) {
 	servicetest.Run(t, func(t *testing.T, s *servicetest.Stack) {
 		l := newLive(t, s, Options{Ping: time.Second})
@@ -225,7 +227,7 @@ func TestStreamBoardFrameOnAChange(t *testing.T) {
 			t.Fatalf("after the change: %+v, want board", f)
 		}
 		// The clock is commit to frame: from the write's return, so the write's own round trip is not counted.
-		if took := f.at.Sub(returned); took > 200*time.Millisecond {
+		if took := f.at.Sub(returned); took > 200*time.Millisecond && !raceDetector {
 			t.Fatalf("the board frame came %v after the write returned, want <= 200ms (end to end %v, the write %v)", took, f.at.Sub(start), wrote)
 		}
 		d := decodeBoard(t, f)

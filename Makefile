@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test stream-latency conformance contract perf clean web-public-check kit-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -99,15 +99,17 @@ image:
 # check is the gate the pre-push hook runs, and CI (.github/workflows/ci.yml). Its steps, in order:
 # gofmt, go vet, staticcheck, THIRD_PARTY_NOTICES against go.sum and web/package-lock.json, the release fixtures, the generated
 # store code against its sources, web/dist against a fresh web build, the SPA's typecheck and tests
-# (web-check), the layering guard, the tests under the race detector, the store conformance suite
-# once per engine, the MCP contract (files and live server), the per-call statement pins, web/public
-# against its allow-list, the vendored brand kit against its lock, the plugin: its instructions
-# against the contract (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against
-# the five. Each test runs once: `test` skips the four that conformance and contract run by name
-# (CHECK_OWN_RUNS), which on CI's runner were 8 minutes run twice.
+# (web-check), the layering guard, the tests under the race detector, the board stream's latency
+# bound on the build that ships, the store conformance suite once per engine, the MCP contract
+# (files and live server), the per-call statement pins, web/public against its allow-list, the
+# vendored brand kit against its lock, the plugin: its instructions against the contract
+# (skill-lint) and its hooks' stdout (hook-check), and the SPA's states against the five. `test`
+# skips the four tests conformance and contract run by name (CHECK_OWN_RUNS), which on CI's runner
+# were 8 minutes run twice. stream-latency's two tests run in `test` too: there under -race, and
+# without it for the bound.
 CHECK_OWN_RUNS := ^(TestSQLiteConformance|TestPostgresConformance|TestLiveContract|TestSurfaceSnapshot)$$
 check: TEST_SKIP = $(CHECK_OWN_RUNS)
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test stream-latency conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -214,6 +216,16 @@ arch:
 TEST_TIMEOUT ?= 20m
 test:
 	go test -race -timeout $(TEST_TIMEOUT)$(if $(TEST_SKIP), -skip '$(TEST_SKIP)') ./cmd/... ./internal/...
+
+# stream-latency holds /api/stream's 200 ms from a write's return to its board frame
+# (TestStreamBoardFrameOnAChange on every engine, TestJoinStreamFrameAfterAnMCPMove at serve's real
+# poll) on the build that ships: without -race, which slows the frame's whole path several-fold, and
+# one package at a time, so no other test binary shares the CPUs. Beside other packages under -race
+# on a 2-vCPU runner, correct frames came 230-530 ms late. `test` runs both under -race as well, with
+# every assertion but that bound (raceDetector). Postgres too with BATONDECK_TEST_POSTGRES_DSN.
+STREAM_LATENCY_TESTS := ^(TestStreamBoardFrameOnAChange|TestJoinStreamFrameAfterAnMCPMove)$$
+stream-latency:
+	go test -count=1 -p 1 -v -run '$(STREAM_LATENCY_TESTS)' ./internal/api/ ./internal/cli/
 
 # conformance judges each store engine by internal/store/conformance, one run per engine, by name.
 # The Postgres run needs BATONDECK_TEST_POSTGRES_DSN: unset, it skips and prints why; set and
