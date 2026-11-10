@@ -13,7 +13,7 @@ import { NOT_A_MEMBER, useDisplayNames, useMyProjectRole } from '../displayNames
 import { closedWhy, mayCall } from '../toolFloors.js';
 import { Icon } from '../icons.js';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { DndContext, DragOverlay, PointerSensor, closestCorners, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -792,7 +792,9 @@ export function Board() {
       setMoreErr(null);
       setLimit(next);
     } catch (e) {
-      setMoreErr(e instanceof Error ? e.message : String(e));
+      // A drag or an assign cancels every read of the project's lists so none lands over its optimistic
+      // card; that is not a failed load. The button is offered again.
+      if (!isCancelledError(e)) setMoreErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingMore(false);
     }

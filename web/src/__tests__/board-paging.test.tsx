@@ -348,6 +348,23 @@ describe('the board pages its task list with the cursor (limit stays within 1..2
     expect(taskUrls).toHaveLength(1);
   });
 
+  it('a Load more cancelled by a drag is not reported as a failure, and is offered again', async () => {
+    const qc = renderBoard();
+    await waitFor(() => expect(cards()).toBe(20));
+    let release!: () => void;
+    holdNextRead = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(taskUrls).toHaveLength(1));
+    // What a drag's or an assign's onMutate does (mutations.ts useTaskMove, Board.tsx): cancel every
+    // read of the project's task lists, so none lands over the optimistic card.
+    await act(async () => { await qc.cancelQueries({ queryKey: ['tasks', 'p1'] }); });
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 30)); });
+    expect(screen.queryByText(/Couldn’t load more tasks/)).toBeNull();
+    expect(cards()).toBe(20);
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeEnabled();
+  });
+
   it('a Load more that fails says so, keeps the cards shown, and leaves later refetches working', async () => {
     const qc = renderBoard();
     await waitFor(() => expect(cards()).toBe(20));
