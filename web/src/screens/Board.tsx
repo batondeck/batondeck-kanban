@@ -772,6 +772,9 @@ export function Board() {
   // socket down and up again to hand the handler a new `limit`.
   const limitRef = useRef(limit);
   limitRef.current = limit;
+  // Counts the task frames the stream has written. A frame that lands while "Load more" reads the longer
+  // list is written to the shorter list's key, so `loadMore` reads the longer one again after it.
+  const tasksFramesRef = useRef(0);
   // `limit` IS part of the key — see `boardTasksKey`. It used to be held out of it and forced through a
   // manual invalidate effect, which left one cache entry shared with TaskDrawer's differently-sized
   // observer.
@@ -785,11 +788,15 @@ export function Board() {
   const [loadingMore, setLoadingMore] = useState(false);
   const loadMore = async (): Promise<void> => {
     const next = limit + boardsApi.LIST_TASKS_MAX;
+    const nextKey = boardTasksKey(projectId, boardId, next);
+    const framesBefore = tasksFramesRef.current;
     setLoadingMore(true);
     try {
-      await qc.fetchQuery({ queryKey: boardTasksKey(projectId, boardId, next), queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, next), retry: false });
+      await qc.fetchQuery({ queryKey: nextKey, queryFn: () => boardsApi.listTasksUpTo(projectId, boardId, next), retry: false });
       setMoreErr(null);
       setLimit(next);
+      // The board changed while the longer list was read: what was read is older than what is shown.
+      if (tasksFramesRef.current !== framesBefore) void qc.invalidateQueries({ queryKey: nextKey, exact: true, refetchType: 'all' });
     } catch (e) {
       setMoreErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -900,6 +907,7 @@ export function Board() {
             // change, so it is cancelled and started again (the default `cancelRefetch`): left to
             // finish, it would put the older rows back. Otherwise a frame costs no read.
             const incoming = snap.tasks as { tasks: Task[]; nextCursor?: string };
+            tasksFramesRef.current += 1;
             const key = boardTasksKey(projectId, boardId, limitRef.current);
             const held = qc.getQueryData<{ tasks: Task[] }>(key)?.tasks.length ?? 0;
             const inFlight = qc.isFetching({ queryKey: key, exact: true }) > 0;

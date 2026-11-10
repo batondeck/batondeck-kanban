@@ -198,6 +198,32 @@ describe('the board pages its task list with the cursor (limit stays within 1..2
     expect(screen.queryByText('Task 1'), 'the older row came back').toBeNull();
   });
 
+  it('a frame that lands while Load more is reading is not lost when the longer list is shown', async () => {
+    // main.tsx's staleTime: the longer list is not re-read just because the board starts showing it.
+    renderBoard(new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } }));
+    await waitFor(() => expect(cards()).toBe(20));
+    const es = FakeES.instances.at(-1)!;
+    act(() => {
+      es.readyState = 1;
+      es.emit('open');
+    });
+    let release!: () => void;
+    holdNextRead = new Promise<void>((r) => { release = r; });
+    taskUrls = [];
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(taskUrls.length).toBeGreaterThan(0));
+    // T-1 is renamed while the longer list is on its way; its frame lands first.
+    all = [{ ...all[0]!, title: 'Renamed' }, ...all.slice(1)];
+    act(() => {
+      es.emit('board', { board: { board, taskCounts: { c1: 25 } }, tasks: { tasks: all.slice(0, 20), nextCursor: '20' }, feed: { events: [] } });
+    });
+    await waitFor(() => expect(screen.getByText('Renamed')).toBeInTheDocument());
+    await act(async () => { release(); await new Promise<void>((r) => setTimeout(r, 50)); });
+    await waitFor(() => expect(cards()).toBe(25));
+    await waitFor(() => expect(screen.getByText('Renamed')).toBeInTheDocument());
+    expect(screen.queryByText('Task 1'), 'the older row came back').toBeNull();
+  });
+
   it('a Load more that fails says so, keeps the cards shown, and leaves later refetches working', async () => {
     const qc = renderBoard();
     await waitFor(() => expect(cards()).toBe(20));
