@@ -20,11 +20,13 @@ export interface AuditFilter {
   action?: string;
   days?: number;
   limit?: number;
+  /** The nextCursor a page answered: the rows after it, older. */
+  cursor?: string;
 }
 
 export const listAuditLog = (f: AuditFilter = {}) => {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(f)) if (v !== undefined && v !== '') q.set(k, String(v));
   const qs = q.toString();
-  return req<{ entries: AuditEntry[]; days: number }>('GET', `/api/audit${qs ? `?${qs}` : ''}`);
+  return req<{ entries: AuditEntry[]; days: number; nextCursor?: string }>('GET', `/api/audit${qs ? `?${qs}` : ''}`);
 };

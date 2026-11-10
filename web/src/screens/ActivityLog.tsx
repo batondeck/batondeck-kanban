@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDisplayNames, useWorkspaceNames } from '../displayNames.js';
 import { Link } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as agentsApi from '../api/agents.js';
 import * as auditApi from '../api/audit.js';
 import * as boardsApi from '../api/boards.js';
@@ -397,11 +397,14 @@ export function ActivityLog() {
  */
 export function AuditLog() {
   const [action, setAction] = useState('');
-  const q = useQuery({
+  // Pages of 100, older ones on Load more through the nextCursor each page answers.
+  const q = useInfiniteQuery({
     queryKey: ['auditLog', action],
-    queryFn: () => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100 }),
+    initialPageParam: '',
+    queryFn: ({ pageParam }) => auditApi.listAuditLog({ action: action.trim() || undefined, limit: 100, cursor: pageParam || undefined }),
+    getNextPageParam: (last) => last.nextCursor || null,
   });
-  const entries = q.data?.entries ?? [];
+  const entries = q.data?.pages.flatMap((p) => p.entries) ?? [];
   // A name beside each account id the caller's projects can name (P-457). The id stays: this is the
   // forensic record, and two accounts may share a name. Subjects are stored lower-cased (P-441), so
   // the lookup ignores case.
@@ -431,7 +434,7 @@ export function AuditLog() {
         {q.isError && <p className="error" style={{ fontSize: 12, margin: '8px 12px' }}>Couldn’t load the audit log.</p>}
         {q.isLoading && <WaitLoader />}
         {!q.isLoading && !q.isError && entries.length === 0 && (
-          <p className="muted" style={{ fontSize: 12, padding: 12, margin: 0 }}>No audit rows in the last {q.data?.days ?? 90} days.</p>
+          <p className="muted" style={{ fontSize: 12, padding: 12, margin: 0 }}>No audit rows in the last {q.data?.pages[0]?.days ?? 90} days.</p>
         )}
         {entries.length > 0 && (
           <div style={{ overflowX: 'auto' }}>
@@ -453,6 +456,11 @@ export function AuditLog() {
               </tbody>
             </table>
           </div>
+        )}
+        {q.hasNextPage && (
+          <button className="btn secondary" style={{ margin: '8px 12px' }} disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
+            {q.isFetchingNextPage ? 'Loading…' : 'Load more'}
+          </button>
         )}
       </Panel>
     </section>
