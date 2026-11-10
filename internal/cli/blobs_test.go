@@ -556,6 +556,12 @@ func TestServesSweepRemovesBlobFilesNoRowNames(t *testing.T) {
 		return s.SHA256
 	}
 	gone, young := commit("no row, old", old), commit("no row, young", time.Now())
+	// A row names one old file, so the store is this board's (the sweep keeps every file when most
+	// of those it looks up have no row; internal/service tests that guard).
+	named := commit("a row names it, old", old)
+	if _, err := st.PutBlob(context.Background(), named, int64(len("a row names it, old"))); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := files.Stage(strings.NewReader("cut off")); err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +578,7 @@ func TestServesSweepRemovesBlobFilesNoRowNames(t *testing.T) {
 		return err == nil
 	}
 	left, _ := filepath.Glob(filepath.Join(files.Dir(), "tmp", "upload-*"))
-	if onDisk(gone) || !onDisk(young) || len(left) != 0 || swept.BlobFiles != 2 {
-		t.Fatalf("after serve's sweep (%+v): the old file with no row on disk %v (want false), the young one %v (want true), temporary files %v (want none)", swept, onDisk(gone), onDisk(young), left)
+	if onDisk(gone) || !onDisk(young) || !onDisk(named) || len(left) != 0 || swept.BlobFiles != 2 {
+		t.Fatalf("after serve's sweep (%+v): the old file with no row on disk %v (want false), the young one %v (want true), the one a row names %v (want true), temporary files %v (want none)", swept, onDisk(gone), onDisk(young), onDisk(named), left)
 	}
 }

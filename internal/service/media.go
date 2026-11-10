@@ -308,9 +308,12 @@ type blobSweep struct {
 // SweepBlobFiles is the disk side of the blob GC (retention's blob-file step), for the files no row
 // will ever name: the temporary files of uploads cut off by a crash, and blob files last written
 // before olderThan that no blob row names (a crash or a timeout between an upload's move and its
-// row, or a GC whose unlink failed after it deleted the row). Each such file is looked up under its
-// hash's lock and removed only when the lookup says no row; a failed lookup keeps it. At most
-// blobFileChecks files are looked up per call. It answers how many files it removed.
+// row, or a GC whose unlink failed after it deleted the row). At most blobFileChecks files are
+// looked up per call. When more than half of those whose lookup answered have no row, it removes
+// none and logs why: in a store that is this board's, such files are rare, so that many means a
+// database that is not this board's or one not restored yet, where every file would look like one
+// to remove. Otherwise each file with no row is looked up again under its hash's lock and removed
+// when that lookup also says no row; a failed lookup keeps it. It answers how many files it removed.
 func (c *Core) SweepBlobFiles(ctx context.Context, olderThan time.Time) int64 {
 	files := c.media.Files
 	if files == nil {
@@ -344,17 +347,49 @@ func (c *Core) SweepBlobFiles(ctx context.Context, olderThan time.Time) int64 {
 	if !whole {
 		turn = turn[:blobFileChecks]
 	}
+	// noRow reports whether no blob row names sha; ok is false when the lookup failed.
+	noRow := func(sha string) (none, ok bool) {
+		_, err := c.store.GetBlob(ctx, sha)
+		if err == nil {
+			return false, true
+		}
+		if e, isErr := domain.AsBatonDeckError(err); isErr && e.Code == domain.CodeNotFound {
+			return true, true
+		}
+		if ctx.Err() == nil {
+			c.log.Printf("service: blob sweep %s: kept, its row could not be read: %+v", sha, err)
+		}
+		return false, false
+	}
+	var unnamed []string
+	answered := 0
 	for _, sha := range turn {
+		if ctx.Err() != nil {
+			return removed
+		}
+		if none, ok := noRow(sha); ok {
+			answered++
+			if none {
+				unnamed = append(unnamed, sha)
+			}
+		}
+		c.blobSweep.after = sha
+	}
+	if whole {
+		c.blobSweep.after = ""
+	}
+	if 2*len(unnamed) > answered {
+		c.log.Printf("service: blob sweep: %d of %d blob files last written before %s have no blob row; kept them all, since that many means a database that is not this board's or one not restored yet",
+			len(unnamed), answered, olderThan.UTC().Format(time.RFC3339))
+		return removed
+	}
+	for _, sha := range unnamed {
 		if ctx.Err() != nil {
 			return removed
 		}
 		func() {
 			defer files.Lock(sha)()
-			_, err := c.store.GetBlob(ctx, sha)
-			if e, ok := domain.AsBatonDeckError(err); !ok || e.Code != domain.CodeNotFound {
-				if err != nil && ctx.Err() == nil {
-					c.log.Printf("service: blob sweep %s: kept, its row could not be read: %+v", sha, err)
-				}
+			if none, _ := noRow(sha); !none {
 				return
 			}
 			if err := files.Remove(sha); err != nil {
@@ -363,10 +398,6 @@ func (c *Core) SweepBlobFiles(ctx context.Context, olderThan time.Time) int64 {
 			}
 			removed++
 		}()
-		c.blobSweep.after = sha
-	}
-	if whole {
-		c.blobSweep.after = ""
 	}
 	return removed
 }

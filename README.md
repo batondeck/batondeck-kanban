@@ -247,6 +247,10 @@ docker compose up -d --wait
 `curl -fsS http://127.0.0.1:8080/healthz` then answers, and the board has its tasks and their
 attachments back.
 
+Either way, start the board only once its database is back, and only against its own. Its hourly
+sweep removes blob files over an hour old that no row in the database names. It keeps them all when
+most of the files it checks have no row, but do not lean on that.
+
 ## Performance
 
 `make bench` measures the three numbers the plan pins (`docs/release/plan-2026-10-22.md`

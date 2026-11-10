@@ -576,24 +576,101 @@ func TestSweepBlobFilesRemovesOnlyWhatNoRowNamesOverTheEngines(t *testing.T) {
 
 		defer func(n int) { blobFileChecks = n }(blobFileChecks)
 		blobFileChecks = 2
-		var three []string
-		for _, b := range []string{"one", "two", "three"} {
-			three = append(three, m.orphan(t, []byte(b), old))
+		// Six files, in hash order alternately named by a row and not, plus kept: no two files with
+		// no row are next to each other in hash order, so each call's two lookups find at most one
+		// (and the majority guard, tested on its own below, never holds a call back).
+		bodies := []string{"one", "two", "three", "four", "five", "six"}
+		slices.SortFunc(bodies, func(a, b string) int { return strings.Compare(hashOf([]byte(a)), hashOf([]byte(b))) })
+		var three, rows []string
+		for i, b := range bodies {
+			if i%2 == 0 {
+				rows = append(rows, m.named(t, []byte(b), old))
+			} else {
+				three = append(three, m.orphan(t, []byte(b), old))
+			}
 		}
-		// kept (looked up, has a row) and two of the three per call, in hash order from the cursor.
-		first := m.c.SweepBlobFiles(m.ctx, cut)
-		second := m.c.SweepBlobFiles(m.ctx, cut)
-		third := m.c.SweepBlobFiles(m.ctx, cut)
-		if first+second+third != 3 || first > 2 || second > 2 {
-			t.Fatalf("removed %d, %d, %d over three bounded calls, want 3 in all and at most 2 per call", first, second, third)
+		// Seven old files, two per call in hash order from the cursor: four calls go round once.
+		var got []int64
+		for range 4 {
+			got = append(got, m.c.SweepBlobFiles(m.ctx, cut))
+		}
+		if got[0]+got[1]+got[2]+got[3] != 3 || slices.Max(got) > 1 {
+			t.Fatalf("removed %v over four bounded calls, want 3 in all and at most 1 per call", got)
 		}
 		for _, sha := range three {
 			if m.onDisk(sha) {
 				t.Errorf("%s still on disk after the bounded calls went round", sha)
 			}
 		}
-		if !m.onDisk(keptSHA) {
-			t.Fatal("the ready attachment's file is gone")
+		for _, sha := range append(rows, keptSHA) {
+			if !m.onDisk(sha) {
+				t.Fatalf("%s, which a row names, is gone", sha)
+			}
+		}
+	})
+}
+
+// named is body committed to the blob store with a blob row, last written at mod.
+func (m *mediaEnv) named(t *testing.T, body []byte, mod time.Time) string {
+	t.Helper()
+	sha := m.orphan(t, body, mod)
+	if _, err := m.st.PutBlob(m.ctx, sha, int64(len(body))); err != nil {
+		t.Fatal(err)
+	}
+	return sha
+}
+
+// api-http#1 (review): the blob-file sweep removes a file because no row names it, so a board
+// started against a database that is not its own, or before its dump is loaded back, would see every
+// file as one to remove. When more than half the files one sweep looks up have no row, it keeps them
+// all and logs why; once rows name at least half, the rest go as before.
+func TestSweepBlobFilesKeepsEveryFileWhenMostHaveNoRowOverTheEngines(t *testing.T) {
+	onMediaEngines(t, func(t *testing.T, m *mediaEnv) {
+		if err := m.c.Close(m.ctx); err != nil {
+			t.Fatal(err)
+		}
+		logs := &logBuf{}
+		m.c = New(m.st, Options{Logger: log.New(logs, "", 0), ToolCallFlush: -1,
+			Media: MediaOptions{Files: m.files, Signer: m.signer, BaseURL: "http://bk.test", MaxBytes: 64}})
+		t.Cleanup(func() { _ = m.c.Close(context.Background()) })
+		now := time.Now()
+		old, cut := now.Add(-2*time.Hour), now.Add(-time.Hour)
+		var orphans []string
+		for _, b := range []string{"one", "two", "three"} {
+			orphans = append(orphans, m.orphan(t, []byte(b), old))
+		}
+		onDisk := func(when string, shas ...string) {
+			t.Helper()
+			for _, sha := range shas {
+				if !m.onDisk(sha) {
+					t.Fatalf("%s: %s was removed", when, sha)
+				}
+			}
+		}
+		// The database names none of them (empty, or not restored yet).
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 0 {
+			t.Fatalf("an empty database: removed %d files, want 0", n)
+		}
+		onDisk("an empty database", orphans...)
+		if !strings.Contains(logs.String(), "3 of 3 blob files") {
+			t.Fatalf("an empty database: the log does not say why the files were kept: %q", logs.String())
+		}
+		// It names one of four: most still have no row.
+		rows := []string{m.named(t, []byte("four"), old)}
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 0 {
+			t.Fatalf("one of four named: removed %d files, want 0", n)
+		}
+		onDisk("one of four named", append(rows, orphans...)...)
+		// It names half: the files no row names go, those it names stay.
+		rows = append(rows, m.named(t, []byte("five"), old), m.named(t, []byte("six"), old))
+		if n := m.c.SweepBlobFiles(m.ctx, cut); n != 3 {
+			t.Fatalf("three of six named: removed %d files, want the 3 no row names", n)
+		}
+		onDisk("three of six named", rows...)
+		for _, sha := range orphans {
+			if m.onDisk(sha) {
+				t.Errorf("three of six named: %s, which no row names, is still on disk", sha)
+			}
 		}
 	})
 }
