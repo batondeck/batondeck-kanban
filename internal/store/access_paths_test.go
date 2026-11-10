@@ -12,6 +12,8 @@ import (
 var accessPaths = []struct{ name, query, index string }{
 	// The head of a column: every write that moves a task into another column reads it.
 	{"column head", "SELECT order_key FROM tasks WHERE project_id = 'p' AND board_id = 'b' AND column_id = 'c' ORDER BY order_key, id LIMIT 1", "tasks_column_order"},
+	// The idempotency keys past their window.
+	{"idempotency sweep", "SELECT project_id, identity, key FROM idempotency_keys i WHERE i.expires_at <= 5 ORDER BY i.expires_at, i.project_id, i.identity, i.key LIMIT 500", "idempotency_keys_expiry"},
 }
 
 // The migrated SQLite schema serves each access path through its index (EXPLAIN QUERY PLAN names

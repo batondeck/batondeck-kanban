@@ -4,5 +4,9 @@
 -- first card, and list_tasks by column.
 CREATE INDEX tasks_column_order ON tasks(project_id, board_id, column_id, order_key COLLATE "C", id COLLATE "C");
 
+-- The idempotency keys past their window, for the retention sweep.
+CREATE INDEX idempotency_keys_expiry ON idempotency_keys(expires_at, project_id COLLATE "C", identity COLLATE "C", key COLLATE "C");
+
 -- +goose Down
+DROP INDEX idempotency_keys_expiry;
 DROP INDEX tasks_column_order;

@@ -100,7 +100,7 @@ func composeWith(st store.Store, version, publicURL string, logger *log.Logger, 
 		sweep.CollectBlobs = sc.CollectBlobs
 	}
 	sweepEvery := time.Duration(ret.SweepIntervalSeconds) * time.Second
-	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse",
+	logger.Printf("serve: retention sweep every %s: change log %d days, tool calls %d days, deliveries %d days (an alert state once its ticket is DONE or deleted), raw bodies %d days, agent sessions %s idle, browser sessions, API tokens, OAuth codes and OAuth tokens %d days after they lapse, idempotency keys once their replay window ends",
 		sweepEvery, ret.ChangeLogDays, ret.ToolCallsDays, ret.DeliveriesDays, ret.RawBodiesDays, retention.AgentSessionIdle, int(retention.LapsedGrace/day))
 	opts := mcp.Options{
 		Version:   version,
