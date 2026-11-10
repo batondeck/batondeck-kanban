@@ -54,6 +54,8 @@ const mk = (i: number): Task =>
 let all: Task[] = [];
 let failTasks = false;
 let taskUrls: string[] = [];
+/** Runs once after the board's first page is served: a change landing between two page reads. */
+let afterFirstPage: (() => void) | null = null;
 const json = (status: number, b: unknown) => ({ ok: status < 400, status, json: async () => b }) as Response;
 
 beforeEach(() => {
@@ -62,6 +64,7 @@ beforeEach(() => {
   hydrateUiSettings({ taskPageLimit: 20 });
   failTasks = false;
   taskUrls = [];
+  afterFirstPage = null;
   vi.stubGlobal('EventSource', FakeES);
   vi.stubGlobal(
     'fetch',
@@ -75,6 +78,7 @@ beforeEach(() => {
         if (limit < 0 || limit > 200) return json(400, { code: 'VALIDATION', message: 'limit is 1 to 200' });
         const from = Number(url.searchParams.get('cursor') ?? '0');
         const page = all.slice(from, from + limit);
+        if (from === 0 && afterFirstPage) { afterFirstPage(); afterFirstPage = null; }
         return json(200, { tasks: page, ...(from + limit < all.length ? { nextCursor: String(from + limit) } : {}) });
       }
       const routes: Array<[RegExp, unknown]> = [
@@ -218,6 +222,17 @@ describe('listTasksUpTo', () => {
       { limit: '200', cursor: '200' },
       { limit: '20', cursor: '400' },
     ]);
+  });
+
+  it('lists a task once when it moves between two page reads', async () => {
+    all = Array.from({ length: 450 }, (_, i) => mk(i + 1));
+    // T-1 is reordered down the board after the first page is read: the second page holds it again.
+    afterFirstPage = () => { const [t1] = all.splice(0, 1); all.splice(250, 0, t1!); };
+    const out = await listTasksUpTo('p1', 'b1', 420);
+    const ids = out.tasks.map((t) => t.id);
+    expect(ids.filter((id) => id === 'T-1'), 'T-1 listed twice').toHaveLength(1);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(420);
   });
 
   it('stops at the end of the board, with no cursor', async () => {
