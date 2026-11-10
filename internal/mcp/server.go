@@ -95,7 +95,7 @@ func New(o Options) *Server {
 	s := &Server{services: o.Services, log: o.Logger}
 	s.halted, s.halt = context.WithCancel(context.Background())
 	s.sessions = &sessionTable{max: o.MaxSessions, perIdentity: o.MaxSessionsPerIdentity, live: map[string]*mcp.ServerSession{},
-		owner: map[string]string{}, seen: map[string]time.Time{}, evicting: map[string]struct{}{},
+		owner: map[string]string{}, seen: map[string]time.Time{}, calls: map[string]int{}, evicting: map[string]struct{}{},
 		agents: map[string]int{}, keys: map[string]string{}, ending: map[string]string{}, inflight: map[string]struct{}{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log,

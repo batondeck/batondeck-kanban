@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,6 +96,76 @@ func TestSessionsBoundedPerIdentity(t *testing.T) {
 	}
 	if logs := h.log.String(); !strings.Contains(logs, "u-ada holds 2 MCP sessions") {
 		t.Errorf("the eviction was not logged:\n%s", logs)
+	}
+}
+
+// The per-identity eviction never cuts a call in progress: a session with a call in hand is not
+// the longest-idle one, whenever its last request arrived. When every one of the identity's
+// sessions has a call in hand, its new initialize is refused (its own, never another identity's),
+// and the calls finish.
+func TestEvictionSparesASessionWithACallInHand(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver(), func(o *Options) { o.MaxSessionsPerIdentity = 2 })
+	plant(h)
+	started, release := make(chan struct{}, 4), make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free) // before the harness's own cleanup, which waits for the handlers
+	AddTool(h.srv, &mcp.Tool{Name: "slow"}, nil, func(context.Context, *mcp.CallToolRequest, plantIn) (*mcp.CallToolResult, plantOut, error) {
+		started <- struct{}{}
+		<-release
+		return nil, plantOut{Identity: "done"}, nil
+	})
+	slow := func(cs *mcp.ClientSession) chan error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "slow", Arguments: map[string]any{"projectId": "P-1"}})
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the slow call never started")
+		}
+		return done
+	}
+	gone := func(cs *mcp.ClientSession) bool {
+		return rawPOST(t, h.url, tokenAda, cs.ID(), `{"jsonrpc":"2.0","id":9,"method":"ping"}`).StatusCode == http.StatusNotFound
+	}
+
+	busy := h.connect(t, tokenAda)
+	call := slow(busy) // busy's last request arrives first, and stays in hand
+	time.Sleep(20 * time.Millisecond)
+	idle := h.connect(t, tokenAda)
+	if err := idle.Ping(ctx(t), nil); err != nil {
+		t.Fatal(err)
+	}
+	h.connect(t, tokenAda) // ada's bound is 2: the session to close is idle, not busy
+	waitFor(t, func() bool { return gone(idle) })
+	if gone(busy) {
+		t.Fatal("the session with a call in hand was closed to make room")
+	}
+
+	// Both of ada's sessions now have a call in hand: a third is refused, and both calls finish.
+	third, err := h.dial(tokenAda)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = third.Close() })
+	call3 := slow(third)
+	if _, err := h.dial(tokenAda); err == nil || !strings.Contains(err.Error(), "too many MCP sessions for this identity") {
+		t.Errorf("an initialize while every one of ada's sessions has a call in hand = %v, want refused", err)
+	}
+	if cs, err := h.dial(tokenGrace); err != nil {
+		t.Errorf("grace was refused while ada's sessions were busy: %v", err)
+	} else {
+		_ = cs.Close()
+	}
+	free()
+	for name, c := range map[string]chan error{"busy": call, "third": call3} {
+		if err := <-c; err != nil {
+			t.Errorf("%s session's call: %v, want it to finish", name, err)
+		}
 	}
 }
 

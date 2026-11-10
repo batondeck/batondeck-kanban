@@ -26,7 +26,8 @@ type sessionTable struct {
 	closed      bool                          // Server.Close ran: no session is admitted again
 	live        map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
 	owner       map[string]string             // MCP session id -> the identity that initialised it
-	seen        map[string]time.Time          // MCP session id -> when its last request arrived
+	seen        map[string]time.Time          // MCP session id -> when its last request arrived or was answered
+	calls       map[string]int                // MCP session id -> its requests in hand (never closed to make room)
 	evicting    map[string]struct{}           // sessions closed to make room for their identity's newer one
 	agents      map[string]int                // agent-session key -> its live MCP sessions
 	keys        map[string]string             // MCP session id -> its agent-session key
@@ -36,19 +37,28 @@ type sessionTable struct {
 	ends        sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
-// reserve admits ss, initialised by identity at now, or refuses when the table is full or closed.
-// fresh is false for an id already live: a second initialize on its session, which this call did
-// not admit. An identity at its own bound is admitted all the same, and evict is its longest-idle
-// session, which the caller closes: from then on it counts against neither bound, so one identity
-// can never hold more than perIdentity of the table, nor lock another identity out of it.
-func (t *sessionTable) reserve(ss *mcp.ServerSession, identity string, now time.Time) (ok, fresh bool, evict *mcp.ServerSession) {
+// The answers to an initialize reserve refuses.
+const (
+	refusedTable    = "too many MCP sessions; retry later"
+	refusedIdentity = "too many MCP sessions for this identity, each with a request in hand; end one or retry later"
+)
+
+// reserve admits ss, initialised by identity at now, or refuses it with the answer to send:
+// refusedTable when the table is full or closed. fresh is false for an id already live: a second
+// initialize on its session, which this call did not admit. An identity at its own bound is
+// admitted all the same, and evict is its longest-idle session with no request in hand, which the
+// caller closes: from then on it counts against neither bound, so one identity can never hold more
+// than perIdentity of the table, nor lock another identity out of it. A call in progress is never
+// cut to make room: when every one of the identity's sessions has a request in hand, its own
+// initialize is refused (refusedIdentity).
+func (t *sessionTable) reserve(ss *mcp.ServerSession, identity string, now time.Time) (fresh bool, evict *mcp.ServerSession, refused string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, live := t.live[ss.ID()]; live {
-		return true, false, nil
+		return false, nil, ""
 	}
 	if t.closed {
-		return false, false, nil
+		return false, nil, refusedTable
 	}
 	mine, oldest := 0, ""
 	for id, who := range t.owner {
@@ -56,7 +66,7 @@ func (t *sessionTable) reserve(ss *mcp.ServerSession, identity string, now time.
 			continue
 		}
 		mine++
-		if oldest == "" || t.seen[id].Before(t.seen[oldest]) {
+		if t.calls[id] == 0 && (oldest == "" || t.seen[id].Before(t.seen[oldest])) {
 			oldest = id
 		}
 	}
@@ -64,19 +74,35 @@ func (t *sessionTable) reserve(ss *mcp.ServerSession, identity string, now time.
 	case mine >= t.perIdentity && t.live[oldest] != nil:
 		evict = t.live[oldest]
 		t.evicting[oldest] = struct{}{}
+	case mine >= t.perIdentity:
+		return false, nil, refusedIdentity
 	case len(t.live)-len(t.evicting) >= t.max:
-		return false, false, nil
+		return false, nil, refusedTable
 	}
 	t.live[ss.ID()], t.owner[ss.ID()], t.seen[ss.ID()] = ss, identity, now
-	return true, true, evict
+	return true, evict, ""
 }
 
-// saw records a request on live session id at now, for the longest-idle choice.
-func (t *sessionTable) saw(id string, now time.Time) {
+// saw records a request on live session id at now, for the longest-idle choice, and holds it in
+// hand until done is called with its answer: a session with a request in hand is never the one
+// reserve closes to make room. done also records the answer's time as the session's last activity.
+func (t *sessionTable) saw(id string, now time.Time) (done func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, live := t.live[id]; live {
-		t.seen[id] = now
+	if _, live := t.live[id]; !live {
+		return func() {}
+	}
+	t.seen[id] = now
+	t.calls[id]++
+	return func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if _, live := t.live[id]; live {
+			t.seen[id] = time.Now()
+			if t.calls[id]--; t.calls[id] <= 0 {
+				delete(t.calls, id)
+			}
+		}
 	}
 }
 
@@ -98,6 +124,7 @@ func (t *sessionTable) release(id string) {
 	delete(t.live, id)
 	delete(t.owner, id)
 	delete(t.seen, id)
+	delete(t.calls, id)
 	delete(t.evicting, id)
 	delete(t.keys, id)
 	delete(t.ending, id)
@@ -238,7 +265,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		caller, _ := CallerFrom(ctx)
-		s.sessions.saw(ss.ID(), time.Now())
+		defer s.sessions.saw(ss.ID(), time.Now())()
 		ctx = context.WithValue(ctx, sessionIDKey{}, ss.ID())
 		if ex := req.GetExtra(); ex != nil && ex.Header != nil {
 			ctx = context.WithValue(ctx, requestMarkKey{}, ex.Header.Get(requestMarkHeader))
@@ -283,10 +310,15 @@ func (s *Server) touchCall(ctx context.Context, ss *mcp.ServerSession, caller do
 
 func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller domain.Caller, method string, req mcp.Request, next mcp.MethodHandler) (mcp.Result, error) {
 	id := ss.ID()
-	ok, fresh, evict := s.sessions.reserve(ss, caller.Identity, time.Now())
-	if !ok {
+	fresh, evict, refused := s.sessions.reserve(ss, caller.Identity, time.Now())
+	switch refused {
+	case refusedTable:
 		s.log.Printf("mcp: session limit %d reached; initialize refused", s.sessions.max)
-		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "too many MCP sessions; retry later"}
+	case refusedIdentity:
+		s.log.Printf("mcp: %s holds %d MCP sessions, its bound, each with a request in hand; initialize refused", caller.Identity, s.sessions.perIdentity)
+	}
+	if refused != "" {
+		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: refused}
 	}
 	if evict != nil {
 		// Its end runs the usual bookkeeping (the goroutine below, started by its own initialize);
