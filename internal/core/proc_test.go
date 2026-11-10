@@ -82,3 +82,20 @@ func TestExitWatcherReportsAKill(t *testing.T) {
 		t.Fatalf("Add(exited) = %v, want ErrNoProcess", err)
 	}
 }
+
+// ProcessParent names a process's parent and the program it runs; a reaped pid is ErrNoProcess.
+func TestProcessParent(t *testing.T) {
+	cmd := startSleeper(t)
+	ppid, name, err := ProcessParent(cmd.Process.Pid)
+	if err != nil || ppid != os.Getpid() || name != "sleep" {
+		t.Fatalf("ProcessParent(child) = %d, %q, %v; want %d, \"sleep\"", ppid, name, err, os.Getpid())
+	}
+	if ppid, _, err := ProcessParent(os.Getpid()); err != nil || ppid != os.Getppid() {
+		t.Fatalf("ProcessParent(self) = %d, %v; want %d", ppid, err, os.Getppid())
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, _, err := ProcessParent(cmd.Process.Pid); !errors.Is(err, ErrNoProcess) {
+		t.Fatalf("ProcessParent(reaped) err = %v, want ErrNoProcess", err)
+	}
+}

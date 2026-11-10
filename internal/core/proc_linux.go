@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,36 @@ func ProcessUID(pid int) (int, error) {
 		return 0, fmt.Errorf("process %d: no owner in its stat", pid)
 	}
 	return int(st.Uid), nil
+}
+
+// ProcessParent is pid's parent pid, from the field after the state in /proc/<pid>/stat, and the
+// name of the program it runs: the base name of /proc/<pid>/exe (a script's interpreter, where the
+// command name would be the script's), else its command name. ErrNoProcess when pid is gone.
+func ProcessParent(pid int) (ppid int, name string, err error) {
+	if pid <= 0 {
+		return 0, "", ErrNoProcess
+	}
+	dir := "/proc/" + strconv.Itoa(pid)
+	stat, err := os.ReadFile(dir + "/stat")
+	if err != nil {
+		return 0, "", ErrNoProcess
+	}
+	open, end := strings.IndexByte(string(stat), '('), strings.LastIndexByte(string(stat), ')')
+	if open < 0 || end < open {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	fields := strings.Fields(string(stat[end+1:])) // state, ppid, ...
+	if len(fields) < 2 {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	if ppid, err = strconv.Atoi(fields[1]); err != nil {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	name = string(stat[open+1 : end])
+	if exe, err := os.Readlink(dir + "/exe"); err == nil {
+		name = filepath.Base(strings.TrimSuffix(exe, " (deleted)"))
+	}
+	return ppid, name, nil
 }
 
 // pidfdWatch holds a pidfd per watched pid and polls them with an eventfd that add, remove and

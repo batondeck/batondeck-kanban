@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,9 @@ func TestSessionRegisterAndUnregister(t *testing.T) {
 // The client's pid without a messaging socket (tested): the parent process, here `go test`, which
 // is this uid's and alive, registered with no socket.
 func TestSessionWithoutAMessagingSocketIsTheParent(t *testing.T) {
+	if _, name, err := core.ProcessParent(os.Getppid()); err == nil && hookShells[name] {
+		t.Skipf("this test's parent is the shell %s, which the client looks past: run it under go test", name)
+	}
 	s := startDirectory(t, nil)
 	sessionEnv(t, s, s.alice, "")
 	oneLine(t, fmt.Sprintf("pid %d registered as worker", os.Getppid()), "session", "register", "--role", "worker")
@@ -97,6 +102,46 @@ func TestSessionWithoutAMessagingSocketIsTheParent(t *testing.T) {
 	if rows := s.rows(t); len(rows) != 0 {
 		t.Fatalf("rows %+v", rows)
 	}
+}
+
+// core-cli-ops#6 (tested): without a messaging socket the client is not the hook's own shell. The
+// plugin's hook is a /bin/sh script that Claude Code runs through `sh -c`, so the command's parent
+// is that script's shell, which exits the moment the command returns: it was registered, reported
+// as registered, and dropped in the same second. Here this test process plays the client and runs
+// a script of the hook's shape the same way; the registered pid is this process, and it stays.
+func TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient(t *testing.T) {
+	s := startDirectory(t, nil)
+	sessionEnv(t, s, s.alice, "")
+	script := filepath.Join(t.TempDir(), "session.sh")
+	body := fmt.Sprintf("#!/bin/sh\n%q -test.run='^TestSessionHookChild$' >&2\nexit 0\n", os.Args[0])
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := exec.Command("sh", "-c", fmt.Sprintf("%q start", script))
+	hook.Env = append(os.Environ(), "BK_SESSION_HOOK_CHILD=1")
+	var stderr strings.Builder
+	hook.Stderr = &stderr
+	if out, err := hook.Output(); err != nil || len(out) != 0 {
+		t.Fatalf("the hook: %v, stdout %q, stderr %q", err, out, stderr.String())
+	}
+	t.Logf("the hook's stderr: %q", stderr.String())
+	want := fmt.Sprintf("pid %d registered as worker", os.Getpid())
+	if !strings.Contains(stderr.String(), want) {
+		t.Fatalf("the hook's stderr %q lacks %q: the client is this process, the shells' parent", stderr.String(), want)
+	}
+	time.Sleep(200 * time.Millisecond) // the shells have exited; an entry for one of them would be gone
+	if rows := s.rows(t); len(rows) != 1 || rows[0].PID != int64(os.Getpid()) || !slices.Contains(s.pids(), int64(os.Getpid())) {
+		t.Fatalf("rows %+v, pids %v; want this process, %d, registered and kept", rows, s.pids(), os.Getpid())
+	}
+}
+
+// TestSessionHookChild is no test of its own: it is the command the hook script of
+// TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient runs.
+func TestSessionHookChild(t *testing.T) {
+	if os.Getenv("BK_SESSION_HOOK_CHILD") != "1" {
+		t.Skip("the hook's command, run by TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient")
+	}
+	os.Exit(session([]string{"register", "--role", "worker"}, os.Stdout, os.Stderr))
 }
 
 // AC2 (tested): the routes are 404 over TCP for the client's exact body, and a client whose listen

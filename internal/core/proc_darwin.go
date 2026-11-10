@@ -23,6 +23,26 @@ func ProcessUID(pid int) (int, error) {
 	return int(kp.Eproc.Ucred.Uid), nil
 }
 
+// ProcessParent is pid's parent pid and the name of the program it runs (p_comm, which for a
+// script is its interpreter's), from sysctl kern.proc.pid; ErrNoProcess when pid is gone.
+func ProcessParent(pid int) (ppid int, name string, err error) {
+	if pid <= 0 {
+		return 0, "", ErrNoProcess
+	}
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || int(kp.Proc.P_pid) != pid || kp.Proc.P_stat == sZOMB {
+		return 0, "", ErrNoProcess
+	}
+	comm := make([]byte, 0, len(kp.Proc.P_comm))
+	for _, c := range kp.Proc.P_comm {
+		if c == 0 {
+			break
+		}
+		comm = append(comm, byte(c))
+	}
+	return int(kp.Eproc.Ppid), string(comm), nil
+}
+
 // sZOMB is <sys/proc.h>'s SZOMB, a process that exited and was not yet reaped.
 const sZOMB = 5
 
