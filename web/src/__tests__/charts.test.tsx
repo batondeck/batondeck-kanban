@@ -176,7 +176,7 @@ describe('describeQueryError', () => {
       ['401', /session expired/i],
       ['403', /do not have access/i],
       ['429', /rate limited/i],
-      ['503', /not configured/i],
+      ['503', /unavailable right now/i],
       ['502', /failed to answer/i],
     ] as const) {
       const msg = describeQueryError(new Error(`request failed: ${status}`), 'analytics');

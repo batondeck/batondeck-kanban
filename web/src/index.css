@@ -182,10 +182,11 @@
   --caps-track: 0.15em;          /* mono caps labels — the panel-header voice */
   --scrim: rgba(21, 18, 13, 0.45);   /* warm, to match the canvas — see --shadow-* above */
 
-  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --display: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --serif: Newsreader, Georgia, serif;   /* Chronicle prose ONLY — not UI titles */
+  /* The "… Variable" families are the bundled ones (main.tsx); the plain names are a local install. */
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Newsreader Variable", Newsreader, Georgia, serif;   /* Chronicle prose ONLY — not UI titles */
   color-scheme: light;
 
   /* ---- Motion vocabulary (T-51) -----------------------------------------------------------------

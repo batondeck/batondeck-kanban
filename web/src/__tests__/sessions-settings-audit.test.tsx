@@ -82,6 +82,24 @@ describe('Settings: CLI tokens and your MCP sessions', () => {
   });
 });
 
+describe('Settings: the shared session cache keeps the device rows', () => {
+  // Settings reads the ['agentSessions'] entry Agents merges presence frames into. A plain list
+  // answer replaced the entry, so visiting Settings dropped every live device row from Agents until
+  // the directory next changed (P-394).
+  it('its list answer keeps the device rows a presence frame put in the cache', async () => {
+    const frame = presenceSessions({ sessions: [{ pid: 4242, role: 'worker', identityId: 'U-1', agentId: 'claude', registeredAt: '2026-10-24T08:00:00Z' }] }, '2026-10-24T08:00:00Z');
+    const qc = await mount('/settings', false, { 'GET /api/agents/sessions': () => ({ sessions: [session({})] }) }, (q) =>
+      q.setQueryData(['agentSessions'], { sessions: frame }, { updatedAt: 0 }),
+    );
+    await waitFor(() => expect(fetched.some((f) => f.includes('/api/agents/sessions'))).toBe(true));
+    await waitFor(() => expect(qc.isFetching({ queryKey: ['agentSessions'] })).toBe(0));
+    const keys = qc.getQueryData<{ sessions: Array<{ sessionKey: string }> }>(['agentSessions'])!.sessions.map((r) => r.sessionKey);
+    expect(keys, 'the device row was dropped by the Settings refetch').toEqual(expect.arrayContaining(['U-1::agent-a', 'device:4242']));
+    // Settings itself still lists only the MCP session (a device row is not something it can end).
+    expect(await screen.findByText('1 logged')).toBeInTheDocument();
+  });
+});
+
 describe('Settings: the minted plaintext leaves memory', () => {
   it('is in no mutation once Done is pressed, nor after the screen unmounts', async () => {
     const qc = await mount('/settings', false, {

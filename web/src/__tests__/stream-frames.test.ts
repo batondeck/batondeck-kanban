@@ -98,3 +98,82 @@ describe('presence frames from the device directory', () => {
     expect(next.map((s) => s.sessionKey).sort()).toEqual(['U-1:agent', 'device:2']);
   });
 });
+
+/**
+ * THE LATE SUBSCRIBER. The server sends presence once on open and afterwards only on a change, and
+ * the nav badge opens the shared socket at app mount. A screen that joins later on
+ * the same URL (Agents with no board, the full task page) must still get the frame the socket already
+ * carried, or a live plugin session is missing from it until the directory next changes.
+ */
+describe('a late subscriber on an unchanged socket', () => {
+  const frame = { sessions: [{ pid: 9, role: 'master', identityId: 'U-1', agentId: 'm', registeredAt: '2026-10-23T10:00:00Z' }] };
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+  // Every subscription is ended even when an assertion throws: the shared socket is module state, and
+  // a subscriber left behind would keep the next test's socket from being opened.
+  const stops: Array<() => void> = [];
+  const keep = (stop: () => void): (() => void) => { stops.push(stop); return stop; };
+  afterEach(() => { for (const s of stops.splice(0)) s(); });
+
+  it('receives the last presence frame the socket carried', async () => {
+    vi.stubGlobal('EventSource', FakeES);
+    keep(streamApi.userStream({ onNotifications: vi.fn() }));
+    const es = FakeES.instances[0]!;
+    es.readyState = 1;
+    es.emit('open');
+    es.emit('presence', frame);
+    const onPresence = vi.fn();
+    keep(streamApi.userStream({ onPresence }));
+    await tick();
+    expect(FakeES.instances, 'the late join must share the socket').toHaveLength(1);
+    expect(onPresence, 'the on-open presence frame never reached the late subscriber').toHaveBeenCalledTimes(1);
+    expect((onPresence.mock.calls[0]![0] as AgentSession[])[0]!.sessionKey).toBe('device:9');
+  });
+
+  it('does NOT replay a notifications frame: marking one read sends no new frame', async () => {
+    // The server sends notifications on open and per new row, not on mark-read, so the socket's last
+    // frame can say "unread" about a row the reader has since read. Every notifications subscriber
+    // reads the list over REST first; a replay could only put that stale state back.
+    vi.stubGlobal('EventSource', FakeES);
+    keep(streamApi.userStream({ onPresence: vi.fn() }));
+    const es = FakeES.instances[0]!;
+    es.readyState = 1;
+    es.emit('open');
+    es.emit('notifications', { notifications: [{ id: 'N-1', read: false }], unread: 1 });
+    const onNotifications = vi.fn();
+    keep(streamApi.userStream({ onNotifications }));
+    await tick();
+    expect(onNotifications, 'a late subscriber got a notifications frame older than its own read').not.toHaveBeenCalled();
+  });
+
+  it('a rebuilt socket does not replay the old socket’s frame', async () => {
+    vi.stubGlobal('EventSource', FakeES);
+    keep(streamApi.userStream({}));
+    const first = FakeES.instances[0]!;
+    first.readyState = 1;
+    first.emit('open');
+    first.emit('presence', frame);
+    const onPresence = vi.fn();
+    keep(streamApi.stream('p1', 'B-1', vi.fn(), undefined, onPresence));
+    await tick();
+    expect(FakeES.instances).toHaveLength(2);
+    expect(onPresence, 'the new socket sends its own on-open frame').not.toHaveBeenCalled();
+  });
+
+  it('nothing is replayed once the socket dropped, and nothing to a subscriber that already left', async () => {
+    vi.stubGlobal('EventSource', FakeES);
+    keep(streamApi.userStream({}));
+    const es = FakeES.instances[0]!;
+    es.readyState = 1;
+    es.emit('open');
+    es.emit('presence', frame);
+    const gone = vi.fn();
+    streamApi.userStream({ onPresence: gone })();
+    es.readyState = 0;
+    es.emit('error'); // the browser is retrying: what the socket carried may be stale
+    const late = vi.fn();
+    keep(streamApi.userStream({ onPresence: late }));
+    await tick();
+    expect(gone).not.toHaveBeenCalled();
+    expect(late).not.toHaveBeenCalled();
+  });
+});

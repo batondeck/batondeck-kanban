@@ -10,12 +10,12 @@
  * Cycle time, lead time and a completion trend all need per-task STATUS HISTORY — when a ticket
  * entered IN_PROGRESS, when it reached DONE. That history does not exist anywhere the SPA can reach:
  *
- *   1. `move_task` / `complete_task` / `claim_task` are NOT in `SENSITIVE_ACTIONS`
- *      (`src/domain/audit.ts`), so the durable audit log never records a status change.
- *   2. The board feed is capped at 50 events and is unpaged (`src/resources/index.ts:276`); the
- *      gateway forwards no params. On a busy board that is minutes of history.
- *   3. BigQuery holds tool-call telemetry only, and `taskId` rides the ERROR path alone
- *      (`src/tools/common.ts:621`). There is no Firestore→BQ export of tasks.
+ *   1. `move_task` / `complete_task` / `claim_task` are NOT sensitive actions
+ *      (`internal/domain/audit.go`), so the durable audit log never records a status change.
+ *   2. The board feed is read a page of recent events at a time, and the screens read its first
+ *      page. On a busy board that is minutes of history.
+ *   3. The tool-call log behind `/api/analytics/operations` holds call counts, errors and latency
+ *      per tool, agent and day, not task transitions.
  *
  * The only per-task timestamps are `createdAt` and `updatedAt`. `updatedAt` is the LAST EDIT, not the
  * completion — add a comment to a closed ticket and it jumps to today. A "completion trend" built on
@@ -23,8 +23,8 @@
  * recent completions inflated, with nothing on screen to reveal it.
  *
  * So: `creationTrend` (honest, `createdAt`) replaces the completion trend, and `ageBuckets` (honest,
- * "what is going stale") replaces the cycle-time scatter. If you are here to add cycle time, add
- * `move_task` to `SENSITIVE_ACTIONS` first and read the audit log — do not approximate it.
+ * "what is going stale") replaces the cycle-time scatter. If you are here to add cycle time, record
+ * status changes first (a sensitive action in `internal/domain/audit.go`) — do not approximate it.
  * ────────────────────────────────────────────────────────────────────────────────────────────────
  */
 import type { OpsSummary, Priority, Status, Task } from './types.js';

@@ -171,9 +171,9 @@ describe('normalizeLink', () => {
 describe('ui settings', () => {
   it('merges overrides over defaults and resets cleanly', () => {
     expect(uiSettings()).toEqual(UI_DEFAULTS);
-    const merged = hydrateUiSettings({ searchK: 10, linkFavicons: false });
+    const merged = hydrateUiSettings({ searchK: 10, presenceWindowMs: 1000 });
     expect(merged.searchK).toBe(10);
-    expect(merged.linkFavicons).toBe(false);
+    expect(merged.presenceWindowMs).toBe(1000);
     expect(merged.taskPageLimit).toBe(UI_DEFAULTS.taskPageLimit);
     expect(uiSettings().searchK).toBe(10); // module store hydrated
     hydrateUiSettings(undefined);

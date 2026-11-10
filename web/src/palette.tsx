@@ -16,6 +16,7 @@ import { useProject } from './projectContext.js';
 import { useShortcuts } from './shortcuts.js';
 import { mayCall } from './toolFloors.js';
 import { searchChronicle, searchValue } from './chronicleSearch.js';
+import { recordHref } from './chronicleBlocks.js';
 import type { ChroniclePage } from './types.js';
 
 /** Chronicle hits per kind. Truncation is stated in the heading — a silent cut is a false absence. */
@@ -245,7 +246,7 @@ export function CommandPalette() {
                       <Command.Item
                         key={p.id}
                         value={searchValue(p)}
-                        onSelect={() => pick(() => void nav(`/chronicle/${p.id}`))}
+                        onSelect={() => pick(() => void nav(recordHref(p.projectId, p.id)))}
                       >
                         {p.title}
                         <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{p.id}</span>

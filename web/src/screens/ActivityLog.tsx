@@ -19,23 +19,32 @@ import { composeResults, descriptionSnippet, looksLikeTaskId, parseTicketQuery }
 import type { ActivityEvent, Task } from '../types.js';
 import { Panel, Stack } from '../ui.js';
 
-/** Human-readable label for a date-bucket key (YYYY-MM-DD). */
-function dayLabel(key: string): string {
+/**
+ * The viewer's LOCAL calendar day of `d`, as YYYY-MM-DD. The buckets and their labels are local
+ * because each row's time reads local: keyed by UTC date, an afternoon's actions in UTC-8 split
+ * across "Today" and "Yesterday" at 16:00.
+ */
+const localDayKey = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Human-readable label for a date-bucket key (YYYY-MM-DD, the viewer's local day). */
+export function dayLabel(key: string): string {
   const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-  const yest = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+  const todayKey = localDayKey(today);
+  // The calendar day before, not 24 hours before: a DST change makes one day 23 or 25 hours long.
+  const yest = localDayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1));
   if (key === todayKey) return 'Today';
   if (key === yest) return 'Yesterday';
   return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** Group events (already newest-first) into ordered date buckets. */
-function groupByDay(events: ActivityEvent[]): Array<{ key: string; items: ActivityEvent[] }> {
+export function groupByDay(events: ActivityEvent[]): Array<{ key: string; items: ActivityEvent[] }> {
   const sorted = [...events].sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
   const out: Array<{ key: string; items: ActivityEvent[] }> = [];
   let current: { key: string; items: ActivityEvent[] } | null = null;
   for (const e of sorted) {
-    const key = new Date(e.ts).toISOString().slice(0, 10);
+    const key = localDayKey(new Date(e.ts));
     if (!current || current.key !== key) {
       current = { key, items: [] };
       out.push(current);

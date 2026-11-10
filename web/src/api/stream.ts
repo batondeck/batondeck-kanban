@@ -153,6 +153,18 @@ let closeCurrent: (() => void) | undefined;
 let currentUrl = '';
 /** The board the open socket streams, or null for a socket that names none. */
 let servedBoard: { projectId: string; boardId: string } | null = null;
+/**
+ * The last `presence` payload the CURRENT socket carried, for a subscriber that joins it later. The
+ * server sends presence once on open and then only on a change, and the nav badge opens the socket at
+ * app mount, so a screen joining on the same URL (Agents with no board, the full task page) would
+ * otherwise not see it until the next change. Cleared whenever the socket is replaced or goes down:
+ * a rebuilt or reconnected socket sends its own on open.
+ *
+ * NOT `notifications`: the server sends those on open and per new row, but not when one is marked
+ * read, so the last frame can be older than the reader's own mark-read, and every notifications
+ * subscriber reads the list over REST first anyway.
+ */
+let lastPresence: unknown;
 
 /**
  * ONE BOARD PER SOCKET. The server streams the board the URL names and drops every other board's
@@ -201,15 +213,22 @@ function reconcile(): void {
   closeCurrent = undefined;
   currentUrl = want;
   servedBoard = board;
+  lastPresence = undefined;
   if (!want) return;
   closeCurrent = sseConnect(
     want,
     // An unserved board subscriber is never live: its board is not on this socket.
-    (live) => fanout((h, sub) => h.onLive?.(live && served(sub))),
+    (live) => {
+      if (!live) lastPresence = undefined;
+      fanout((h, sub) => h.onLive?.(live && served(sub)));
+    },
     {
       updated: () => fanout((h) => h.onUpdate?.(), true),
       board: (d) => fanout((h) => h.onBoard?.(d), true),
-      presence: (d) => fanout((h) => h.onPresence?.(presenceSessions(d, new Date().toISOString()))),
+      presence: (d) => {
+        lastPresence = d;
+        fanout((h) => h.onPresence?.(presenceSessions(d, new Date().toISOString())));
+      },
       // The caller's list_notifications {limit:50}: on open, then per notification row (R2.3).
       notifications: (d) => fanout((h) => h.onNotifications?.(d)),
       resync: () => fanout((h) => h.onResync?.(), true),
@@ -260,6 +279,7 @@ export function presenceSessions(d: unknown, seenAt: string): AgentSession[] {
 export function joinStream(key: { projectId?: string; boardId?: string }, h: StreamHandlers): () => void {
   const sub: Sub = { key, h };
   subs.add(sub);
+  const before = currentUrl;
   reconcile();
   // Another board holds the socket: say so now, or the caller believes it is live and never polls.
   if (!served(sub)) {
@@ -268,6 +288,21 @@ export function joinStream(key: { projectId?: string; boardId?: string }, h: Str
     } catch {
       /* as in fanout */
     }
+  }
+  // Joined a socket that was already open: hand over the presence it carried (see `lastPresence`).
+  // Next microtask, so the frame lands after the caller's effect has returned; and only while this
+  // subscriber is still here and the frame is still the socket's last (a newer one was fanned out).
+  if (currentUrl === before && lastPresence !== undefined && h.onPresence) {
+    const replay = lastPresence;
+    const onPresence = h.onPresence;
+    queueMicrotask(() => {
+      if (!subs.has(sub) || replay !== lastPresence) return;
+      try {
+        onPresence(presenceSessions(replay, new Date().toISOString()));
+      } catch {
+        /* a bad subscriber must not break the join */
+      }
+    });
   }
   return () => {
     subs.delete(sub);

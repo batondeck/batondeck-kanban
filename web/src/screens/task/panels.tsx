@@ -480,7 +480,7 @@ export function DiscussionPanel({ d }: P) {
 /* ---- files ------------------------------------------------------------------------------------- */
 
 /**
- * One produced artifact. A url renders through the existing smart link card (favicon + forge name);
+ * One produced artifact. A url renders through the existing smart link card (link icon + forge name);
  * a bare ref (a commit sha or repo-relative path from a checkout with no remote) still renders — as
  * mono text with its kind, because evidence without a forge is still evidence.
  */

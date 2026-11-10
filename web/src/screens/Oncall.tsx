@@ -149,7 +149,6 @@ export default function Oncall() {
           </Tiles>
 
           <Note>
-            Incident metrics — MTTA, MTTR, incidents by source — arrive with the analytics section.
             The delivery health below is read live from each integration&apos;s log.
           </Note>
 

@@ -3,8 +3,7 @@
  *
  * There was no boundary at all before this file. Any throw during render — a screen reading a field
  * off an undefined API response, a bad cast, a broken third-party component — unmounted the entire
- * tree and left `#root` empty. The user saw white, and we saw NOTHING: the stack died in a console
- * nobody is attached to, so the failure could not be discovered, counted, or fixed.
+ * tree and left `#root` empty. The user saw white, with nothing to quote in a bug report.
  *
  * Two boundaries, not one, and the split is the whole point of "graceful":
  *   - the OUTER one in `main.tsx` catches provider/router crashes, where there is no shell left to keep;
@@ -16,46 +15,17 @@
  * — not a rejected fetch, not an event handler, not an async callback. Those are covered elsewhere
  * (`MutationCache.onError` → toast, `fire()` → toast, and each screen's own `isError` branch).
  *
+ * NOTHING IS SENT ANYWHERE. This server has no client-error route (internal/api/routes.json leaves
+ * `/api/client-error` out by decision), so the crash stays in the browser: React logs it to the
+ * console, and the panel shows the message and asks the user to report it. It used to post every
+ * crash, window error and unhandled rejection there and say "It has been reported" over a 405.
+ *
  * THE ONE WHITE SCREEN THIS CANNOT CATCH is the bundle failing to load or parse at all — no JS runs, so
  * no boundary exists to catch anything. Low risk today only because nothing here is code-split (no
  * `React.lazy`, no dynamic `import()` in app code), so there is no stale-chunk 404 after a deploy. If
  * code-splitting is ever introduced, that gap opens and needs an answer outside this file.
  */
-import { Component, type ErrorInfo, type ReactNode } from 'react';
-
-/**
- * Ship the crash to the gateway, which logs it with a stack so Cloud Error Reporting groups it.
- *
- * `keepalive` because a crash is frequently followed by the user closing the tab or hitting reload —
- * a plain fetch would be cancelled in flight and the one report we needed would never arrive.
- * Failures are swallowed on purpose: a reporter that throws inside an error handler is a loop.
- */
-export function reportClientError(err: unknown, extra?: Record<string, string>): void {
-  const e = err instanceof Error ? err : new Error(String(err));
-  try {
-    void fetch('/api/client-error', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      keepalive: true,
-      body: JSON.stringify({ msg: e.message, stack: e.stack ?? '', url: location.pathname + location.search, ...extra }),
-    }).catch(() => {});
-  } catch {
-    /* reporting must never be the thing that breaks the page */
-  }
-}
-
-/**
- * Window-level nets for what a boundary structurally cannot see: throws in event handlers, timers,
- * and unhandled promise rejections. Installed once from `main.tsx`.
- *
- * These REPORT but do not render — by the time they fire, React has usually kept the page intact, so
- * replacing it with an error panel would be a downgrade. The user-visible path for a failed action is
- * still the toast.
- */
-export function installClientErrorReporting(): void {
-  window.addEventListener('error', (ev) => reportClientError(ev.error ?? ev.message));
-  window.addEventListener('unhandledrejection', (ev) => reportClientError(ev.reason));
-}
+import { Component, type ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
@@ -70,10 +40,6 @@ export class ErrorBoundary extends Component<Props, { err: Error | null }> {
     return { err };
   }
 
-  override componentDidCatch(err: Error, info: ErrorInfo): void {
-    reportClientError(err, { stack: `${err.stack ?? err.message}\n--- component stack ---${info.componentStack ?? ''}` });
-  }
-
   override render(): ReactNode {
     const { err } = this.state;
     if (!err) return this.props.children;
@@ -82,16 +48,14 @@ export class ErrorBoundary extends Component<Props, { err: Error | null }> {
       <div className={`crash ${full ? 'crash-full' : ''}`} role="alert">
         <div className="crash-title">This screen hit an unexpected error</div>
         <p className="crash-hint">
-          It has been reported. {full ? 'Reloading usually clears it.' : 'The rest of the app still works.'}
+          {full ? 'Reloading usually clears it.' : 'The rest of the app still works.'} If it keeps happening, report it
+          with the message below: nothing was sent automatically.
         </p>
         {/* The message, not the stack: enough for a user to quote in a bug report, no internals on screen. */}
         <p className="crash-detail">{err.message}</p>
         <div className="crash-actions">
           {/* Clearing `err` re-renders the same subtree — worth one click before a full reload, since a
-              transient bad render (a race on stale data) recovers from it and a real bug does not.
-              ponytail: KNOWN CEILING — a deterministic crash re-throws and fires another beacon POST
-              per click. Bounded by a human clicking, so it is noise rather than an amplifier; add a
-              retry counter here if a single crash ever shows up as dozens of grouped events. */}
+              transient bad render (a race on stale data) recovers from it and a real bug does not. */}
           <button className="btn" onClick={() => this.setState({ err: null })}>
             Try again
           </button>

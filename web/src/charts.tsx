@@ -348,10 +348,10 @@ export function RankedBars({ rows }: {
 /**
  * Upstream failures, told apart.
  *
- * The gateway deliberately PRESERVES the distinction between 401/403/502/503 (`app.ts` comments say
- * so: collapsing them is how a membership refusal gets read as an outage) — and Analytics then threw
- * it away, rendering one "Analytics service unavailable." for every cause. This is where that
- * distinction reaches the reader.
+ * The REST API answers a refusal and a failure with different statuses (internal/api/errors.go:
+ * 401, 403, 429, 500), and a proxy in front of it may add 502/503. Collapsing them is how a
+ * membership refusal gets read as an outage — Analytics once rendered one "Analytics service
+ * unavailable." for every cause. This is where that distinction reaches the reader.
  */
 export function describeQueryError(err: unknown, subject: string): string {
   const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -370,7 +370,8 @@ export function describeQueryError(err: unknown, subject: string): string {
     case '429':
       return 'Rate limited — this panel will retry on the next refresh.';
     case '503':
-      return `${subject} is not configured in this environment.`;
+      // This server answers no read with 503; a proxy in front of it does, while it restarts.
+      return `${subject} is unavailable right now. Try again in a moment.`;
     case '502':
     case '500':
       return `${subject} failed to answer. The rest of this page is unaffected.`;

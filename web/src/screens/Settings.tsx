@@ -9,7 +9,8 @@ import * as projectsApi from '../api/projects.js';
 import * as usersApi from '../api/users.js';
 import { WaitLoader } from '../brand.js';
 import { Avatar } from '../components.js';
-import type { Status } from '../types.js';
+import type { AgentSession, Status } from '../types.js';
+import { keepCachedDevices } from '../presenceMerge.js';
 import { STATUSES } from '../types.js';
 import { Cluster, Panel, Stack } from '../ui.js';
 import { can, SUPERADMIN } from '../permissions.js';
@@ -73,7 +74,7 @@ function Toggle({ checked, onChange, disabled, title, labelledBy, describedBy }:
  * Roles a PERSON can be given here. Deliberately not the full `Role` ladder.
  *
  * Two things this fixes. `agent` used to be in this list and was the DEFAULT selection — but that role
- * was RETIRED (`src/domain/types.ts`), so the core's Zod enum rejects it: clicking "+ Add Member"
+ * was RETIRED, so the server's role list refuses it (internal/domain): clicking "+ Add Member"
  * without touching the dropdown always failed. And `worker` / `master` are agent PERSONAS — an agent
  * gets its reach through `add_member` over MCP, which is the documented onboarding path and is
  * unaffected by this list. This form is for sharing a board with a colleague by email; it is not where
@@ -425,6 +426,18 @@ export function UsersSection() {
  */
 const display = (token: string): string => `${token.split('_').slice(0, 2).join('_')}…`;
 
+/**
+ * A WIP limit field: blank is no limit (null), a whole number of 1 or more is that limit, anything
+ * else is undefined and is refused before sending. `Number('five')` is NaN, which JSON writes as
+ * null, and the server reads null as "no limit": a typo used to clear the column's limit silently.
+ */
+const parseWip = (raw: string): number | null | undefined => {
+  const t = raw.trim();
+  if (!t) return null;
+  return /^[1-9]\d*$/.test(t) && Number.isSafeInteger(Number(t)) ? Number(t) : undefined;
+};
+const WIP_INVALID = 'A WIP limit is a whole number of 1 or more, or blank for no limit.';
+
 
 function CliTokens() {
   const qc = useQueryClient();
@@ -514,10 +527,11 @@ function CliTokens() {
                     // Clipboard access can be denied or absent (insecure origin, permission). Falling
                     // back to "select it yourself" beats a button that silently does nothing — and on
                     // that path the value must STAY on screen, so `copied` is not set.
-                    void navigator.clipboard?.writeText(minted).then(
-                      () => setCopied(true),
-                      () => setErr('Could not copy — select the value above and copy it manually.'),
-                    );
+                    // `?.` alone short-circuited to undefined with no clipboard at all (a plain-HTTP
+                    // LAN origin), so neither callback ran and the button did nothing.
+                    const fail = () => setErr('Could not copy — select the value above and copy it manually.');
+                    if (!navigator.clipboard) { fail(); return; }
+                    void navigator.clipboard.writeText(minted).then(() => setCopied(true), fail);
                   }}
                 >
                   Copy
@@ -539,7 +553,7 @@ function CliTokens() {
               aria-label="Token label"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim()) mint.mutate(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && label.trim() && !mint.isPending) mint.mutate(); }}
               style={{ minWidth: 260 }}
             />
             <button className="btn" disabled={!label.trim() || mint.isPending} onClick={() => mint.mutate()}>
@@ -563,8 +577,8 @@ function CliTokens() {
                   <tr key={t.id}>
                     <td>{t.label}</td>
                     {/* NO IDENTIFIER COLUMN. It rendered `t.display` — the public half of the id,
-                        never the secret (`src/domain/cli-token.ts` keeps `secretHash` only and states
-                        there is deliberately no Store method that could return one). But a
+                        never the secret (the store keeps only the token's hash, `SecretHash` in
+                        internal/store, and has no method that could return one). But a
                         `bd_bd7c064b…` in a credentials table is indistinguishable from a leaked
                         token BY LOOKING, and the label is not enough to fix that. The row is
                         identified by its label; `t.id` is still what Revoke sends, it is simply never
@@ -674,10 +688,9 @@ export function Settings() {
    * YOUR OWN MCP sessions. `list_agent_sessions` is CALLER-SCOPED — it never returns another user's
    * sessions — so this table is inherently personal and needs no admin gate.
    *
-   * It exists because "Manage sessions" on the Agents screen pointed at /admin: admin-only, and
-   * workspace-WIDE. The one person who could click it was sent somewhere that manages everyone's
-   * sessions, and every other member had no way to stop their own agent at all. The gateway route for
-   * self-service disconnect had been there the whole time; only the SPA was missing.
+   * It exists because "Manage sessions" on the Agents screen pointed at an admin-only, workspace-WIDE
+   * page that this build does not have. Every member needs a way to stop their own agent, and the REST
+   * route for self-service disconnect is caller-scoped, so the panel lives here.
    */
   /**
    * Honour `#sessions` and `#cli-tokens` in the URL. React Router does client-side navigation, so the browser never sees
@@ -696,7 +709,15 @@ export function Settings() {
     return () => clearTimeout(t);
   }, []);
 
-  const sessionsQ = useQuery({ queryKey: ['agentSessions'], queryFn: () => agentsApi.agentSessions(100) });
+  // The entry Agents merges presence frames into: the list never carries `device:` rows, so the answer
+  // keeps the ones the cache holds when it lands, or a visit here would drop them from Agents (P-394).
+  const sessionsQ = useQuery({
+    queryKey: ['agentSessions'],
+    queryFn: async () => {
+      const fresh = await agentsApi.agentSessions(100);
+      return { sessions: keepCachedDevices(fresh.sessions, qc.getQueryData<{ sessions: AgentSession[] }>(['agentSessions'])?.sessions) };
+    },
+  });
   // MCP sessions only: the device rows a presence frame merges into the same cache (`device:<pid>`,
   // presenceMerge.ts) are processes on this machine, not sessions disconnect_agent can end.
   const mySessions = (sessionsQ.data?.sessions ?? []).filter((s) => !s.sessionKey.startsWith('device:'));
@@ -729,7 +750,7 @@ export function Settings() {
   const addMember = useMutation({ mutationFn: () => projectsApi.addMember(projectId, member, role), onSuccess: () => { setMember(''); refresh(); }, onError: (e) => setErr(String(e)) });
   const removeMember = useMutation({ mutationFn: (id: string) => projectsApi.removeMember(projectId, id), onSuccess: refresh, onError: (e) => setErr(String(e)) });
   const addColumn = useMutation({
-    mutationFn: () => boardsApi.addColumn(projectId, board!.id, col.name, col.status, col.wip ? Number(col.wip) : null),
+    mutationFn: (wipLimit: number | null) => boardsApi.addColumn(projectId, board!.id, col.name, col.status, wipLimit),
     onSuccess: () => { setCol({ name: '', status: 'TODO', wip: '' }); refresh(); },
     onError: (e) => setErr(String(e)),
   });
@@ -851,10 +872,14 @@ export function Settings() {
                         disabled={!dirty || !canEditColumns}
                         // Clear the draft only on success — guard() swallows the rejection (surfacing it via
                         // err), so chaining after guard would wipe the user's edits on failure too.
-                        onClick={() => void guard(
-                          boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: d.wip ? Number(d.wip) : null })
-                            .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
-                        )}
+                        onClick={() => {
+                          const wip = parseWip(d.wip);
+                          if (wip === undefined) { setErr(WIP_INVALID); return; }
+                          void guard(
+                            boardsApi.updateColumn(projectId, board.id, c.id, { name: d.name, wipLimit: wip })
+                              .then((r) => { setDrafts((prev) => { const n = { ...prev }; delete n[c.id]; return n; }); return r; }),
+                          );
+                        }}
                       >
                         Save
                       </button>
@@ -898,10 +923,15 @@ export function Settings() {
                 />
                 <button
                   className="btn"
-                  disabled={!canAddColumn || !col.name}
+                  disabled={!canAddColumn || !col.name || addColumn.isPending}
                   title={!canAddColumn && columnsWhy ? columnsWhy : undefined}
                   aria-describedby={!canAddColumn && columnsWhy ? 'columns-closed' : undefined}
-                  onClick={() => addColumn.mutate()}
+                  onClick={() => {
+                    const wip = parseWip(col.wip);
+                    if (wip === undefined) { setErr(WIP_INVALID); return; }
+                    setErr(null);
+                    addColumn.mutate(wip);
+                  }}
                 >
                   + Add Column
                 </button>
@@ -1041,11 +1071,11 @@ export function Settings() {
                   <p id="workflow-closed" className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>{workflowWhy}</p>
                 )}
               </Panel>
-              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
-                  cost control over the tenant, not a workflow choice, and the core refuses both fields
-                  from anyone who is not a workspace admin (src/tools/projects.ts, update_settings) — so
-                  rendering them here only offered a project admin a guaranteed FORBIDDEN. They now live
-                  in the /admin portal (web/src/screens/Admin.tsx, ProjectQuotaCard). */}
+              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. This deployment has no
+                  quota enforcement, and update_settings refuses quotaEnabled and txnCap from everyone
+                  (internal/service/projects.go, settingsPatch): FORBIDDEN for a caller who is not a
+                  workspace admin, VALIDATION for one who is, since a cap would be recorded and never
+                  enforced. So the controls are gone and nothing in this build sets them. */}
             </Stack>
           ) : (
             <Panel pad>

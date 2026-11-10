@@ -266,7 +266,7 @@ describe('writing a record by hand', () => {
     await waitFor(() => expect(createBtn().disabled).toBe(false));
     createBtn().click();
     await waitFor(() => expect(s.created).toHaveLength(1));
-    expect(s.created[0]!.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(s.created[0]!.idempotencyKey).toMatch(/^[0-9a-f]{32}$/); // 128 random bits (randomId.ts)
 
     // The retry from the SAME form carries the SAME key — that is what lets the server replay a
     // create whose response was lost instead of refusing the slug as taken.
