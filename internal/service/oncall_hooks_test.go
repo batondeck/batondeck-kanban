@@ -704,6 +704,32 @@ func TestHookBoundsTheEventsOfOneDelivery(t *testing.T) {
 	}
 }
 
+// A Datadog multi-alert monitor notifies each group under its one alert_id: host A's recovery
+// closes host A's ticket and leaves host B's, still alerting, open.
+func TestHookDatadogGroupsAreSeparateAlerts(t *testing.T) {
+	f, _, root := oncallFixture(t)
+	key := func(name string) string { return map[string]string{HeaderAPIKey: "dd-key-0123456789"}[name] }
+	iid := f.integration(t, root, CreateIntegrationReq{Source: "datadog", Lifecycle: "autoclose", Auth: IntegrationAuthInput{Mode: "api_key", APIKey: "dd-key-0123456789"}}).Integration.ID
+	send := func(group, transition string) HookResult {
+		t.Helper()
+		out := f.hook(t, iid, HookRequest{Header: key, Body: fmt.Appendf(nil, `{"alert_id":7001,"aggreg_key":%q,"transition":%q,"title":"disk > 90%% on %s"}`, group, transition, group)})
+		if out.Refusal != "" || len(out.Results) != 1 {
+			t.Fatalf("%s %s: %+v", group, transition, out)
+		}
+		return out.Results[0]
+	}
+	a, b := send("host-a", "Triggered"), send("host-b", "Triggered")
+	if a.Result != "created" || b.Result != "created" || *a.TaskID == *b.TaskID {
+		t.Fatalf("two groups: %+v, %+v; want two tickets", a, b)
+	}
+	if r := send("host-a", "Recovered"); r.Result != "closed" || *r.TaskID != *a.TaskID {
+		t.Fatalf("host A's recovery: %+v, want host A's ticket closed", r)
+	}
+	if _, err := f.st.GetTask(f.ctx, f.project.ID, *b.TaskID); err != nil {
+		t.Fatalf("host B's ticket after host A's recovery: %v", err)
+	}
+}
+
 // A PagerDuty subscription may carry every event type. A note added to an incident, a service
 // event and the subscription's test ping are accepted (202) as no event: no ticket filed for a note
 // as if it were a new incident, no 400 for the ping during setup, no rejected row.

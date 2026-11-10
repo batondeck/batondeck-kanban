@@ -126,6 +126,25 @@ func TestDatadog(t *testing.T) {
 	want(t, "annotations", e.Annotations, map[string]string{"datadog_transition": "triggered", "datadog_event_type": "query_alert_monitor"})
 	want(t, "description", e.Description, "Error rate is 7.2% (threshold 5%)")
 	want(t, "occurredAt", e.OccurredAt, "2026-10-24T10:00:00.000Z")
+
+	// A multi-alert monitor notifies each group under the one alert_id; aggreg_key ($AGGREG_KEY)
+	// names the group, so one group's recovery is not another's.
+	c, _ := connectors.For("datadog")
+	fp := func(body string) string {
+		t.Helper()
+		p, _ := connectors.Decode([]byte(body))
+		evs, err := c.Events(p, connectors.Context{Now: now})
+		if err != nil || len(evs) != 1 {
+			t.Fatalf("%s: %+v, %v", body, evs, err)
+		}
+		return evs[0].Fingerprint
+	}
+	a, b := fp(`{"alert_id":7001,"aggreg_key":"9bd4ac31","transition":"Triggered"}`), fp(`{"alert_id":7001,"aggreg_key":"5e1f0c77","transition":"Recovered"}`)
+	want(t, "group A's fingerprint", a, "7001:9bd4ac31")
+	if a == b {
+		t.Errorf("two groups of one monitor share fingerprint %q", a)
+	}
+	want(t, "no aggreg_key: the alert_id alone", fp(`{"alert_id":7001,"transition":"Triggered"}`), "7001")
 }
 
 func TestDynatrace(t *testing.T) {
