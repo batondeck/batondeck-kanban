@@ -110,8 +110,7 @@ check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
 
 # sqlc-check fails when the committed generated code (internal/store/{sqlitedb,pgdb}, sqlc.yaml's
-# outputs) does not match what the current queries and migrations produce. Until queries/ holds a
-# .sql file there is nothing to generate, and it says so.
+# outputs) does not match what the current queries and migrations produce.
 sqlc-check:
 	@if ! find queries -name '*.sql' 2>/dev/null | grep -q .; then \
 		echo "sqlc-check: no queries/*.sql yet"; exit 0; \
@@ -246,7 +245,7 @@ e2e:
 	go test -tags e2e -count=1 -timeout $(E2E_TIMEOUT) -v ./test/e2e/
 
 # bench runs plan §Performance's three numbers, outside check: the claim race (50 real MCP clients
-# call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 3 rounds), the
+# call claim_next at once on a board of 50 TODO tasks; p50 and p95 of the median of 5 rounds, after a warm-up round), the
 # idle cost (200 device-directory entries and 10 /api/stream clients held 60 s with no write: the
 # sweep's statements per entry, and none between sweeps, by the engine's own count) and the per-call
 # statement pins of test/perf, each in its three cache states. SQLite always, Postgres too with

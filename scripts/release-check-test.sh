@@ -9,8 +9,8 @@
 # target, nothing run in the final stage), and copies of it with each part broken refused. Then
 # the binary check alone: a build from a modified tree, a build with no VCS stamp, a build of
 # another commit and a build by a Go other than go.mod's pin are each refused. Then the versions check
-# (`release-check.sh VERSION`): passing when compose.yaml, plugin.json, CHANGELOG.md and the binary
-# agree, and refused, naming the file, when any one of them does not. Run by `make check`.
+# (`release-check.sh VERSION`): passing when compose.yaml, README.md, plugin.json, CHANGELOG.md and the
+# binary agree, and refused, naming the file, when any one of them does not. Run by `make check`.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,7 +34,7 @@ goline=$(go env GOVERSION | sed -E 's/^go([0-9]+\.[0-9]+).*/\1/')
 gotoolchain=$(go env GOVERSION)
 
 # A fixture is a release candidate at 9.9.9: go.mod pins the Go on PATH (dist builds with exactly
-# that toolchain), and compose.yaml, plugin.json and CHANGELOG.md name 9.9.9.
+# that toolchain), and compose.yaml, README.md, plugin.json and CHANGELOG.md name 9.9.9.
 fixture() {
   local dir=$tmp/$1
   mkdir -p "$dir/cmd/batondeck-kanban" "$dir/plugin/.claude-plugin"
@@ -43,6 +43,7 @@ fixture() {
   printf 'services:\n  batondeck-kanban:\n    image: ghcr.io/batondeck/batondeck-kanban:9.9.9\n' > "$dir/compose.yaml"
   printf '{\n  "name": "batondeck-kanban",\n  "version": "9.9.9"\n}\n' > "$dir/plugin/.claude-plugin/plugin.json"
   printf '# Changelog\n\n## [Unreleased]\n\n## [9.9.9] - 2026-01-01\n\n- fixture\n' > "$dir/CHANGELOG.md"
+  printf '# fixture\n\nbase=https://github.com/batondeck/batondeck-kanban/releases/download/v9.9.9\ncurl -O "$base/batondeck-kanban_9.9.9_${os}_${arch}"\nThe image is `ghcr.io/batondeck/batondeck-kanban:9.9.9`.\n' > "$dir/README.md"
   printf '/dist/\n' > "$dir/.gitignore"
   (cd "$dir" && g init -q && g add -A && g commit -q -m fixture && g tag -a v9.9.9 -m v9.9.9)
   echo "$dir"
@@ -131,8 +132,8 @@ else
 fi
 
 # image: the published image's build, against the stubbed docker (which builds and pushes nothing).
-# The control first: a clean checkout of the tag builds both platforms with the vendored crates and
-# the version, under both tags, and keeps it (--load) unless PUSH=1.
+# The control first: a clean checkout of the tag builds both platforms with the version, under both
+# tags, and keeps it (--load) unless PUSH=1.
 image() {
   : > "$STUB_LOG"
   PATH=$tmp/stub:$PATH make -s -C "$1" -f "$makefile" image VERSION=9.9.9 ${2:+PUSH=$2} >"$tmp/out" 2>&1
@@ -259,7 +260,7 @@ build; (cd "$d" && sed -i.bak "s/^toolchain .*/toolchain go1.0.1/" go.mod && rm 
 refuse_bin "binary built by another Go than go.mod pins" "built with $gotoolchain, not the go1.0.1 go.mod pins"
 (cd "$d" && g checkout -q go.mod)
 
-# The versions check: the four agree in the control; each one changed alone is refused by name.
+# The versions check: the five agree in the control; each one changed alone is refused by name.
 versions() { (cd "$1" && "$check" 9.9.9) >"$tmp/out" 2>&1; }
 d=$(fixture versions)
 if versions "$d" && grep -q "9.9.9 agrees" "$tmp/out"; then
@@ -280,6 +281,12 @@ refuse_versions() {
 }
 (cd "$d" && sed -i.bak 's/:9\.9\.9$/:9.9.8/' compose.yaml && rm compose.yaml.bak)
 refuse_versions "compose.yaml at 9.9.8" "compose.yaml: pulls ghcr.io/batondeck/batondeck-kanban:9.9.8, not ghcr.io/batondeck/batondeck-kanban:9.9.9"
+(cd "$d" && sed -i.bak 's|download/v9\.9\.9|download/v9.9.8|' README.md && rm README.md.bak)
+refuse_versions "README.md downloading v9.9.8" "README.md: names 'releases/download/v9.9.8', not 9.9.9"
+(cd "$d" && sed -i.bak 's|kanban:9\.9\.9|kanban:9.9.8|' README.md && rm README.md.bak)
+refuse_versions "README.md naming the 9.9.8 image" "README.md: names 'ghcr.io/batondeck/batondeck-kanban:9.9.8', not 9.9.9"
+(cd "$d" && printf '# fixture\n\nBuild from source.\n' > README.md)
+refuse_versions "README.md naming no release" "README.md: names no release"
 (cd "$d" && sed -i.bak 's/"9\.9\.9"/"9.9.8"/' plugin/.claude-plugin/plugin.json && rm plugin/.claude-plugin/plugin.json.bak)
 refuse_versions "plugin.json at 9.9.8" "plugin/.claude-plugin/plugin.json: version is '9.9.8', not 9.9.9"
 (cd "$d" && sed -i.bak 's/^## \[9\.9\.9\]/## [9.9.8]/' CHANGELOG.md && rm CHANGELOG.md.bak)
