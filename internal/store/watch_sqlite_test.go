@@ -11,8 +11,8 @@ import (
 // A SQLite watch hears a commit made by another connection on the file that fires no in-process
 // signal, which is what a second `serve` process on the same data dir is (core/lock.go admits several
 // on one host): its tail was never woken by the other's writes, so its board snapshots went stale
-// and its doorbells stayed silent. The watch wakes once at start, once for the foreign commit, and
-// not again while nothing commits.
+// and its doorbells stayed silent. The watch wakes once at start, once for each commit however it
+// hears it first, and not again while nothing commits.
 func TestSQLiteWatchHearsAnotherProcessCommit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "watch.db")
 	s, err := OpenSQLite(path, "FULL")
@@ -74,5 +74,18 @@ func TestSQLiteWatchHearsAnotherProcessCommit(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the watch did not hear this process's commit")
 	}
+	quietFor(3 * sqliteWatchPoll)
+
+	// A poll that lands between this process's commit and its signal wakes the watch for that commit,
+	// and the signal then wakes it no more: one commit, one wake.
+	if _, err := s.w.Exec("INSERT INTO t (n) VALUES (3)"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-woke:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the poll did not hear this process's commit before its signal")
+	}
+	s.noteAppended()
 	quietFor(3 * sqliteWatchPoll)
 }

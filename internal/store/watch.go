@@ -77,11 +77,13 @@ const sqliteWatchPoll = 250 * time.Millisecond
 // WatchChanges wakes on the file's in-process signal, and on another process's commit, until ctx
 // ends. The second it hears by `PRAGMA data_version` every sqliteWatchPoll, on a connection of its
 // own (not one of the read pool's, and outside the statement count): the value moves when any other
-// connection commits, this process's write connection included, so after each in-process wake the
-// value it left is read before wake is called, and only another process's commit moves it from
-// there, or one of this process's that appended no change (a tool_calls row, a session touch),
-// which costs the tail one read that finds nothing. An idle watch costs that one pragma per poll and
-// no read of the change log.
+// connection commits, this process's write connection included. So the in-process signal, too, only
+// makes it read the value at once, and it wakes when the value moved from the one it last read:
+// every commit moves it, and the signal fires after its commit, so a signal that finds it unmoved is
+// for a commit a poll already read and woke for (one that landed between the commit and the
+// signal), and one commit never wakes it twice. A commit of this process's that appended no change
+// (a tool_calls row, a session touch) moves it too, which costs the tail one read that finds nothing.
+// An idle watch costs that one pragma per poll and no read of the change log.
 func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 	db, err := sql.Open("sqlite", s.watchDSN)
 	if err != nil {
@@ -129,13 +131,11 @@ func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 	tick := time.NewTicker(sqliteWatchPoll)
 	defer tick.Stop()
 	for {
-		var polled bool
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-local:
 		case <-tick.C:
-			polled = true
 		}
 		v, err := dataVersion()
 		if err != nil {
@@ -144,9 +144,8 @@ func (s *SQLite) WatchChanges(ctx context.Context, wake func()) error {
 			}
 			return fmt.Errorf("store: watch changes: %w", err)
 		}
-		moved := v != seen
-		seen = v
-		if !polled || moved {
+		if v != seen {
+			seen = v
 			wake()
 		}
 	}
