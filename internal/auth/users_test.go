@@ -262,3 +262,44 @@ func TestAccountName(t *testing.T) {
 		})
 	}
 }
+
+// failingAudit is an audit log every append to fails.
+type failingAudit struct{ store.Audit }
+
+func (failingAudit) AppendAudit(context.Context, store.AuditRow) (int64, error) {
+	return 0, domain.NewError(domain.CodeInternal, "the audit log is down", nil)
+}
+
+// The recorded account changes refuse without an audit log, and leave no usable account or enable
+// unrecorded: an add whose row cannot be written leaves the account disabled, an enable leaves the
+// user disabled.
+func TestRecordedAccountChangesNeedTheirRow(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	acc := *f.svc.Accounts
+	if _, err := acc.AddAs(ctx, HostActor, "cli", "carol", "", "pw", false); err == nil {
+		t.Fatal("AddAs without an audit log: no error")
+	}
+	if _, err := acc.Lookup(ctx, "carol"); err == nil {
+		t.Fatal("AddAs without an audit log added the account")
+	}
+	acc.Audit = failingAudit{}
+	if _, err := acc.AddAs(ctx, HostActor, "cli", "carol", "", "pw", false); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("AddAs with a failing audit log: %v", err)
+	}
+	if u, err := acc.Lookup(ctx, "carol"); err != nil || u.DisabledAt == 0 {
+		t.Fatalf("the unrecorded account: %+v %v, want it disabled", u, err)
+	}
+	_, err := acc.Authenticate(ctx, "192.0.2.1", "carol", "pw")
+	wantCode(t, err, domain.CodeUnauthenticated)
+	if _, _, err := acc.EnableAs(ctx, HostActor, "cli", "carol"); err == nil {
+		t.Fatal("EnableAs with a failing audit log: no error")
+	}
+	if u, _ := acc.Lookup(ctx, "carol"); u.DisabledAt == 0 {
+		t.Fatal("an unrecorded enable left the account enabled")
+	}
+	acc.Audit = f.st
+	if u, was, err := acc.EnableAs(ctx, HostActor, "cli", "carol"); err != nil || !was || u.DisabledAt != 0 {
+		t.Fatalf("EnableAs: %+v %t %v", u, was, err)
+	}
+}

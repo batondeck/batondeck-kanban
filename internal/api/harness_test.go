@@ -43,7 +43,7 @@ func newHarness(t *testing.T, build func(st *memstore.Store) Options) *harness {
 	if _, err := st.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st, Params: fastArgon}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: st, Sessions: st, Params: fastArgon, Audit: st}, Tokens: &auth.TokenService{Store: st, Audit: st}, Sessions: st}
 	return mountHarness(t, a, build(st))
 }
 
@@ -58,7 +58,7 @@ func newStackHarness(t *testing.T, s *servicetest.Stack, o Options) *harness {
 func newStackHarnessAt(t *testing.T, s *servicetest.Stack, o Options, now func() time.Time) *harness {
 	t.Helper()
 	o.Services, o.Bus = s.Services, s.Bus
-	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Sessions: s.Store, Params: fastArgon}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store, Now: now}
+	a := &auth.Service{Accounts: &auth.Accounts{Store: s.Store, Sessions: s.Store, Params: fastArgon, Audit: s.Store}, Tokens: &auth.TokenService{Store: s.Store, Audit: s.Store}, Sessions: s.Store, Now: now}
 	return mountHarness(t, a, o)
 }
 
