@@ -206,6 +206,9 @@ tried from claude.ai itself.
 | a file path, such as `/srv/batondeck/batondeck-kanban.db` (relative paths are relative to the working directory) | SQLite, the default |
 | `postgres://user:password@host:5432/dbname?sslmode=disable` (or `postgresql://…`) | Postgres |
 
+The SQLite file is created mode 0600, and its `-wal` and `-shm` files take its mode, so a
+directory other accounts can list, such as a `/srv/batondeck` made by a plain `mkdir`, does not
+open the board to them; `serve` and `doctor` warn of a file made or copied in with a looser mode.
 SQLite runs with `synchronous=FULL`. `BATONDECK_DATABASE_SYNCHRONOUS=NORMAL` (`database.synchronous`)
 opts into `NORMAL` for write throughput: in WAL mode the file stays consistent, but the last
 transactions before a power loss may be lost. `batondeck-kanban serve -h` lists every
@@ -218,8 +221,11 @@ batondeck-kanban doctor
 ```
 
 checks the config and names the engine the connection itself reports (`the connection reports:
-SQLite 3.x`, or the Postgres server version), the store's location and the blob dir, and exits non-zero
-on a failure.
+SQLite 3.x`, or the Postgres server version), the store's location and the blob dir. Then it checks
+what `serve` refuses to start on: the schema (newer than the binary's fails; not migrated yet is a
+warning, since `serve` migrates it), the master key (`BATONDECK_MASTER_KEY`, or `master.key`'s mode
+and length) and whether the blob dir can be written. It creates none of them, and exits non-zero on
+a failure.
 
 ### On-call webhooks
 
@@ -236,8 +242,9 @@ seals the secrets the database holds (each on-call integration's signing secret,
 directory's inbox tokens) and signs the attachment links. Restored under another key, the board, its
 tasks and its attachments come back, but no sealed secret opens: every delivery to an HMAC-signed
 on-call integration is refused 401. Keep the key with the backup, and keep both where only you can read
-them. Stop the server first, so the database and the blobs are copied at the same moment: the binary
-has no online backup.
+them. `serve` makes a new key when it finds none and says so, as a warning when the database already
+holds secrets sealed under another key. Stop the server first, so the database and the blobs are
+copied at the same moment: the binary has no online backup.
 
 **The binary, on SQLite.** By default everything is in one directory, `$XDG_DATA_HOME/batondeck-kanban`
 (else `~/.local/share/batondeck-kanban`): the SQLite file `batondeck-kanban.db` (with `-wal` and

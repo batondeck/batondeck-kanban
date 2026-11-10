@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -113,7 +114,7 @@ func TestDialAddr(t *testing.T) {
 // gooseRows counts the rows of goose's version table in the SQLite file at path.
 func gooseRows(t *testing.T, path string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := sql.Open("sqlite", "file://"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,10 +179,14 @@ func TestDoctorReadsTheEngineFromTheConnection(t *testing.T) {
 		t.Fatalf("doctor on an unreachable Postgres: %d %q", code, out)
 	}
 
-	if dsn := os.Getenv("BATONDECK_TEST_POSTGRES_DSN"); dsn != "" {
+	if os.Getenv("BATONDECK_TEST_POSTGRES_DSN") != "" {
+		// A database of its own, migrated: doctor also judges the schema, and the server's default
+		// database is not this binary's.
+		_, dsn := storetest.PostgresDSN(t)
 		t.Setenv("BATONDECK_DATABASE_URL", dsn)
 		code, out, _ := run("doctor")
-		if code != 0 || !regexp.MustCompile(`ok   store        postgres on host .+, database .+, blobs in .+, the connection reports: PostgreSQL `).MatchString(out) {
+		if code != 0 || !regexp.MustCompile(`ok   store        postgres on host .+, database .+, blobs in .+, the connection reports: PostgreSQL `).MatchString(out) ||
+			!strings.Contains(out, "ok   schema       migrated to this binary's version\n") {
 			t.Fatalf("doctor on Postgres: %d %q", code, out)
 		}
 	}
@@ -205,6 +210,15 @@ func TestDataLineNamesThePathsAndNeverThePassword(t *testing.T) {
 	}
 	if got := dataLine(cfg); got != "postgres on host db.example:5432, database kanban, blobs in /srv/blobs" {
 		t.Fatalf("postgres: %q", got)
+	}
+	// A '?' or '#' in the password ends the authority for url.Parse, not for libpq and pgx, which read
+	// the host after the '@': the line names that host, and no part of the password.
+	t.Setenv("BATONDECK_DATABASE_URL", "postgres://bk:12?SE#CRET@db.example/kanban")
+	if cfg, err = loadConfig(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := dataLine(cfg); got != "postgres on host db.example, database kanban, blobs in /srv/blobs" {
+		t.Fatalf("postgres, a '?' in the password: %q", got)
 	}
 }
 
@@ -427,5 +441,189 @@ func TestSPAAnswers404(t *testing.T) {
 				t.Errorf("/brand/favicon.svg: %d %q", code, ct)
 			}
 		})
+	}
+}
+
+// migrate, doctor and user all name the one file database.url names, when a directory in its path
+// holds a '#' (a "C#" folder, "team#1"): migrate made the database in the parent directory, and
+// user and doctor, which look at the path itself, said it was not created.
+func TestCommandsAgreeOnASQLitePathWithAHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team#1", "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %d %s", code, errs)
+	}
+	if rows := gooseRows(t, path); rows != 1+sqliteMigrations(t) {
+		t.Fatalf("goose_db_version at %s holds %d rows", path, rows)
+	}
+	if code, out, _ := run("doctor"); code != 0 || !strings.Contains(out, "the connection reports: SQLite") {
+		t.Fatalf("doctor: %d %q", code, out)
+	}
+	if code, _, errs := run("user", "list"); code != 0 {
+		t.Fatalf("user list: %d %s", code, errs)
+	}
+}
+
+// A SQLite file made before OpenSQLite created it 0600, or copied in under a looser umask, keeps
+// its mode: serve logs a WARN and doctor prints one, each naming the files other local accounts can
+// read and the chmod that makes them private. A private file draws no warning.
+func TestALooseSQLiteFileModeIsWarnedOf(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	if code, out, _ := run("doctor"); code != 0 || strings.Contains(out, "WARN") {
+		t.Fatalf("doctor on a private file: %d %q", code, out)
+	}
+	if w := sqliteModeWarning(path); w != "" {
+		t.Fatalf("a private file: %q", w)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := "sqlite file " + path + " is mode 644: other local accounts can read the board; chmod 600 it, and its -wal and -shm files"
+	if w := sqliteModeWarning(path); w != want {
+		t.Fatalf("a 0644 file:\n got %q\nwant %q", w, want)
+	}
+	if code, out, _ := run("doctor"); code != 0 || !strings.Contains(out, "WARN store        "+want+"\n") {
+		t.Fatalf("doctor on a 0644 file: %d %q", code, out)
+	}
+}
+
+// serve, migrate, doctor, healthcheck and version take no positional argument: one (a config file
+// named without -config, say) is a usage error, exit 2 with the usage on stderr, not a run against
+// the defaults. The config here would fail the run, so a command that ignored the argument exits 1.
+func TestCommandsRefuseAPositionalArgument(t *testing.T) {
+	t.Setenv("BATONDECK_DATABASE_URL", "mysql://h/db")
+	for _, args := range [][]string{{"serve", "prod.json"}, {"serve", "prod.json", "-config", "other.json"}, {"migrate", "prod.json"},
+		{"doctor", "extra"}, {"healthcheck", "extra"}, {"version", "extra"}, {"licenses", "extra"}} {
+		code, out, errs := run(args...)
+		if code != 2 || out != "" || !strings.Contains(errs, args[0]+": unexpected argument "+fmt.Sprintf("%q", args[1])) || !strings.Contains(errs, "usage") {
+			t.Errorf("%v: %d %q %q, want 2 and the refusal and usage on stderr", args, code, out, errs)
+		}
+	}
+	if code, out, _ := run("version", "-h"); code != 0 || !strings.Contains(out, "usage: batondeck-kanban version") {
+		t.Errorf("version -h: %d %q", code, out)
+	}
+}
+
+// doctor checks what serve refuses to start on, each on a line of its own and each failing the exit
+// code: the master key (BATONDECK_MASTER_KEY's, or master.key's mode and length), the blob dir, and
+// the schema (newer than the binary's fails; not migrated yet is a WARN, since serve migrates it).
+// It creates nothing it checks: no master.key, no blob dir, no goose table in an empty file.
+func TestDoctorChecksWhatServeChecks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run("doctor")
+	if code != 0 || !regexp.MustCompile(`WARN schema       at version 0, this binary's is \d+: serve migrates it as it starts; user and token need it migrated first \(batondeck-kanban migrate\)\n`).MatchString(out) ||
+		!strings.Contains(out, "ok   keyring      master.key at "+filepath.Join(dir, "master.key")+": not created yet; serve creates it\n") ||
+		!strings.Contains(out, "ok   blobs        "+filepath.Join(dir, "blobs")+": not created yet; serve creates it\n") {
+		t.Fatalf("doctor on an empty file: %d %q", code, out)
+	}
+	db, err := sql.Open("sqlite", "file://"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master").Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("doctor wrote to the file it checks: %d tables, %v", tables, err)
+	}
+	db.Close()
+	for _, p := range []string{filepath.Join(dir, "master.key"), filepath.Join(dir, "blobs")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("doctor created %s: %v", p, err)
+		}
+	}
+
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	if _, err := core.OpenKeyring(filepath.Join(dir, "master.key"), func(string) (string, bool) { return "", false }); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = run("doctor")
+	if code != 0 || !regexp.MustCompile(`ok   schema       migrated to this binary's version\n`).MatchString(out) ||
+		!strings.Contains(out, "ok   keyring      master.key at "+filepath.Join(dir, "master.key")+"\n") {
+		t.Fatalf("doctor on a migrated store with its key: %d %q", code, out)
+	}
+
+	t.Setenv("BATONDECK_MASTER_KEY", "notbase64")
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL keyring      keyring: BATONDECK_MASTER_KEY is not base64") {
+		t.Fatalf("doctor with a bad BATONDECK_MASTER_KEY: %d %q", code, out)
+	}
+	os.Unsetenv("BATONDECK_MASTER_KEY")
+	if err := os.Chmod(filepath.Join(dir, "master.key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL keyring      keyring: "+filepath.Join(dir, "master.key")+" mode 644 is group/world accessible") {
+		t.Fatalf("doctor with a 0644 master.key: %d %q", code, out)
+	}
+	if err := os.Chmod(filepath.Join(dir, "master.key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notDir := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BATONDECK_BLOB_DIR", filepath.Join(notDir, "blobs"))
+	if code, out, _ := run("doctor"); code != 1 || !strings.Contains(out, "FAIL blobs        ") {
+		t.Fatalf("doctor with a blob dir under a file: %d %q", code, out)
+	}
+}
+
+// migrate beside a running serve (the data-dir lock held shared, which only serve does) fails at
+// once, saying a serve holds the dir and that serve migrates as it starts: the lock can never come
+// free while it runs, and the wait was a minute of silence. Beside a holder that will let go (another
+// migrate), it says it is waiting, then runs.
+func TestMigrateBesideARunningServeFailsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BATONDECK_DATABASE_URL", filepath.Join(dir, "bk.db"))
+	serving, err := core.AcquireServeLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serving.Share(); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		code int
+		errs string
+	}
+	done := make(chan result, 1)
+	go func() {
+		code, _, errs := run("migrate")
+		done <- result{code, errs}
+	}()
+	select {
+	case r := <-done:
+		if r.code != 1 || !strings.Contains(r.errs, "a serve is running on data dir "+dir) || !strings.Contains(r.errs, "serve migrates the store as it starts") {
+			t.Fatalf("migrate beside a serve: %d %q", r.code, r.errs)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("migrate beside a running serve is still waiting after 5 s")
+	}
+	if err := serving.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	alone, err := core.AcquireLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		code, _, errs := run("migrate")
+		done <- result{code, errs}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := alone.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-done; r.code != 0 || !strings.Contains(r.errs, "migrate: data dir "+dir+" is held by another batondeck-kanban process") || !strings.Contains(r.errs, "waiting up to 1m0s") {
+		t.Fatalf("migrate beside another migrate: %d %q", r.code, r.errs)
 	}
 }

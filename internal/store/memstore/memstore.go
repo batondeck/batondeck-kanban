@@ -7,6 +7,7 @@
 package memstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -228,6 +229,24 @@ func (s *Store) SchemaCurrent(ctx context.Context) error {
 
 // ServerVersion names the in-memory store.
 func (s *Store) ServerVersion(context.Context) (string, error) { return "memstore", nil }
+
+// HoldsSealedValues is the engines' answer over the maps: a live integration whose auth block holds
+// an oncall envelope, or a wake session with a sealed inbox token or bearer.
+func (s *Store) HoldsSealedValues(ctx context.Context) (bool, error) {
+	return get(ctx, s, func(st *state) (bool, error) {
+		for _, i := range st.integrations {
+			if i.DeletedAt == nil && bytes.Contains(i.Auth, []byte(`"enc1:`)) {
+				return true, nil
+			}
+		}
+		for _, w := range st.wake {
+			if w.SocketTokenSealed != nil || w.BearerSealed != nil {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+}
 
 // Close closes the store; every later call fails.
 func (s *Store) Close() error {

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -74,4 +75,32 @@ func TestAServeWaitsOutAnotherServesMigration(t *testing.T) {
 	}
 	joined.Release()
 	migrating.Release()
+}
+
+// AcquireLock tells a running serve (the lock held shared) from another offline command or a serve
+// migrating (held alone): only the first wraps ErrServeRunning, since only it never comes free.
+func TestAcquireLockNamesARunningServe(t *testing.T) {
+	dir := t.TempDir()
+	serving, err := AcquireServeLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(dir); err == nil || errors.Is(err, ErrServeRunning) {
+		t.Fatalf("beside a serve still migrating (alone): %v, want a refusal that is not ErrServeRunning", err)
+	}
+	if err := serving.Share(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(dir); !errors.Is(err, ErrServeRunning) {
+		t.Fatalf("beside a running serve: %v, want ErrServeRunning", err)
+	}
+	// The probe left no hold behind: once the serve stops, the lock is free.
+	if err := serving.Release(); err != nil {
+		t.Fatal(err)
+	}
+	offline, err := AcquireLock(dir)
+	if err != nil {
+		t.Fatalf("an idle data dir: %v", err)
+	}
+	offline.Release()
 }

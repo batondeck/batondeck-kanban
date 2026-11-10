@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -624,5 +626,133 @@ func TestServeSweepsAtTheRetentionBounds(t *testing.T) {
 	}
 	if len(left) != 2 || strings.Contains(logs.String(), "retention:") {
 		t.Fatalf("a sweep at the bounds left %+v and logged %q; want both rows and no failed step", left, logs.String())
+	}
+}
+
+// The README's first run, `migrate` and then `serve`, makes the master key with no warning: migrate
+// made the schema, so serve's own Migrate applies nothing, but the database holds nothing sealed
+// under an earlier key, so there is nothing for a new one to lose.
+func TestMigrateThenServeCreatesTheKeyWithoutAWarning(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	dir := t.TempDir()
+	t.Setenv("BATONDECK_DATABASE_URL", filepath.Join(dir, "bk.db"))
+	t.Setenv("BATONDECK_LISTEN", "tcp://"+addr)
+	t.Setenv("BATONDECK_MASTER_KEY", "")
+	os.Unsetenv("BATONDECK_MASTER_KEY")
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %s", errs)
+	}
+	done := make(chan int, 1)
+	var errb bytes.Buffer
+	go func() { done <- Run([]string{"serve"}, "x", io.Discard, &errb) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := http.Get("http://" + addr + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		select {
+		case code := <-done:
+			t.Fatalf("serve exited %d before listening: %s", code, errb.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("serve did not answer /healthz: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("serve exited %d: %s", code, errb.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("serve did not stop on SIGINT")
+	}
+	logs := errb.String()
+	if !strings.Contains(logs, "serve: created the master key "+filepath.Join(dir, "master.key")) || strings.Contains(logs, "WARN created") {
+		t.Fatalf("serve after migrate, on a database that holds nothing sealed: %q", logs)
+	}
+}
+
+// serve says when it creates master.key: one plain line while the database holds nothing sealed
+// (new, or used without an on-call HMAC integration or an inbox token), and a WARN once it holds
+// values sealed under an earlier key (an integration's secret, a wake session's token or bearer),
+// which no longer open: a delivery to an HMAC-signed integration is refused 401 with nothing else in
+// the log to say why. A key it reads, or the environment's, is not mentioned, and a store it cannot
+// ask draws the WARN too.
+func TestServeSaysWhenItCreatesTheMasterKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BATONDECK_DATABASE_URL", filepath.Join(dir, "bk.db"))
+	cfg, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	st, err := store.OpenSQLite(cfg.SQLitePath(), "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if _, err := st.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	noEnv := func(string) (string, bool) { return "", false }
+	open := func(lookup func(string) (string, bool), s sealedHolder) string {
+		t.Helper()
+		var buf bytes.Buffer
+		if _, err := openKeyring(cfg, "", lookup, log.New(&buf, "", 0), s); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	keyPath := filepath.Join(dir, "master.key")
+	removeKey := func() {
+		t.Helper()
+		if err := os.Remove(keyPath); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created := "serve: created the master key " + keyPath + "; back it up"
+	if got := open(noEnv, st); !strings.Contains(got, created) || strings.Contains(got, "WARN") {
+		t.Fatalf("a new database: %q", got)
+	}
+	if got := open(noEnv, st); got != "" {
+		t.Fatalf("the key read back: %q", got)
+	}
+	// Lost beside a database that sealed nothing: the new key loses nothing either.
+	removeKey()
+	if got := open(noEnv, st); !strings.Contains(got, created) || strings.Contains(got, "WARN") {
+		t.Fatalf("a database that holds nothing sealed: %q", got)
+	}
+	if err := st.PutWakeSession(ctx, store.WakeSession{ID: "W-1", IdentityID: "alice", AgentID: "a1", CreatedAt: 1, LastSeenAt: 1,
+		ExpiresAt: time.Now().Add(time.Hour).UnixMilli(), BearerSealed: []byte{1, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	removeKey()
+	if got := open(noEnv, st); !strings.Contains(got, "serve: WARN created a new master key "+keyPath+", but the database holds secrets sealed under an earlier key") {
+		t.Fatalf("a database that holds a sealed bearer: %q", got)
+	}
+	removeKey()
+	closed, err := store.OpenSQLite(filepath.Join(dir, "other.db"), "FULL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	if got := open(noEnv, closed); !strings.Contains(got, "serve: WARN created a new master key "+keyPath+", and could not tell whether") {
+		t.Fatalf("a store that cannot be asked: %q", got)
+	}
+	env := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{5}, 32))
+	if got := open(func(k string) (string, bool) { return env, k == core.MasterKeyEnv }, st); got != "" {
+		t.Fatalf("the environment's key: %q", got)
 	}
 }

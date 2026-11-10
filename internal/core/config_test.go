@@ -302,3 +302,46 @@ func TestPublicURL(t *testing.T) {
 		t.Errorf("file's public_url loaded as %q, want https://file.example", c.PublicURL)
 	}
 }
+
+// database.url may carry the database password, so a refused one is never echoed: a mistyped scheme
+// is named by its scheme alone, and a postgres URL that libpq and pgx would split with part of the
+// password in the host or database (an unencoded '/' or '@' in it) is refused before it reaches a
+// log line or a connection error, with the encoding that fixes it.
+func TestARefusedDatabaseURLIsNeverEchoed(t *testing.T) {
+	for raw, want := range map[string]string{
+		"Postgres://kanban:S3cretPw@db.internal:5432/kanban":   `"Postgres://"`,
+		"postgress://kanban:S3cretPw@db.internal:5432/kanban":  `"postgress://"`,
+		"pg://kanban:S3cretPw@db.internal/kanban":              `"pg://"`,
+		"postgresql+psycopg://kanban:S3cretPw@db.internal/k":   `"postgresql+psycopg://"`,
+		"kanban:S3cretPw@db.internal://x":                      "neither a file path nor a postgres://",
+		"postgres://kanban:123/S3cretPw@127.0.0.1:5432/kanban": "%2F",
+		"postgres://kanban:12@S3cretPw@db.internal/kanban":     "%40",
+		"postgres://kanban:a@S3cret/Pw@db.internal/kanban":     "%2F",
+		"postgres://kanban:a@S3cret/Pw?x@db.internal/kanban":   "%40",
+	} {
+		_, err := Load("", env(map[string]string{"BATONDECK_DATABASE_URL": raw}))
+		if err == nil || !strings.Contains(err.Error(), RuleDatabaseURL) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: err %v, want one naming %s and %s", raw, err, RuleDatabaseURL, want)
+		}
+		if strings.Contains(err.Error(), "S3cretPw") || strings.Contains(err.Error(), "kanban:") {
+			t.Fatalf("%s: the refusal echoes the URL: %v", raw, err)
+		}
+	}
+	// Each of these is read by libpq and pgx with the whole password in the userinfo, and loads.
+	for raw, hostDB := range map[string][2]string{
+		"postgres://kanban:S3cretPw@db.internal:5432/kanban?sslmode=disable": {"db.internal:5432", "kanban"},
+		"postgres://kanban:12?3#4@db.internal/kanban":                        {"db.internal", "kanban"},
+		"postgres://kanban:S3cret%2FPw@db.internal/kanban":                   {"db.internal", "kanban"},
+		"postgresql://db.internal/kanban":                                    {"db.internal", "kanban"},
+		"postgres://kanban@db.internal/kanban?application_name=me%40host":    {"db.internal", "kanban"},
+		"postgresql:///kanban?host=/run/postgresql":                          {"", "kanban"},
+	} {
+		c, err := Load("", env(map[string]string{"BATONDECK_DATABASE_URL": raw, "BATONDECK_BLOB_DIR": "/srv/blobs"}))
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if host, db := c.PostgresHostDB(); host != hostDB[0] || db != hostDB[1] {
+			t.Fatalf("%s: host %q, database %q; want %q, %q", raw, host, db, hostDB[0], hostDB[1])
+		}
+	}
+}

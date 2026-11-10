@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -10,7 +11,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -50,8 +50,7 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 	}
 	switch cmd {
 	case "version":
-		fmt.Fprintln(stdout, "batondeck-kanban "+version)
-		return 0
+		return printVersion(rest, version, stdout, stderr)
 	case "serve":
 		return serve(rest, version, stdout, stderr)
 	case "healthcheck":
@@ -84,7 +83,7 @@ commands:
   token        create, list and revoke API tokens (a token is printed once, at create)
   user         add, disable, list users and set their passwords (no sign-up page: users are made here)
   session      register or unregister this client session for the server's wake doorbell (hooks run it)
-  doctor       check the config and report the store engine the connection answers as
+  doctor       check the config, the store and its schema, the master key and the blob dir
   healthcheck  probe /healthz on the configured listen address (container HEALTHCHECK)
   licenses     print the licence, the NOTICE and the third-party notices this binary carries
   version      print the version
@@ -106,9 +105,7 @@ func licenses(args []string, stdout, stderr io.Writer) int {
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "licenses: unexpected argument %q\n", fs.Arg(0))
-		fs.Usage()
+	if !noArgs(fs) {
 		return 2
 	}
 	rule := strings.Repeat("=", 80)
@@ -118,6 +115,35 @@ func licenses(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s\n%s\n%s\n\n%s\n\n", rule, f.name, rule, strings.TrimRight(f.text, "\n"))
 	}
 	return 0
+}
+
+// printVersion is `batondeck-kanban version`: the build-stamped version on stdout.
+func printVersion(args []string, version string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprint(fs.Output(), "usage: batondeck-kanban version\n\nprints the version.\n") }
+	if code, ok := parseFlags(fs, args, stdout); !ok {
+		return code
+	}
+	if !noArgs(fs) {
+		return 2
+	}
+	fmt.Fprintln(stdout, "batondeck-kanban "+version)
+	return 0
+}
+
+// noArgs reports whether fs, parsed, was given no positional argument; when it was, it prints the
+// refusal and fs's usage on fs's output, the command's stderr, and the command returns 2. A command
+// that takes none would otherwise run against the defaults: `migrate prod.json` (the file named
+// without -config) migrated the default SQLite file, and flag parsing stops at the first
+// positional, so the flags after it were dropped too.
+func noArgs(fs *flag.FlagSet) bool {
+	if fs.NArg() == 0 {
+		return true
+	}
+	fmt.Fprintf(fs.Output(), "%s: unexpected argument %q\n", fs.Name(), fs.Arg(0))
+	fs.Usage()
+	return false
 }
 
 // isHelp reports whether arg, in a command's or a subcommand's place, asks for the usage.
@@ -177,6 +203,18 @@ func openStore(ctx context.Context, cfg *core.Config, create bool) (store.Store,
 	return store.OpenSQLite(path, cfg.Database.Synchronous)
 }
 
+// sqliteModeWarning is why the SQLite file at path is open to other local accounts, naming the
+// chmod that closes it, or "" when it is private (or not there). store.OpenSQLite creates the file
+// 0600, and SQLite gives its -wal and -shm files the same mode; a file made before, or copied in
+// under a looser umask, keeps the mode it has, which serve and doctor warn of.
+func sqliteModeWarning(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm()&0o077 == 0 {
+		return ""
+	}
+	return fmt.Sprintf("sqlite file %s is mode %o: other local accounts can read the board; chmod 600 it, and its -wal and -shm files", path, fi.Mode().Perm())
+}
+
 // migratedLine says what one Migrate did.
 func migratedLine(m store.Migrated) string {
 	if m.None {
@@ -231,6 +269,9 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
 	}
+	if !noArgs(fs) {
+		return 2
+	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
@@ -274,7 +315,12 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	log.Printf("serve: store %s: %s", cfg.Engine(), line)
-	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log)
+	if cfg.Engine() == core.EngineSQLite {
+		if w := sqliteModeWarning(cfg.SQLitePath()); w != "" {
+			log.Printf("serve: WARN %s", w)
+		}
+	}
+	keys, err := openKeyring(cfg, cfgPath, os.LookupEnv, log, st)
 	if err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
@@ -309,16 +355,14 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 }
 
 // dataLine names where serve keeps its state: the SQLite file, or the Postgres host and database
-// (never the URL, which may carry a password), and the blob dir.
+// as libpq and pgx read them (core.Config.PostgresHostDB; never the URL, which may carry a
+// password), and the blob dir.
 func dataLine(cfg *core.Config) string {
 	if cfg.Engine() != core.EnginePostgres {
 		return fmt.Sprintf("sqlite at %s, blobs in %s", cfg.SQLitePath(), cfg.BlobDir())
 	}
-	host, db := "?", "?"
-	if u, err := url.Parse(cfg.Database.URL); err == nil {
-		host, db = u.Host, strings.TrimPrefix(u.Path, "/")
-	}
-	return fmt.Sprintf("postgres on host %s, database %s, blobs in %s", host, db, cfg.BlobDir())
+	host, db := cfg.PostgresHostDB()
+	return fmt.Sprintf("postgres on host %s, database %s, blobs in %s", cmp.Or(host, "?"), cmp.Or(db, "?"), cfg.BlobDir())
 }
 
 // listenAll binds every listen entry, closing the ones bound when one fails.
@@ -367,8 +411,12 @@ func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (code int, ok
 func healthcheck(args []string, stdout, stderr io.Writer) int {
 	var cfgPath string
 	fs := commonFlags("healthcheck", &cfgPath, stderr)
+	serverHelp(fs, "Probes /healthz on the first listen address; exits 0 if it answers 200 (the container HEALTHCHECK).")
 	if code, ok := parseFlags(fs, args, stdout); !ok {
 		return code
+	}
+	if !noArgs(fs) {
+		return 2
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
