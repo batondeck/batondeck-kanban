@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -113,7 +114,7 @@ func TestDialAddr(t *testing.T) {
 // gooseRows counts the rows of goose's version table in the SQLite file at path.
 func gooseRows(t *testing.T, path string) int {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := sql.Open("sqlite", "file://"+(&url.URL{Path: path}).EscapedPath()+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,5 +428,25 @@ func TestSPAAnswers404(t *testing.T) {
 				t.Errorf("/brand/favicon.svg: %d %q", code, ct)
 			}
 		})
+	}
+}
+
+// migrate, doctor and user all name the one file database.url names, when a directory in its path
+// holds a '#' (a "C#" folder, "team#1"): migrate made the database in the parent directory, and
+// user and doctor, which look at the path itself, said it was not created.
+func TestCommandsAgreeOnASQLitePathWithAHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team#1", "bk.db")
+	t.Setenv("BATONDECK_DATABASE_URL", path)
+	if code, _, errs := run("migrate"); code != 0 {
+		t.Fatalf("migrate: %d %s", code, errs)
+	}
+	if rows := gooseRows(t, path); rows != 1+sqliteMigrations(t) {
+		t.Fatalf("goose_db_version at %s holds %d rows", path, rows)
+	}
+	if code, out, _ := run("doctor"); code != 0 || !strings.Contains(out, "the connection reports: SQLite") {
+		t.Fatalf("doctor: %d %q", code, out)
+	}
+	if code, _, errs := run("user", "list"); code != 0 {
+		t.Fatalf("user list: %d %s", code, errs)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"strings"
 	"sync/atomic"
 
 	"github.com/pressly/goose/v3"
@@ -54,11 +56,23 @@ const sqliteConns = 4
 // a read connection refuses writes, and its pragma comes last so that journal_mode(WAL) has run
 // on a fresh file before it.
 func sqliteDSN(path, synchronous string, write bool) string {
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(%s)", path, synchronous)
+	dsn := fmt.Sprintf("%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(%s)", sqliteURI(path), synchronous)
 	if write {
 		return dsn + "&_txlock=immediate"
 	}
 	return dsn + "&_pragma=query_only(1)"
+}
+
+// sqliteURI is the file: URI naming path, percent-encoded (SQLite decodes it), so that a '?', '#'
+// or '%' in a directory or file name is part of the name: pasted in as it is, '?' and '#' end the
+// path and '%' starts an escape, and the driver opens another file. An absolute path takes an empty
+// authority ("file:///..."), so that one starting with "//" is not read as naming a host.
+func sqliteURI(path string) string {
+	p := (&url.URL{Path: path}).EscapedPath()
+	if strings.HasPrefix(path, "/") {
+		return "file://" + p
+	}
+	return "file:" + p
 }
 
 // OpenSQLite opens the SQLite file at path with the connection settings the type's comment explains:
