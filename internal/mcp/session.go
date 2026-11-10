@@ -15,35 +15,69 @@ import (
 	"github.com/batondeck/batondeck-kanban/internal/service"
 )
 
-// sessionTable is the live MCP sessions, by id: an id per initialize, at most max of them. go-sdk
-// collects a session idle past Options.SessionIdle (StreamableHTTPOptions.SessionTimeout) and then
-// answers its id with 404 "session not found", the client's cue to initialise again.
+// sessionTable is the live MCP sessions, by id: an id per initialize, at most max of them and at most
+// perIdentity of one identity's. go-sdk collects a session idle past Options.SessionIdle
+// (StreamableHTTPOptions.SessionTimeout) and then answers its id with 404 "session not found", the
+// client's cue to initialise again.
 type sessionTable struct {
-	mu       sync.Mutex
-	max      int
-	closed   bool                          // Server.Close ran: no session is admitted again
-	live     map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
-	agents   map[string]int                // agent-session key -> its live MCP sessions
-	keys     map[string]string             // MCP session id -> its agent-session key
-	ending   map[string]string             // sessions to close once a request is answered: id -> that request's mark
-	closing  map[string]struct{}           // sessions EndAgentSessions is ending: their calls touch no row
-	inflight map[string]struct{}           // marks of the HTTP requests closeEnding has not seen return
-	ends     sync.WaitGroup                // one per admitted session, done when its end is recorded
+	mu          sync.Mutex
+	max         int
+	perIdentity int
+	closed      bool                          // Server.Close ran: no session is admitted again
+	live        map[string]*mcp.ServerSession // by MCP session id, for the bound and for Close
+	owner       map[string]string             // MCP session id -> the identity that initialised it
+	seen        map[string]time.Time          // MCP session id -> when its last request arrived
+	evicting    map[string]struct{}           // sessions closed to make room for their identity's newer one
+	agents      map[string]int                // agent-session key -> its live MCP sessions
+	keys        map[string]string             // MCP session id -> its agent-session key
+	ending      map[string]string             // sessions to close once a request is answered: id -> that request's mark
+	closing     map[string]struct{}           // sessions EndAgentSessions is ending: their calls touch no row
+	inflight    map[string]struct{}           // marks of the HTTP requests closeEnding has not seen return
+	ends        sync.WaitGroup                // one per admitted session, done when its end is recorded
 }
 
-// reserve admits ss, or refuses when the table is full or closed. fresh is false for an id
-// already live: a second initialize on its session, which this call did not admit.
-func (t *sessionTable) reserve(ss *mcp.ServerSession) (ok, fresh bool) {
+// reserve admits ss, initialised by identity at now, or refuses when the table is full or closed.
+// fresh is false for an id already live: a second initialize on its session, which this call did
+// not admit. An identity at its own bound is admitted all the same, and evict is its longest-idle
+// session, which the caller closes: from then on it counts against neither bound, so one identity
+// can never hold more than perIdentity of the table, nor lock another identity out of it.
+func (t *sessionTable) reserve(ss *mcp.ServerSession, identity string, now time.Time) (ok, fresh bool, evict *mcp.ServerSession) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if _, live := t.live[ss.ID()]; live {
-		return true, false
+		return true, false, nil
 	}
-	if t.closed || len(t.live) >= t.max {
-		return false, false
+	if t.closed {
+		return false, false, nil
 	}
-	t.live[ss.ID()] = ss
-	return true, true
+	mine, oldest := 0, ""
+	for id, who := range t.owner {
+		if _, going := t.evicting[id]; going || who != identity {
+			continue
+		}
+		mine++
+		if oldest == "" || t.seen[id].Before(t.seen[oldest]) {
+			oldest = id
+		}
+	}
+	switch {
+	case mine >= t.perIdentity && t.live[oldest] != nil:
+		evict = t.live[oldest]
+		t.evicting[oldest] = struct{}{}
+	case len(t.live)-len(t.evicting) >= t.max:
+		return false, false, nil
+	}
+	t.live[ss.ID()], t.owner[ss.ID()], t.seen[ss.ID()] = ss, identity, now
+	return true, true, evict
+}
+
+// saw records a request on live session id at now, for the longest-idle choice.
+func (t *sessionTable) saw(id string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, live := t.live[id]; live {
+		t.seen[id] = now
+	}
 }
 
 // closeAll refuses new sessions and returns the live ones.
@@ -62,6 +96,9 @@ func (t *sessionTable) release(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.live, id)
+	delete(t.owner, id)
+	delete(t.seen, id)
+	delete(t.evicting, id)
 	delete(t.keys, id)
 	delete(t.ending, id)
 	delete(t.closing, id)
@@ -201,6 +238,7 @@ func (s *Server) sessionMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 			return next(ctx, method, req)
 		}
 		caller, _ := CallerFrom(ctx)
+		s.sessions.saw(ss.ID(), time.Now())
 		ctx = context.WithValue(ctx, sessionIDKey{}, ss.ID())
 		if ex := req.GetExtra(); ex != nil && ex.Header != nil {
 			ctx = context.WithValue(ctx, requestMarkKey{}, ex.Header.Get(requestMarkHeader))
@@ -245,10 +283,16 @@ func (s *Server) touchCall(ctx context.Context, ss *mcp.ServerSession, caller do
 
 func (s *Server) initialize(ctx context.Context, ss *mcp.ServerSession, caller domain.Caller, method string, req mcp.Request, next mcp.MethodHandler) (mcp.Result, error) {
 	id := ss.ID()
-	ok, fresh := s.sessions.reserve(ss)
+	ok, fresh, evict := s.sessions.reserve(ss, caller.Identity, time.Now())
 	if !ok {
 		s.log.Printf("mcp: session limit %d reached; initialize refused", s.sessions.max)
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "too many MCP sessions; retry later"}
+	}
+	if evict != nil {
+		// Its end runs the usual bookkeeping (the goroutine below, started by its own initialize);
+		// its client's next request is answered 404 session not found, the cue to initialise again.
+		s.log.Printf("mcp: %s holds %d MCP sessions, its bound; closing its longest-idle one", caller.Identity, s.sessions.perIdentity)
+		go func() { _ = evict.Close() }()
 	}
 	if !fresh {
 		// Another initialize admitted this session and keeps its bookkeeping; go-sdk answers this one.

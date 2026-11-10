@@ -30,6 +30,11 @@ const DefaultSessionIdle = 30 * time.Minute
 // DefaultMaxSessions bounds the live sessions; an initialize past it is refused.
 const DefaultMaxSessions = 1000
 
+// DefaultMaxSessionsPerIdentity bounds one identity's live sessions, so that one token holder (or a
+// client that never ends its sessions) cannot fill the table and lock every other client out: an
+// initialize past it closes that identity's longest-idle session to make room.
+const DefaultMaxSessionsPerIdentity = 64
+
 // Options builds a Server.
 type Options struct {
 	// Version is the binary's version, reported as serverInfo.version.
@@ -48,6 +53,8 @@ type Options struct {
 	SessionIdle time.Duration
 	// MaxSessions: 0 means DefaultMaxSessions.
 	MaxSessions int
+	// MaxSessionsPerIdentity: 0 means DefaultMaxSessionsPerIdentity.
+	MaxSessionsPerIdentity int
 	// Logger receives refusals, bookkeeping failures and recovered panics; nil discards them.
 	Logger *log.Logger
 	// HiddenTools is what a caller's capability grants leave out of its tools/list
@@ -79,12 +86,17 @@ func New(o Options) *Server {
 	if o.MaxSessions == 0 {
 		o.MaxSessions = DefaultMaxSessions
 	}
+	if o.MaxSessionsPerIdentity == 0 {
+		o.MaxSessionsPerIdentity = DefaultMaxSessionsPerIdentity
+	}
 	if o.Logger == nil {
 		o.Logger = log.New(io.Discard, "", 0)
 	}
 	s := &Server{services: o.Services, log: o.Logger}
 	s.halted, s.halt = context.WithCancel(context.Background())
-	s.sessions = &sessionTable{max: o.MaxSessions, live: map[string]*mcp.ServerSession{}, agents: map[string]int{}, keys: map[string]string{}, ending: map[string]string{}, inflight: map[string]struct{}{}}
+	s.sessions = &sessionTable{max: o.MaxSessions, perIdentity: o.MaxSessionsPerIdentity, live: map[string]*mcp.ServerSession{},
+		owner: map[string]string{}, seen: map[string]time.Time{}, evicting: map[string]struct{}{},
+		agents: map[string]int{}, keys: map[string]string{}, ending: map[string]string{}, inflight: map[string]struct{}{}}
 	s.manifest = &manifest{entries: map[string]ManifestEntry{}}
 	s.tools = &toolList{memo: map[audience]*mcp.ListToolsResult{}, visible: map[string]func(audience) bool{}, seen: map[string]audience{}, known: map[string]bool{}, log: s.log,
 		hidden: o.HiddenTools}

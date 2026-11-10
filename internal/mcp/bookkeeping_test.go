@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -49,6 +51,50 @@ func TestCallBookkeepingStoresNoCallerText(t *testing.T) {
 	}
 	if want := []string{unknownTool + " []", unknownTool + " []", "whoami []", "whoami []"}; strings.Join(tools, "|") != strings.Join(want, "|") {
 		t.Errorf("agent session touches = %q, want %q", tools, want)
+	}
+}
+
+// One identity's sessions are bounded on their own: at its bound an initialize closes that
+// identity's longest-idle session instead of taking another slot, so one token holder (or a client
+// that never ends its sessions) cannot fill the table and lock every other client out. The global
+// bound still holds behind it.
+func TestSessionsBoundedPerIdentity(t *testing.T) {
+	f := servicefake.New()
+	h := bootHarness(t, f.Services(), resolver(), func(o *Options) { o.MaxSessions = 3; o.MaxSessionsPerIdentity = 2 })
+	plant(h)
+	whoami := func(cs *mcp.ClientSession) error {
+		_, err := cs.CallTool(ctx(t), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{"projectId": "P-1"}})
+		return err
+	}
+	idle := h.connect(t, tokenAda)
+	time.Sleep(20 * time.Millisecond)
+	busy := h.connect(t, tokenAda)
+	time.Sleep(20 * time.Millisecond)
+	if err := whoami(busy); err != nil {
+		t.Fatal(err)
+	}
+	third := h.connect(t, tokenAda) // ada's bound is 2: her longest-idle session makes room
+	waitFor(t, func() bool {
+		resp := rawPOST(t, h.url, tokenAda, idle.ID(), `{"jsonrpc":"2.0","id":9,"method":"ping"}`)
+		return resp.StatusCode == http.StatusNotFound
+	})
+	for name, cs := range map[string]*mcp.ClientSession{"the busy session": busy, "the new session": third} {
+		if err := whoami(cs); err != nil {
+			t.Errorf("%s of ada's after the eviction: %v", name, err)
+		}
+	}
+	if cs, err := h.dial(tokenGrace); err != nil {
+		t.Errorf("grace was locked out by ada's sessions: %v", err)
+	} else {
+		t.Cleanup(func() { _ = cs.Close() })
+	}
+	// ada's two and grace's one fill the table of 3: the global bound refuses a fourth identity.
+	if cs, err := h.dial(tokenAdmin); err == nil {
+		t.Cleanup(func() { _ = cs.Close() })
+		t.Error("a session past MaxSessions 3 was admitted")
+	}
+	if logs := h.log.String(); !strings.Contains(logs, "u-ada holds 2 MCP sessions") {
+		t.Errorf("the eviction was not logged:\n%s", logs)
 	}
 }
 
