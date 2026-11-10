@@ -118,6 +118,14 @@ func TestInitializeAnswersTheSurface(t *testing.T) {
 	if err != nil || len(tpl.ResourceTemplates) != 11 {
 		t.Errorf("resources/templates/list = %+v, %v; want the eleven templates (five board and task, six chronicle)", tpl, err)
 	}
+	// Every list is the caller's own (tools/list is filtered per audience): no cache shared across
+	// callers may serve it, so none is labelled public, the protocol default.
+	for name, scope := range map[string]string{"tools/list": tools.CacheScope, "prompts/list": prompts.CacheScope,
+		"resources/list": res.CacheScope, "resources/templates/list": tpl.CacheScope} {
+		if scope != "private" {
+			t.Errorf("%s cacheScope %q, want private", name, scope)
+		}
+	}
 
 	touches := calls(f, "Sessions.TouchAgentSession")
 	if len(touches) == 0 {

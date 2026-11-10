@@ -272,6 +272,9 @@ func TestResourcesRead(t *testing.T) {
 		if len(res.Contents) != 1 || res.Contents[0].URI != c.uri || res.Contents[0].MIMEType != "application/json" || res.Contents[0].Text != string(want) {
 			t.Errorf("read %s = %+v, want %s", c.uri, res.Contents, want)
 		}
+		if res.CacheScope != "private" {
+			t.Errorf("read %s cacheScope %q, want private: the content is one member's view of a project", c.uri, res.CacheScope)
+		}
 		t.Logf("read %s -> %s %s", c.uri, c.method, res.Contents[0].Text)
 	}
 

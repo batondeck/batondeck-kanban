@@ -95,6 +95,7 @@ func New(o Options) *Server {
 			Prompts:   &mcp.PromptCapabilities{ListChanged: true},
 			Resources: &mcp.ResourceCapabilities{ListChanged: true},
 		},
+		SetCacheable: privateCache,
 	})
 	// The sending handler, kept to notify one session (go-sdk exports no per-session list_changed).
 	s.sdk.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler { s.tools.send = next; return next })
@@ -113,6 +114,11 @@ func New(o Options) *Server {
 	s.handler = hostCheck(o.PublicURL)(requireBearer(o.Resolver, o.ResourceMetadataURL, s.log)(s.closeEnding(streamable)))
 	return s
 }
+
+// privateCache labels every list and resources/read result private, ttlMs left 0: each is the
+// caller's own (tools/list is filtered per audience, a resource is read as one member), and go-sdk
+// otherwise fills in the protocol default "public", which lets a cache shared across callers serve it.
+func privateCache(_ context.Context, _ mcp.Request, c *mcp.Cacheable) { c.CacheScope = "private" }
 
 // Close refuses new sessions, ends every live one, each as any other end does (its agent session's
 // row kept for the retention sweep, P-264), and waits for that bookkeeping or ctx. A session's end
