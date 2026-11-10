@@ -23,7 +23,7 @@ func (q *Queries) DeleteWakeSession(ctx context.Context, id string) (int64, erro
 }
 
 const getWakeSession = `-- name: GetWakeSession :one
-SELECT id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed
+SELECT id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed, device_id
 FROM wake_sessions WHERE id = $1 AND expires_at > $2
 `
 
@@ -51,16 +51,18 @@ func (q *Queries) GetWakeSession(ctx context.Context, arg GetWakeSessionParams) 
 		&i.ClientSessionID,
 		&i.ProcStart,
 		&i.BearerSealed,
+		&i.DeviceID,
 	)
 	return i, err
 }
 
 const listWakeSessions = `-- name: ListWakeSessions :many
-SELECT id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed
+SELECT id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed, device_id
 FROM wake_sessions ORDER BY created_at, id
 `
 
-// Every row, expired or not, oldest first: the directory re-validates each at start-up.
+// Every row, expired or not, oldest first: the directory re-validates each of its device's at
+// start-up.
 func (q *Queries) ListWakeSessions(ctx context.Context) ([]WakeSession, error) {
 	rows, err := q.db.Query(ctx, listWakeSessions)
 	if err != nil {
@@ -85,6 +87,7 @@ func (q *Queries) ListWakeSessions(ctx context.Context) ([]WakeSession, error) {
 			&i.ClientSessionID,
 			&i.ProcStart,
 			&i.BearerSealed,
+			&i.DeviceID,
 		); err != nil {
 			return nil, err
 		}
@@ -97,13 +100,13 @@ func (q *Queries) ListWakeSessions(ctx context.Context) ([]WakeSession, error) {
 }
 
 const putWakeSession = `-- name: PutWakeSession :exec
-INSERT INTO wake_sessions (id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+INSERT INTO wake_sessions (id, identity_id, agent_id, socket_path, socket_token_sealed, last_cursor, created_at, last_seen_at, expires_at, pid, role, client_session_id, proc_start, bearer_sealed, device_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (id) DO UPDATE SET identity_id = excluded.identity_id, agent_id = excluded.agent_id,
   socket_path = excluded.socket_path, socket_token_sealed = excluded.socket_token_sealed,
   last_cursor = excluded.last_cursor, last_seen_at = excluded.last_seen_at, expires_at = excluded.expires_at,
   pid = excluded.pid, role = excluded.role, client_session_id = excluded.client_session_id,
-  proc_start = excluded.proc_start, bearer_sealed = excluded.bearer_sealed
+  proc_start = excluded.proc_start, bearer_sealed = excluded.bearer_sealed, device_id = excluded.device_id
 `
 
 type PutWakeSessionParams struct {
@@ -121,6 +124,7 @@ type PutWakeSessionParams struct {
 	ClientSessionID   sql.NullString
 	ProcStart         sql.NullString
 	BearerSealed      []byte
+	DeviceID          string
 }
 
 // The wake-session area: the device session directory's rows (R0.25). A put replaces every field of
@@ -141,6 +145,7 @@ func (q *Queries) PutWakeSession(ctx context.Context, arg PutWakeSessionParams) 
 		arg.ClientSessionID,
 		arg.ProcStart,
 		arg.BearerSealed,
+		arg.DeviceID,
 	)
 	return err
 }

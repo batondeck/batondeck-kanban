@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,15 +41,48 @@ func ProcessUID(pid int) (int, error) {
 	return int(st.Uid), nil
 }
 
+// ProcessParent is pid's parent pid, from the field after the state in /proc/<pid>/stat, and the
+// name of the program it runs: the base name of /proc/<pid>/exe (a script's interpreter, where the
+// command name would be the script's), else its command name. ErrNoProcess when pid is gone.
+func ProcessParent(pid int) (ppid int, name string, err error) {
+	if pid <= 0 {
+		return 0, "", ErrNoProcess
+	}
+	dir := "/proc/" + strconv.Itoa(pid)
+	stat, err := os.ReadFile(dir + "/stat")
+	if err != nil {
+		return 0, "", ErrNoProcess
+	}
+	open, end := strings.IndexByte(string(stat), '('), strings.LastIndexByte(string(stat), ')')
+	if open < 0 || end < open {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	fields := strings.Fields(string(stat[end+1:])) // state, ppid, ...
+	if len(fields) < 2 {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	if ppid, err = strconv.Atoi(fields[1]); err != nil {
+		return 0, "", fmt.Errorf("process %d: unreadable stat", pid)
+	}
+	name = string(stat[open+1 : end])
+	if exe, err := os.Readlink(dir + "/exe"); err == nil {
+		name = filepath.Base(strings.TrimSuffix(exe, " (deleted)"))
+	}
+	return ppid, name, nil
+}
+
 // pidfdWatch holds a pidfd per watched pid and polls them with an eventfd that add, remove and
 // close write to so the loop rebuilds its set. A removed pidfd is closed by the loop, after the
-// poll that may still hold it returns.
+// poll that may still hold it returns. Once closed, add and remove touch no descriptor: the
+// eventfd's number may already belong to another file. quit, closed by close, ends a send on
+// exited that nobody reads.
 type pidfdWatch struct {
 	efd     int
 	mu      sync.Mutex
 	fds     map[int]int // pid → pidfd
 	retired []int
 	closed  bool
+	quit    chan struct{}
 	done    chan struct{}
 }
 
@@ -57,7 +91,7 @@ func newExitImpl(exited chan<- int) (exitImpl, error) {
 	if err != nil {
 		return nil, fmt.Errorf("exit watch: eventfd: %w", err)
 	}
-	w := &pidfdWatch{efd: efd, fds: map[int]int{}, done: make(chan struct{})}
+	w := &pidfdWatch{efd: efd, fds: map[int]int{}, quit: make(chan struct{}), done: make(chan struct{})}
 	go w.loop(exited)
 	return w, nil
 }
@@ -80,6 +114,7 @@ func (w *pidfdWatch) loop(exited chan<- int) {
 			for _, fd := range w.fds {
 				unix.Close(fd)
 			}
+			clear(w.fds)
 			w.mu.Unlock()
 			return
 		}
@@ -114,7 +149,10 @@ func (w *pidfdWatch) loop(exited chan<- int) {
 			}
 			w.mu.Unlock()
 			if watched {
-				exited <- pid
+				select {
+				case exited <- pid:
+				case <-w.quit: // the next round sees closed
+				}
 			}
 		}
 	}
@@ -146,7 +184,7 @@ func (w *pidfdWatch) remove(pid int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	fd, ok := w.fds[pid]
-	if !ok {
+	if !ok || w.closed {
 		return
 	}
 	delete(w.fds, pid)
@@ -159,6 +197,7 @@ func (w *pidfdWatch) close() error {
 	w.closed = true
 	w.kick()
 	w.mu.Unlock()
+	close(w.quit)
 	<-w.done
 	return unix.Close(w.efd)
 }

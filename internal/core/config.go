@@ -390,6 +390,10 @@ func (c *Config) Engine() string {
 	return EngineSQLite
 }
 
+// DataDir is the default data dir as Load resolved it ("" when it could not be, which is an error
+// only where it is used).
+func (c *Config) DataDir() string { return c.dataDir }
+
 // SQLitePath is the SQLite file: database.url, or DefaultDBFile in the default data dir when it
 // is unset. It is meaningful only when Engine is sqlite.
 func (c *Config) SQLitePath() string {

@@ -148,7 +148,7 @@ func (s *Store) PutWakeSession(ctx context.Context, w store.WakeSession) error {
 	}
 	return s.do(ctx, func(st *state) error {
 		for id, o := range st.wake {
-			if w.PID != 0 && o.PID == w.PID && id != w.ID {
+			if w.PID != 0 && o.PID == w.PID && o.DeviceID == w.DeviceID && id != w.ID {
 				return store.ErrWakePIDTaken(w.PID)
 			}
 		}

@@ -346,12 +346,25 @@ func serve(args []string, version string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
-	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media, cfg.Retention, proxies); err != nil {
+	if err := runServer(ctx, lns, st, version, cfg.PublicURL, log, sealer, media, cfg.Retention, proxies, deviceID(cfg, log)); err != nil {
 		fmt.Fprintln(stderr, "serve:", err)
 		return 1
 	}
 	log.Printf("serve: stopped")
 	return 0
+}
+
+// deviceID is this device's id for the session directory's rows (core.DeviceID in the data dir).
+// When it cannot be read or made, serve runs on "", the id of a store no other device shares, and
+// says so once.
+func deviceID(cfg *core.Config, logger *log.Logger) string {
+	id, err := core.DeviceID(cfg.DataDir())
+	if err != nil {
+		logger.Printf("serve: WARN no device id (%v): the session directory takes every row that names no device as this device's, so give each device sharing this database a data dir", err)
+		return ""
+	}
+	logger.Printf("serve: the session directory's device id is %s (%s)", id, filepath.Join(cfg.DataDir(), core.DeviceFile))
+	return id
 }
 
 // dataLine names where serve keeps its state: the SQLite file, or the Postgres host and database

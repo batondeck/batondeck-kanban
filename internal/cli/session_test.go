@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +90,9 @@ func TestSessionRegisterAndUnregister(t *testing.T) {
 // The client's pid without a messaging socket (tested): the parent process, here `go test`, which
 // is this uid's and alive, registered with no socket.
 func TestSessionWithoutAMessagingSocketIsTheParent(t *testing.T) {
+	if _, name, err := core.ProcessParent(os.Getppid()); err == nil && hookShells[name] {
+		t.Skipf("this test's parent is the shell %s, which the client looks past: run it under go test", name)
+	}
 	s := startDirectory(t, nil)
 	sessionEnv(t, s, s.alice, "")
 	oneLine(t, fmt.Sprintf("pid %d registered as worker", os.Getppid()), "session", "register", "--role", "worker")
@@ -96,6 +102,130 @@ func TestSessionWithoutAMessagingSocketIsTheParent(t *testing.T) {
 	oneLine(t, "removed", "session", "unregister")
 	if rows := s.rows(t); len(rows) != 0 {
 		t.Fatalf("rows %+v", rows)
+	}
+}
+
+// The client under a hook's shells (tested): without a messaging socket it is not the hook's shell.
+// The plugin's hook is a /bin/sh script that Claude Code runs through `sh -c`, so the command's
+// parent is that script's shell, which exits the moment the command returns: it was registered,
+// reported as registered, and dropped in the same second. Here this test process plays the client
+// and runs a script of the hook's shape the same way; the registered pid is this process, and it
+// stays.
+func TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient(t *testing.T) {
+	s := startDirectory(t, nil)
+	sessionEnv(t, s, s.alice, "")
+	script := filepath.Join(t.TempDir(), "session.sh")
+	body := fmt.Sprintf("#!/bin/sh\n%q -test.run='^TestSessionHookChild$' >&2\nexit 0\n", os.Args[0])
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := exec.Command("sh", "-c", fmt.Sprintf("%q start", script))
+	hook.Env = append(os.Environ(), "BK_SESSION_HOOK_CHILD=1")
+	var stderr strings.Builder
+	hook.Stderr = &stderr
+	if out, err := hook.Output(); err != nil || len(out) != 0 {
+		t.Fatalf("the hook: %v, stdout %q, stderr %q", err, out, stderr.String())
+	}
+	t.Logf("the hook's stderr: %q", stderr.String())
+	want := fmt.Sprintf("pid %d registered as worker", os.Getpid())
+	if !strings.Contains(stderr.String(), want) {
+		t.Fatalf("the hook's stderr %q lacks %q: the client is this process, the shells' parent", stderr.String(), want)
+	}
+	time.Sleep(200 * time.Millisecond) // the shells have exited; an entry for one of them would be gone
+	if rows := s.rows(t); len(rows) != 1 || rows[0].PID != int64(os.Getpid()) || !slices.Contains(s.pids(), int64(os.Getpid())) {
+		t.Fatalf("rows %+v, pids %v; want this process, %d, registered and kept", rows, s.pids(), os.Getpid())
+	}
+}
+
+// The walk past the hook's shells (tested on a process table): it stops at the nearest ancestor that
+// is not a shell, which may be pid 1 (a client that is a container's first process; the walk
+// stopped short of pid 1 and registered the hook's shell), and never at another uid's process or one
+// it cannot read.
+func TestClientProcessWalksPastShells(t *testing.T) {
+	type proc struct {
+		ppid int
+		name string
+		uid  int
+	}
+	me := os.Getuid()
+	for _, c := range []struct {
+		what  string
+		table map[int]proc
+		from  int
+		want  int
+	}{
+		{"a client as pid 1", map[int]proc{40: {12, "sh", me}, 12: {1, "dash", me}, 1: {0, "claude", me}}, 40, 1},
+		{"a client under init", map[int]proc{40: {12, "sh", me}, 12: {30, "dash", me}, 30: {1, "node", me}, 1: {0, "systemd", 0}}, 40, 30},
+		{"a client that is no shell", map[int]proc{40: {30, "node", me}}, 40, 40},
+		{"another uid's parent", map[int]proc{40: {12, "sh", me}, 12: {1, "sshd", me + 1}}, 40, 40},
+		{"an unreadable parent", map[int]proc{40: {12, "sh", me}}, 40, 40},
+	} {
+		parent := func(pid int) (int, string, error) {
+			if p, ok := c.table[pid]; ok {
+				return p.ppid, p.name, nil
+			}
+			return 0, "", core.ErrNoProcess
+		}
+		uid := func(pid int) (int, error) {
+			if p, ok := c.table[pid]; ok {
+				return p.uid, nil
+			}
+			return 0, core.ErrNoProcess
+		}
+		if got := walkPastShells(c.from, parent, uid); got != c.want {
+			t.Errorf("%s: the client of %d is %d, want %d", c.what, c.from, got, c.want)
+		}
+	}
+}
+
+// TestSessionHookChild is no test of its own: it is the command the hook script of
+// TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient runs.
+func TestSessionHookChild(t *testing.T) {
+	if os.Getenv("BK_SESSION_HOOK_CHILD") != "1" {
+		t.Skip("the hook's command, run by TestSessionWithoutAMessagingSocketUnderAHookShellIsTheClient")
+	}
+	os.Exit(session([]string{"register", "--role", "worker"}, os.Stdout, os.Stderr))
+}
+
+// The server's uid (tested): the client sends the bearer only to a server of its own uid, as the
+// server admits only clients of its own uid. Another local user who binds the configured socket
+// path first (a /tmp directory after a reboot, say) got every session's BATONDECK_TOKEN from the
+// SessionStart hook, which fails quietly by design. A server of another uid is played here by a
+// listener of this uid with the client's expected uid pointed elsewhere: it is refused in one
+// stderr line, exit 0, and the listener reads no request.
+func TestSessionSendsTheBearerOnlyToAServerOfItsUID(t *testing.T) {
+	sock := filepath.Join(shortDir(t, "bkimp"), "bk.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 4)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusCreated)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	t.Setenv("BATONDECK_CONFIG", "")
+	t.Setenv("BATONDECK_LISTEN", "unix://"+sock)
+	const bearer = "a-bearer-the-impostor-must-not-read" // the client sends it as it is
+	t.Setenv("BATONDECK_TOKEN", bearer)
+	t.Setenv("CLAUDE_CODE_MESSAGING_SOCKET", "")
+	old := sessionServerUID
+	sessionServerUID = func() int { return os.Getuid() + 1 }
+	t.Cleanup(func() { sessionServerUID = old })
+	for _, sub := range [][]string{{"session", "register", "--role", "worker"}, {"session", "unregister"}} {
+		oneLine(t, fmt.Sprintf("is served by uid %d, not uid %d", os.Getuid(), os.Getuid()+1), sub...)
+	}
+	select {
+	case auth := <-got:
+		t.Fatalf("a server of another uid read a request carrying %q", auth)
+	default:
+	}
+	sessionServerUID = old // the positive control: the same listener, as this uid's, is sent the request
+	oneLine(t, "registered as", "session", "register", "--role", "worker")
+	if auth := <-got; auth != "Bearer "+bearer {
+		t.Fatalf("the positive control's request carried %q", auth)
 	}
 }
 

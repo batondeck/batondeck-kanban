@@ -48,9 +48,9 @@ type WakeStore interface {
 	// of each row with the row's re-resolved caller, so a row written before the check holds is dropped.
 	CheckWakeAgent(ctx context.Context, caller domain.Caller, agent string) error
 
-	// ListWakeSessions is every directory row with its secrets opened, for the directory's start-up
-	// rebuild. A row whose secrets do not open is listed with Sealed false and an empty Bearer, so
-	// the directory drops it.
+	// ListWakeSessions is every directory row of this device (Options.Device; a row that names no
+	// device counts) with its secrets opened, for the directory's start-up rebuild. A row whose
+	// secrets do not open is listed with Sealed false and an empty Bearer, so the directory drops it.
 	ListWakeSessions(ctx context.Context) ([]WakeSessionRow, error)
 
 	// SetWakeSessionCursor records the last cursor delivered to the entry.

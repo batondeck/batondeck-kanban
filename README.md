@@ -85,7 +85,9 @@ curl -fsS http://127.0.0.1:8080/healthz     # batondeck-kanban 0.1.0 ok postgres
 In the steps below, run `batondeck-kanban …` as `docker compose exec -T batondeck-kanban
 batondeck-kanban …`. The image serves the web UI, `/mcp` and pull clients; the plugin's device wake
 (step 4) needs the binary on the machine the Claude Code sessions run on, because the server watches
-each registered session's process and writes into that session's own socket.
+each registered session's process and writes into that session's own socket. Such a server may share
+the image's Postgres database: each machine's server names its sessions with its own device id (the
+`device-id` file in its data dir) and leaves the other machines' sessions alone.
 
 ### 2. The first admin, a token and a board
 

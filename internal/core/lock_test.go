@@ -104,3 +104,24 @@ func TestAcquireLockNamesARunningServe(t *testing.T) {
 	}
 	offline.Release()
 }
+
+// The exclusive lock is one holder's: a second acquisition fails while it is held, and succeeds once
+// it is released.
+func TestStoreLockExcludes(t *testing.T) {
+	dir := t.TempDir()
+	l1, err := AcquireLock(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireLock(dir); err == nil {
+		t.Fatal("second lock acquisition must fail while held")
+	}
+	if err := l1.Release(); err != nil {
+		t.Fatal(err)
+	}
+	l2, err := AcquireLock(dir)
+	if err != nil {
+		t.Fatalf("lock not reacquirable after release: %v", err)
+	}
+	l2.Release()
+}

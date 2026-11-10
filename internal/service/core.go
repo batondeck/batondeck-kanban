@@ -77,6 +77,10 @@ type Options struct {
 	// ToolCallRetentionDays is the tool_calls window the operations summary reports; 0 is
 	// DefaultToolCallRetentionDays.
 	ToolCallRetentionDays int64
+	// Device is this serve's device id (core.DeviceID), which every directory row it registers
+	// names: ListWakeSessions lists this device's rows (and the rows that name none), so serves on
+	// several devices sharing one database leave each other's rows alone (P-167). "" names none.
+	Device string
 }
 
 // Core is the service core (ADR-0003 layer 2): the one place the store and the domain are composed.
@@ -110,6 +114,8 @@ type Core struct {
 	toolCallRetentionDays int64
 	// deliveryTTL and rawBodyTTL are Options.DeliveryRetention and RawBodyRetention.
 	deliveryTTL, rawBodyTTL time.Duration
+	// device is Options.Device.
+	device string
 }
 
 // SetDeviceSessions hands the core the device session directory, which internal/wake builds after
@@ -151,6 +157,7 @@ func New(st store.Store, o Options) *Core {
 		sealer:  o.Sealer,
 		blobGC:  o.BlobGC,
 		media:   o.Media,
+		device:  o.Device,
 
 		toolCallRetentionDays: orDefault(o.ToolCallRetentionDays, DefaultToolCallRetentionDays),
 		deliveryTTL:           orDefault(o.DeliveryRetention, DeliveryRetention),

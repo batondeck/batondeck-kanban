@@ -164,6 +164,7 @@ type dirOpts struct {
 	sweep     time.Duration
 	windows   wake.Windows
 	tapBuffer int
+	device    string // the serve's device id; "" is a store no other device shares
 }
 
 // shortSweep is the sweep interval of a test that watches the sweep act.
@@ -217,7 +218,7 @@ func startDirectoryWith(t *testing.T, from *dirServer, o dirOpts) *dirServer {
 	if o.oauth {
 		public = "http://" + s.tcp
 	}
-	a, err := composeWith(s.st, "x", public, logger, s.keys, media, core.Retention{}, wakeTuning{registry: s.reg, sweep: o.sweep, windows: o.windows, tapBuffer: o.tapBuffer})
+	a, err := composeWith(s.st, "x", public, logger, s.keys, media, core.Retention{}, wakeTuning{registry: s.reg, sweep: o.sweep, windows: o.windows, tapBuffer: o.tapBuffer, device: o.device})
 	if err != nil {
 		t.Fatal(err)
 	}

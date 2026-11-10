@@ -4,8 +4,12 @@ package core
 
 import (
 	"errors"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -80,5 +84,78 @@ func TestExitWatcherReportsAKill(t *testing.T) {
 	_ = a.Wait()
 	if err := w.Add(a.Process.Pid); !errors.Is(err, ErrNoProcess) {
 		t.Fatalf("Add(exited) = %v, want ErrNoProcess", err)
+	}
+}
+
+// Close returns while exits fill Exited and nobody reads it (tested): the directory's dispatcher,
+// which reads Exited, is what closes the watcher as it returns, so a loop blocked on a full Exited
+// held Close (and serve's shutdown) for good.
+func TestExitWatcherClosesWithExitsUnread(t *testing.T) {
+	w, err := NewExitWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cmds []*exec.Cmd
+	var ins []io.WriteCloser
+	t.Cleanup(func() {
+		for _, c := range cmds {
+			_ = c.Process.Kill()
+			_ = c.Wait()
+		}
+	})
+	for range cap(w.exited) + 8 {
+		cmd := exec.Command("cat") // exits when its stdin closes
+		in, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		cmds, ins = append(cmds, cmd), append(ins, in)
+		if err := w.Add(cmd.Process.Pid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, in := range ins {
+		in.Close()
+	}
+	for deadline := time.Now().Add(10 * time.Second); len(w.exited) < cap(w.exited); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d exits reported, want %d", len(w.exited), cap(w.exited))
+		}
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- w.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Close did not return within 5 s with %d unread exits and %d more to report", len(w.exited), len(cmds)-cap(w.exited))
+	}
+}
+
+// ProcessParent names a process's parent and the program it runs; a reaped pid is ErrNoProcess.
+func TestProcessParent(t *testing.T) {
+	cmd := startSleeper(t)
+	// The program's name, or on Linux its executable's: a multicall binary's (busybox, coreutils)
+	// where sleep is a link to one.
+	names := map[string]bool{"sleep": true}
+	if exe, err := filepath.EvalSymlinks(cmd.Path); err == nil {
+		names[filepath.Base(exe)] = true
+	}
+	ppid, name, err := ProcessParent(cmd.Process.Pid)
+	if err != nil || ppid != os.Getpid() || !names[name] {
+		t.Fatalf("ProcessParent(child) = %d, %q, %v; want %d and one of %v", ppid, name, err, os.Getpid(), slices.Sorted(maps.Keys(names)))
+	}
+	if ppid, _, err := ProcessParent(os.Getpid()); err != nil || ppid != os.Getppid() {
+		t.Fatalf("ProcessParent(self) = %d, %v; want %d", ppid, err, os.Getppid())
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, _, err := ProcessParent(cmd.Process.Pid); !errors.Is(err, ErrNoProcess) {
+		t.Fatalf("ProcessParent(reaped) err = %v, want ErrNoProcess", err)
 	}
 }

@@ -77,7 +77,7 @@ func ValidWakeSession(w WakeSession) error {
 	return nil
 }
 
-// ErrWakePIDTaken is the refusal of a pid another session holds.
+// ErrWakePIDTaken is the refusal of a pid another session of the same device holds.
 func ErrWakePIDTaken(pid int64) error {
 	return domain.Validation(fmt.Sprintf("pid %d is registered by another wake session", pid), map[string]any{"field": "pid"})
 }
@@ -91,10 +91,11 @@ func putWakeSession(ctx context.Context, e engine, w WakeSession) error {
 		SocketTokenSealed: w.SocketTokenSealed, LastCursor: nullMillis(w.LastCursor),
 		CreatedAt: w.CreatedAt, LastSeenAt: w.LastSeenAt, ExpiresAt: w.ExpiresAt,
 		Pid: nullMillis(w.PID), Role: nullText(w.Role), ClientSessionID: nullText(w.ClientSessionID),
-		ProcStart: nullText(w.ProcStart), BearerSealed: w.BearerSealed,
+		ProcStart: nullText(w.ProcStart), BearerSealed: w.BearerSealed, DeviceID: w.DeviceID,
 	})
 	if err != nil {
-		// The partial unique index wake_sessions_pid, as each engine names it in its error.
+		// The partial unique index wake_sessions_pid (device_id, pid), as each engine names it in its
+		// error: SQLite by its columns, Postgres by its name.
 		if m := err.Error(); strings.Contains(m, "wake_sessions_pid") || strings.Contains(m, "wake_sessions.pid") {
 			return ErrWakePIDTaken(w.PID)
 		}
@@ -109,7 +110,7 @@ func wakeSessionOf(r sqlitedb.WakeSession) WakeSession {
 		SocketTokenSealed: r.SocketTokenSealed, LastCursor: nullOrZero(r.LastCursor),
 		CreatedAt: r.CreatedAt, LastSeenAt: r.LastSeenAt, ExpiresAt: r.ExpiresAt,
 		PID: nullOrZero(r.Pid), Role: r.Role.String, ClientSessionID: r.ClientSessionID.String,
-		ProcStart: r.ProcStart.String, BearerSealed: r.BearerSealed,
+		ProcStart: r.ProcStart.String, BearerSealed: r.BearerSealed, DeviceID: r.DeviceID,
 	}
 }
 
