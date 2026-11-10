@@ -9,9 +9,10 @@ ships; there is no sidecar.
 
 v0.1.0 is released, cut by the two workflows (so its tag is lightweight). What follows is the local
 sequence, written with v0.1.0's values; a later release runs the same lines with its own version.
-From v0.1.0 on, a published release is not replaced: a fix ships as the next patch version, with its
-own tag, and `release-draft`'s `replace` input is not used on a published release. Steps 1, 4, 5
-and 6 also run on demand as the `release-draft` workflow (`.github/workflows/release-draft.yml`,
+Once the repository is public, a published release is not replaced: a fix ships as the next patch
+version, with its own tag, and `release-draft`'s `replace` input is not used on a published release.
+(Before the public flip, v0.1.0 was re-cut in place while nobody outside had downloaded it.)
+Steps 1, 4, 5 and 6 also run on demand as the `release-draft` workflow (`.github/workflows/release-draft.yml`,
 `workflow_dispatch` with the candidate's full SHA), with step 3's tag made locally in the runner
 only: it ends in a draft release with the assets and the pushed image, and a maintainer publishes the
 draft, which creates the tag at the candidate (a lightweight tag, where step 3 makes an annotated

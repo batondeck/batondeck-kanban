@@ -3,8 +3,8 @@
 ## Reporting a vulnerability
 
 Please report a vulnerability privately, through GitHub's private vulnerability reporting on this
-repository: the **Security** tab, then **Report a vulnerability**. Do not open a public issue, pull
-request or discussion for it.
+repository: the **Security** tab, then **Report a vulnerability**. If you cannot use that, email
+security@batondeck.com. Do not open a public issue, pull request or discussion for it.
 
 Include what you can of:
 
