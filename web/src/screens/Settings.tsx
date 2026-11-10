@@ -969,11 +969,11 @@ export function Settings() {
                   <p id="workflow-closed" className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>{workflowWhy}</p>
                 )}
               </Panel>
-              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. They are the OPERATOR's
-                  cost control, not a workflow choice, and update_settings refuses both fields from
-                  anyone who is not a workspace admin (internal/service/projects.go) — so rendering them
-                  here only offered a project admin a guaranteed FORBIDDEN. This build has no admin
-                  screen for them; a workspace admin sets them with update_settings over MCP. */}
+              {/* T-43: "Enforce transaction quota" + "Quota cap" used to sit here. This deployment has no
+                  quota enforcement, and update_settings refuses quotaEnabled and txnCap from everyone
+                  (internal/service/projects.go, settingsPatch): FORBIDDEN for a caller who is not a
+                  workspace admin, VALIDATION for one who is, since a cap would be recorded and never
+                  enforced. So the controls are gone and nothing in this build sets them. */}
             </Stack>
           ) : (
             <Panel pad>

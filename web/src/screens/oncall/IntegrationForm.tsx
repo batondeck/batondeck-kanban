@@ -11,8 +11,9 @@
  *
  *  1. **The auth mode is not a free choice, and the catalog decides it.** Most vendors cannot compute
  *     our HMAC and Cloud Monitoring cannot even set a header, so the mode select offers exactly
- *     `source.authModes` — served from `src/domain/oncall-sources.ts`, never hardcoded here. A form
- *     that offers a mode the vendor cannot send is how the commonest misconfiguration happens.
+ *     `source.authModes` — served from the source catalog (internal/oncall/sources.go), never
+ *     hardcoded here. A form that offers a mode the vendor cannot send is how the commonest
+ *     misconfiguration happens.
  *  2. **A credential the operator cannot supply is worse than no field.** `api_key`/`basic` mint the
  *     key in the browser and show it once, because the server only ever stores its hash; PagerDuty
  *     requires ITS OWN secret pasted in, because PagerDuty signs with it and the core now refuses the
