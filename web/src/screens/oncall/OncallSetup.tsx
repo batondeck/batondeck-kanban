@@ -552,7 +552,7 @@ export function OncallSetup({
   const active = integrations.find((i) => i.id === selected) ?? null;
   const activeSource = active ? sourceOf(active.source) : undefined;
   const formSource = creating instanceof Object ? creating : activeSource;
-  const problems = formSource ? formProblems(form, formSource, creating !== null) : [];
+  const problems = formSource ? formProblems(form, formSource, creating !== null, active?.auth.mode) : [];
   const set = (patch: Partial<FormState>): void => setForm((f) => ({ ...f, ...patch }));
 
   /**

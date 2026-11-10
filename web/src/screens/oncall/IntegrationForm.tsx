@@ -207,7 +207,7 @@ export function patchBodyOf(f: FormState, source: OncallSource, current: Integra
   const modeChanged = f.authMode !== current.auth.mode;
   const suppliedMaterial =
     (f.authMode === 'api_key' || f.authMode === 'basic') && f.apiKey.trim().length > 0;
-  const suppliedJwt = f.authMode === 'jwt' && f.jwtIssuer.trim().length > 0;
+  const suppliedJwt = f.authMode === 'jwt' && jwtTyped(f);
   const suppliedExternal = f.authMode === 'hmac' && f.externalSecret.trim().length > 0;
   const sendAuth = modeChanged || suppliedMaterial || suppliedJwt || suppliedExternal;
   return {
@@ -216,15 +216,36 @@ export function patchBodyOf(f: FormState, source: OncallSource, current: Integra
   };
 }
 
-/** True when this form can be submitted — the fields the core would refuse without. */
-export function formProblems(f: FormState, source: OncallSource, isCreate: boolean): string[] {
+/** True when the operator typed any of the three jwt settings: on an edit, that is new auth. */
+const jwtTyped = (f: FormState): boolean =>
+  [f.jwtIssuer, f.jwtAudience, f.jwtJwksUrl].some((v) => v.trim().length > 0);
+
+/**
+ * True when this form can be submitted — the fields the core would refuse without.
+ *
+ * `currentMode` is the edited integration's stored auth mode (absent on create). The server's view
+ * of an integration carries no issuer, audience or JWKS URL, so an edit opens with them blank, and
+ * blank then means "keep what is configured" (`patchBodyOf` sends no auth). They are required on
+ * create, on a switch to jwt, and once any one is typed, because the patch then sends all three.
+ */
+export function formProblems(
+  f: FormState,
+  source: OncallSource,
+  isCreate: boolean,
+  currentMode?: IntegrationAuthMode,
+): string[] {
   const out: string[] = [];
   if (!f.name.trim()) out.push('Name is required.');
   if (!f.boardId.trim()) out.push('Target board id is required.');
   if (isCreate && (f.authMode === 'api_key' || f.authMode === 'basic') && !f.apiKey.trim()) {
     out.push('This mode needs a key — generate one.');
   }
-  if (f.authMode === 'jwt' && (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())) {
+  const jwtNeeded = isCreate || f.authMode !== currentMode || jwtTyped(f);
+  if (
+    f.authMode === 'jwt' &&
+    jwtNeeded &&
+    (!f.jwtIssuer.trim() || !f.jwtAudience.trim() || !f.jwtJwksUrl.trim())
+  ) {
     out.push('JWT mode needs an issuer, an audience and a JWKS URL.');
   }
   // PagerDuty signs with its OWN secret; the core refuses a mint. Saying so here turns a server
@@ -356,6 +377,12 @@ export function IntegrationForm({
 
           {form.authMode === 'jwt' && (
             <Stack gap={12}>
+              {!isCreate && (
+                <Note>
+                  The configured issuer, audience and JWKS URL are not shown back. Leave all three
+                  blank to keep them; type all three to replace them.
+                </Note>
+              )}
               <TextField
                 id="oc-jwt-iss"
                 label="Issuer"
