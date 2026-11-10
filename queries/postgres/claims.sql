@@ -3,7 +3,8 @@
 -- with assignee set only its tasks, without it the unassigned ones and the caller's (assigned to
 -- the caller's id, or to its account email in any case: a handoff stores the login), with caps (a JSON array; JSON null for no filter) only the
 -- tasks whose required capabilities are all among caps, with sprint_id set (empty for none) only the members
--- of that sprint (its id in sprint_ids), with only_ids (a JSON array; JSON null for no filter) only
+-- of that sprint (its id in sprint_ids) and the runs of its members (run_of a task whose sprint_ids hold
+-- it: a raced member's work is in its runs), with only_ids (a JSON array; JSON null for no filter) only
 -- the tasks it names. caps, sprint_id and only_ids are read once, as the derived table p
 -- (the shape SQLite's statement needs, so the two generate one parameter struct), and is always
 -- valid JSON, so no plan can fail to cast it. Best first: score descending, then priority (urgent,
@@ -38,7 +39,9 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text
@@ -74,7 +77,9 @@ WHERE t.id = (
             OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
           ELSE f.assignee = sqlc.narg(assignee)::text END)
     AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+    AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+      OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+        WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
     AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
     AND (sqlc.arg(column_id)::text = '' OR EXISTS (
       SELECT 1 FROM columns col WHERE col.project_id = f.project_id AND col.board_id = f.board_id AND col.id = sqlc.arg(column_id)::text
@@ -100,7 +105,9 @@ WHERE f.project_id = sqlc.arg(project_id) AND f.board_id = sqlc.arg(board_id) AN
           OR LOWER(f.assignee) = (SELECT u.email FROM users u WHERE u.id = sqlc.arg(caller)::text)
         ELSE f.assignee = sqlc.narg(assignee)::text END)
   AND CASE WHEN p.caps = 'null' THEN true ELSE f.required_capabilities::jsonb <@ p.caps::jsonb END
-  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint))
+  AND (p.sprint = '' OR f.sprint_ids::jsonb @> jsonb_build_array(p.sprint)
+    OR (f.run_of IS NOT NULL AND EXISTS (SELECT 1 FROM tasks par
+      WHERE par.project_id = f.project_id AND par.id = f.run_of AND par.sprint_ids::jsonb @> jsonb_build_array(p.sprint))))
   AND (p.only_ids = 'null' OR p.only_ids::jsonb @> jsonb_build_array(f.id))
 ORDER BY f.score DESC,
   CASE f.priority WHEN 'urgent' THEN 3 WHEN 'high' THEN 2 WHEN 'normal' THEN 1 ELSE 0 END DESC,

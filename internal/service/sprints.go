@@ -105,12 +105,16 @@ func sprintText(name, goal, acceptance Optional[string]) error {
 }
 
 // Update is update_sprint (conductor sprints.ts:114-181, in-memory-store.ts:1645-1729), version
-// checked on the sprint: proposalTaskId is patchable only while PROPOSED (VALIDATION); a status
-// change follows the fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the
-// activation gates against the proposal task read in the transaction and stamps approvedBy and
-// startedAt; CLOSED and ABANDONED stamp closedAt. Closing with members not DONE warns, naming them:
-// "open" is status != DONE (plan §Fold 2), so a BLOCKED-poison member is open and a cancelled one
-// (DONE with the cancelled label, ADR-0001) is not.
+// checked on the sprint: proposalTaskId is patchable only while PROPOSED, and name, goal and
+// acceptance only until the sprint is CLOSED or ABANDONED (VALIDATION; resending the value held
+// passes, and checkpoint and eventCursor stay patchable for a resume); a status change follows the
+// fixed sprint table (INVALID_TRANSITION); PROPOSED → ACTIVE passes the activation gates against
+// the proposal task read in the transaction and stamps approvedBy (the proposal's reviewer, else who
+// moved it to DONE, read from its events: doneBy) and startedAt; CLOSED and ABANDONED stamp
+// closedAt. Closing with members not DONE warns, naming them: "open" is status != DONE (plan §Fold
+// 2), so a BLOCKED-poison member is open and a cancelled one (DONE with the cancelled label,
+// ADR-0001) is not. It runs under the project lock, as set_sprint and create_task {sprintId} do, so
+// a member cannot join between the close and its warning.
 func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req UpdateSprintReq) (UpdateSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "update_sprint", domain.GrantSubject{}, false)
 	if err != nil {
@@ -155,7 +159,7 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 	}
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "update_sprint", Args: map[string]any{"projectId": req.ProjectID, "sprintId": req.SprintID},
-		ProjectID: req.ProjectID, Access: a,
+		ProjectID: req.ProjectID, Access: a, LockProject: true,
 	}, func(t *txn) (UpdateSprintResp, error) {
 		cur, err := t.Tx.GetSprint(ctx, req.ProjectID, req.SprintID)
 		if err != nil {
@@ -163,6 +167,18 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 		}
 		if cur.Version != req.Version {
 			return UpdateSprintResp{}, domain.Stale(req.Version, cur.Version)
+		}
+		if cur.Status == domain.SprintClosed || cur.Status == domain.SprintAbandoned {
+			for _, f := range []struct {
+				name     string
+				patch    Optional[string]
+				recorded string
+			}{{"name", p.Name, cur.Name}, {"goal", p.Goal, cur.Goal}, {"acceptance", p.Acceptance, cur.Acceptance}} {
+				if f.patch.Set && f.patch.V != f.recorded {
+					return UpdateSprintResp{}, domain.Validation(fmt.Sprintf("%s is patchable only while PROPOSED or ACTIVE — sprint %s is %s and keeps the record it ended with", f.name, cur.ID, cur.Status),
+						map[string]any{"sprintId": cur.ID, "sprintStatus": cur.Status, "field": f.name})
+				}
+			}
 		}
 		now := t.Now.UnixMilli()
 		sp := store.SprintPatch{UpdatedBy: caller.Identity, UpdatedAt: now}
@@ -206,7 +222,10 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 				if err != nil {
 					return UpdateSprintResp{}, err
 				}
-				sp.ApprovedBy, sp.StartedAt, selfApproved = &store.Nullable[string]{Value: &approvedBy}, stamp, self
+				if approvedBy != "" {
+					sp.ApprovedBy = &store.Nullable[string]{Value: &approvedBy}
+				}
+				sp.StartedAt, selfApproved = stamp, self
 			case domain.SprintClosed, domain.SprintAbandoned:
 				sp.ClosedAt = stamp
 			}
@@ -247,7 +266,7 @@ func (s sprintsSvc) Update(ctx context.Context, caller domain.Caller, req Update
 				}
 			}
 			if len(open) > 0 {
-				resp.Warnings = []string{fmt.Sprintf("%d member(s) not DONE at close: %s — they keep their sprintIds for history; descope or carry them to a successor sprint.",
+				resp.Warnings = []string{fmt.Sprintf("%d member(s) not DONE at close: %s — they stay members of this sprint for history; set_sprint add carries each to a successor sprint.",
 					len(open), strings.Join(open, ", "))}
 			}
 		}
@@ -264,7 +283,12 @@ func (t *txn) proposalOf(taskID string) (*domain.SprintProposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, Cancelled: slices.Contains(task.Labels, domain.LabelCancelled), UpdatedBy: task.UpdatedBy}
+	out := &domain.SprintProposal{ID: task.ID, Status: task.Status, Cancelled: slices.Contains(task.Labels, domain.LabelCancelled)}
+	if task.Status == domain.Done {
+		if out.DoneBy, err = t.doneBy(task.ID); err != nil {
+			return nil, err
+		}
+	}
 	var fields map[string]any
 	if len(task.CustomFields) > 0 {
 		if err := json.Unmarshal(task.CustomFields, &fields); err != nil {
@@ -282,6 +306,41 @@ func (t *txn) proposalOf(taskID string) (*domain.SprintProposal, error) {
 		out.Reviewer = *review.Reviewer
 	}
 	return out, nil
+}
+
+// doneByPages bounds doneBy's read of a task's history, newest first, at 200 events a page.
+const doneByPages = 5
+
+// doneBy is the actor of the newest event that landed taskID DONE: task.moved from another status,
+// or task.completed or run.picked, to DONE. "" when none of its newest doneByPages pages holds one.
+func (t *txn) doneBy(taskID string) (string, error) {
+	cursor := ""
+	for range doneByPages {
+		page, err := t.Tx.ListTaskEvents(t.ctx, t.ProjectID, taskID, cursor, 200)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range page.Events {
+			if e.Type != domain.EventTaskMoved && e.Type != domain.EventTaskCompleted && e.Type != domain.EventRunPicked {
+				continue
+			}
+			var d struct {
+				From domain.Status `json:"from"`
+				To   domain.Status `json:"to"`
+			}
+			if err := json.Unmarshal(e.Data, &d); err != nil {
+				return "", err
+			}
+			if d.To == domain.Done && d.From != domain.Done {
+				return e.Actor, nil
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	return "", nil
 }
 
 // orWarn is a policy as conductor reads it: unset is "warn" (artifacts.ts:15,140).
@@ -310,8 +369,11 @@ func samePtr(a, b *string) bool {
 // Set is set_sprint (conductor sprints.ts:183-237, in-memory-store.ts:1731-1782): an add of a task on
 // another board is VALIDATION; an add of a member, or a remove of a non-member, returns the task
 // unchanged before the version check (retry-safe); otherwise the task is version-checked, the
-// membership is judged (domain.CheckSprintMembership, exclusive), and the task's sprintIds and the
-// sprint's member count move together, with sprint.task_added or sprint.task_removed on the task.
+// membership is judged (domain.CheckSprintMembership, exclusive among the sprints that have not
+// ended: endedSprints), and the task's sprintIds and the sprint's member count move together, with
+// sprint.task_added or sprint.task_removed on the task. It runs under the project lock, as
+// update_sprint does: under Postgres READ COMMITTED a close that committed after this call read the
+// sprint ACTIVE would otherwise let the task join a CLOSED sprint its close warning never named.
 func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprintReq) (SetSprintResp, error) {
 	a, err := s.c.authorize(ctx, caller, req.ProjectID, "set_sprint", domain.GrantSubject{}, true)
 	if err != nil {
@@ -332,7 +394,7 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 	add := req.Action == "add"
 	return mutate(ctx, s.c, caller, mutation{
 		Tool: "set_sprint", Args: map[string]any{"projectId": req.ProjectID, "taskId": req.TaskID},
-		ProjectID: req.ProjectID,
+		ProjectID: req.ProjectID, LockProject: true,
 	}, func(t *txn) (SetSprintResp, error) {
 		task, err := t.Tx.GetTask(ctx, req.ProjectID, req.TaskID)
 		if err != nil {
@@ -355,8 +417,15 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 			if task.Version != req.Version {
 				return SetSprintResp{}, domain.Stale(req.Version, task.Version)
 			}
+			var ended []string
+			if add {
+				if ended, err = t.endedSprints(task.SprintIDs, sprint.ID); err != nil {
+					return SetSprintResp{}, err
+				}
+			}
 			if err := domain.CheckSprintMembership(domain.SprintMembership{SprintID: sprint.ID, SprintStatus: sprint.Status,
-				MemberCount: sprint.MemberCount, Add: add, TaskID: task.ID, TaskSprints: task.SprintIDs, Exclusive: sprintExclusive}); err != nil {
+				MemberCount: sprint.MemberCount, Add: add, TaskID: task.ID, TaskSprints: task.SprintIDs, EndedSprints: ended,
+				Exclusive: sprintExclusive}); err != nil {
 				return SetSprintResp{}, err
 			}
 			ids, delta, typ := append(slices.Clone(task.SprintIDs), sprint.ID), int64(1), domain.EventSprintTaskAdded
@@ -383,8 +452,33 @@ func (s sprintsSvc) Set(ctx context.Context, caller domain.Caller, req SetSprint
 	})
 }
 
+// endedSprints is the ids of sprintIDs, but except, whose sprint is CLOSED or ABANDONED (or gone):
+// they stay in the task's sprintIds for history and hold it out of no other sprint
+// (domain.CheckSprintMembership). One read per id; a task carries at most SprintIDsMax.
+func (t *txn) endedSprints(sprintIDs []string, except string) ([]string, error) {
+	var out []string
+	for _, id := range sprintIDs {
+		if id == except {
+			continue
+		}
+		sp, err := t.Tx.GetSprint(t.ctx, t.ProjectID, id)
+		if e, ok := domain.AsBatonDeckError(err); ok && e.Code == domain.CodeNotFound {
+			out = append(out, id)
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if sp.Status == domain.SprintClosed || sp.Status == domain.SprintAbandoned {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // Get is get_sprint (conductor sprints.ts:239-408): the sprint, its members (one read of at most
-// sprintMemberPage+1, truncated the tripwire), the derived counts, frontier and attention, the board's
+// sprintMemberPage+1, truncated the tripwire), the derived counts, frontier (the claimable members
+// and the claimable runs of its racing members, which are not members) and attention, the board's
 // lanes and the fixed table, and the project policies. counts: ready is TODO, backlog is always 0
 // (no parking state, ADR-0005), blocked the BLOCKED members that are not poisoned and poisoned those
 // that are (plan §Fold 1), done the DONE members less the cancelled ones (ADR-0001: conductor's
@@ -454,6 +548,22 @@ func (s sprintsSvc) Get(ctx context.Context, caller domain.Caller, req GetSprint
 		}
 		if why != "" {
 			out.Attention = append(out.Attention, SprintAttention{TaskID: m.ID, Why: why})
+		}
+	}
+	// A racing member is not claimable; its runs carry its work, and claim_next {sprintId} offers
+	// them, so the frontier names its claimable runs (one read per racing member).
+	for _, m := range members {
+		if !m.Racing {
+			continue
+		}
+		runs, err := s.c.store.ListTasks(ctx, req.ProjectID, store.TaskFilter{BoardID: m.BoardID, RunOf: &m.ID}, "", listMaxLimit)
+		if err != nil {
+			return fail(err)
+		}
+		for _, r := range runs.Tasks {
+			if domain.IsClaimable(claimView(r), now) {
+				out.Frontier = append(out.Frontier, r.ID)
+			}
 		}
 	}
 	board, _, err := s.c.store.GetBoard(ctx, req.ProjectID, sp.BoardID)

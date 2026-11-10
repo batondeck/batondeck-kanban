@@ -24,7 +24,19 @@ Setup:
    - **`modelHint { model, effort }`**: the complexity estimate the worker runs at.
    - `requiredCapabilities`, so profile matching routes it.
    A created task is TODO and claimable at once, so create only what is ready to be worked.
-   Wrap a durable objective in a sprint (`create_sprint`, then `create_task { …, sprintId }`).
+3. **Wrap a durable objective in a sprint.** A sprint starts PROPOSED and workers look only for an
+   ACTIVE one, so it needs an approved proposal before it is worked:
+   - `create_sprint { projectId, boardId, name, goal, acceptance }` (PROPOSED);
+   - the proposal task, which carries the plan for approval:
+     `create_task { projectId, boardId, title, description, customFields: { sprintProposalFor: "<sprintId>" } }`,
+     bound with `update_sprint { projectId, sprintId, version, patch: { proposalTaskId } }` (only
+     while PROPOSED);
+   - the members, `create_task { …, sprintId }` or `set_sprint { projectId, taskId, version,
+     sprintId, action: "add" }`;
+   - once the proposal task is DONE (approved by someone other than its completer), a **project
+     admin** activates the sprint: `update_sprint { projectId, sprintId, version, patch: { status:
+     "ACTIVE" } }`, or Start sprint on the board's sprints rail. A master is refused (`FORBIDDEN`),
+     and under `selfApprovalPolicy: "enforce"` so is the admin who created the sprint: ask an admin.
 
 Supervision, each turn the doorbell starts:
 
@@ -52,8 +64,11 @@ Supervision, each turn the doorbell starts:
    cursor, retry.
 5. **Keep planning**: fold discoveries back into the board as new tasks and edges.
 6. Then end your turn; the next change starts the next one. **Goal fully DONE** → post a final summary
-   (what shipped, deliverables, loose ends) and close the sprint, `update_sprint { patch: { status:
-   "CLOSED" } }`.
+   (what shipped, deliverables, loose ends) and close the sprint, `update_sprint { projectId,
+   sprintId, version, patch: { status: "CLOSED" } }`. Only an ACTIVE sprint closes; one that never
+   activated ends with `status: "ABANDONED"`. The close's warning names the members not DONE: they
+   stay in the closed sprint for history, and `set_sprint { …, action: "add" }` carries each to a
+   successor sprint.
 
 High-stakes or ambiguous task? Race it: `/batondeck-kanban:runs`.
 

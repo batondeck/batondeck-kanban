@@ -110,10 +110,18 @@ Turn a goal into a **dependency tree**, not a flat list:
 The board is the plan: the execution order falls out of the tree.
 
 **Sprints** wrap a durable objective: `create_sprint { projectId, boardId, name, goal, acceptance }`,
-then `create_task { …, sprintId }` per member. A cold session resumes from
+then `create_task { …, sprintId }` (or `set_sprint { …, action: "add" }`) per member. A sprint starts
+PROPOSED and is worked once ACTIVE: create a proposal task carrying the plan
+(`customFields: { sprintProposalFor: "<sprintId>" }`), bind it with
+`update_sprint { projectId, sprintId, version, patch: { proposalTaskId } }`, get it approved to DONE,
+and a project admin activates the sprint with `update_sprint { …, patch: { status: "ACTIVE" } }` (a
+master is refused). Only an ACTIVE sprint closes (`status: "CLOSED"`); one never activated ends
+`ABANDONED`. A member left unfinished by an ended sprint keeps it in `sprintIds` for history and joins
+a successor with `set_sprint { …, action: "add" }`. A cold session resumes from
 `list_sprints { projectId, boardId, status: "ACTIVE" }` and `get_sprint { projectId, sprintId }`
-(goal, counts, the frontier, what needs attention). While a sprint is ACTIVE, pass `sprintId` to
-`next_task`, `list_tasks` and `rank_tasks` so selection stays inside it.
+(goal, counts, the frontier with the runs of raced members, what needs attention). While a sprint is
+ACTIVE, pass `sprintId` to `claim_next`, `next_task`, `list_tasks` and `rank_tasks` so selection
+stays inside it.
 
 ## Populate every task
 

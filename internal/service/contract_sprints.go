@@ -16,9 +16,10 @@ type Sprints interface {
 
 	// Update is update_sprint.
 	// Tier: master; version-checked on the sprint (STALE); the fixed sprint table and the activation
-	// gates (INVALID_TRANSITION, FORBIDDEN); proposalTaskId outside PROPOSED VALIDATION. Event:
-	// sprint.activated, sprint.closed, sprint.abandoned, sprint.checkpoint or sprint.updated
-	// (board-level), and sprint.self_approved under the "warn" rung. Audit: none. Doorbell: none.
+	// gates (INVALID_TRANSITION, FORBIDDEN); a change of proposalTaskId outside PROPOSED, or of
+	// name, goal or acceptance on a CLOSED or ABANDONED sprint, VALIDATION. Event: sprint.activated,
+	// sprint.closed, sprint.abandoned, sprint.checkpoint or sprint.updated (board-level), and
+	// sprint.self_approved under the "warn" rung. Audit: none. Doorbell: none.
 	Update(ctx context.Context, caller domain.Caller, req UpdateSprintReq) (UpdateSprintResp, error)
 
 	// Set is set_sprint.

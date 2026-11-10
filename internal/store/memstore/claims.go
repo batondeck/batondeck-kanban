@@ -97,7 +97,7 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 		if len(q.Capabilities) > 0 && !allIn(t.RequiredCapabilities, q.Capabilities) {
 			continue
 		}
-		if q.SprintID != "" && !slices.Contains(t.SprintIDs, q.SprintID) {
+		if q.SprintID != "" && !slices.Contains(t.SprintIDs, q.SprintID) && !st.runInSprint(k[0], t, q.SprintID) {
 			continue
 		}
 		if q.TaskIDs != nil && !slices.Contains(q.TaskIDs, t.ID) {
@@ -118,6 +118,16 @@ func (st *state) frontier(q store.FrontierQuery) []store.Task {
 
 // callers is the routing half of the frontier without an assignee: the task is unassigned, or
 // assigned to caller's id or, in any case, to its account's email.
+// runInSprint reports whether t is a run of a member of sprintID: the frontier's sprint filter
+// takes a raced member's runs with the member.
+func (st *state) runInSprint(projectID string, t store.Task, sprintID string) bool {
+	if t.RunOf == nil {
+		return false
+	}
+	parent, ok := st.tasks[[2]string{projectID, *t.RunOf}]
+	return ok && slices.Contains(parent.SprintIDs, sprintID)
+}
+
 func (st *state) callers(assignee *string, caller string) bool {
 	if assignee == nil {
 		return true
