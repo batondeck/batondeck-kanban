@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/batondeck/batondeck-kanban/internal/core"
 	"github.com/batondeck/batondeck-kanban/internal/store"
 )
 
@@ -123,19 +123,20 @@ func TestSessionIsUnixSocketOnly(t *testing.T) {
 
 // AC2's refusals (tested): every refusal is one stderr line naming the status and the server's
 // message, exit 0, no row: a pid another uid owns, a pid no one registered, no bearer, a socket no
-// live registry entry names.
+// live registry entry names. Only the first needs another uid's process (foreignPID), so only it can
+// skip.
 func TestSessionRefusalsAreOneLineExitZero(t *testing.T) {
 	s := startDirectory(t, nil)
-	if uid, err := core.ProcessUID(1); err != nil || uid == os.Getuid() {
-		t.Skipf("pid 1 is uid %d (%v): no process of another uid to register", uid, err)
-	}
-	other := filepath.Join(shortDir(t, "bkoth"), "1.sock")
-	entry, _ := json.Marshal(map[string]any{"pid": 1, "sessionId": "s-root", "procStart": "x", "messagingSocketPath": other, "peerProtocol": 1})
-	if err := os.WriteFile(filepath.Join(s.reg, "1.json"), entry, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sessionEnv(t, s, s.alice, other)
-	oneLine(t, "pid 1: refused, 403 Forbidden FORBIDDEN: pid 1 is not owned by the caller's uid", "session", "register", "--role", "worker")
+	t.Run("a pid another uid owns", func(t *testing.T) {
+		pid := foreignPID(t)
+		other := filepath.Join(shortDir(t, "bkoth"), strconv.Itoa(pid)+".sock")
+		entry, _ := json.Marshal(map[string]any{"pid": pid, "sessionId": "s-other", "procStart": "x", "messagingSocketPath": other, "peerProtocol": 1})
+		if err := os.WriteFile(filepath.Join(s.reg, strconv.Itoa(pid)+".json"), entry, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sessionEnv(t, s, s.alice, other)
+		oneLine(t, fmt.Sprintf("pid %d: refused, 403 Forbidden FORBIDDEN: pid %d is not owned by the caller's uid", pid, pid), "session", "register", "--role", "worker")
+	})
 	c := s.client(t, "s-1", "")
 	sessionEnv(t, s, s.alice, c.sock)
 	oneLine(t, fmt.Sprintf("pid %d: refused, 404 Not Found NOT_FOUND", c.pid), "session", "unregister")
