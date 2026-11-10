@@ -1704,6 +1704,21 @@
           "additionalProperties": false
         }
       }
+    },
+    {
+      "pointer": "/tools/list_audit_log/input/properties/cursor",
+      "required": false,
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "pointer": "/tools/list_audit_log/output/properties/nextCursor",
+      "required": false,
+      "schema": {
+        "type": "string"
+      }
     }
   ],
   "errorDeltas": [
