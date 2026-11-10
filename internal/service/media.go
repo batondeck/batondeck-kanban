@@ -16,6 +16,10 @@ import (
 // BlobURLTTL is how long a signed URL is valid, conductor's SIGNED_URL_TTL_MS.
 const BlobURLTTL = 15 * time.Minute
 
+// uploadFinishTimeout bounds CompleteUpload's work once the body is in, which no longer follows the
+// request's context: the client going away then must not cut it between the file and its row.
+const uploadFinishTimeout = time.Minute
+
 // MediaOptions are the blob store attach_file and list_attachments sign URLs into. With no Files or
 // no Signer (serve found no keyring) attach_file is INTERNAL and every downloadUrl is null.
 type MediaOptions struct {
@@ -186,8 +190,12 @@ func (m media) ListAttachments(ctx context.Context, caller domain.Caller, req Li
 // status, sha256} and the task's one version bump: a ready row always has its file. A refusal
 // leaves the attachment pending and unlinks the file unless a blob row still names it. A missing
 // attachment is NOT_FOUND, one not pending INVALID_TRANSITION, a body whose size is not the
-// declared bytes VALIDATION.
+// declared bytes VALIDATION. The body is in when it is called, so it runs to its end under its own
+// bound (uploadFinishTimeout), not the request's cancellation: a client that closes the connection
+// right after its body does not leave the file moved and its row unwritten.
 func (c *Core) CompleteUpload(ctx context.Context, ref blob.Ref, st *blob.Staged) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uploadFinishTimeout)
+	defer cancel()
 	files := c.media.Files
 	if files == nil {
 		st.Discard()

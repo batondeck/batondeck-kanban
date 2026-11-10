@@ -457,3 +457,53 @@ func TestTheHashLockKeepsAReadyRowsFileOverTheEngines(t *testing.T) {
 		})
 	}
 }
+
+// cancellingStore cancels a request's context at the first Atomically after arm: CompleteUpload's
+// mutation, after its file is moved into place, as net/http does when the client closes the
+// connection right after the body.
+type cancellingStore struct {
+	store.Store
+	cancel atomic.Pointer[context.CancelFunc]
+}
+
+func (c *cancellingStore) Atomically(ctx context.Context, fn func(tx store.Store) error) error {
+	if f := c.cancel.Swap(nil); f != nil {
+		(*f)()
+	}
+	return c.Store.Atomically(ctx, fn)
+}
+
+// api-http#1: an upload whose client goes away once its body is in finishes anyway, row and file
+// together, instead of failing its mutation on the cancelled context and leaving a file no blob row
+// names (which nothing ever removed).
+func TestAnUploadWhoseClientLeftAfterTheBodyFinishesOverTheEngines(t *testing.T) {
+	for _, ec := range engineCases {
+		t.Run(ec.name, func(t *testing.T) {
+			g := &cancellingStore{Store: ec.open(t)}
+			m := newMediaEnv(t, g, true)
+			body := []byte("the client left")
+			sha := hashOf(body)
+			task := m.newTask(t)
+			u, err := url.Parse(m.attach(t, task.ID, int64(len(body))).UploadURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref, _ := blob.ParseRef(strings.TrimPrefix(u.Path, "/blobs/"))
+			st, err := m.files.Stage(bytes.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(m.ctx)
+			defer cancel()
+			g.cancel.Store(&cancel)
+			err = m.c.CompleteUpload(ctx, ref, st)
+			list := m.list(t, task.ID)
+			if m.onDisk(sha) && list[0].Status != "ready" {
+				t.Fatalf("the file is on disk and the attachment is %s (CompleteUpload: %v): a file no row names", list[0].Status, err)
+			}
+			if err != nil || list[0].Status != "ready" || !m.onDisk(sha) {
+				t.Fatalf("CompleteUpload: %v, attachment %s, on disk %v; want it ready with its file", err, list[0].Status, m.onDisk(sha))
+			}
+		})
+	}
+}
