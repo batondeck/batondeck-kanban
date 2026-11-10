@@ -142,14 +142,15 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 		return HookOutcome{Refusal: HookRateLimited, RetryAfter: rateRetryAfter(int(limits.RatePerMin))}, nil
 	}
 	if reason, challenge := c.verifyHook(ctx, integration, r, now); reason != "" {
-		c.log.Printf("ingest: integration %s refused a delivery's signature: %s", integration.ID, reason)
+		c.log.Printf("ingest: integration %s refused a delivery's signature: %q", integration.ID, reason)
 		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
 		return HookOutcome{Refusal: HookUnauthorized, Challenge: challenge}, nil
 	}
 	badRequest := func(reason string) (HookOutcome, error) {
-		c.log.Printf("ingest: integration %s refused a delivery: %s", integration.ID, reason)
+		reason = capReason(reason)
+		c.log.Printf("ingest: integration %s refused a delivery: %q", integration.ID, reason)
 		if err := c.reject(ctx, integration, r.Body, reason, now); err != nil {
 			return HookOutcome{}, err
 		}
@@ -171,11 +172,7 @@ func (c *Core) Hook(ctx context.Context, integrationID string, r HookRequest) (H
 	cc := connectors.Context{Mapping: &mapping, BodyHash: bodyHash, Now: now}
 	events, err := conn.Events(payload, cc)
 	if err != nil {
-		reason := "unrecognized_payload: " + err.Error()
-		if rs := []rune(reason); len(rs) > 500 {
-			reason = string(rs[:500])
-		}
-		return badRequest(reason)
+		return badRequest("unrecognized_payload: " + err.Error())
 	}
 	base := conn.DeliveryID(payload, cc)
 	if base == "" {
@@ -300,12 +297,26 @@ func (c *Core) hookSecrets(integration store.Integration, a oncall.Auth, now tim
 	return nil, "secret_unavailable"
 }
 
+// rejectionReasonMax is the most runes of a refusal reason a rejected delivery's error keeps: a
+// reason can carry the sender's text (a connector's error naming a field, a token header's alg),
+// and the row is written for a sender who may hold no credential at all.
+const rejectionReasonMax = 500
+
+// capReason is reason cut to rejectionReasonMax runes.
+func capReason(reason string) string {
+	if rs := []rune(reason); len(rs) > rejectionReasonMax {
+		return string(rs[:rejectionReasonMax])
+	}
+	return reason
+}
+
 // reject records a refused delivery (kind and result rejected, the reason its error), already paid
 // by Hook's charge ahead of verification (P-231), so it charges nothing itself. The raw body (its
 // first 64 KiB) is kept for the raw-body window while the integration's hourly budget of
 // oncall.RejectionsPerHour lasts. Its id is the body's hash, so a sender repeating one body is
-// recorded once.
+// recorded once; its error is the reason cut to rejectionReasonMax runes.
 func (c *Core) reject(ctx context.Context, integration store.Integration, body []byte, reason string, now time.Time) error {
+	reason = capReason(reason)
 	deliveryID := connectors.Sha256Hex(body)[:32] + rejectionIDSuffix
 	err := c.store.Atomically(ctx, func(tx store.Store) error {
 		_, inserted, err := tx.InsertDelivery(ctx, store.Delivery{

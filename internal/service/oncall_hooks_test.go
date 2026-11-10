@@ -91,7 +91,7 @@ func TestHookFilesAnIncidentFromASignedDelivery(t *testing.T) {
 	if out := f.hook(t, iid, tampered); out.Refusal != HookUnauthorized {
 		t.Fatalf("one byte changed: %+v, want unauthorized", out)
 	}
-	if want := "ingest: integration " + iid + " refused a delivery's signature: signature_mismatch"; !strings.Contains(f.logs.String(), want) {
+	if want := "ingest: integration " + iid + ` refused a delivery's signature: "signature_mismatch"`; !strings.Contains(f.logs.String(), want) {
 		t.Fatalf("no refusal line %q in %q", want, f.logs.String())
 	}
 	if f.taskCount(t) != before {
@@ -714,5 +714,66 @@ func TestHookChargesBeforeVerifying(t *testing.T) {
 				t.Fatalf("the good set was fetched %d times, want 1", count(good))
 			}
 		})
+	}
+}
+
+// The text an unverified or verified sender controls is bounded where it lands: a rejected
+// delivery's error is at most 500 characters whatever the refusal (a JWT header's alg or kid of
+// 100 KB, a generic body's unknown key), and none of it can start a line of its own in the server
+// log. Control: a short refusal is recorded and logged whole.
+func TestHookBoundsSenderTextInRejections(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k", "n": b64url(key.N.Bytes()), "e": b64url(big.NewInt(int64(key.E)).Bytes())}}})
+	f := newFixture(t, Options{Sealer: oncallKeyring(t), JWKSFetch: func(context.Context, string) ([]byte, error) { return set, nil }})
+	root := f.alice
+	root.WorkspaceAdmin = true
+	const forged = "2026/11/10 03:00:00 auth: admin@example.com signed in from 203.0.113.9"
+	cfg := IntegrationJWT{Issuer: "https://accounts.google.com", Audience: "batondeck", JWKSURL: "https://www.googleapis.com/oauth2/v3/certs"}
+	jwtInt := f.integration(t, root, CreateIntegrationReq{Name: "j", Source: "gcp", Auth: IntegrationAuthInput{Mode: "jwt", JWT: cfg}})
+	gcpBody := func(i int) []byte {
+		return fmt.Appendf(nil, `{"version":"1.2","incident":{"incident_id":"i-%d","state":"open","policy_name":"p","started_at":1729764000}}`, i)
+	}
+	for i, header := range []map[string]string{
+		{"alg": strings.Repeat("Z", 100000) + "\n" + forged},
+		{"alg": "RS256", "kid": strings.Repeat("K", 100000) + "\n" + forged},
+	} {
+		h, _ := json.Marshal(header)
+		hd := http.Header{}
+		hd.Set(HeaderAuthorize, "Bearer "+b64url(h)+".e30.AAAA")
+		if out := f.hook(t, jwtInt.Integration.ID, HookRequest{Header: hd.Get, Body: gcpBody(i)}); out.Refusal != HookUnauthorized {
+			t.Fatalf("junk bearer %d: %+v", i, out)
+		}
+	}
+	hm := f.integration(t, root, CreateIntegrationReq{Name: "h"})
+	unknown := fmt.Appendf(nil, `{"fingerprint":"f","status":"firing","severity":"s","title":"t",%q:"x"}`, strings.Repeat("u", 2000)+"\n"+forged)
+	if out := f.hook(t, hm.Integration.ID, signedHook(hm.Secret, f.clock.now(), unknown)); out.Refusal != HookBadRequest {
+		t.Fatalf("an unknown key: %+v", out)
+	}
+	for _, iid := range []string{jwtInt.Integration.ID, hm.Integration.ID} {
+		for _, d := range f.deliveries(t, iid) {
+			if d.Error == nil {
+				t.Fatalf("a rejected delivery with no error: %+v", d)
+			}
+			if n := len([]rune(*d.Error)); n > 500 {
+				t.Errorf("a rejected delivery's error is %d characters (%.60q…), want at most 500", n, *d.Error)
+			}
+		}
+	}
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.HasPrefix(line, "2026/11/10") {
+			t.Errorf("the sender's text is a line of its own in the server log: %.120q", line)
+		}
+	}
+	// Control: a short refusal is recorded whole and named in the log.
+	tampered := signedHook(hm.Secret, f.clock.now(), genericBody("ok", "firing", "t"))
+	tampered.Header = signedHook("whsec_not-the-secret", f.clock.now(), genericBody("ok", "firing", "t")).Header
+	if out := f.hook(t, hm.Integration.ID, tampered); out.Refusal != HookUnauthorized {
+		t.Fatalf("a bad signature: %+v", out)
+	}
+	if !strings.Contains(f.logs.String(), "ingest: integration "+hm.Integration.ID+` refused a delivery's signature: "signature_mismatch"`) {
+		t.Errorf("no quoted signature_mismatch line in the log")
 	}
 }

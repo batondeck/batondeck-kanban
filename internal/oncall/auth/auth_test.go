@@ -223,3 +223,38 @@ func TestJWTNegativeCache(t *testing.T) {
 		})
 	}
 }
+
+// A sender's JWT header is not trusted text: the alg and kid it names reach the refusal reason
+// (the delivery log's error, and the server log) cut and quoted, so a 100 KB alg is not stored at
+// length and a newline in one cannot start a line of its own.
+func TestJWTRefusalBoundsTheSendersHeader(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes())}}})
+	v := &Verifier{Fetch: func(context.Context, string) ([]byte, error) { return set, nil }, Now: func() time.Time { return now }}
+	cfg := JWT{Issuer: "https://issuer.example.com", Audience: "batondeck", JWKSURL: "https://issuer.example.com/jwks"}
+	forged := "\n2026/11/10 03:00:00 auth: admin@example.com signed in"
+	good := map[string]any{"iss": cfg.Issuer, "aud": cfg.Audience, "exp": now.Add(time.Minute).Unix()}
+	for name, header := range map[string]map[string]string{
+		"a long alg": {"alg": strings.Repeat("Z", 100000) + forged, "kid": "k1"},
+		"a long kid": {"alg": "RS256", "kid": strings.Repeat("K", 100000) + forged},
+	} {
+		h, _ := json.Marshal(header)
+		for _, tok := range []string{b64(h) + ".e30.AAAA", sign(t, key, header, good)} {
+			reason, ok := v.Verify(context.Background(), "Bearer "+tok, cfg, "I-1")
+			if ok || !strings.HasPrefix(reason, ReasonVerifyFailed) {
+				t.Fatalf("%s: %q, %v; want a verify_failed refusal", name, reason, ok)
+			}
+			if len(reason) > 128 || strings.ContainsAny(reason, "\n\r") {
+				t.Errorf("%s: a %d-byte reason %.80q…; want at most 128 bytes and no line break", name, len(reason), reason)
+			}
+		}
+	}
+	// Control: a short alg is still named, so the operator can read which one was sent.
+	hs, _ := json.Marshal(map[string]string{"alg": "HS256", "kid": "k1"})
+	if reason, _ := v.Verify(context.Background(), "Bearer "+b64(hs)+".e30.AAAA", cfg, "I-1"); !strings.Contains(reason, "HS256") {
+		t.Errorf("alg HS256: %q does not name it", reason)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -115,7 +116,7 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": malformed header", false
 	}
 	if header.Alg != "RS256" {
-		return ReasonVerifyFailed + ": alg " + header.Alg + " is not RS256", false
+		return ReasonVerifyFailed + ": alg " + quoted(header.Alg) + " is not RS256", false
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
@@ -150,6 +151,19 @@ func (v *Verifier) Verify(ctx context.Context, authorization string, cfg JWT, in
 		return ReasonVerifyFailed + ": not yet valid", false
 	}
 	return "", true
+}
+
+// headerTextMax is the most runes of a token header's alg or kid a refusal reason names.
+const headerTextMax = 32
+
+// quoted is s, a value from an unverified token's header, as a refusal reason may carry it: cut to
+// headerTextMax runes and Go-quoted, so the delivery log does not store the sender's text at length
+// and a line break in it cannot start a line of its own in the server log.
+func quoted(s string) string {
+	if r := []rune(s); len(r) > headerTextMax {
+		return strconv.Quote(string(r[:headerTextMax])) + "…"
+	}
+	return strconv.Quote(s)
 }
 
 func decodeSegment(seg string, into any) error {
@@ -190,7 +204,7 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 		return k, ""
 	}
 	if fresh && now.Sub(ks.fetched) < jwksRefetchAfter {
-		return nil, ReasonVerifyFailed + ": no key " + kid
+		return nil, ReasonVerifyFailed + ": no key " + quoted(kid)
 	}
 	v.mu.Lock()
 	at, failed := v.failed[rawURL]
@@ -225,7 +239,7 @@ func (v *Verifier) key(ctx context.Context, rawURL, kid, integrationID string) (
 	if k := pickKey(keys, kid); k != nil {
 		return k, ""
 	}
-	return nil, ReasonVerifyFailed + ": no key " + kid
+	return nil, ReasonVerifyFailed + ": no key " + quoted(kid)
 }
 
 // fetchFailed remembers rawURL's failed fetch at now.
