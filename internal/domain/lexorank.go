@@ -132,8 +132,9 @@ func OrderBetween(a, b string) (string, error) {
 
 // OrderBetweenSpread is OrderBetween with four more digits drawn from entropy, so two writers that
 // place a task in the same gap from the same read (each before the other's write is visible) mint
-// different keys rather than one key twice. The key still sorts strictly between a and b; where no
-// spread key fits the gap it is OrderBetween's own.
+// different keys rather than one key twice. The key sorts strictly between a and b. It is
+// OrderBetween's own key, unspread, only where no spread key fits on either side of it, which a head
+// placement (a == "") never meets short of the smallest integer.
 func OrderBetweenSpread(a, b string, entropy uint32) (string, error) {
 	if a != "" && b != "" && a > b {
 		a, b = b, a
@@ -157,6 +158,14 @@ func OrderBetweenSpread(a, b string, entropy uint32) (string, error) {
 		}
 		if lo, err = OrderBetween(lo, b); err != nil {
 			break
+		}
+	}
+	// b's fraction runs through low digits after k ("a01111V" after "a0"), which repeated head
+	// placements produce on their own: spread a key before k instead. For a head placement that key is
+	// the integer before k's, which no spread can carry past k, and keys stay short.
+	if k2, err := OrderBetween(a, k); err == nil {
+		if c := k2 + string(spread[:]); c < k {
+			return c, nil
 		}
 	}
 	return k, nil

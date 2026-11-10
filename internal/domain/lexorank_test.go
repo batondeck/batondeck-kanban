@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -137,5 +138,57 @@ func TestOrderBetweenSpread(t *testing.T) {
 	}
 	if _, err := OrderBetweenSpread("a0", "a0", 7); err == nil {
 		t.Fatal("OrderBetweenSpread(a0, a0) has no gap and must fail")
+	}
+}
+
+// A head whose fraction runs through low digits ("a01111V", "Zn111eAwM", which repeated head
+// placements produce on their own) leaves no room after OrderBetween's key for a spread; writers that
+// read that head at once must still mint different keys, not the bare key each.
+func TestOrderBetweenSpreadBeforeACrowdedHead(t *testing.T) {
+	for _, g := range [][2]string{{"", "a01111V"}, {"", "Zn111eAwM"}, {"", "a0001"}, {"", "Zz00011"},
+		{"a0", "a01111V"}, {"Zn1", "Zn111eAwM"}, {"a00001", "a0001"}} {
+		bare := mustOrder(t, g[0], g[1])
+		seen := map[string]bool{}
+		for i := range 1000 {
+			k, err := OrderBetweenSpread(g[0], g[1], uint32(i)*2654435761)
+			if err != nil {
+				t.Fatalf("OrderBetweenSpread(%q, %q): %v", g[0], g[1], err)
+			}
+			if !(g[0] == "" || g[0] < k) || !(k < g[1]) || !IsValidOrder(k) {
+				t.Fatalf("OrderBetweenSpread(%q, %q) = %q: not a well-formed key strictly between", g[0], g[1], k)
+			}
+			if k == bare {
+				t.Fatalf("OrderBetweenSpread(%q, %q, entropy #%d) = %q, OrderBetween's own key with no spread", g[0], g[1], i, k)
+			}
+			seen[k] = true
+		}
+		if len(seen) < 990 {
+			t.Errorf("OrderBetweenSpread(%q, %q): %d distinct keys of 1000", g[0], g[1], len(seen))
+		}
+	}
+}
+
+// Placing task after task at a column's head (each before the last) always spreads the key and keeps
+// keys short: no placement falls back to OrderBetween's bare key, which two writers reading the same
+// head would both mint.
+func TestOrderBetweenSpreadChainedHeadPlacements(t *testing.T) {
+	r := rand.New(rand.NewPCG(1, 2))
+	head, longest := "a0", 0
+	for i := range 10_000 {
+		k, err := OrderBetweenSpread("", head, r.Uint32())
+		if err != nil {
+			t.Fatalf("placement %d before %q: %v", i, head, err)
+		}
+		if !(k < head) || !IsValidOrder(k) {
+			t.Fatalf("placement %d before %q = %q: not a well-formed key before it", i, head, k)
+		}
+		if bare := mustOrder(t, "", head); k == bare {
+			t.Fatalf("placement %d before %q = %q, OrderBetween's own key with no spread", i, head, k)
+		}
+		longest = max(longest, len(k))
+		head = k
+	}
+	if longest > 16 {
+		t.Errorf("10,000 head placements reached a %d-character key, want at most 16", longest)
 	}
 }

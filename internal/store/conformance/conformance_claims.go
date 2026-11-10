@@ -566,6 +566,11 @@ func claims(t *testing.T, newStore Factory) {
 		for i := range n {
 			f.add(t, fmt.Sprint("task ", i), nil)
 		}
+		// IN_PROGRESS is headed by a key whose fraction runs through low digits, which leaves no room
+		// after OrderBetween's key "a0" for a spread: the landings must still not share one key.
+		f.add(t, "crowded head", func(in *store.CreateTaskInput) {
+			in.ColumnID, in.Status, in.OrderKey = f.col[domain.InProgress], domain.InProgress, "a01111V"
+		})
 		ids := make([]string, n)
 		oks := make([]bool, n)
 		errs := make([]error, n)
@@ -594,16 +599,19 @@ func claims(t *testing.T, newStore Factory) {
 		if len(seen) != n || dup != 0 {
 			t.Fatalf("%d distinct winners and %d duplicates, want %d and 0", len(seen), dup, n)
 		}
-		// Every winner left "a0" behind and landed in IN_PROGRESS with a key of its own, though the
-		// claims read that column at once.
-		landed, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board, ColumnID: f.col[domain.InProgress]}, "", n)
+		// Every winner left "a0" behind and landed in IN_PROGRESS before its head with a key of its
+		// own, though the claims read that column at once.
+		landed, err := f.s.ListTasks(ctx, f.project, store.TaskFilter{BoardID: f.board, ColumnID: f.col[domain.InProgress]}, "", n+1)
 		mustOK(t, err)
-		keys := map[string]bool{}
+		keys := map[string]int{}
 		for _, task := range landed.Tasks {
-			keys[task.OrderKey] = true
+			keys[task.OrderKey]++
 		}
-		if len(landed.Tasks) != n || len(keys) != n {
-			t.Fatalf("%d tasks in IN_PROGRESS under %d distinct order keys, want %d and %d", len(landed.Tasks), len(keys), n, n)
+		if len(landed.Tasks) != n+1 || len(keys) != n+1 {
+			t.Fatalf("%d tasks in IN_PROGRESS under %d distinct order keys, want %d and %d: %v", len(landed.Tasks), len(keys), n+1, n+1, keys)
+		}
+		if last := landed.Tasks[n].OrderKey; last != "a01111V" {
+			t.Fatalf("IN_PROGRESS ends at %q, want the claims before its head \"a01111V\"", last)
 		}
 		if _, ok, err := f.s.ClaimNext(ctx, f.frontier(), f.leaseFor("late", "z", "L-z")); err != nil || ok {
 			t.Fatalf("the 51st caller: ok %v, %v; want an empty frontier", ok, err)

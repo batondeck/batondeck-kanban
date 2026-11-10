@@ -102,7 +102,8 @@ func (s contextSvc) AddSubtask(ctx context.Context, caller domain.Caller, req Ad
 
 // headOfColumn is an order key before the column's first task, one bounded read, spread
 // (domain.OrderBetweenSpread) so writers that place tasks at the head of one column at once (two
-// creates on Postgres read the head before either commits) never mint one key twice.
+// creates on Postgres read the head before either commits) mint different keys: two of them draw the
+// same spread about once in 14 million.
 // ponytail: conductor appends at the column's END (maxOrderInColumn); the store has no last-key read
 // (P-69) and paging to the end is unbounded, so the child lands at the head until P-69 lands.
 func headOfColumn(ctx context.Context, tx store.Store, projectID, boardID, columnID string) (string, error) {

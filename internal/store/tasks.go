@@ -287,9 +287,9 @@ func placeOf(ctx context.Context, q sqlQueries, projectID, boardID, columnID str
 
 // HeadKey is the order key a task takes when a write moves it into a column without naming one: a key
 // before first, the column's first key ("" when it is empty), so the task lands at the column's head,
-// spread (domain.OrderBetweenSpread) so two writers that land tasks in one column at once do not mint
-// one key twice. A first that is malformed gives keep, the task's own key: a neighbour's bad key never
-// fails a lifecycle write.
+// spread (domain.OrderBetweenSpread) so two writers that land tasks in one column at once mint
+// different keys (the same spread comes up about once in 14 million draws). A first that is
+// malformed gives keep, the task's own key: a neighbour's bad key never fails a lifecycle write.
 func HeadKey(first, keep string) string {
 	k, err := domain.OrderBetweenSpread("", first, rand.Uint32())
 	if err != nil {
