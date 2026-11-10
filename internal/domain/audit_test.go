@@ -13,8 +13,8 @@ import (
 
 func TestAuditCoveragePinned(t *testing.T) {
 	want := []string{
-		"add_member", "create_integration", "delete_integration", "delete_project", "delete_task",
-		"disconnect_agent", "grant_capabilities", "remove_member", "rotate_integration_secret",
+		"add_member", "create_integration", "delete_chronicle_page", "delete_integration", "delete_project",
+		"delete_task", "disconnect_agent", "grant_capabilities", "remove_member", "rotate_integration_secret",
 		"update_integration", "update_settings",
 	}
 	if got := AuditedTools(); !reflect.DeepEqual(got, want) {
@@ -40,6 +40,11 @@ func TestDescribeAudit(t *testing.T) {
 	d, ok := DescribeAudit("delete_task", map[string]any{"projectId": "P-1", "taskId": "T-7", "version": 3})
 	if !ok || !reflect.DeepEqual(d, AuditDescriptor{Action: "task.deleted", Subject: "T-7", Data: map[string]any{}}) {
 		t.Fatalf("delete_task: %+v %v", d, ok)
+	}
+	// A Chronicle page leaves no version behind, so this row is its trace: the page, in the row's project.
+	d, ok = DescribeAudit("delete_chronicle_page", map[string]any{"projectId": "P-1", "pageId": "CP-0a1b", "expectedHeadVersionId": "CV-9"})
+	if !ok || !reflect.DeepEqual(d, AuditDescriptor{Action: "chronicle.page_deleted", Subject: "CP-0a1b", Data: map[string]any{}}) {
+		t.Fatalf("delete_chronicle_page: %+v %v", d, ok)
 	}
 	d, _ = DescribeAudit("remove_member", map[string]any{"projectId": "P-1", "identityId": " Bob@X.com "})
 	if d.Action != "member.removed" || d.Subject != "bob@x.com" {

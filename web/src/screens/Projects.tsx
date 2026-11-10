@@ -39,7 +39,7 @@ export function Projects() {
   // The sidebar switcher scopes this grid: "All projects" ('') shows every PROJECT card; a selected
   // project shows THAT project's BOARDS instead (a project has many boards).
   const selectedName = roster.find((p) => p.projectId === selected)?.name ?? '';
-  // A board is `create_board`, tier write (P-440): below it "New board" is closed and says why, and
+  // A board is `create_board`, tier master (P-440): below it "New board" is closed and says why, and
   // opening a project with no board shows its empty board list instead of creating one.
   const selectedRole = useMyProjectRole(selected);
   const canNewBoard = mayCall(selectedRole, 'create_board');

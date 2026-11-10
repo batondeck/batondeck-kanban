@@ -112,11 +112,14 @@ const (
 
 // toolPosture is the one place every tool is classified: the 86 tools of the target surface
 // (conductor's 91 in scope, delete_task and cancel_task, less ADR-0004's 7). The exempt set, the
-// unscoped set and the landing statuses all derive from it.
+// unscoped set and the landing statuses all derive from it. The tiers are conductor's, except
+// create_board, add_column and delete_chronicle_page, which the owner's ruling of 2026-11-10 moved
+// from write to master: a worker could otherwise destroy a Chronicle page for good, or add a board or
+// a low-order, WIP-limited column that draws every claim and then refuses it, which it cannot undo.
 var toolPosture = map[string]Posture{
 	"ack_follow_up":             {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite, Idempotent: true},
 	"add_artifact":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite, Idempotent: true},
-	"add_column":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
+	"add_column":                {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_comment":               {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_context_item":          {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"add_dependency":            {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
@@ -130,13 +133,13 @@ var toolPosture = map[string]Posture{
 	"claim_next":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(InProgress), Effect: EffectWrite},
 	"claim_task":                {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(InProgress), Effect: EffectWrite},
 	"complete_task":             {TenantScoped: true, Landing: completionLanding, Effect: EffectWrite},
-	"create_board":              {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
+	"create_board":              {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_integration":        {Tier: TierStructural, TenantScoped: true, AdminOnly: AdminOnlyOnly, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_project":            {TenantScoped: false, GrantExempt: true, Effect: EffectWrite},
 	"create_sprint":             {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectWrite},
 	"create_task":               {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(Todo), Effect: EffectWrite},
-	"delete_chronicle_page":     {Tier: TierWrite, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
+	"delete_chronicle_page":     {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_integration":        {Tier: TierStructural, TenantScoped: true, AdminOnly: AdminOnlyOnly, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_project":            {Tier: TierAdmin, TenantScoped: true, AdminOnly: AdminOnlyConditional, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},
 	"delete_task":               {Tier: TierMaster, TenantScoped: true, Landing: fixedLanding(), Effect: EffectDestructive, Idempotent: true},

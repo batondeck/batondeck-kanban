@@ -630,12 +630,15 @@ export function ChronicleNew() {
 /** One page: read, edit inline, delete, reach its history. */
 export function ChroniclePageView() {
   const { projectId } = useProject();
-  // Edit and Land are `edit_chronicle_page`, Delete `delete_chronicle_page`, both tier write (P-440):
-  // below it they are closed and say why.
+  // Edit and Land are `edit_chronicle_page`, tier write; Delete is `delete_chronicle_page`, tier master
+  // (P-440; the owner's ruling of 2026-11-10: it destroys every version). Below its tier each is closed
+  // and says why: a viewer can do neither, a worker can edit but not delete.
   const myRole = useMyProjectRole(projectId);
   const canEdit = mayCall(myRole, 'edit_chronicle_page');
   const canDelete = mayCall(myRole, 'delete_chronicle_page');
   const editWhy = closedWhy(myRole, 'edit_chronicle_page', 'edit or delete records');
+  // The one reason beside Edit and Delete: the edit's while Edit is closed (it covers both), else the delete's.
+  const headerWhy = canEdit ? closedWhy(myRole, 'delete_chronicle_page', 'delete records') : editWhy;
   const { pageId = '' } = useParams();
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -942,15 +945,15 @@ export function ChroniclePageView() {
                   <Button
                     variant="danger"
                     disabled={!canDelete}
-                    title={canDelete ? undefined : editWhy ?? 'Checking your role'}
-                    aria-describedby={!canDelete && editWhy ? 'chronicle-closed' : undefined}
+                    title={canDelete ? undefined : headerWhy ?? 'Checking your role'}
+                    aria-describedby={!canDelete && headerWhy ? 'chronicle-closed' : undefined}
                     onClick={() => setConfirmDelete('')}
                   >
                     Delete
                   </Button>
                 )}
-                {(!canEdit || !canDelete) && editWhy && (
-                  <span id="chronicle-closed" className="muted" style={{ fontSize: 12 }}>{editWhy}</span>
+                {(!canEdit || !canDelete) && headerWhy && (
+                  <span id="chronicle-closed" className="muted" style={{ fontSize: 12 }}>{headerWhy}</span>
                 )}
               </>
             )}

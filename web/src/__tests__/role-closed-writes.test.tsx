@@ -106,6 +106,8 @@ async function boardAs(role: string): Promise<Calls> {
 }
 
 const newBoard = () => screen.getByRole('button', { name: '+ New board' });
+/** create_board is tier master (the owner's ruling of 2026-11-10), so a viewer and a worker read this. */
+const NEW_BOARD_WHY = 'Only a master can create boards.';
 const assignChip = () => screen.getByRole('button', { name: 'assign' });
 const assignedChip = () => screen.getByTitle(/^Assigned to bot-1/);
 /** The palette's own list: the board also has a status filter whose `<option>`s share these names. */
@@ -115,9 +117,9 @@ const sortables = () => [...document.querySelectorAll('[aria-roledescription="so
 describe('the board closes what a viewer cannot write', () => {
   it('a viewer: "+ New board", both assign chips, drag and the sprint lifecycle are closed with reasons, and nothing is sent', async () => {
     const f = await boardAs('viewer');
-    await waitFor(() => expect(screen.getByText('A viewer cannot create boards.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(NEW_BOARD_WHY)).toBeInTheDocument());
     expect(newBoard()).toBeDisabled();
-    expect(newBoard()).toHaveAccessibleDescription('A viewer cannot create boards.');
+    expect(newBoard()).toHaveAccessibleDescription(NEW_BOARD_WHY);
     fireEvent.click(newBoard());
 
     const cardsWhy = 'Only a master can assign, move or reprioritise tasks.';
@@ -143,7 +145,7 @@ describe('the board closes what a viewer cannot write', () => {
 
   it('a viewer: the palette lists Set status and Set priority disabled, each with its reason, and `s` opens no status list', async () => {
     const f = await boardAs('viewer');
-    await waitFor(() => expect(screen.getByText('A viewer cannot create boards.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(NEW_BOARD_WHY)).toBeInTheDocument());
     fireEvent.keyDown(window, { key: 'j' });
     fireEvent.keyDown(window, { key: 's' });
     const status = await waitFor(() => palette().getByRole('option', { name: /Set status/ }));
@@ -156,6 +158,16 @@ describe('the board closes what a viewer cannot write', () => {
     await settle();
     expect(palette().queryByRole('option', { name: 'IN PROGRESS' })).toBeNull();
     expect(palette().getByRole('option', { name: /Set status/ })).toBeInTheDocument();
+    expect(writes(f)).toEqual([]);
+  });
+
+  it('a worker: "+ New board" is closed with its reason (create_board is tier master), and clicking it sends nothing', async () => {
+    const f = await boardAs('worker');
+    await waitFor(() => expect(newBoard()).toHaveAccessibleDescription(NEW_BOARD_WHY));
+    expect(newBoard()).toBeDisabled();
+    fireEvent.click(newBoard());
+    expect(screen.queryByLabelText('New board name')).toBeNull();
+    await settle();
     expect(writes(f)).toEqual([]);
   });
 
@@ -358,19 +370,21 @@ function projectsAs(role: string): Calls {
   return fetchMock as unknown as Calls;
 }
 
-describe('Projects creates a board only for a role that may (create_board is tier write)', () => {
-  it('a viewer opening a project with no boards selects it, creates nothing, and sees "New board" closed with the reason', async () => {
-    const f = projectsAs('viewer');
-    fireEvent.click(await screen.findByText('Apollo'));
-    await waitFor(() => expect(screen.getByText('No boards in this project yet.')).toBeInTheDocument());
-    expect(localStorage.getItem('bd.projectId')).toBe('P-1');
-    described(screen.getByLabelText('New board name'), 'A viewer cannot create boards.');
-    described(btn('New board'), 'A viewer cannot create boards.');
-    expect(writes(f)).toEqual([]);
-  });
+describe('Projects creates a board only for a role that may (create_board is tier master)', () => {
+  for (const role of ['viewer', 'worker']) {
+    it(`a ${role} opening a project with no boards selects it, creates nothing, and sees "New board" closed with the reason`, async () => {
+      const f = projectsAs(role);
+      fireEvent.click(await screen.findByText('Apollo'));
+      await waitFor(() => expect(screen.getByText('No boards in this project yet.')).toBeInTheDocument());
+      expect(localStorage.getItem('bd.projectId')).toBe('P-1');
+      described(screen.getByLabelText('New board name'), NEW_BOARD_WHY);
+      described(btn('New board'), NEW_BOARD_WHY);
+      expect(writes(f)).toEqual([]);
+    });
+  }
 
-  it('POSITIVE CONTROL: a worker opening it creates the first board and lands on it', async () => {
-    const f = projectsAs('worker');
+  it('POSITIVE CONTROL: a master opening it creates the first board and lands on it', async () => {
+    const f = projectsAs('master');
     fireEvent.click(await screen.findByText('Apollo'));
     expect(await screen.findByText('the board')).toBeInTheDocument();
     expect(writes(f).some((w) => /^POST .*\/projects\/P-1\/boards$/.test(w))).toBe(true);
@@ -418,7 +432,7 @@ function chronicleAs(role: string, entry: string): Calls {
   return fetchMock as unknown as Calls;
 }
 
-describe('Chronicle offers writing from worker up (create, edit and delete are tier write)', () => {
+describe('Chronicle offers writing from worker up and deleting from master up (delete_chronicle_page is tier master)', () => {
   it('a viewer: the index offers no "New record" link and says why', async () => {
     chronicleAs('viewer', '/chronicle');
     await waitFor(() => expect(screen.getAllByText('A viewer cannot write records.').length).toBeGreaterThan(0));
@@ -458,13 +472,26 @@ describe('Chronicle offers writing from worker up (create, edit and delete are t
     expect(writes(f)).toEqual([]);
   });
 
-  it('POSITIVE CONTROL: a worker can open the editor', async () => {
-    chronicleAs('worker', '/chronicle/CP-1');
+  it('a worker can open the editor, but Delete is closed with its reason and opens no confirmation', async () => {
+    const f = chronicleAs('worker', '/chronicle/CP-1');
     await screen.findByText('original text');
     await waitFor(() => expect(btn('Edit')).toBeEnabled());
-    expect(btn('Delete')).toBeEnabled();
+    described(btn('Delete'), 'Only a master can delete records.');
+    expect(screen.getByText('Only a master can delete records.')).toBeInTheDocument();
+    fireEvent.click(btn('Delete'));
+    await settle();
+    expect(screen.queryByRole('button', { name: /Delete permanently/i })).toBeNull();
+    expect(writes(f)).toEqual([]);
     fireEvent.click(btn('Edit'));
     expect(await screen.findByText('Save version')).toBeInTheDocument();
+  });
+
+  it('POSITIVE CONTROL: a master can delete, and no reason is shown', async () => {
+    chronicleAs('master', '/chronicle/CP-1');
+    await screen.findByText('original text');
+    await waitFor(() => expect(btn('Delete')).toBeEnabled());
+    expect(btn('Edit')).toBeEnabled();
+    expect(screen.queryByText(/cannot edit or delete records|can delete records/)).toBeNull();
   });
 
   it('a viewer on history: Revert is closed with the reason', async () => {

@@ -658,8 +658,8 @@ export function Board() {
   const myRole = useMyProjectRole(projectId);
   const canCreate = mayCall(myRole, 'create_task');
   const createClosedWhy = closedWhy(myRole, 'create_task', 'create tasks') ?? null;
-  // The rest of the board's writes, from the same table (P-440): a new board is `create_board` (write),
-  // the card's assign chip and the palette's priority are `update_task`, a drag and the palette's status
+  // The rest of the board's writes, from the same table (P-440): a new board is `create_board`, the
+  // card's assign chip and the palette's priority are `update_task`, a drag and the palette's status
   // are `move_task`, the sprint lifecycle is `update_sprint` (all master). Each is closed below its floor.
   const canNewBoard = mayCall(myRole, 'create_board');
   const newBoardWhy = closedWhy(myRole, 'create_board', 'create boards') ?? null;
