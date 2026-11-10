@@ -120,8 +120,12 @@ func (c *Core) InvalidateAccess(projectID, identityID string) {
 	c.hidden.invalidate(identityID)
 }
 
-// accessEntry is the cached membership and grant, read through on a miss or an expired entry.
+// accessEntry is the cached membership and grant, read through on a miss or an expired entry. A
+// projectID longer than any the server makes is VALIDATION, neither looked up nor cached.
 func (c *Core) accessEntry(ctx context.Context, projectID, identityID string) (accessCached, error) {
+	if len(projectID) > maxIDLen {
+		return accessCached{}, domain.Validation("projectId is not a project id", map[string]any{"field": "projectId", "maxLength": maxIDLen})
+	}
 	now := c.now()
 	e, gen, ok := c.access.get(projectID, identityID, now)
 	if ok {
@@ -154,7 +158,8 @@ type accessCached struct {
 	expires  time.Time
 }
 
-// accessCache holds one entry per (project, identity), a non-member included, each for ttl. gen
+// accessCache holds one entry per (project, identity), a non-member included, each for ttl, and at
+// most accessCacheSweep of them (put). gen
 // counts invalidations: a read-through that began before one does not store what it read, so an
 // invalidation is never undone by a lookup already in flight.
 type accessCache struct {
@@ -164,8 +169,15 @@ type accessCache struct {
 	entries map[[2]string]accessCached
 }
 
-// accessCacheSweep is the size past which a put first drops the expired entries.
+// accessCacheSweep is the size past which a put first drops the expired entries and then, while more
+// than three quarters of it are left, any others: the cache never holds more, and the next sweep is
+// at least a quarter of it away, so a put stays amortised O(1) however many entries are live.
 const accessCacheSweep = 10_000
+
+// maxIDLen is the longest projectId authorize looks up. The server's ids are 14 bytes (P- and 12 hex
+// digits); a longer one names no project, and refusing it before the lookup keeps a caller-chosen
+// string of any size out of the access cache.
+const maxIDLen = 64
 
 func newAccessCache(ttl time.Duration) *accessCache {
 	return &accessCache{ttl: ttl, entries: map[[2]string]accessCached{}}
@@ -192,6 +204,12 @@ func (a *accessCache) put(projectID, identityID string, e accessCached, gen uint
 			if !now.Before(v.expires) {
 				delete(a.entries, k)
 			}
+		}
+		for k := range a.entries {
+			if len(a.entries) <= accessCacheSweep*3/4 {
+				break
+			}
+			delete(a.entries, k)
 		}
 	}
 	e.expires = now.Add(a.ttl)

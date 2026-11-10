@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/batondeck/batondeck-kanban/internal/domain"
@@ -23,9 +25,103 @@ import (
 // ponytail: an in-process lock is the ceiling for one binary on one disk; several processes on a
 // shared directory need the lock in the database.
 type Store struct {
+	// Reserve is the free space, in bytes, uploads leave on the volume dir is on: Stage cuts off a
+	// body that would take the volume below it, and Room refuses a size that would (ErrFull), so
+	// attachments cannot fill the disk the database shares. Zero checks nothing.
+	Reserve int64
+
 	dir   string
 	mu    sync.Mutex
 	locks map[string]*hashLock
+
+	roomMu sync.Mutex
+	held   int64 // bytes the Stage calls in flight have claimed and not yet given back
+}
+
+// ErrFull is Stage's and Room's refusal: the store's volume would be left with less than Reserve
+// free.
+var ErrFull = errors.New("blob: the volume is down to its reserve")
+
+// statFree is the bytes an unprivileged writer may still use on the volume dir is on; a test swaps it.
+var statFree = func(dir string) (int64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return int64(min(st.Bavail*uint64(st.Bsize), math.MaxInt64)), nil
+}
+
+// Room is ErrFull when n more bytes would leave the store's volume with less than Reserve free,
+// counting the bytes the uploads in flight are about to write. A volume whose free space cannot be
+// read is not refused.
+func (s *Store) Room(n int64) error {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	return s.roomLocked(n)
+}
+
+func (s *Store) roomLocked(n int64) error {
+	if s.Reserve <= 0 {
+		return nil
+	}
+	free, err := statFree(s.dir)
+	if err != nil {
+		return nil
+	}
+	if free-s.held-n < s.Reserve {
+		return ErrFull
+	}
+	return nil
+}
+
+// claim gives back done bytes an earlier claim held, which are written by now and so counted in the
+// volume's free space, then holds n bytes for the writes to come: ErrFull, holding nothing more,
+// when they do not fit above the reserve (Room). Statfs alone cannot see bytes another upload is
+// about to write, so every byte Stage writes is held first.
+func (s *Store) claim(done, n int64) error {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	s.held -= done
+	if err := s.roomLocked(n); err != nil {
+		return err
+	}
+	s.held += n
+	return nil
+}
+
+// release gives back n bytes a claim held.
+func (s *Store) release(n int64) {
+	s.roomMu.Lock()
+	s.held -= n
+	s.roomMu.Unlock()
+}
+
+// roomEvery is the bytes Stage holds at a time (claim): one look at the volume per roomEvery bytes
+// written. Within roomEvery of the reserve every upload is refused.
+const roomEvery = 1 << 20
+
+// roomWriter is w that writes only bytes it holds: before a write past what it holds it gives that
+// back and claims the write's size, or roomEvery if that is larger; ErrFull when they do not fit.
+type roomWriter struct {
+	w    io.Writer
+	s    *Store
+	held int64 // bytes claimed
+	used int64 // of them, bytes written
+}
+
+func (r *roomWriter) Write(p []byte) (int, error) {
+	if r.used+int64(len(p)) > r.held {
+		n := max(int64(len(p)), roomEvery)
+		done := r.held
+		r.held, r.used = 0, 0
+		if err := r.s.claim(done, n); err != nil {
+			return 0, err
+		}
+		r.held = n
+	}
+	n, err := r.w.Write(p)
+	r.used += int64(n)
+	return n, err
 }
 
 type hashLock struct {
@@ -66,13 +162,28 @@ const tmpPrefix = "upload-"
 
 // Stage reads r whole to a temporary file, hashing it, and syncs it to disk, so the row a commit
 // writes after it never names bytes still only in the page cache. On any error the file is removed.
+// With a Reserve it is ErrFull, before the first byte or with the body cut off, once the bytes would
+// not fit above the reserve, counting those the other uploads in flight hold (Room).
 func (s *Store) Stage(r io.Reader) (*Staged, error) {
+	var room *roomWriter
+	if s.Reserve > 0 {
+		if err := s.claim(0, roomEvery); err != nil {
+			return nil, err
+		}
+		room = &roomWriter{s: s, held: roomEvery}
+		defer func() { s.release(room.held) }()
+	}
 	f, err := os.CreateTemp(filepath.Join(s.dir, "tmp"), tmpPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("blob: %w", err)
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), r)
+	var w io.Writer = io.MultiWriter(f, h)
+	if room != nil {
+		room.w = w
+		w = room
+	}
+	n, err := io.Copy(w, r)
 	if err == nil {
 		err = f.Sync()
 	}

@@ -365,7 +365,8 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 	if lim == nil {
 		lim = loginLimits
 	}
-	refund, err := lim.admit(addr, a.now())
+	known := lim.isKnown(addr, l, a.now())
+	refund, err := lim.admit(addr, known, a.now())
 	if err != nil {
 		return store.User{}, err
 	}
@@ -377,7 +378,7 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 			refund()
 		}
 	}()
-	release, err := lim.acquire(ctx)
+	release, err := lim.acquire(ctx, known)
 	if err != nil {
 		return store.User{}, err
 	}
@@ -395,6 +396,7 @@ func (a *Accounts) Authenticate(ctx context.Context, addr, login, password strin
 		charged = true
 		return store.User{}, errUnauthenticated()
 	}
+	lim.signedIn(addr, l, a.now())
 	return u, nil
 }
 

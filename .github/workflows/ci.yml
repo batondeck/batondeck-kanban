@@ -2,7 +2,9 @@
 # the pre-push hook runs (githooks/pre-push), once, with a Postgres 16 service and
 # BATONDECK_TEST_POSTGRES_DSN pointing at it, so the Postgres halves of conformance, perf and the
 # live contract run rather than skip. The SPA's typecheck and vitest suite are part of `make check`
-# (its web-check step), so the hook and this workflow cannot run different gates.
+# (its web-check step), so the hook and this workflow cannot run different gates. Before it, this
+# workflow alone runs govulncheck and npm audit: both ask an advisory database over the network,
+# which the hook does not need.
 #
 # The service is the hook's: the postgres:16-alpine image, user and password batondeck, the
 # `postgres` database (each test makes its own). GOWORK=off as in the hook: the gate proves the
@@ -54,6 +56,23 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: govulncheck
+        # A vulnerability the code reaches, in the standard library of the Go go.mod pins or in a
+        # module, fails the gate (exit 3); one it does not call is listed and passes. Installed and
+        # then run, not `go run`: under `go run` it would scan the Go that runs it, which can be newer
+        # than the pinned one.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: npm audit
+        # An advisory of moderate or worse in what the web UI is built from (its dependencies) fails
+        # the gate; one in the dev tooling (vite, vitest, jsdom) is shown as a warning.
+        working-directory: web
+        run: |
+          npm audit --package-lock-only --omit=dev --audit-level=moderate
+          npm audit --package-lock-only || echo "::warning title=npm audit::a dev dependency of web/ has a published advisory (see above)"
 
       - name: make check, both engines
         # The runner has 2 vCPUs: internal/cli under -race outruns the Makefile's 20m test timeout here.

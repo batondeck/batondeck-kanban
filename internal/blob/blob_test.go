@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -253,5 +254,147 @@ func TestWalkAndSweepTmp(t *testing.T) {
 	left, _ := filepath.Glob(filepath.Join(dir, "tmp", "*"))
 	if !slices.Equal(left, []string{other, tmps[1]}) && !slices.Equal(left, []string{tmps[1], other}) {
 		t.Fatalf("tmp holds %v, want %s and %s", left, other, tmps[1])
+	}
+}
+
+// volume makes statFree report a volume of size bytes on which only dir/tmp's files take space.
+func volume(t *testing.T, size int64) {
+	t.Helper()
+	orig := statFree
+	statFree = func(dir string) (int64, error) {
+		used := int64(0)
+		ents, _ := os.ReadDir(filepath.Join(dir, "tmp"))
+		for _, e := range ents {
+			if fi, err := e.Info(); err == nil {
+				used += fi.Size()
+			}
+		}
+		return size - used, nil
+	}
+	t.Cleanup(func() { statFree = orig })
+}
+
+// Uploads leave Reserve free on the store's volume: a body that would take it below is cut off with
+// ErrFull and leaves no file, and Room answers the same for a size before any byte is written, so
+// attachments cannot fill the disk the database shares.
+func TestStageKeepsTheReserveFree(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Reserve = 1 << 20
+	volume(t, 3<<20)
+	if _, err := s.Stage(bytes.NewReader(make([]byte, 4<<20))); !errors.Is(err, ErrFull) {
+		t.Fatalf("staging 4 MiB on a 3 MiB volume with 1 MiB reserved: %v, want ErrFull", err)
+	}
+	// A body read in small pieces (an HTTP body) is cut off once it reaches the reserve.
+	if _, err := s.Stage(struct{ io.Reader }{bytes.NewReader(make([]byte, 4<<20))}); !errors.Is(err, ErrFull) {
+		t.Fatalf("staging 4 MiB piecewise: %v, want ErrFull", err)
+	}
+	if left, _ := os.ReadDir(filepath.Join(s.Dir(), "tmp")); len(left) != 0 {
+		t.Fatalf("%d staged files left behind", len(left))
+	}
+	if err := s.Room(2<<20 + 1); !errors.Is(err, ErrFull) {
+		t.Fatalf("Room past the reserve: %v, want ErrFull", err)
+	}
+	t.Run("Control", func(t *testing.T) {
+		if err := s.Room(2 << 20); err != nil {
+			t.Fatalf("Room up to the reserve: %v", err)
+		}
+		st, err := s.Stage(bytes.NewReader(make([]byte, 1<<20)))
+		if err != nil {
+			t.Fatalf("staging 1 MiB above the reserve: %v", err)
+		}
+		st.Discard()
+		s.Reserve = 0
+		st, err = s.Stage(bytes.NewReader(make([]byte, 4<<20)))
+		if err != nil {
+			t.Fatalf("no reserve: %v", err)
+		}
+		st.Discard()
+	})
+}
+
+// Uploads running at the same time share the room above the reserve: each holds the bytes it is
+// about to write, from before its first byte, so many slow bodies, each smaller than the stretch
+// Stage writes between two looks at the volume, cannot together take it past the reserve. Room
+// counts what they hold, and a body that starts at the reserve is refused before its first byte.
+func TestConcurrentStagesKeepTheReserveFree(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reserve, room, uploads, body = 64 << 20, 1 << 20, 16, 600 << 10
+	s.Reserve = reserve
+	volume(t, reserve+room)
+	type result struct {
+		st  *Staged
+		err error
+	}
+	results := make(chan result, uploads)
+	release := make(chan struct{})
+	var returned atomic.Int32
+	for range uploads {
+		pr, pw := io.Pipe()
+		go func() {
+			<-release
+			_, _ = pw.Write(make([]byte, body))
+			_ = pw.Close()
+		}()
+		go func() {
+			st, err := s.Stage(pr)
+			returned.Add(1)
+			_ = pr.Close() // a refused Stage read nothing: let its body's writer go
+			results <- result{st, err}
+		}()
+	}
+	// Every body is held until each Stage has opened its temp file or returned.
+	tmp := filepath.Join(s.Dir(), "tmp")
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		ents, _ := os.ReadDir(tmp)
+		if len(ents)+int(returned.Load()) >= uploads {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d temp files and %d returned Stage calls after 10 s, want %d in all", len(ents), returned.Load(), uploads)
+		}
+	}
+	if err := s.Room(1); !errors.Is(err, ErrFull) {
+		t.Errorf("Room(1) while the uploads in flight hold the room above the reserve: %v, want ErrFull", err)
+	}
+	close(release)
+	var staged []*Staged
+	var total int64
+	for range uploads {
+		r := <-results
+		switch {
+		case r.err == nil:
+			staged = append(staged, r.st)
+			total += r.st.Bytes
+		case !errors.Is(r.err, ErrFull):
+			t.Errorf("Stage: %v, want nil or ErrFull", r.err)
+		}
+	}
+	if total > room {
+		t.Errorf("%d of %d uploads staged at once, %d bytes past the reserve", len(staged), uploads, total-room)
+	}
+	if len(staged) == 0 {
+		t.Errorf("no upload staged, yet the room above the reserve holds one")
+	}
+	for _, st := range staged {
+		st.Discard()
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("%d temp files left behind", len(left))
+	}
+	// A body that starts with the volume at its reserve is refused before its first byte.
+	volume(t, reserve)
+	if st, err := s.Stage(struct{ io.Reader }{bytes.NewReader(make([]byte, body))}); !errors.Is(err, ErrFull) {
+		t.Fatalf("staging %d bytes at the reserve: %v, want ErrFull", body, err)
+	} else if st != nil {
+		st.Discard()
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("%d temp files left behind", len(left))
 	}
 }
