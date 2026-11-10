@@ -517,7 +517,11 @@ func (s tasksSvc) Move(ctx context.Context, caller domain.Caller, req MoveTaskRe
 			return MoveTaskResp{}, domain.NewError(domain.CodeConflictLocked, "Task "+cur.ID+" is racing; resolve via pick_run/cancel_runs",
 				map[string]any{"taskId": cur.ID, "reason": "race"})
 		}
-		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
+		yields, err := s.c.leaseYields(ctx, t.Tx, cur, caller, a.Role, t.Now.UnixMilli())
+		if err != nil {
+			return MoveTaskResp{}, err
+		}
+		if !yields {
 			return MoveTaskResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)

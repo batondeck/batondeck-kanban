@@ -189,7 +189,11 @@ func (s runsSvc) Start(ctx context.Context, caller domain.Caller, req StartRunsR
 		if domain.IsPoisoned(cur.Status, reasonOf(cur)) {
 			return StartRunsResp{}, domain.InvalidTransition(cur.Status, domain.InProgress, domain.AllowedNext(cur.Status), nil)
 		}
-		if !leaseYields(cur, caller, a.Role, t.Now.UnixMilli()) {
+		yields, err := s.c.leaseYields(ctx, t.Tx, cur, caller, a.Role, t.Now.UnixMilli())
+		if err != nil {
+			return StartRunsResp{}, err
+		}
+		if !yields {
 			return StartRunsResp{}, domain.ConflictLocked(cur.ID, cur.Claim.Owner)
 		}
 		board, _, err := t.Tx.GetBoard(ctx, req.ProjectID, cur.BoardID)
