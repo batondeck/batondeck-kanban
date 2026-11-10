@@ -713,32 +713,58 @@ func TestDirectoryScopesChangeInPlace(t *testing.T) {
 	}
 }
 
+// foreignPID is a live process another uid owns, for the pid-ownership refusals: pid 1 when it is not
+// this uid's; as root, whose pid 1 a container often shares, a sleep started as nobody (uid 65534).
+// Where there is neither, the (sub)test calling it skips, and only that one: every other refusal
+// runs as any uid.
+func foreignPID(t *testing.T) int {
+	t.Helper()
+	uid, err := core.ProcessUID(1)
+	if err == nil && uid != os.Getuid() {
+		return 1
+	}
+	if os.Getuid() != 0 {
+		t.Skipf("pid 1 is not another uid's (uid %d, %v), and only root starts a process as another uid", uid, err)
+	}
+	cmd := exec.Command("sleep", "3600")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 65534, Gid: 65534}}
+	if err := cmd.Start(); err != nil {
+		t.Skipf("pid 1 is root's, and a process as uid 65534 did not start: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	if got, err := core.ProcessUID(cmd.Process.Pid); err != nil || got != 65534 {
+		t.Fatalf("the sleep started as uid 65534 is uid %d (%v)", got, err)
+	}
+	return cmd.Process.Pid
+}
+
 // AC8's pid ownership refusal (tested): a pid another uid owns is 403 and a dead one 400, each
 // leaving no entry; the caller's own child is 201 (the positive control). A socket the registry
-// does not name is 400. Over TCP both routes are 404.
+// does not name is 400. Over TCP both routes are 404. Only the 403 needs another uid's process
+// (foreignPID), so only it can skip.
 func TestDirectoryRegisterRefusals(t *testing.T) {
 	t.Parallel()
 	s := startDirectory(t, nil)
 	c := s.client(t, "s-1", "")
 	u := unixHTTP(s.sock)
-	reg := func(body string) (int, string) {
+	reg := func(t *testing.T, body string) (int, string) {
 		return httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", s.alice.token, body)
 	}
-	if uid, err := core.ProcessUID(1); err != nil || uid == os.Getuid() {
-		t.Skipf("pid 1 is uid %d (%v): no process of another uid to register", uid, err)
-	}
-	if code, got := reg(`{"pid":1,"role":"worker"}`); code != http.StatusForbidden || !strings.Contains(got, "not owned by the caller's uid") {
-		t.Fatalf("pid 1 (root's): %d %s, want 403", code, got)
-	}
+	t.Run("a pid another uid owns", func(t *testing.T) {
+		pid := foreignPID(t)
+		if code, got := reg(t, fmt.Sprintf(`{"pid":%d,"role":"worker"}`, pid)); code != http.StatusForbidden || !strings.Contains(got, "not owned by the caller's uid") {
+			t.Fatalf("pid %d (another uid's): %d %s, want 403", pid, code, got)
+		}
+	})
 	dead := exec.Command("true")
 	_ = dead.Run()
-	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker"}`, dead.Process.Pid)); code != http.StatusBadRequest || !strings.Contains(got, "not a live process") {
+	if code, got := reg(t, fmt.Sprintf(`{"pid":%d,"role":"worker"}`, dead.Process.Pid)); code != http.StatusBadRequest || !strings.Contains(got, "not a live process") {
 		t.Fatalf("a dead pid: %d %s, want 400", code, got)
 	}
-	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker","socket":"/tmp/elsewhere.sock"}`, c.pid)); code != http.StatusBadRequest {
+	if code, got := reg(t, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":"/tmp/elsewhere.sock"}`, c.pid)); code != http.StatusBadRequest {
 		t.Fatalf("a socket the registry does not name: %d %s, want 400", code, got)
 	}
-	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"admin"}`, c.pid)); code != http.StatusBadRequest {
+	if code, got := reg(t, fmt.Sprintf(`{"pid":%d,"role":"admin"}`, c.pid)); code != http.StatusBadRequest {
 		t.Fatalf("role admin: %d %s, want 400", code, got)
 	}
 	if code, _ := httpDo(t, u, http.MethodPost, "http://x/internal/wake-session", "", `{}`); code != http.StatusUnauthorized {
@@ -747,7 +773,7 @@ func TestDirectoryRegisterRefusals(t *testing.T) {
 	if len(s.pids()) != 0 {
 		t.Fatalf("a refusal left entries %v", s.pids())
 	}
-	if code, got := reg(fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q}`, c.pid, c.sock)); code != http.StatusCreated {
+	if code, got := reg(t, fmt.Sprintf(`{"pid":%d,"role":"worker","socket":%q}`, c.pid, c.sock)); code != http.StatusCreated {
 		t.Fatalf("the caller's own child: %d %s, want 201", code, got)
 	}
 	tcp := &http.Client{Timeout: 3 * time.Second}

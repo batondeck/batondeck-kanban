@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -534,17 +535,31 @@ func TestASweepKeepsTheLiveAgentSessions(t *testing.T) {
 	}
 }
 
-// Run sweeps once at once and then every interval, until ctx ends.
+// Run sweeps once at once and then every interval, until ctx ends. Each half is waited for, not read
+// off a wall-clock window a loaded machine can stall (3 sweeps inside a 70 ms sleep missed when the
+// sweeper started 30 ms late): at an hour's interval the one sweep can only be the one at once, and
+// at 20 ms the timer brings two more.
 func TestRunSweepsAtOnceThenOnTheTimer(t *testing.T) {
-	f := &fake{calls: map[string]int{}}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { (&Sweeper{Store: f}).Run(ctx, 20*time.Millisecond); close(done) }()
-	time.Sleep(70 * time.Millisecond)
-	cancel()
-	<-done
-	if n := f.calls["tool calls"] / (MaxPerTick / Batch); n < 3 {
-		t.Fatalf("%d sweeps in 70 ms at a 20 ms interval, want at least 3", n)
+	for _, c := range []struct {
+		interval time.Duration
+		want     int
+		what     string
+	}{{time.Hour, 1, "the sweep at once"}, {20 * time.Millisecond, 3, "the sweep at once and two on the timer"}} {
+		f := &fake{calls: map[string]int{}}
+		var began atomic.Int64 // Sweep reads Now once, as it begins
+		sw := &Sweeper{Store: f, Now: func() time.Time { began.Add(1); return time.Now() }}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { sw.Run(ctx, c.interval); close(done) }()
+		for deadline := time.Now().Add(5 * time.Second); began.Load() < int64(c.want) && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		<-done // Run never returns while a sweep runs: every sweep begun has ended
+		n := f.calls["tool calls"] / (MaxPerTick / Batch)
+		if n < c.want || (c.interval == time.Hour && n != 1) {
+			t.Fatalf("%d sweeps within 5 s at a %v interval, want %d: %s", n, c.interval, c.want, c.what)
+		}
 	}
 }
 
