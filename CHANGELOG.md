@@ -2025,10 +2025,12 @@ fix:
   tag, so a moved tag could change what the image is built on or what holds the database. Both are
   now pinned by digest, as the Go builder already was (`postgres:16.15@sha256:…`), and `make check`
   refuses a workflow action, base image or compose image that is not pinned.
-- **The release is built with Go 1.26.10.** Go 1.26.9 lacked crypto/x509's denylist of compromised
+- **The release is built with Go 1.26.11.** Go 1.26.9 lacked crypto/x509's denylist of compromised
   intermediate certificates (GO-2026-6809), which the server reaches through a `jwt` integration's
-  JWKS fetch and a Postgres connection over TLS. CI now runs govulncheck and fails on any
-  vulnerability the code reaches.
+  JWKS fetch and a Postgres connection over TLS. Go 1.26.10's net/http could crash an HTTP/1 server
+  through a race between `MaxBytesReader` and the response headers (GO-2026-6859), which every
+  request the server takes reaches. CI now runs govulncheck and fails on any vulnerability the code
+  reaches.
 - **The web UI's development tools are past their published advisories.** vite 8.2.4, vitest 4.1.12,
   undici 8.12.4 and source-map-js 1.2.2 replace versions with published advisories (the vite 8.2.0
   dev server behind `npm run dev` could serve files outside the project). The bundled UI is not
