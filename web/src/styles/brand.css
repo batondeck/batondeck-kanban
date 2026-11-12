@@ -1,6 +1,6 @@
 /* The brand layer: the lockup and the loader.
    ================================================================================================
-   THE LOCKUP is the kit's two cuts (brand.tsx): ink-on-light and cream-on-dark. Exactly one shows,
+   THE LOCKUP is BatonDeck's two cuts (brand.tsx): ink-on-light and paper-on-dark. Exactly one shows,
    chosen the way the theme is: the OS preference unless the page picked light, and an explicit dark
    choice wins everywhere (the same order as index.css).
 

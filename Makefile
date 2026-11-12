@@ -7,7 +7,7 @@ SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
 RELEASE_CHECK := $(dir $(SELF))scripts/release-check.sh
 
 # bench and bench-baseline are not part of check (see bench below).
-.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test stream-latency conformance contract perf clean web-public-check kit-check skill-lint hook-check
+.PHONY: e2e e2e-ui bench bench-baseline release-check notices notices-check image hooks staticcheck sqlc-check web-dist-check web-check web-states-check dist sbom build check fmt vet test stream-latency conformance contract perf clean web-public-check brand-check skill-lint hook-check
 
 # The Go the analyzers run under: the one go.mod names (its `toolchain` line when it has one, else
 # its `go` line, which is a full version: the go command refuses a bare language version here, by
@@ -109,7 +109,7 @@ image:
 # without it for the bound.
 CHECK_OWN_RUNS := ^(TestSQLiteConformance|TestPostgresConformance|TestLiveContract|TestSurfaceSnapshot)$$
 check: TEST_SKIP = $(CHECK_OWN_RUNS)
-check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test stream-latency conformance contract perf web-public-check kit-check skill-lint hook-check web-states-check
+check: fmt vet staticcheck notices-check release-check sqlc-check web-dist-check web-check arch test stream-latency conformance contract perf web-public-check brand-check skill-lint hook-check web-states-check
 
 # SQLC pins the generator, built from source at this version (minutes on a cold module cache).
 SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
@@ -315,11 +315,10 @@ web-public-check:
 	fi; \
 	echo "web-public-check: web/public holds the $$(wc -l < "$$tmp/listed" | tr -d ' ') allow-listed files and nothing else"
 
-# kit-check holds the vendored brand kit (web/kit/, web/public/brand/) to its pinned release:
-# every file's sha256 against web/kit/kit.lock, the lock against the release manifest, and no
-# stray file in a vendored directory (web/tools/kit.mjs says how).
-kit-check:
-	node web/tools/kit.mjs check
+# brand-check holds web/public/brand/ to BatonDeck's logo as copied from the product: exactly the
+# files web/brand.lock.json names, each at the sha256 it records (web/tools/brand.mjs says how).
+brand-check:
+	node web/tools/brand.mjs check
 
 # skill-lint holds plugin/ to this repository (scripts/skill-lint.py says how): every tool a skill or
 # command names is in contract/expected.json, every script it names is in plugin/, no file names a

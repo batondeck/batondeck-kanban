@@ -1,17 +1,17 @@
 /**
  * The BatonDeck brand in the SPA: the lockup, and the loader.
  *
- * THE ARTWORK IS THE KIT'S. `web/kit` vendors hdtp-web-kit's brand set into `public/brand/`, served
- * at `/brand/`, and `make kit-check` holds every file to the sha256 pinned in `web/kit/kit.lock`.
- * Nothing here draws a logo; it points at those files. The lockup comes in two cuts, ink-on-light
+ * THE ARTWORK IS BATONDECK'S OWN. `public/brand/` holds the product's logo files (its
+ * portal/public/batondeck/), served at `/brand/`, and `make brand-check` holds every file to the
+ * sha256 pinned in `web/brand.lock.json`. Nothing here draws a logo; it points at those files. The lockup comes in two cuts, ink-on-light
  * and cream-on-dark, and `styles/brand.css` shows the one that matches the theme.
  */
 import { type CSSProperties } from 'react';
 
 import './styles/brand.css';
 
-/** The kit lockup's own aspect ratio (`batondeck-inline.svg`, 473x84), so a caller sizes by height. */
-const LOCKUP_RATIO = 473 / 84;
+/** The lockup's own aspect ratio (`batondeck-inline.svg`'s viewBox, 668.14 by 132.69), so a caller sizes by height. */
+const LOCKUP_RATIO = 668.14 / 132.69;
 
 /**
  * The full lockup: mark, then the word. `height` is the lockup's own height. The wrapper carries the

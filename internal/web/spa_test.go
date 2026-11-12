@@ -169,7 +169,7 @@ func TestMountSPA(t *testing.T) {
 		{"/.well-known/oauth-authorization-server", 404, "text/plain", "404 page not found"},
 		{"/api", 404, "text/plain", `{"error":"not_found"}`},
 		{"/api/nothing", 404, "text/plain", `{"error":"not_found"}`},
-		{"/brand/favicon.svg", 200, "image/svg+xml", "<svg"},
+		{"/brand/batondeck-mark.svg", 200, "image/svg+xml", "<svg"},
 		{"/assets/nope.js", 404, "text/plain", "404 page not found"},
 	} {
 		rec := httptest.NewRecorder()

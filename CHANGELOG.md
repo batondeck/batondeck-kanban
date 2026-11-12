@@ -1250,12 +1250,12 @@ this section's headings in CHANGELOG.md, are all part of it.
   history), analytics, reports, activity, notifications, settings, on-call, sign-in. Removed with
   their routes, nav entries and tests: the plugin studio (7 routes), billing, admin, onboarding, the
   organization (tenant) switcher, and the transition-graph editor with `getTransitions` /
-  `setTransitions`. `api.ts` is kept whole. The brand is hdtp-web-kit 0.2.0's brand set, vendored by
-  `web/tools/kit.mjs` and pinned in `web/kit/kit.lock`, in place of the generated logo artwork. The
+  `setTransitions`. `api.ts` is kept whole. The brand is BatonDeck's own logo, copied from the
+  BatonDeck product and pinned in `web/brand.lock.json`, in place of the generated logo artwork. The
   build is committed in `web/dist`, embedded in the binary and served at `/`. `make check` gains
   `web-public-check` (refuses `web/public/pitch/` and `web/ds-bundle/` anywhere under `web/`, and
-  holds `web/public/` to `scripts/web-public-allowlist.txt`) and `kit-check` (every kit file
-  against its sha256 in the lock).
+  holds `web/public/` to `scripts/web-public-allowlist.txt`) and `brand-check` (every logo file
+  against its sha256 in the lock, and no other file in `web/public/brand/`).
 - The layering guard, `internal/arch/layering_test.go`, run by `make arch` before `test` in
   `make check`. One `go list -e -deps -json` over every Go directory of the module (the walk skips
   `node_modules`, `testdata`, dot and underscore directories and nested modules) judges the eight
@@ -1417,6 +1417,11 @@ this section's headings in CHANGELOG.md, are all part of it.
   pull request now reports no status check; the reviewer re-runs `make check` on its head.
 
 ### Fixed
+
+- **The web UI carries BatonDeck's own logo.** The logo, the favicon, the app icon and the loading
+  mark were the HDTP gateway's bridge mark from a shared brand kit, with the BatonDeck name beside
+  it. They are now BatonDeck's own mark and wordmark, in light and dark cuts, copied from the
+  BatonDeck product and pinned by `make brand-check`.
 
 From the pre-public review (2026-11-10), in which every subsystem was read by a reviewer, each
 finding was checked against the code, and each code defect was shown by a failing test before its
@@ -2020,10 +2025,12 @@ fix:
   tag, so a moved tag could change what the image is built on or what holds the database. Both are
   now pinned by digest, as the Go builder already was (`postgres:16.15@sha256:…`), and `make check`
   refuses a workflow action, base image or compose image that is not pinned.
-- **The release is built with Go 1.26.10.** Go 1.26.9 lacked crypto/x509's denylist of compromised
+- **The release is built with Go 1.26.11.** Go 1.26.9 lacked crypto/x509's denylist of compromised
   intermediate certificates (GO-2026-6809), which the server reaches through a `jwt` integration's
-  JWKS fetch and a Postgres connection over TLS. CI now runs govulncheck and fails on any
-  vulnerability the code reaches.
+  JWKS fetch and a Postgres connection over TLS. Go 1.26.10's net/http could crash an HTTP/1 server
+  through a race between `MaxBytesReader` and the response headers (GO-2026-6859), which every
+  request the server takes reaches. CI now runs govulncheck and fails on any vulnerability the code
+  reaches.
 - **The web UI's development tools are past their published advisories.** vite 8.2.4, vitest 4.1.12,
   undici 8.12.4 and source-map-js 1.2.2 replace versions with published advisories (the vite 8.2.0
   dev server behind `npm run dev` could serve files outside the project). The bundled UI is not

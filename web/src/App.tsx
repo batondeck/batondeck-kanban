@@ -168,7 +168,7 @@ function Shell() {
         {/* THE VERSION IS GONE ON PURPOSE. It was a hardcoded "v1.0" string that no release ever
             updated, so it stated a fact that had been wrong since the first deploy — worse than
             saying nothing. The real version is on the release, not in the chrome. */}
-        <div className="brand"><BrandLockup height={18} /></div>
+        <div className="brand"><BrandLockup height={22} /></div>
         {/* CAPTIONED. Unlabelled, this reads as a BOARD picker — especially against Settings' board
             picker, and doubly so when a project happens to be named "Board 1". Reported from staging
             as "why do we need this dropdown when we have that one"; they select different things and
