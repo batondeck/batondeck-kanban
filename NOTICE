@@ -19,7 +19,7 @@ copied. Two more trees come from that product at the same commit and are relicen
 same way: the tool contract under contract/ (tools.json and admin-tools.json are that product's MCP
 tool lists, imported verbatim; expected.json is derived from them), and the Claude Code plugin under
 plugin/, a rewrite of that product's plugin (plugin/TRIM.md says, file by file, what was kept,
-rewritten or dropped). The brand files under web/public/brand/ are hdtp-web-kit release 0.2.0, as vendored in
-hdtp-gateway at commit 3324f09, pinned by web/kit/kit.lock; the BatonDeck and HDTP marks they carry
-are the owner's, and the licence grants no right to use them (Apache-2.0, section 6). web/tools/kit.mjs
-was copied from hdtp-gateway at the same commit and cut to the lock check.
+rewritten or dropped). The brand files under web/public/brand/ are BatonDeck's logo, copied from
+the BatonDeck product's repository (batondeck/batondeck, portal/public/batondeck/ at commit ec0f579)
+and pinned by web/brand.lock.json; the BatonDeck name and marks are the owner's, and the licence
+grants no right to use them (Apache-2.0, section 6).

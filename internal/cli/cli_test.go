@@ -437,8 +437,8 @@ func TestSPAAnswers404(t *testing.T) {
 					t.Errorf("%s: %d %q, want 404 and not a page", p, code, ct)
 				}
 			}
-			if code, ct, _ := get("/brand/favicon.svg"); code != 200 || ct != "image/svg+xml" {
-				t.Errorf("/brand/favicon.svg: %d %q", code, ct)
+			if code, ct, _ := get("/brand/batondeck-mark.svg"); code != 200 || ct != "image/svg+xml" {
+				t.Errorf("/brand/batondeck-mark.svg: %d %q", code, ct)
 			}
 		})
 	}

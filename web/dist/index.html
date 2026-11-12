@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BatonDeck</title>
-    <!-- The kit's brand set (web/kit, served at /brand/). -->
-    <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
-    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <!-- BatonDeck's logo (web/public/brand, pinned by web/brand.lock.json, served at /brand/). -->
+    <link rel="icon" type="image/svg+xml" href="/brand/batondeck-mark.svg" />
+    <link rel="apple-touch-icon" href="/brand/batondeck-mark-256.png" />
     <!-- Paints the stored theme BEFORE the bundle loads. Without it a dark-mode user gets a
          white flash for the length of the JS download, which no in-app fix can reach. -->
     <script>try{var t=localStorage.getItem("bd.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
     <!-- No font link: Inter, JetBrains Mono and Newsreader are bundled (main.tsx imports them), so
          the page asks no third-party host for anything. -->
-    <script type="module" crossorigin src="/assets/index-Bc26YdWd.js"></script>
+    <script type="module" crossorigin src="/assets/index-DXs6Ww1r.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-BWaJ3C7D.js">
     <link rel="stylesheet" crossorigin href="/assets/index-BS0PEUZc.css">
   </head>
@@ -27,15 +27,22 @@
           background: #F7F6F4;
         }
         #bd-boot img { width: 56px; height: 56px; animation: bd-boot-pulse 1.6s ease-in-out infinite; }
+        /* The mark's right half is ink, so a dark page shows its paper cut. */
+        #bd-boot .bd-boot-dark { display: none; }
         @keyframes bd-boot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
         @media (prefers-reduced-motion: reduce) { #bd-boot img { animation: none; } }
         @media (prefers-color-scheme: dark) {
           :root:not([data-theme="light"]) #bd-boot { background: #131A24; }
+          :root:not([data-theme="light"]) #bd-boot .bd-boot-light { display: none; }
+          :root:not([data-theme="light"]) #bd-boot .bd-boot-dark { display: block; }
         }
         [data-theme="dark"] #bd-boot { background: #131A24; }
+        [data-theme="dark"] #bd-boot .bd-boot-light { display: none; }
+        [data-theme="dark"] #bd-boot .bd-boot-dark { display: block; }
       </style>
       <div id="bd-boot" role="status" aria-label="Loading BatonDeck">
-        <img src="/brand/mark.svg" alt="" />
+        <img class="bd-boot-light" src="/brand/batondeck-mark.svg" alt="" />
+        <img class="bd-boot-dark" src="/brand/batondeck-mark-dark.svg" alt="" />
       </div>
     </div>
   </body>
